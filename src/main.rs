@@ -8,27 +8,40 @@ mod backend;
 mod types;
 mod utils;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::fs;
+use std::process;
+
+use frontend::lexer::Lexer;
+use frontend::parser::Parser as AethParser;
+use frontend::semantic::SemanticAnalyzer;
+use middle::ir_gen::IRGenerator;
+use middle::optimize::Optimizer;
+use middle::ir_printer::print_ir;
+use backend::{CodeGen, CCodeGen};
 
 /// AetherLang Compiler
 #[derive(Parser, Debug)]
 #[command(name = "aethc")]
 #[command(author = "Z1529")]
 #[command(version = "0.1.0")]
-#[command(about = "AetherLang compiler - simpler than Rust, safer than C")]
+#[command(about = "AetherLang compiler - A self-hosting systems programming language")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Input source file (.aeth)
     #[arg(value_name = "FILE")]
-    input: PathBuf,
+    input: Option<PathBuf>,
 
     /// Output file
     #[arg(short, long, value_name = "FILE")]
     output: Option<PathBuf>,
 
-    /// Emit LLVM IR instead of binary
+    /// Emit C code instead of binary
     #[arg(long)]
-    emit_llvm: bool,
+    emit_c: bool,
 
     /// Emit Aether IR (for debugging)
     #[arg(long)]
@@ -38,9 +51,29 @@ struct Cli {
     #[arg(short = 'O', default_value = "0")]
     opt_level: u8,
 
-    /// Target triple (e.g., x86_64-pc-windows-msvc)
-    #[arg(long)]
-    target: Option<String>,
+    /// Backend to use (c, llvm)
+    #[arg(long, default_value = "c")]
+    backend: String,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Compile a source file
+    Build {
+        /// Input source file
+        input: PathBuf,
+        
+        /// Output file
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Check a source file for errors
+    Check {
+        /// Input source file
+        input: PathBuf,
+    },
+    /// Print version information
+    Version,
 }
 
 fn main() {
@@ -48,17 +81,227 @@ fn main() {
     
     let cli = Cli::parse();
     
+    // Handle subcommands
+    match &cli.command {
+        Some(Commands::Build { input, output }) => {
+            compile_file(input, output.clone(), &cli);
+        }
+        Some(Commands::Check { input }) => {
+            check_file(input);
+        }
+        Some(Commands::Version) => {
+            println!("aethc 0.1.0");
+            println!("AetherLang Compiler");
+            println!("License: Apache-2.0");
+        }
+        None => {
+            // Default: compile the input file
+            if let Some(ref input) = cli.input {
+                compile_file(input, cli.output.clone(), &cli);
+            } else {
+                eprintln!("Error: No input file specified");
+                eprintln!("Usage: aethc <FILE> or aethc build <FILE>");
+                process::exit(1);
+            }
+        }
+    }
+}
+
+/// Compile a source file
+fn compile_file(input: &PathBuf, output: Option<PathBuf>, cli: &Cli) {
     println!("AetherLang Compiler v0.1.0");
-    println!("Input: {:?}", cli.input);
+    println!("Compiling: {}", input.display());
     
-    // TODO: Implement compilation pipeline
     // 1. Read source file
-    // 2. Lexer -> Tokens
-    // 3. Parser -> AST
-    // 4. Semantic Analysis -> Typed AST
-    // 5. IR Generation -> Aether IR
-    // 6. Optimization -> Optimized IR
-    // 7. Code Generation -> Binary
+    let source = match fs::read_to_string(input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error reading file: {}", e);
+            process::exit(1);
+        }
+    };
     
-    println!("Compilation not yet implemented.");
+    // 2. Lexer -> Tokens
+    let lexer = Lexer::new(&source, 0);
+    
+    // 3. Parser -> AST
+    let mut parser = AethParser::new(lexer);
+    let program = match parser.parse_program() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Parse error: {}", e);
+            process::exit(1);
+        }
+    };
+    println!("  [✓] Parsed {} items", program.items.len());
+    
+    // 4. Semantic Analysis -> Typed AST
+    let mut analyzer = SemanticAnalyzer::new();
+    if let Err(e) = analyzer.analyze(&program) {
+        eprintln!("Semantic error: {}", e);
+        process::exit(1);
+    }
+    println!("  [✓] Semantic analysis passed");
+    
+    // 5. IR Generation -> Aether IR
+    let module_name = input.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("module");
+    let mut ir_gen = IRGenerator::new(module_name);
+    let mut ir_module = match ir_gen.generate(&program) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("IR generation error: {}", e);
+            process::exit(1);
+        }
+    };
+    println!("  [✓] Generated IR ({} functions)", ir_module.functions.len());
+    
+    // Emit IR if requested
+    if cli.emit_ir {
+        let ir_text = print_ir(&ir_module);
+        let ir_path = input.with_extension("ir");
+        if let Err(e) = fs::write(&ir_path, &ir_text) {
+            eprintln!("Error writing IR: {}", e);
+        } else {
+            println!("  [✓] Wrote IR to {}", ir_path.display());
+        }
+        println!("\n{}", ir_text);
+        return;
+    }
+    
+    // 6. Optimization -> Optimized IR
+    if cli.opt_level > 0 {
+        let mut optimizer = Optimizer::new();
+        optimizer.optimize(&mut ir_module);
+        println!("  [✓] Optimized (level {})", cli.opt_level);
+    }
+    
+    // 7. Code Generation
+    match cli.backend.as_str() {
+        "c" => {
+            let mut codegen = CCodeGen::new("x86_64-pc-windows-msvc");
+            
+            // Generate C source
+            let c_source = match codegen.generate_source(&ir_module) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Code generation error: {}", e);
+                    process::exit(1);
+                }
+            };
+            
+            if cli.emit_c {
+                // Just output C code
+                let c_path = output.unwrap_or_else(|| input.with_extension("c"));
+                if let Err(e) = fs::write(&c_path, &c_source) {
+                    eprintln!("Error writing C file: {}", e);
+                    process::exit(1);
+                }
+                println!("  [✓] Generated C code: {}", c_path.display());
+            } else {
+                // Compile C code to executable
+                let obj_path = input.with_extension("o");
+                let exe_path = output.unwrap_or_else(|| {
+                    #[cfg(windows)]
+                    { input.with_extension("exe") }
+                    #[cfg(not(windows))]
+                    { input.with_extension("") }
+                });
+                
+                // Write C source
+                let c_path = input.with_extension("c");
+                if let Err(e) = fs::write(&c_path, &c_source) {
+                    eprintln!("Error writing C file: {}", e);
+                    process::exit(1);
+                }
+                
+                // Compile with clang/gcc
+                let compilers = ["clang", "gcc", "cc"];
+                let mut compiled = false;
+                
+                for compiler in &compilers {
+                    let result = std::process::Command::new(compiler)
+                        .args(&["-o"])
+                        .arg(&exe_path)
+                        .arg(&c_path)
+                        .output();
+                    
+                    if let Ok(output) = result {
+                        if output.status.success() {
+                            compiled = true;
+                            println!("  [✓] Compiled with {}", compiler);
+                            break;
+                        }
+                    }
+                }
+                
+                // Cleanup temp C file
+                let _ = fs::remove_file(&c_path);
+                
+                if !compiled {
+                    eprintln!("Error: Could not find C compiler (clang/gcc)");
+                    process::exit(1);
+                }
+                
+                println!("\n✅ Output: {}", exe_path.display());
+            }
+        }
+        #[cfg(feature = "llvm")]
+        "llvm" => {
+            use backend::llvm::LLVMCodeGen;
+            let mut codegen = LLVMCodeGen::new("x86_64-pc-windows-gnu");
+            
+            match codegen.generate(&ir_module) {
+                Ok(bytes) => {
+                    let obj_path = output.unwrap_or_else(|| input.with_extension("o"));
+                    if let Err(e) = fs::write(&obj_path, &bytes) {
+                        eprintln!("Error writing object file: {}", e);
+                        process::exit(1);
+                    }
+                    println!("  [✓] Generated object file: {}", obj_path.display());
+                }
+                Err(e) => {
+                    eprintln!("LLVM code generation error: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        _ => {
+            eprintln!("Unknown backend: {}. Use 'c' or 'llvm'", cli.backend);
+            process::exit(1);
+        }
+    }
+}
+
+/// Check a source file for errors without generating code
+fn check_file(input: &PathBuf) {
+    println!("Checking: {}", input.display());
+    
+    let source = match fs::read_to_string(input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error reading file: {}", e);
+            process::exit(1);
+        }
+    };
+    
+    let lexer = Lexer::new(&source, 0);
+    let mut parser = AethParser::new(lexer);
+    
+    let program = match parser.parse_program() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Parse error: {}", e);
+            process::exit(1);
+        }
+    };
+    
+    let mut analyzer = SemanticAnalyzer::new();
+    if let Err(e) = analyzer.analyze(&program) {
+        eprintln!("Semantic error: {}", e);
+        process::exit(1);
+    }
+    
+    println!("✅ No errors found");
 }

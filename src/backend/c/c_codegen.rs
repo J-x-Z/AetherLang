@@ -329,7 +329,7 @@ impl CCodeGen {
     }
 
     /// Generate the complete C source file
-    fn generate_source(&mut self, module: &IRModule) -> Result<String> {
+    pub fn generate_source(&mut self, module: &IRModule) -> Result<String> {
         self.output.clear();
         
         // Header
