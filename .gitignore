@@ -12,7 +12,11 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Test outputs
+# Test/Build outputs
 test_output.txt
 build_output.txt
 ir_output.txt
+*.log
+
+# Project internal docs (not for public)
+项目书.txt
