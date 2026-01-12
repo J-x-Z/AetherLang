@@ -249,27 +249,29 @@ impl CCodeGen {
                 let args_str: Vec<_> = args.iter().map(|a| self.value_to_c(a)).collect();
                 
                 // Map built-in function names to C runtime functions
-                let c_func = match func.as_str() {
-                    "print" => "aether_print",
-                    "println" => "aether_println",
-                    "print_i64" => "aether_print_i64",
-                    "println_i64" => "aether_println_i64",
-                    "assert" => "aether_assert",
-                    "alloc" => "malloc",
-                    "free" => "free",
-                    "exit" => "exit",
-                    _ => func.as_str(),
+                let (c_func, is_void) = match func.as_str() {
+                    "print" => ("aether_print", true),
+                    "println" => ("aether_println", true),
+                    "print_i64" => ("aether_print_i64", true),
+                    "println_i64" => ("aether_println_i64", true),
+                    "assert" => ("aether_assert", true),
+                    "alloc" => ("malloc", false),
+                    "free" => ("free", true),
+                    "exit" => ("exit", true),
+                    _ => (func.as_str(), false),
                 };
                 
                 let call = format!("{}({})", c_func, args_str.join(", "));
                 
-                if let Some(d) = dest {
+                // For void functions, don't assign to a variable
+                if is_void || dest.is_none() {
+                    self.writeln(&format!("{};", call));
+                } else if let Some(d) = dest {
                     let var = self.get_var(*d);
                     self.writeln(&format!("{} = {};", var, call));
-                } else {
-                    self.writeln(&format!("{};", call));
                 }
             }
+
 
             
             Instruction::Alloca { dest, ty } => {

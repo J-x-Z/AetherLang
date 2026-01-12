@@ -493,7 +493,15 @@ impl SemanticAnalyzer {
             
             Expr::Ident(ident) => {
                 if let Some(symbol) = self.symbols.lookup(&ident.name) {
-                    Ok(symbol.ty.clone())
+                    // For functions, return the function type from SymbolKind
+                    if let SymbolKind::Function { params, ret } = &symbol.kind {
+                        Ok(ResolvedType::Function {
+                            params: params.clone(),
+                            ret: Box::new(ret.clone()),
+                        })
+                    } else {
+                        Ok(symbol.ty.clone())
+                    }
                 } else {
                     Err(Error::UndefinedVariable {
                         name: ident.name.clone(),
@@ -501,6 +509,7 @@ impl SemanticAnalyzer {
                     })
                 }
             }
+
 
             Expr::Binary { left, op, right, span } => {
                 let left_ty = self.check_expr(left)?;
