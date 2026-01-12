@@ -7,13 +7,18 @@ description = "AetherLang - A self-hosting systems programming language"
 license = "Apache-2.0"
 repository = "https://github.com/Z1529/AetherLang"
 
+[features]
+default = []
+llvm = ["llvm-sys"]
+
 [dependencies]
 # Error handling
 anyhow = "1.0"
 thiserror = "1.0"
 
-# LLVM bindings (v1.0 backend) - requires LLVM with llvm-config
-# llvm-sys = "211"
+# LLVM bindings (v1.0 backend) - requires LLVM 21 (MSYS2 UCRT64)
+# Enabled with --features llvm
+llvm-sys = { version = "211", optional = true }
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }

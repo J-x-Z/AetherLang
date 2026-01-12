@@ -103,6 +103,9 @@ pub enum Error {
     
     #[error("LLVM error: {0}")]
     Llvm(String),
+    
+    #[error("Code generation error: {0}")]
+    CodeGen(String),
 }
 
 impl Error {
@@ -132,7 +135,7 @@ impl Error {
             Self::CannotMutBorrowTwice { span, .. } => Some(*span),
             Self::CannotMoveOutOfBorrow { span, .. } => Some(*span),
             Self::CannotBorrowMutably { span, .. } => Some(*span),
-            Self::Io(_) | Self::Llvm(_) => None,
+            Self::Io(_) | Self::Llvm(_) | Self::CodeGen(_) => None,
         }
     }
 }
