@@ -1,99 +1,86 @@
 # AetherLang
 
-> 一个为 Aether OS 设计的自托管系统编程语言
+> A self-hosting systems programming language designed for Aether OS
 
-[![Build Status](https://github.com/Z1529/AetherLang/actions/workflows/ci.yml/badge.svg)](https://github.com/Z1529/AetherLang/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-## 特性
+## Features
 
-- 🦀 **比 Rust 简单** - 简化的所有权系统 (`own`/`ref`/`mut`)
-- 🛡️ **比 C 安全** - 编译期所有权检查，无悬垂指针
-- ⚡ **快速编译** - 增量编译，秒级构建
-- 🔧 **自托管** - 用 AetherLang 编写的编译器
+- **Simplified Ownership System** - `own`/`ref`/`mut` semantics for memory safety
+- **Compile-time Safety Checks** - Ownership analysis prevents dangling pointers
+- **Fast Compilation** - Designed for incremental builds
+- **Self-hosting** - The compiler is written in AetherLang (planned)
 
-## 快速开始
+## Getting Started
 
 ```bash
-# 克隆仓库
-git clone https://github.com/Z1529/AetherLang.git
+# Clone the repository
+git clone https://github.com/J-x-Z/AetherLang.git
 cd AetherLang
 
-# 构建编译器
+# Build the compiler
 cargo build --release
 
-# 编译示例程序
-./target/release/aethc examples/hello.aeth
+# Run tests
+cargo test
 ```
 
-## 语法示例
+## Syntax Example
 
 ```rust
-// Hello World
 fn main() {
     print("Hello, AetherLang!")
 }
 
-// 所有权系统
+// Ownership system
 fn process(ref data: Buffer) {
-    // 借用数据，不转移所有权
+    // Borrow data without transferring ownership
 }
 
 fn consume(own data: Buffer) {
-    // 获取所有权，函数结束时释放
+    // Take ownership, released when function ends
 }
 
-// 错误处理
+// Error handling
 fn read_file(path: str) -> Result<String, Error> {
     let content = fs::read(path) or return Err(Error::NotFound)
     return Ok(content)
 }
 ```
 
-## 项目结构
+## Project Structure
 
 ```
 src/
-├── frontend/     # 词法分析、语法分析、语义分析
-│   ├── lexer.rs
-│   ├── parser.rs
-│   └── semantic.rs
-├── middle/       # IR 生成和优化
-│   ├── ir.rs
-│   ├── ir_gen.rs
-│   └── optimize.rs
-├── backend/      # 代码生成 (LLVM)
-│   └── llvm/
-└── main.rs       # CLI 入口
+├── frontend/     # Lexer, Parser, Semantic Analysis
+├── middle/       # IR Generation and Optimization
+├── backend/      # Code Generation (LLVM)
+└── main.rs       # CLI Entry Point
 ```
 
-## 开发进度
+## Development Status
 
-- [x] **前端** - Lexer, Parser, Semantic Analyzer
-- [x] **中端** - Aether IR, Optimizer, IR Printer
-- [ ] **后端** - LLVM Code Generation
-- [ ] **标准库** - core, collections, io
-- [ ] **自举** - 用 AetherLang 重写编译器
+- [x] **Frontend** - Lexer, Parser, Semantic Analyzer
+- [x] **Middle-end** - Aether IR, Optimizer, IR Printer
+- [ ] **Backend** - LLVM Code Generation
+- [ ] **Standard Library** - core, collections, io
+- [ ] **Bootstrapping** - Self-hosting compiler
 
-## 测试
+## Testing
 
 ```bash
 cargo test
 ```
 
-当前测试状态: **25 tests passing** ✅
+Current: **25 tests passing** ✅
 
-## 文档
+## Documentation
 
-- [词法规范](docs/spec/词法规范.md)
-- [语法规范](docs/spec/语法规范.md)
-- [类型系统](docs/spec/类型系统.md)
-- [架构概览](docs/design/架构概览.md)
+- [Lexical Specification](docs/spec/词法规范.md)
+- [Syntax Specification](docs/spec/语法规范.md)
+- [Type System](docs/spec/类型系统.md)
+- [Architecture Overview](docs/design/架构概览.md)
 
-## 贡献
+## License
 
-欢迎贡献！请查看 [CONTRIBUTING.md](CONTRIBUTING.md) 了解详情。
-
-## 许可证
-
-MIT License - 详见 [LICENSE](LICENSE)
+Apache License 2.0 - see [LICENSE](LICENSE)

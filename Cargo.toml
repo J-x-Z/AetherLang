@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Z1529"]
 description = "AetherLang - A self-hosting systems programming language"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/Z1529/AetherLang"
 
 [dependencies]
