@@ -247,7 +247,21 @@ impl CCodeGen {
             
             Instruction::Call { dest, func, args } => {
                 let args_str: Vec<_> = args.iter().map(|a| self.value_to_c(a)).collect();
-                let call = format!("{}({})", func, args_str.join(", "));
+                
+                // Map built-in function names to C runtime functions
+                let c_func = match func.as_str() {
+                    "print" => "aether_print",
+                    "println" => "aether_println",
+                    "print_i64" => "aether_print_i64",
+                    "println_i64" => "aether_println_i64",
+                    "assert" => "aether_assert",
+                    "alloc" => "malloc",
+                    "free" => "free",
+                    "exit" => "exit",
+                    _ => func.as_str(),
+                };
+                
+                let call = format!("{}({})", c_func, args_str.join(", "));
                 
                 if let Some(d) = dest {
                     let var = self.get_var(*d);
@@ -256,6 +270,7 @@ impl CCodeGen {
                     self.writeln(&format!("{};", call));
                 }
             }
+
             
             Instruction::Alloca { dest, ty } => {
                 let var = self.get_var(*dest);
@@ -338,6 +353,15 @@ impl CCodeGen {
         self.writeln("#include <stdbool.h>");
         self.writeln("#include <stdio.h>");
         self.writeln("#include <stdlib.h>");
+        self.writeln("");
+        
+        // Runtime support functions
+        self.writeln("/* AetherLang Runtime */");
+        self.writeln("static void aether_print(const char* s) { printf(\"%s\", s); }");
+        self.writeln("static void aether_println(const char* s) { printf(\"%s\\n\", s); }");
+        self.writeln("static void aether_print_i64(int64_t n) { printf(\"%lld\", (long long)n); }");
+        self.writeln("static void aether_println_i64(int64_t n) { printf(\"%lld\\n\", (long long)n); }");
+        self.writeln("static void aether_assert(bool c) { if(!c) { fprintf(stderr, \"Assertion failed\\n\"); exit(1); } }");
         self.writeln("");
         
         // Forward declarations

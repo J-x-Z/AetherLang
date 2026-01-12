@@ -60,6 +60,8 @@ pub enum ResolvedType {
     Struct { name: String, fields: Vec<(String, ResolvedType)> },
     Enum { name: String },
     Function { params: Vec<ResolvedType>, ret: Box<ResolvedType> },
+    /// String type (pointer to char array)
+    String,
     Unknown,
 }
 
@@ -78,5 +80,25 @@ impl ResolvedType {
     
     pub fn bool() -> Self {
         Self::Primitive(PrimitiveType::Bool)
+    }
+    
+    // Constants for common types
+    pub const Unit: Self = Self::Primitive(PrimitiveType::Unit);
+    pub const Never: Self = Self::Primitive(PrimitiveType::Never);
+    pub const Bool: Self = Self::Primitive(PrimitiveType::Bool);
+    pub const I8: Self = Self::Primitive(PrimitiveType::I8);
+    pub const I16: Self = Self::Primitive(PrimitiveType::I16);
+    pub const I32: Self = Self::Primitive(PrimitiveType::I32);
+    pub const I64: Self = Self::Primitive(PrimitiveType::I64);
+    pub const U8: Self = Self::Primitive(PrimitiveType::U8);
+    pub const U16: Self = Self::Primitive(PrimitiveType::U16);
+    pub const U32: Self = Self::Primitive(PrimitiveType::U32);
+    pub const U64: Self = Self::Primitive(PrimitiveType::U64);
+    pub const F32: Self = Self::Primitive(PrimitiveType::F32);
+    pub const F64: Self = Self::Primitive(PrimitiveType::F64);
+    
+    /// Create a pointer type
+    pub fn Ptr(inner: Box<ResolvedType>) -> Self {
+        Self::Pointer(inner)
     }
 }

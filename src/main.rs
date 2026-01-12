@@ -7,6 +7,7 @@ mod middle;
 mod backend;
 mod types;
 mod utils;
+mod stdlib;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;

@@ -245,11 +245,47 @@ pub struct SemanticAnalyzer {
 
 impl SemanticAnalyzer {
     pub fn new() -> Self {
-        Self {
+        let mut analyzer = Self {
             symbols: SymbolTable::new(),
             errors: Vec::new(),
             ownership: OwnershipState::new(),
-        }
+        };
+        analyzer.register_builtins();
+        analyzer
+    }
+    
+    /// Register built-in functions
+    fn register_builtins(&mut self) {
+        // I/O functions
+        self.define_builtin("print", vec![ResolvedType::String], ResolvedType::unit());
+        self.define_builtin("println", vec![ResolvedType::String], ResolvedType::unit());
+        self.define_builtin("print_i64", vec![ResolvedType::I64], ResolvedType::unit());
+        self.define_builtin("println_i64", vec![ResolvedType::I64], ResolvedType::unit());
+        
+        // Memory functions
+        self.define_builtin("alloc", vec![ResolvedType::U64], 
+            ResolvedType::Pointer(Box::new(ResolvedType::U8)));
+        self.define_builtin("free", 
+            vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], 
+            ResolvedType::unit());
+        
+        // Process control
+        self.define_builtin("exit", vec![ResolvedType::I32], ResolvedType::never());
+        
+        // Debug
+        self.define_builtin("assert", vec![ResolvedType::Bool], ResolvedType::unit());
+    }
+    
+    /// Define a built-in function
+    fn define_builtin(&mut self, name: &str, params: Vec<ResolvedType>, ret: ResolvedType) {
+        let symbol = Symbol {
+            name: name.to_string(),
+            kind: SymbolKind::Function { params, ret },
+            ty: ResolvedType::Unknown, // Function type handled by kind
+            span: Span::dummy(), // Built-in, no source location
+            mutable: false,
+        };
+        let _ = self.symbols.define(symbol);
     }
 
     /// Analyze a program
