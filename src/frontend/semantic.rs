@@ -740,15 +740,14 @@ impl SemanticAnalyzer {
     /// Get the type of a literal
     fn literal_type(&self, lit: &Literal) -> ResolvedType {
         match lit {
-            Literal::Int(_, _) => ResolvedType::Primitive(PrimitiveType::I32),
+            Literal::Int(_, _) => ResolvedType::Primitive(PrimitiveType::I64), // Default to i64
             Literal::Float(_, _) => ResolvedType::Primitive(PrimitiveType::F64),
-            Literal::String(_, _) => ResolvedType::Slice(Box::new(
-                ResolvedType::Primitive(PrimitiveType::U8)
-            )),
+            Literal::String(_, _) => ResolvedType::String, // String type for string literals
             Literal::Char(_, _) => ResolvedType::Primitive(PrimitiveType::Char),
             Literal::Bool(_, _) => ResolvedType::Primitive(PrimitiveType::Bool),
         }
     }
+
 
     /// Check binary operation and return result type
     fn check_binary_op(&self, left: &ResolvedType, op: BinOp, right: &ResolvedType, span: Span) -> Result<ResolvedType> {
