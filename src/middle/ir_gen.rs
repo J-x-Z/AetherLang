@@ -455,7 +455,35 @@ impl IRGenerator {
             // Not yet implemented
             Expr::Match { .. } => Ok(Value::Unit),
             Expr::For { .. } => Ok(Value::Unit),
-            Expr::StructLit { .. } => Ok(Value::Unit),
+            Expr::StructLit { name, fields, .. } => {
+                // Allocate space for the struct
+                let struct_type = IRType::Struct(name.name.clone());
+                let ptr = self.alloc_register();
+                self.emit_current(Instruction::Alloca { dest: ptr, ty: struct_type.clone() });
+                
+                // Store each field value
+                for (idx, (field_name, field_expr)) in fields.iter().enumerate() {
+                    let field_val = self.generate_expr(field_expr)?;
+                    
+                    // Get pointer to field
+                    let field_ptr = self.alloc_register();
+                    self.emit_current(Instruction::GetElementPtr {
+                        dest: field_ptr,
+                        ptr: Value::Register(ptr),
+                        index: Value::Constant(Constant::Int(idx as i64)),
+                    });
+                    
+                    // Store the value
+                    self.emit_current(Instruction::Store {
+                        ptr: Value::Register(field_ptr),
+                        value: field_val,
+                    });
+                }
+                
+                // Return pointer to the struct
+                Ok(Value::Register(ptr))
+            }
+
             Expr::Cast { .. } => Ok(Value::Unit),
             Expr::Range { .. } => Ok(Value::Unit),
             Expr::Asm { .. } => Ok(Value::Unit),

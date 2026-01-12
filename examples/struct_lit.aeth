@@ -1,0 +1,10 @@
+// Struct literal test
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn main() {
+    let p = Point { x: 10, y: 20 }
+    println("Created point")
+}

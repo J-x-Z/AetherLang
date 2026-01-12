@@ -730,7 +730,40 @@ impl SemanticAnalyzer {
 
             // Placeholders for unimplemented expressions
             Expr::MethodCall { .. } => Ok(ResolvedType::Unknown),
-            Expr::StructLit { .. } => Ok(ResolvedType::Unknown),
+            
+            Expr::StructLit { name, fields, span } => {
+                // First, check struct exists and get field info
+                let (is_struct, struct_fields) = if let Some(symbol) = self.symbols.lookup(&name.name) {
+                    if let SymbolKind::Struct { fields: sf } = &symbol.kind {
+                        (true, sf.clone())
+                    } else {
+                        (false, Vec::new())
+                    }
+                } else {
+                    return Err(Error::UndefinedType {
+                        name: name.name.clone(),
+                        span: *span,
+                    });
+                };
+                
+                if !is_struct {
+                    return Err(Error::NotAStruct { span: *span });
+                }
+                
+                // Now check each field expression (no borrow conflict)
+                for (_field_name, field_expr) in fields {
+                    let _field_ty = self.check_expr(field_expr)?;
+                    // TODO: Verify field exists and type matches
+                }
+                
+                // Return pointer to struct type
+                Ok(ResolvedType::Pointer(Box::new(ResolvedType::Struct {
+                    name: name.name.clone(),
+                    fields: struct_fields,
+                })))
+            }
+
+
             Expr::Cast { ty, .. } => self.resolve_type(ty),
             Expr::Range { .. } => Ok(ResolvedType::Unknown),
             Expr::Asm { .. } => Ok(ResolvedType::unit()),

@@ -1,10 +1,5 @@
-[build]
-target = "x86_64-pc-windows-gnu"
-
-[target.x86_64-pc-windows-gnu]
-linker = "C:\\msys64\\ucrt64\\bin\\gcc.exe"
-rustflags = ["-L", "C:\\msys64\\ucrt64\\lib"]
+# Only use GNU toolchain when llvm feature is enabled
+# The GNU toolchain is needed for linking with MSYS2 LLVM
 
 [env]
 LLVM_SYS_211_PREFIX = "C:\\msys64\\ucrt64"
-PATH = { value = "C:\\msys64\\ucrt64\\bin", relative = false }

@@ -64,6 +64,9 @@ pub enum Error {
     #[error("Expression is not a struct")]
     NotAStruct { span: Span },
     
+    #[error("Undefined type: {name}")]
+    UndefinedType { name: String, span: Span },
+    
     #[error("Unknown field: {field}")]
     UnknownField { field: String, span: Span },
     
@@ -125,6 +128,7 @@ impl Error {
             Self::ArgCountMismatch { span, .. } => Some(*span),
             Self::NotCallable { span } => Some(*span),
             Self::NotAStruct { span } => Some(*span),
+            Self::UndefinedType { span, .. } => Some(*span),
             Self::UnknownField { span, .. } => Some(*span),
             Self::CannotDeref { span } => Some(*span),
             Self::NotIndexable { span } => Some(*span),

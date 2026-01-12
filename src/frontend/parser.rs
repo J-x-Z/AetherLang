@@ -445,11 +445,39 @@ impl Parser {
                 Expr::Literal(Literal::Bool(false, token.span))
             }
 
-            // Identifier
+            // Identifier or struct literal
             TokenKind::Ident(_) => {
                 let ident = self.parse_ident()?;
+                
+                // Check if this is a struct literal: TypeName { field: value, ... }
+                if self.check(&TokenKind::LBrace) {
+                    let start_span = ident.span;
+                    self.advance(); // consume '{'
+                    
+                    let mut fields = Vec::new();
+                    while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+                        // Parse field name
+                        let field_name = self.parse_ident()?;
+                        self.expect(TokenKind::Colon)?;
+                        let field_value = self.parse_expr()?;
+                        fields.push((field_name, field_value));
+                        
+                        if !self.consume(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    
+                    let end_token = self.expect(TokenKind::RBrace)?;
+                    return Ok(Expr::StructLit {
+                        name: ident,
+                        fields,
+                        span: start_span.merge(&end_token.span),
+                    });
+                }
+                
                 Expr::Ident(ident)
             }
+
 
             // Parenthesized or tuple
             TokenKind::LParen => {
