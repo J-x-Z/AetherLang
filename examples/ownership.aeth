@@ -1,0 +1,54 @@
+// AetherLang 示例：所有权系统演示
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+impl Point {
+    fn new(x: i32, y: i32) -> Point {
+        return Point { x: x, y: y }
+    }
+    
+    fn distance(self: ref) -> f64 {
+        return sqrt(self.x * self.x + self.y * self.y)
+    }
+    
+    fn move(self: mut, dx: i32, dy: i32) {
+        self.x += dx
+        self.y += dy
+    }
+}
+
+// 不可变借用：只读访问
+fn print_point(p: ref Point) {
+    println("Point({}, {})", p.x, p.y)
+}
+
+// 可变借用：可以修改
+fn scale_point(p: mut Point, factor: i32) {
+    p.x *= factor
+    p.y *= factor
+}
+
+// 所有权转移：获得所有权
+fn consume_point(p: own Point) {
+    println("Consuming point: ({}, {})", p.x, p.y)
+    // p 在函数结束时被释放
+}
+
+fn main() {
+    let p = Point.new(10, 20)
+    
+    // 不可变借用 - 可以多次
+    print_point(ref p)
+    print_point(ref p)
+    
+    // 可变借用
+    scale_point(mut p, 2)
+    print_point(ref p)  // 输出: Point(20, 40)
+    
+    // 转移所有权
+    consume_point(own p)
+    // p 不再可用
+}

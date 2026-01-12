@@ -1,0 +1,6 @@
+// AetherLang 示例：Hello World
+// 这是 AetherLang 的第一个示例程序
+
+fn main() {
+    println("Hello, AetherLang!")
+}

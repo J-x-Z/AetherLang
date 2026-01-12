@@ -1,0 +1,572 @@
+    Checking aether-lang v0.1.0 (C:\Users\Z1529\.gemini\antigravity\scratch\AetherLang)
+warning: unused import: `TokenKind`
+ --> src\frontend\parser.rs:5:37
+  |
+5 | use crate::frontend::token::{Token, TokenKind};
+  |                                     ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `Error` and `Span`
+ --> src\frontend\parser.rs:8:20
+  |
+8 | use crate::utils::{Span, Error, Result};
+  |                    ^^^^  ^^^^^
+
+warning: unused imports: `TokenKind` and `Token`
+ --> src\frontend\mod.rs:9:17
+  |
+9 | pub use token::{Token, TokenKind};
+  |                 ^^^^^  ^^^^^^^^^
+
+warning: unused import: `lexer::Lexer`
+  --> src\frontend\mod.rs:10:9
+   |
+10 | pub use lexer::Lexer;
+   |         ^^^^^^^^^^^^
+
+warning: unused import: `parser::Parser`
+  --> src\frontend\mod.rs:11:9
+   |
+11 | pub use parser::Parser;
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `semantic::SemanticAnalyzer`
+  --> src\frontend\mod.rs:12:9
+   |
+12 | pub use semantic::SemanticAnalyzer;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ir::*`
+ --> src\middle\mod.rs:7:9
+  |
+7 | pub use ir::*;
+  |         ^^^^^
+
+warning: unused import: `ir_gen::IRGenerator`
+ --> src\middle\mod.rs:8:9
+  |
+8 | pub use ir_gen::IRGenerator;
+  |         ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `optimize::Optimizer`
+ --> src\middle\mod.rs:9:9
+  |
+9 | pub use optimize::Optimizer;
+  |         ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `llvm_codegen::LLVMCodeGen`
+ --> src\backend\llvm\mod.rs:5:9
+  |
+5 | pub use llvm_codegen::LLVMCodeGen;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `codegen::CodeGen`
+ --> src\backend\mod.rs:6:9
+  |
+6 | pub use codegen::CodeGen;
+  |         ^^^^^^^^^^^^^^^^
+
+warning: unused import: `type_system::*`
+ --> src\types\mod.rs:5:9
+  |
+5 | pub use type_system::*;
+  |         ^^^^^^^^^^^^^^
+
+warning: struct `Token` is never constructed
+ --> src\frontend\token.rs:6:12
+  |
+6 | pub struct Token {
+  |            ^^^^^
+  |
+  = note: `#[warn(dead_code)]` on by default
+
+warning: associated functions `new` and `eof` are never used
+  --> src\frontend\token.rs:12:12
+   |
+11 | impl Token {
+   | ---------- associated functions in this implementation
+12 |     pub fn new(kind: TokenKind, span: Span) -> Self {
+   |            ^^^
+...
+16 |     pub fn eof(span: Span) -> Self {
+   |            ^^^
+
+warning: enum `TokenKind` is never used
+  --> src\frontend\token.rs:23:10
+   |
+23 | pub enum TokenKind {
+   |          ^^^^^^^^^
+
+warning: associated items `is_keyword`, `keyword_from_str`, and `binary_precedence` are never used
+   --> src\frontend\token.rs:175:12
+    |
+173 | impl TokenKind {
+    | -------------- associated items in this implementation
+174 |     /// Check if this token is a keyword
+175 |     pub fn is_keyword(&self) -> bool {
+    |            ^^^^^^^^^^
+...
+206 |     pub fn keyword_from_str(s: &str) -> Option<TokenKind> {
+    |            ^^^^^^^^^^^^^^^^
+...
+238 |     pub fn binary_precedence(&self) -> Option<u8> {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `Lexer` is never constructed
+ --> src\frontend\lexer.rs:9:12
+  |
+9 | pub struct Lexer {
+  |            ^^^^^
+
+warning: multiple associated items are never used
+   --> src\frontend\lexer.rs:22:12
+    |
+20  | impl Lexer {
+    | ---------- associated items in this implementation
+21  |     /// Create a new lexer for the given source code
+22  |     pub fn new(source: &str, file_id: usize) -> Self {
+    |            ^^^
+...
+32  |     fn peek(&self) -> Option<char> {
+    |        ^^^^
+...
+37  |     fn peek_next(&self) -> Option<char> {
+    |        ^^^^^^^^^
+...
+42  |     fn advance(&mut self) -> Option<char> {
+    |        ^^^^^^^
+...
+49  |     fn is_at_end(&self) -> bool {
+    |        ^^^^^^^^^
+...
+54  |     fn make_span(&self) -> Span {
+    |        ^^^^^^^^^
+...
+59  |     fn make_token(&self, kind: TokenKind) -> Token {
+    |        ^^^^^^^^^^
+...
+64  |     fn skip_whitespace(&mut self) {
+    |        ^^^^^^^^^^^^^^^
+...
+110 |     fn read_identifier(&mut self) -> Token {
+    |        ^^^^^^^^^^^^^^^
+...
+129 |     fn read_number(&mut self) -> Token {
+    |        ^^^^^^^^^^^
+...
+210 |     fn read_string(&mut self) -> Token {
+    |        ^^^^^^^^^^^
+...
+244 |     fn read_char(&mut self) -> Token {
+    |        ^^^^^^^^^
+...
+272 |     pub fn next_token(&mut self) -> Token {
+    |            ^^^^^^^^^^
+...
+433 |     pub fn tokenize(&mut self) -> Vec<Token> {
+    |            ^^^^^^^^
+
+warning: struct `Program` is never constructed
+ --> src\frontend\ast.rs:7:12
+  |
+7 | pub struct Program {
+  |            ^^^^^^^
+
+warning: enum `Item` is never used
+  --> src\frontend\ast.rs:13:10
+   |
+13 | pub enum Item {
+   |          ^^^^
+
+warning: struct `Function` is never constructed
+  --> src\frontend\ast.rs:24:12
+   |
+24 | pub struct Function {
+   |            ^^^^^^^^
+
+warning: struct `Param` is never constructed
+  --> src\frontend\ast.rs:34:12
+   |
+34 | pub struct Param {
+   |            ^^^^^
+
+warning: enum `Ownership` is never used
+  --> src\frontend\ast.rs:43:10
+   |
+43 | pub enum Ownership {
+   |          ^^^^^^^^^
+
+warning: struct `StructDef` is never constructed
+  --> src\frontend\ast.rs:60:12
+   |
+60 | pub struct StructDef {
+   |            ^^^^^^^^^
+
+warning: struct `Field` is never constructed
+  --> src\frontend\ast.rs:68:12
+   |
+68 | pub struct Field {
+   |            ^^^^^
+
+warning: struct `EnumDef` is never constructed
+  --> src\frontend\ast.rs:76:12
+   |
+76 | pub struct EnumDef {
+   |            ^^^^^^^
+
+warning: struct `Variant` is never constructed
+  --> src\frontend\ast.rs:84:12
+   |
+84 | pub struct Variant {
+   |            ^^^^^^^
+
+warning: struct `ImplBlock` is never constructed
+  --> src\frontend\ast.rs:92:12
+   |
+92 | pub struct ImplBlock {
+   |            ^^^^^^^^^
+
+warning: struct `InterfaceDef` is never constructed
+   --> src\frontend\ast.rs:101:12
+    |
+101 | pub struct InterfaceDef {
+    |            ^^^^^^^^^^^^
+
+warning: struct `FunctionSig` is never constructed
+   --> src\frontend\ast.rs:109:12
+    |
+109 | pub struct FunctionSig {
+    |            ^^^^^^^^^^^
+
+warning: struct `ConstDef` is never constructed
+   --> src\frontend\ast.rs:118:12
+    |
+118 | pub struct ConstDef {
+    |            ^^^^^^^^
+
+warning: struct `Block` is never constructed
+   --> src\frontend\ast.rs:127:12
+    |
+127 | pub struct Block {
+    |            ^^^^^
+
+warning: enum `Stmt` is never used
+   --> src\frontend\ast.rs:134:10
+    |
+134 | pub enum Stmt {
+    |          ^^^^
+
+warning: enum `Expr` is never used
+   --> src\frontend\ast.rs:160:10
+    |
+160 | pub enum Expr {
+    |          ^^^^
+
+warning: struct `MatchArm` is never constructed
+   --> src\frontend\ast.rs:290:12
+    |
+290 | pub struct MatchArm {
+    |            ^^^^^^^^
+
+warning: enum `Pattern` is never used
+   --> src\frontend\ast.rs:299:10
+    |
+299 | pub enum Pattern {
+    |          ^^^^^^^
+
+warning: struct `AsmOperand` is never constructed
+   --> src\frontend\ast.rs:325:12
+    |
+325 | pub struct AsmOperand {
+    |            ^^^^^^^^^^
+
+warning: enum `Literal` is never used
+   --> src\frontend\ast.rs:332:10
+    |
+332 | pub enum Literal {
+    |          ^^^^^^^
+
+warning: method `span` is never used
+   --> src\frontend\ast.rs:341:12
+    |
+340 | impl Literal {
+    | ------------ method in this implementation
+341 |     pub fn span(&self) -> Span {
+    |            ^^^^
+
+warning: struct `Ident` is never constructed
+   --> src\frontend\ast.rs:354:12
+    |
+354 | pub struct Ident {
+    |            ^^^^^
+
+warning: enum `BinOp` is never used
+   --> src\frontend\ast.rs:361:10
+    |
+361 | pub enum BinOp {
+    |          ^^^^^
+
+warning: enum `UnOp` is never used
+   --> src\frontend\ast.rs:394:10
+    |
+394 | pub enum UnOp {
+    |          ^^^^
+
+warning: enum `Type` is never used
+   --> src\frontend\ast.rs:405:10
+    |
+405 | pub enum Type {
+    |          ^^^^
+
+warning: method `span` is never used
+   --> src\frontend\ast.rs:441:12
+    |
+440 | impl Type {
+    | --------- method in this implementation
+441 |     pub fn span(&self) -> Span {
+    |            ^^^^
+
+warning: struct `Parser` is never constructed
+  --> src\frontend\parser.rs:11:12
+   |
+11 | pub struct Parser {
+   |            ^^^^^^
+
+warning: associated items `new` and `parse_program` are never used
+  --> src\frontend\parser.rs:18:12
+   |
+16 | impl Parser {
+   | ----------- associated items in this implementation
+17 |     /// Create a new parser from a lexer
+18 |     pub fn new(mut lexer: Lexer) -> Self {
+   |            ^^^
+...
+26 |     pub fn parse_program(&mut self) -> Result<Program> {
+   |            ^^^^^^^^^^^^^
+
+warning: struct `SemanticAnalyzer` is never constructed
+ --> src\frontend\semantic.rs:7:12
+  |
+7 | pub struct SemanticAnalyzer {
+  |            ^^^^^^^^^^^^^^^^
+
+warning: associated items `new` and `analyze` are never used
+  --> src\frontend\semantic.rs:12:12
+   |
+11 | impl SemanticAnalyzer {
+   | --------------------- associated items in this implementation
+12 |     pub fn new() -> Self {
+   |            ^^^
+...
+16 |     pub fn analyze(&mut self, _program: &mut Program) -> Result<()> {
+   |            ^^^^^^^
+
+warning: struct `IRModule` is never constructed
+ --> src\middle\ir.rs:5:12
+  |
+5 | pub struct IRModule {
+  |            ^^^^^^^^
+
+warning: struct `IRFunction` is never constructed
+  --> src\middle\ir.rs:11:12
+   |
+11 | pub struct IRFunction {
+   |            ^^^^^^^^^^
+
+warning: struct `BasicBlock` is never constructed
+  --> src\middle\ir.rs:18:12
+   |
+18 | pub struct BasicBlock {
+   |            ^^^^^^^^^^
+
+warning: struct `BlockId` is never constructed
+  --> src\middle\ir.rs:25:12
+   |
+25 | pub struct BlockId(pub usize);
+   |            ^^^^^^^
+
+warning: struct `Register` is never constructed
+  --> src\middle\ir.rs:29:12
+   |
+29 | pub struct Register(pub usize);
+   |            ^^^^^^^^
+
+warning: enum `Instruction` is never used
+  --> src\middle\ir.rs:33:10
+   |
+33 | pub enum Instruction {
+   |          ^^^^^^^^^^^
+
+warning: enum `Value` is never used
+  --> src\middle\ir.rs:46:10
+   |
+46 | pub enum Value {
+   |          ^^^^^
+
+warning: enum `Constant` is never used
+  --> src\middle\ir.rs:54:10
+   |
+54 | pub enum Constant {
+   |          ^^^^^^^^
+
+warning: enum `BinOp` is never used
+  --> src\middle\ir.rs:63:10
+   |
+63 | pub enum BinOp {
+   |          ^^^^^
+
+warning: struct `IRGenerator` is never constructed
+ --> src\middle\ir_gen.rs:8:12
+  |
+8 | pub struct IRGenerator;
+  |            ^^^^^^^^^^^
+
+warning: associated items `new` and `generate` are never used
+  --> src\middle\ir_gen.rs:11:12
+   |
+10 | impl IRGenerator {
+   | ---------------- associated items in this implementation
+11 |     pub fn new() -> Self {
+   |            ^^^
+...
+15 |     pub fn generate(&mut self, _program: &Program) -> Result<IRModule> {
+   |            ^^^^^^^^
+
+warning: struct `Optimizer` is never constructed
+ --> src\middle\optimize.rs:6:12
+  |
+6 | pub struct Optimizer;
+  |            ^^^^^^^^^
+
+warning: associated items `new` and `optimize` are never used
+  --> src\middle\optimize.rs:9:12
+   |
+8  | impl Optimizer {
+   | -------------- associated items in this implementation
+9  |     pub fn new() -> Self {
+   |            ^^^
+...
+13 |     pub fn optimize(&mut self, _module: &mut IRModule) {
+   |            ^^^^^^^^
+
+warning: trait `CodeGen` is never used
+ --> src\backend\codegen.rs:9:11
+  |
+9 | pub trait CodeGen {
+  |           ^^^^^^^
+
+warning: struct `LLVMCodeGen` is never constructed
+ --> src\backend\llvm\llvm_codegen.rs:8:12
+  |
+8 | pub struct LLVMCodeGen {
+  |            ^^^^^^^^^^^
+
+warning: associated function `new` is never used
+  --> src\backend\llvm\llvm_codegen.rs:13:12
+   |
+12 | impl LLVMCodeGen {
+   | ---------------- associated function in this implementation
+13 |     pub fn new(target: &str) -> Self {
+   |            ^^^
+
+warning: enum `PrimitiveType` is never used
+ --> src\types\type_system.rs:5:10
+  |
+5 | pub enum PrimitiveType {
+  |          ^^^^^^^^^^^^^
+
+warning: methods `size_of`, `align_of`, `is_signed`, `is_integer`, and `is_float` are never used
+  --> src\types\type_system.rs:17:12
+   |
+15 | impl PrimitiveType {
+   | ------------------ methods in this implementation
+16 |     /// Get the size in bytes
+17 |     pub fn size_of(&self) -> usize {
+   |            ^^^^^^^
+...
+28 |     pub fn align_of(&self) -> usize {
+   |            ^^^^^^^^
+...
+33 |     pub fn is_signed(&self) -> bool {
+   |            ^^^^^^^^^
+...
+38 |     pub fn is_integer(&self) -> bool {
+   |            ^^^^^^^^^^
+...
+46 |     pub fn is_float(&self) -> bool {
+   |            ^^^^^^^^
+
+warning: enum `ResolvedType` is never used
+  --> src\types\type_system.rs:53:10
+   |
+53 | pub enum ResolvedType {
+   |          ^^^^^^^^^^^^
+
+warning: associated functions `unit`, `never`, `i32`, and `bool` are never used
+  --> src\types\type_system.rs:67:12
+   |
+66 | impl ResolvedType {
+   | ----------------- associated functions in this implementation
+67 |     pub fn unit() -> Self {
+   |            ^^^^
+...
+71 |     pub fn never() -> Self {
+   |            ^^^^^
+...
+75 |     pub fn i32() -> Self {
+   |            ^^^
+...
+79 |     pub fn bool() -> Self {
+   |            ^^^^
+
+warning: struct `Span` is never constructed
+ --> src\utils\span.rs:5:12
+  |
+5 | pub struct Span {
+  |            ^^^^
+
+warning: associated items `new`, `dummy`, `merge`, `len`, and `is_empty` are never used
+  --> src\utils\span.rs:16:12
+   |
+14 | impl Span {
+   | --------- associated items in this implementation
+15 |     /// Create a new span
+16 |     pub fn new(start: usize, end: usize, file_id: usize) -> Self {
+   |            ^^^
+...
+21 |     pub fn dummy() -> Self {
+   |            ^^^^^
+...
+26 |     pub fn merge(&self, other: &Span) -> Span {
+   |            ^^^^^
+...
+35 |     pub fn len(&self) -> usize {
+   |            ^^^
+...
+40 |     pub fn is_empty(&self) -> bool {
+   |            ^^^^^^^^
+
+warning: type alias `Result` is never used
+ --> src\utils\error.rs:7:10
+  |
+7 | pub type Result<T> = std::result::Result<T, Error>;
+  |          ^^^^^^
+
+warning: enum `Error` is never used
+  --> src\utils\error.rs:11:10
+   |
+11 | pub enum Error {
+   |          ^^^^^
+
+warning: method `span` is never used
+  --> src\utils\error.rs:62:12
+   |
+60 | impl Error {
+   | ---------- method in this implementation
+61 |     /// Get the span associated with this error
+62 |     pub fn span(&self) -> Option<Span> {
+   |            ^^^^
+
+warning: `aether-lang` (bin "aethc") generated 73 warnings (run `cargo fix --bin "aethc"` to apply 12 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.39s

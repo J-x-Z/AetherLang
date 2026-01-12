@@ -1,0 +1,35 @@
+[package]
+name = "aether-lang"
+version = "0.1.0"
+edition = "2021"
+authors = ["Z1529"]
+description = "AetherLang - A self-hosting systems programming language"
+license = "MIT"
+repository = "https://github.com/Z1529/AetherLang"
+
+[dependencies]
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# LLVM bindings (v1.0 backend) - requires LLVM with llvm-config
+# llvm-sys = "211"
+
+# CLI
+clap = { version = "4.0", features = ["derive"] }
+
+# Utilities
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+# Testing
+pretty_assertions = "1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[[bin]]
+name = "aethc"
+path = "src/main.rs"
