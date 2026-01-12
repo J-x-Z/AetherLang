@@ -1,0 +1,18 @@
+// Fibonacci function
+fn fib(n: i64) -> i64 {
+    if n <= 1 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+    println("Fibonacci sequence:")
+    println_i64(fib(0))
+    println_i64(fib(1))
+    println_i64(fib(2))
+    println_i64(fib(3))
+    println_i64(fib(4))
+    println_i64(fib(5))
+    println_i64(fib(10))
+}

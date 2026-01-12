@@ -269,32 +269,55 @@ impl IRGenerator {
 
                 // Generate then block
                 self.current_block = then_id;
-                let then_val = self.generate_block(then_block)?;
-                self.set_terminator_current(Terminator::Jump { target: merge_id });
+                let then_result = self.generate_block(then_block)?;
+                
+                let then_jumps_to_merge = if self.get_current_terminator().is_none() {
+                    self.set_terminator_current(Terminator::Jump { target: merge_id });
+                    true
+                } else {
+                    false
+                };
                 let then_exit = self.current_block;
 
                 // Generate else block
                 self.current_block = else_id;
-                let else_val = if let Some(eb) = else_block {
+                let else_result = if let Some(eb) = else_block {
                     self.generate_block(eb)?
                 } else {
                     Some(Value::Unit)
                 };
-                self.set_terminator_current(Terminator::Jump { target: merge_id });
+                
+                let else_jumps_to_merge = if self.get_current_terminator().is_none() {
+                    self.set_terminator_current(Terminator::Jump { target: merge_id });
+                    true
+                } else {
+                    false
+                };
                 let else_exit = self.current_block;
 
                 // Merge block with phi node
                 self.current_block = merge_id;
                 
-                if then_val.is_some() || else_val.is_some() {
+                if then_result.is_some() || else_result.is_some() {
                     let dest = self.alloc_register();
                     let mut incoming = Vec::new();
-                    if let Some(tv) = then_val {
-                        incoming.push((tv, then_exit));
+                    
+                    if then_jumps_to_merge {
+                        if let Some(tv) = then_result {
+                            incoming.push((tv, then_exit));
+                        } else {
+                            incoming.push((Value::Unit, then_exit));
+                        }
                     }
-                    if let Some(ev) = else_val {
-                        incoming.push((ev, else_exit));
+                    
+                    if else_jumps_to_merge {
+                        if let Some(ev) = else_result {
+                            incoming.push((ev, else_exit));
+                        } else {
+                            incoming.push((Value::Unit, else_exit));
+                        }
                     }
+                    
                     if !incoming.is_empty() {
                         self.emit_current(Instruction::Phi { dest, incoming });
                         return Ok(Value::Register(dest));
@@ -302,6 +325,7 @@ impl IRGenerator {
                 }
 
                 Ok(Value::Unit)
+
             }
 
             Expr::Loop { body, .. } => {

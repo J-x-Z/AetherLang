@@ -140,10 +140,11 @@ impl CCodeGen {
         self.var_counter = 0;
         self.block_labels.clear();
 
-        // Generate block labels
+        // Generate block labels with L_ prefix to avoid C reserved words
         for (i, block) in func.blocks.iter().enumerate() {
-            self.block_labels.insert(i, block.label.clone());
+            self.block_labels.insert(i, format!("L_{}", block.label));
         }
+
 
         // Function signature
         let ret_type = self.ir_type_to_c(&func.ret_type);
@@ -194,10 +195,12 @@ impl CCodeGen {
         for (i, block) in func.blocks.iter().enumerate() {
             // Label (except for entry block)
             if i > 0 {
+                let label = &self.block_labels[&i];
                 self.indent -= 1;
-                self.writeln(&format!("{}:", block.label));
+                self.writeln(&format!("{}:", label));
                 self.indent += 1;
             }
+
 
             // Instructions
             for inst in &block.instructions {
