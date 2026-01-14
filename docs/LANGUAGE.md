@@ -264,6 +264,14 @@ fn critical() {}
 
 ---
 
+## 5. 相关设计文档
+
+- [AI-IR 设计 (English)](design/ai_ir_design.md) | [(中文)](design/ai_ir_design_zh_CN.md)
+- [AI-IR API (English)](design/ai_ir_api.md) | [(中文)](design/ai_ir_api_zh_CN.md)
+- [架构概览 (English)](design/architecture_overview.md) | [(中文)](design/architecture_overview_zh_CN.md)
+
+---
+
 ## ⚠️ 旧文档 (已废弃)
 
 以下文档为旧版本，仅供参考：
