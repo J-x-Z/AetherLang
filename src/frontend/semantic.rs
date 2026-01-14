@@ -3,7 +3,9 @@
 //! Performs:
 //! - Symbol table management (scopes, definitions)
 //! - Type checking
+//! - Type checking
 //! - Ownership analysis (own/ref/mut)
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use crate::frontend::ast::*;
@@ -31,9 +33,10 @@ pub struct Symbol {
 pub enum SymbolKind {
     Variable,
     Function { params: Vec<ResolvedType>, ret: ResolvedType },
-    Struct { fields: Vec<(String, ResolvedType)> },
+    Struct { fields: Vec<(String, ResolvedType)>, type_params: Vec<String> },
     Enum { variants: Vec<String> },
     Param { ownership: Ownership },
+    TypeParam,
 }
 
 /// A scope containing symbols
@@ -241,6 +244,11 @@ pub struct SemanticAnalyzer {
     pub symbols: SymbolTable,
     pub errors: Vec<Error>,
     ownership: OwnershipState,
+    // AI-Native extensions
+    /// Current function's declared effects (for effect propagation checking)
+    current_effects: Option<EffectSet>,
+    /// Whether we're in strict mode (@production) or lenient mode (@prototype)
+    strict_mode: bool,
 }
 
 impl SemanticAnalyzer {
@@ -249,9 +257,16 @@ impl SemanticAnalyzer {
             symbols: SymbolTable::new(),
             errors: Vec::new(),
             ownership: OwnershipState::new(),
+            current_effects: None,
+            strict_mode: false, // Default: lenient mode
         };
         analyzer.register_builtins();
         analyzer
+    }
+    
+    /// Set strict mode for production-level checking
+    pub fn set_strict_mode(&mut self, strict: bool) {
+        self.strict_mode = strict;
     }
     
     /// Register built-in functions
@@ -273,7 +288,7 @@ impl SemanticAnalyzer {
         self.define_builtin("exit", vec![ResolvedType::I32], ResolvedType::never());
         
         // Debug
-        self.define_builtin("assert", vec![ResolvedType::Bool], ResolvedType::unit());
+        self.define_builtin("assert", vec![ResolvedType::BOOL], ResolvedType::UNIT);
     }
     
     /// Define a built-in function
@@ -331,25 +346,54 @@ impl SemanticAnalyzer {
                 })?;
             }
             Item::Struct(s) => {
+                self.symbols.enter_scope();
+                for param in &s.type_params {
+                     self.symbols.define(Symbol {
+                         name: param.name.clone(),
+                         kind: SymbolKind::TypeParam,
+                         ty: ResolvedType::GenericParam(param.name.clone()),
+                         span: param.span,
+                         mutable: false,
+                     })?;
+                }
+                
                 let fields: Vec<(String, ResolvedType)> = s.fields.iter()
                     .map(|f| Ok((f.name.name.clone(), self.resolve_type(&f.ty)?)))
                     .collect::<Result<Vec<_>>>()?;
+                
+                self.symbols.exit_scope();
 
                 self.symbols.define(Symbol {
                     name: s.name.name.clone(),
-                    kind: SymbolKind::Struct { fields },
+                    kind: SymbolKind::Struct { 
+                        fields: fields.clone(),
+                        type_params: s.type_params.iter().map(|p| p.name.clone()).collect(),
+                    },
                     ty: ResolvedType::Struct { 
                         name: s.name.name.clone(), 
-                        fields: Vec::new() 
+                        fields, // Use generic fields
                     },
                     span: s.span,
                     mutable: false,
                 })?;
             }
             Item::Enum(e) => {
+                self.symbols.enter_scope();
+                for param in &e.type_params {
+                     self.symbols.define(Symbol {
+                         name: param.name.clone(),
+                         kind: SymbolKind::TypeParam,
+                         ty: ResolvedType::GenericParam(param.name.clone()),
+                         span: param.span,
+                         mutable: false,
+                     })?;
+                }
+                
                 let variants: Vec<String> = e.variants.iter()
                     .map(|v| v.name.name.clone())
                     .collect();
+                
+                self.symbols.exit_scope();
 
                 self.symbols.define(Symbol {
                     name: e.name.name.clone(),
@@ -391,6 +435,21 @@ impl SemanticAnalyzer {
                 // TODO: Check that expr_ty matches declared type
                 Ok(())
             }
+            Item::Macro(_) => Ok(()), // Macro expansion handled elsewhere
+            Item::Module(m) => {
+                // Recursively check module items
+                if let Some(items) = &m.items {
+                    for item in items {
+                        self.check_item(item)?;
+                    }
+                }
+                Ok(())
+            }
+            Item::Use(_) => Ok(()), // Import resolution handled elsewhere
+            // Phase 8: FFI and System features
+            Item::Extern(_) => Ok(()), // FFI - external symbols registered elsewhere
+            Item::Static(_) => Ok(()), // TODO: Check static variable type
+            Item::Union(_) => Ok(()), // TODO: Check union field types
         }
     }
 
@@ -398,6 +457,9 @@ impl SemanticAnalyzer {
     fn check_function(&mut self, func: &Function) -> Result<()> {
         self.symbols.enter_scope();
         self.ownership = OwnershipState::new();
+        
+        // Set effect context for this function (for effect propagation checking)
+        self.current_effects = Some(func.effects.clone());
 
         // Add parameters to scope
         for param in &func.params {
@@ -411,9 +473,65 @@ impl SemanticAnalyzer {
             })?;
             self.ownership.add_owned(param.name.name.clone(), param.span);
         }
+        
+        // Resolve return type for 'result' variable in ensures contracts
+        let return_type = if let Some(ref ret_ty) = func.ret_type {
+            self.resolve_type(ret_ty)?
+        } else {
+            ResolvedType::UNIT
+        };
+        
+        // Check contract expressions (requires, ensures)
+        for contract in &func.contracts {
+            // For 'ensures' contracts, add 'result' variable to scope
+            // This allows postconditions to reference the return value
+            let is_ensures = matches!(contract.kind, crate::frontend::ast::ContractKind::Ensures);
+            
+            if is_ensures && return_type != ResolvedType::UNIT {
+                // Temporarily add 'result' variable for ensures checking
+                self.symbols.enter_scope();
+                self.symbols.define(Symbol {
+                    name: "result".to_string(),
+                    kind: SymbolKind::Variable,
+                    ty: return_type.clone(),
+                    span: func.span,
+                    mutable: false,
+                })?;
+            }
+            
+            let contract_ty = self.check_expr(&contract.condition)?;
+            
+            // Contract expressions must be boolean
+            if contract_ty != ResolvedType::BOOL && contract_ty != ResolvedType::Unknown {
+                if self.strict_mode {
+                    if is_ensures && return_type != ResolvedType::UNIT {
+                        self.symbols.exit_scope();
+                    }
+                    return Err(Error::TypeMismatch {
+                        expected: "bool".to_string(),
+                        got: format!("{:?}", contract_ty),
+                        span: contract.span,
+                    });
+                } else {
+                    // In lenient mode, just warn (add to errors but don't fail)
+                    self.errors.push(Error::TypeMismatch {
+                        expected: "bool".to_string(),
+                        got: format!("{:?}", contract_ty),
+                        span: contract.span,
+                    });
+                }
+            }
+            
+            if is_ensures && return_type != ResolvedType::UNIT {
+                self.symbols.exit_scope();
+            }
+        }
 
         // Check function body
         self.check_block(&func.body)?;
+        
+        // Clear effect context
+        self.current_effects = None;
 
         self.symbols.exit_scope();
         Ok(())
@@ -452,7 +570,14 @@ impl SemanticAnalyzer {
 
                 let final_ty = match (declared_ty, value_ty) {
                     (Some(d), Some(v)) => {
-                        // TODO: Check compatibility
+                        // Strict Type System: No implicit conversions allowed
+                        if !self.types_compatible(&d, &v) {
+                            return Err(Error::TypeMismatch {
+                                expected: format!("{:?}", d),
+                                got: format!("{:?}", v),
+                                span: *span,
+                            });
+                        }
                         d
                     }
                     (Some(d), None) => d,
@@ -511,10 +636,36 @@ impl SemanticAnalyzer {
             }
 
 
+            Expr::Path { segments, span } => {
+                // Phase 11: Basic path resolution for Enum constructors
+                if segments.len() >= 2 {
+                    let type_name = &segments[0].name;
+                    
+                    if let Some(symbol) = self.symbols.lookup(type_name) {
+                         if matches!(symbol.kind, SymbolKind::Enum { .. }) {
+                             return Ok(ResolvedType::Unknown);
+                         }
+                    }
+                }
+                
+                Err(Error::UndefinedVariable {
+                    name: segments.iter().map(|i| i.name.clone()).collect::<Vec<_>>().join("::"),
+                    span: *span,
+                })
+            }
+
             Expr::Binary { left, op, right, span } => {
                 let left_ty = self.check_expr(left)?;
                 let right_ty = self.check_expr(right)?;
                 self.check_binary_op(&left_ty, *op, &right_ty, *span)
+            }
+            
+            Expr::Try { expr, .. } => {
+                // Determine the error type (basic check: expr must be Result)
+                let _ty = self.check_expr(expr)?;
+                // TODO: Verify type is Result<T, E> and return T
+                // For now, return the inner type blindly or assume ok
+                Ok(_ty) 
             }
 
             Expr::Unary { op, expr, .. } => {
@@ -524,6 +675,29 @@ impl SemanticAnalyzer {
 
             Expr::Call { func, args, span } => {
                 let func_ty = self.check_expr(func)?;
+                
+                // Effect propagation: check if calling from pure context
+                if let Some(ref effects) = self.current_effects {
+                    if effects.is_pure {
+                        // Pure functions cannot call impure functions
+                        // Check if calling a known impure builtin
+                        if let Expr::Ident(ident) = func.as_ref() {
+                            let impure_builtins = ["print", "println", "print_i64", "println_i64", "exit", "alloc", "free"];
+                            if impure_builtins.contains(&ident.name.as_str()) {
+                                let err = Error::EffectViolation {
+                                    message: format!("pure function cannot call impure builtin '{}'", ident.name),
+                                    span: *span,
+                                };
+                                if self.strict_mode {
+                                    return Err(err);
+                                } else {
+                                    self.errors.push(err);
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 match func_ty {
                     ResolvedType::Function { params, ret } => {
                         if args.len() != params.len() {
@@ -539,17 +713,31 @@ impl SemanticAnalyzer {
                         }
                         Ok(*ret)
                     }
+                    ResolvedType::Unknown => {
+                        // Allow calling unknown functions (e.g. enum constructors for now)
+                        for arg in args {
+                            let _ = self.check_expr(arg)?;
+                        }
+                        Ok(ResolvedType::Unknown)
+                    }
                     _ => Err(Error::NotCallable { span: *span }),
                 }
             }
 
             Expr::Field { expr, field, span } => {
                 let expr_ty = self.check_expr(expr)?;
-                match expr_ty {
+                
+                let struct_ty = if let ResolvedType::Pointer(inner) = &expr_ty {
+                    inner.as_ref()
+                } else {
+                    &expr_ty
+                };
+
+                match struct_ty {
                     ResolvedType::Struct { name: _, fields } => {
                         for (fname, fty) in fields {
-                            if fname == field.name {
-                                return Ok(fty);
+                            if fname == &field.name {
+                                return Ok(fty.clone());
                             }
                         }
                         Err(Error::UnknownField {
@@ -577,7 +765,7 @@ impl SemanticAnalyzer {
 
                 if let Some(else_block) = else_block {
                     self.symbols.enter_scope();
-                    let else_ty = self.check_block(else_block)?;
+                    let _else_ty = self.check_block(else_block)?;
                     self.symbols.exit_scope();
                     // TODO: Check then_ty == else_ty
                     Ok(then_ty)
@@ -728,43 +916,140 @@ impl SemanticAnalyzer {
                 Ok(ty)
             }
 
-            // Placeholders for unimplemented expressions
-            Expr::MethodCall { .. } => Ok(ResolvedType::Unknown),
+            Expr::MethodCall { expr, method, args, span } => {
+                let receiver_ty = self.check_expr(expr)?;
+                
+                match &receiver_ty {
+                    ResolvedType::Pointer(inner) => {
+                        if method.name == "add" {
+                            if args.len() != 1 {
+                                return Err(Error::ArgCountMismatch { expected: 1, got: args.len(), span: *span });
+                            }
+                            let offset_ty = self.check_expr(&args[0])?;
+                            // Check offset is integer
+                            match offset_ty {
+                                ResolvedType::Primitive(p) if p.is_integer() => {},
+                                _ => return Err(Error::TypeMismatch { 
+                                    expected: "integer".to_string(), 
+                                    got: format!("{:?}", offset_ty), 
+                                    span: args[0].span() 
+                                }),
+                            }
+                            // Returns same pointer type
+                            Ok(ResolvedType::Pointer(inner.clone()))
+                        } else {
+                            Ok(ResolvedType::Unknown)
+                        }
+                    },
+                    _ => Ok(ResolvedType::Unknown)
+                }
+            }
             
             Expr::StructLit { name, fields, span } => {
                 // First, check struct exists and get field info
-                let (is_struct, struct_fields) = if let Some(symbol) = self.symbols.lookup(&name.name) {
-                    if let SymbolKind::Struct { fields: sf } = &symbol.kind {
-                        (true, sf.clone())
-                    } else {
-                        (false, Vec::new())
+                let symbol = self.symbols.lookup(&name.name)
+                    .ok_or(Error::UndefinedType { name: name.name.clone(), span: *span })
+                    .cloned()?;
+
+                if let SymbolKind::Struct { fields: def_fields, type_params } = &symbol.kind {
+                    let mut inferred_params = std::collections::HashMap::new();
+                    
+                    // Check each field
+                    for (fname, fvalue) in fields {
+                        let fvalue_ty = self.check_expr(fvalue)?;
+                        
+                        // Find definition
+                        if let Some((_, def_ty)) = def_fields.iter().find(|(n, _)| n == &fname.name) {
+                             // Unify def_ty and fvalue_ty
+                             if let ResolvedType::GenericParam(p_name) = def_ty {
+                                 inferred_params.insert(p_name.clone(), fvalue_ty.clone());
+                             } else if let ResolvedType::Generic(g_name, g_args) = def_ty {
+                                 if let ResolvedType::Generic(v_name, v_args) = &fvalue_ty {
+                                     if g_name == v_name && g_args.len() == v_args.len() {
+                                         for (g_arg, v_arg) in g_args.iter().zip(v_args.iter()) {
+                                              if let ResolvedType::GenericParam(p_name) = g_arg {
+                                                  inferred_params.insert(p_name.clone(), v_arg.clone());
+                                              }
+                                         }
+                                     }
+                                 }
+                             }
+                        } else {
+                            return Err(Error::UnknownField { field: fname.name.clone(), span: *span });
+                        }
                     }
-                } else {
-                    return Err(Error::UndefinedType {
+                    
+                    // Construct Result
+                    if !type_params.is_empty() {
+                        let mut args = Vec::new();
+                        for param in type_params {
+                             if let Some(ty) = inferred_params.get(param) {
+                                 args.push(ty.clone());
+                             } else {
+                                  args.push(ResolvedType::Unknown);
+                             }
+                        }
+                        return Ok(ResolvedType::Generic(name.name.clone(), args));
+                    }
+
+                    // Return struct type (Value, not Pointer)
+                    Ok(ResolvedType::Struct {
                         name: name.name.clone(),
-                        span: *span,
-                    });
-                };
-                
-                if !is_struct {
-                    return Err(Error::NotAStruct { span: *span });
+                        fields: def_fields.clone(),
+                    })
+                } else {
+                    Err(Error::NotAStruct { span: *span })
                 }
-                
-                // Now check each field expression (no borrow conflict)
-                for (_field_name, field_expr) in fields {
-                    let _field_ty = self.check_expr(field_expr)?;
-                    // TODO: Verify field exists and type matches
-                }
-                
-                // Return pointer to struct type
-                Ok(ResolvedType::Pointer(Box::new(ResolvedType::Struct {
-                    name: name.name.clone(),
-                    fields: struct_fields,
-                })))
             }
 
 
-            Expr::Cast { ty, .. } => self.resolve_type(ty),
+            Expr::Cast { expr, ty, span } => {
+                let source_ty = self.check_expr(expr)?;
+                let target_ty = self.resolve_type(ty)?;
+                
+                // Allow explicit casts in the following cases:
+                // 1. Integer to Integer (any size)
+                // 2. Integer to Pointer (for raw memory access)
+                // 3. Pointer to Integer (address extraction)
+                // 4. Pointer to Pointer (reinterpret)
+                // 5. Same type (no-op)
+                
+                let is_valid_cast = match (&source_ty, &target_ty) {
+                    // Same type
+                    (s, t) if s == t => true,
+                    
+                    // Int to Int
+                    (ResolvedType::Primitive(p1), ResolvedType::Primitive(p2)) 
+                        if p1.is_integer() && p2.is_integer() => true,
+                    
+                    // Int to Pointer
+                    (ResolvedType::Primitive(p), ResolvedType::Pointer(_)) => {
+                        p.is_integer()
+                    },
+                    
+                    // Pointer to Int
+                    (ResolvedType::Pointer(_), ResolvedType::Primitive(p))
+                        if p.is_integer() => true,
+                    
+                    // Pointer to Pointer
+                    (ResolvedType::Pointer(_), ResolvedType::Pointer(_)) => true,
+                    
+                    // Unknown source (permissive for now)
+                    (ResolvedType::Unknown, _) => true,
+                    
+                    _ => false,
+                };
+                
+                if !is_valid_cast {
+                    return Err(Error::TypeMismatch {
+                        expected: format!("{:?}", target_ty),
+                        got: format!("{:?}", source_ty),
+                        span: *span,
+                    });
+                }
+                
+                Ok(target_ty)
+            }
             Expr::Range { .. } => Ok(ResolvedType::Unknown),
             Expr::Asm { .. } => Ok(ResolvedType::unit()),
         }
@@ -783,7 +1068,7 @@ impl SemanticAnalyzer {
 
 
     /// Check binary operation and return result type
-    fn check_binary_op(&self, left: &ResolvedType, op: BinOp, right: &ResolvedType, span: Span) -> Result<ResolvedType> {
+    fn check_binary_op(&self, left: &ResolvedType, op: BinOp, _right: &ResolvedType, _span: Span) -> Result<ResolvedType> {
         // TODO: Proper type checking
         match op {
             // Comparison operators return bool
@@ -868,6 +1153,12 @@ impl SemanticAnalyzer {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(ResolvedType::Tuple(resolved))
             }
+            Type::Generic(name, args, _) => {
+                let resolved_args: Vec<ResolvedType> = args.iter()
+                    .map(|arg| self.resolve_type(arg))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ResolvedType::Generic(name.clone(), resolved_args))
+            }
             Type::Function { params, ret, .. } => {
                 let param_types: Vec<ResolvedType> = params.iter()
                     .map(|t| self.resolve_type(t))
@@ -880,6 +1171,40 @@ impl SemanticAnalyzer {
             Type::Unit(_) => Ok(ResolvedType::unit()),
             Type::Never(_) => Ok(ResolvedType::never()),
             Type::Infer(_) => Ok(ResolvedType::Unknown),
+            // For now, just resolve the inner type (ownership is handled separately)
+            Type::Owned { inner, .. } => self.resolve_type(inner),
+            // Volatile type (Phase 8) - resolve inner type, volatile semantics handled at IR level
+            Type::Volatile(inner, _) => {
+                Ok(ResolvedType::Pointer(Box::new(self.resolve_type(inner)?)))
+            }
+        }
+    }
+
+    /// Check if two types are compatible (Strict Type System: no implicit conversions)
+    fn types_compatible(&self, expected: &ResolvedType, got: &ResolvedType) -> bool {
+        // Unknown types are always compatible (inference pending)
+        if matches!(expected, ResolvedType::Unknown) || matches!(got, ResolvedType::Unknown) {
+            return true;
+        }
+        
+        // Strict equality - no implicit conversions between numeric types
+        match (expected, got) {
+            (ResolvedType::Primitive(a), ResolvedType::Primitive(b)) => a == b,
+            (ResolvedType::Pointer(a), ResolvedType::Pointer(b)) => self.types_compatible(a, b),
+            (ResolvedType::Reference { mutable: ma, inner: ia, .. }, 
+             ResolvedType::Reference { mutable: mb, inner: ib, .. }) => {
+                // Mutable reference can be used where immutable is expected
+                (*ma || !*mb) && self.types_compatible(ia, ib)
+            }
+            (ResolvedType::Array { elem: ea, size: sa, .. },
+             ResolvedType::Array { elem: eb, size: sb, .. }) => {
+                sa == sb && self.types_compatible(ea, eb)
+            }
+            (ResolvedType::Tuple(a), ResolvedType::Tuple(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| self.types_compatible(x, y))
+            }
+            (ResolvedType::Struct { name: na, .. }, ResolvedType::Struct { name: nb, .. }) => na == nb,
+            (a, b) => a == b,
         }
     }
 }

@@ -1,6 +1,7 @@
 //! Lexer for AetherLang
 //! 
 //! Converts source code into a stream of tokens.
+#![allow(dead_code)]
 
 use crate::frontend::token::{Token, TokenKind};
 use crate::utils::Span;
@@ -423,6 +424,10 @@ impl Lexer {
             ']' => TokenKind::RBracket,
             ',' => TokenKind::Comma,
             ';' => TokenKind::Semicolon,
+            '@' => TokenKind::At,
+            '#' => TokenKind::Hash,
+            '?' => TokenKind::Question,
+            '~' => TokenKind::Tilde,
             _ => TokenKind::Unknown(c),
         };
         
@@ -489,5 +494,33 @@ mod tests {
         assert!(matches!(tokens[1].kind, TokenKind::Mut));
         assert!(matches!(tokens[2].kind, TokenKind::Own));
         assert!(matches!(tokens[3].kind, TokenKind::Ref));
+    }
+    
+    #[test]
+    fn test_ai_native_keywords() {
+        let mut lexer = Lexer::new("requires ensures invariant effect pure shared type trait pub where", 0);
+        let tokens = lexer.tokenize();
+        
+        assert!(matches!(tokens[0].kind, TokenKind::Requires));
+        assert!(matches!(tokens[1].kind, TokenKind::Ensures));
+        assert!(matches!(tokens[2].kind, TokenKind::Invariant));
+        assert!(matches!(tokens[3].kind, TokenKind::Effect));
+        assert!(matches!(tokens[4].kind, TokenKind::Pure));
+        assert!(matches!(tokens[5].kind, TokenKind::Shared));
+        assert!(matches!(tokens[6].kind, TokenKind::Type));
+        assert!(matches!(tokens[7].kind, TokenKind::Trait));
+        assert!(matches!(tokens[8].kind, TokenKind::Pub));
+        assert!(matches!(tokens[9].kind, TokenKind::Where));
+    }
+    
+    #[test]
+    fn test_new_tokens() {
+        let mut lexer = Lexer::new("@test ? ~x", 0);
+        let tokens = lexer.tokenize();
+        
+        assert!(matches!(tokens[0].kind, TokenKind::At));
+        assert!(matches!(tokens[1].kind, TokenKind::Ident(ref s) if s == "test"));
+        assert!(matches!(tokens[2].kind, TokenKind::Question));
+        assert!(matches!(tokens[3].kind, TokenKind::Tilde));
     }
 }

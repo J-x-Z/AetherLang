@@ -1,0 +1,13 @@
+// Test: Effect propagation checking
+// This pure function should NOT call println (impure)
+
+fn add(a: i32, b: i32) -> i32 pure {
+    // This should trigger an EffectViolation warning in lenient mode
+    // println("debug: adding numbers")  // Uncomment to test
+    a + b
+}
+
+fn main() {
+    let result = add(1, 2)
+    println_i64(result)
+}

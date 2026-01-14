@@ -1,6 +1,7 @@
 //! Code Generation trait - Backend abstraction
 //!
 //! This trait allows swapping between LLVM and native backends.
+#![allow(dead_code)]
 
 use crate::middle::ir::IRModule;
 use crate::utils::Result;

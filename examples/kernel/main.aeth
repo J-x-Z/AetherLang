@@ -1,0 +1,36 @@
+// AetherLang Kernel "Hello World"
+// Writes directly to VGA text buffer at 0xB8000
+
+fn kernel_main() {
+    // VGA buffer as raw pointer (direct cast)
+    // This previously failed with TypeMismatch (I64 vs Pointer)
+    let vga: *u8 = 0xB8000 as *u8;
+    
+    // Write "Hello" to VGA buffer using unsafe blocks
+    // Each character is 2 bytes: char + attribute (0x0F = white on black)
+    
+    unsafe(reason = "Direct VGA memory write") {
+        // H
+        *(vga.add(0)) = 0x48;
+        *(vga.add(1)) = 0x0F;
+        
+        // e
+        *(vga.add(2)) = 0x65;
+        *(vga.add(3)) = 0x0F;
+        
+        // l
+        *(vga.add(4)) = 0x6C;
+        *(vga.add(5)) = 0x0F;
+        
+        // l
+        *(vga.add(6)) = 0x6C;
+        *(vga.add(7)) = 0x0F;
+        
+        // o
+        *(vga.add(8)) = 0x6F;
+        *(vga.add(9)) = 0x0F;
+    }
+    
+    // Infinite loop (halt)
+    loop {}
+}

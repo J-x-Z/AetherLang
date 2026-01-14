@@ -11,12 +11,39 @@ static void aether_print_i64(int64_t n) { printf("%lld", (long long)n); }
 static void aether_println_i64(int64_t n) { printf("%lld\n", (long long)n); }
 static void aether_assert(bool c) { if(!c) { fprintf(stderr, "Assertion failed\n"); exit(1); } }
 
+/* Struct Definitions */
+struct Point {
+    int64_t x;
+    int64_t y;
+};
+
 void main(void);
 
 void main(void) {
-    int64_t _t0;
+    int64_t _t5;
+    int64_t _t6;
+    int64_t _t8;
+    int64_t _t9;
+    int64_t* _t1;
+    int64_t* _t2;
+    int64_t* _t4;
+    int64_t* _t7;
+    struct Point* _t0;
+    struct Point* _t3;
     
-    aether_println("Hello, AetherLang!");
+    struct Point _alloca__t0;
+    _t0 = &_alloca__t0;
+    _t1 = &_t0->x;
+    *_t1 = 10LL;
+    _t2 = &_t0->y;
+    *_t2 = 20LL;
+    _t3 = _t0;
+    _t4 = &_t3->x;
+    _t5 = *_t4;
+    aether_println_i64(_t5);
+    _t7 = &_t3->y;
+    _t8 = *_t7;
+    aether_println_i64(_t8);
     return;
 }
 

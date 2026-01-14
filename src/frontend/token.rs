@@ -1,4 +1,5 @@
 //! Token definitions for AetherLang
+#![allow(dead_code)]
 
 use crate::utils::Span;
 /// A token produced by the lexer
@@ -52,9 +53,9 @@ pub enum TokenKind {
     Enum,
     /// interface
     Interface,
-    /// own
+    /// own (ownership)
     Own,
-    /// ref
+    /// ref (borrow)
     Ref,
     /// const
     Const,
@@ -70,6 +71,40 @@ pub enum TokenKind {
     False,
     /// asm
     Asm,
+    /// as (cast)
+    As,
+    
+    // ============ AI-Native Keywords (New) ============
+    /// type (type definition)
+    Type,
+    /// trait
+    Trait,
+    /// pub (public visibility)
+    Pub,
+    /// where (constraints)
+    Where,
+    /// shared (shared ownership)
+    Shared,
+    /// pure (no side effects)
+    Pure,
+    /// effect (side effect annotation)
+    Effect,
+    /// requires (precondition)
+    Requires,
+    /// ensures (postcondition)
+    Ensures,
+    /// invariant (type invariant)
+    Invariant,
+    
+    // ============ System Keywords (Phase 8) ============
+    /// extern (foreign function interface)
+    Extern,
+    /// static (global variable)
+    Static,
+    /// union (overlapping memory layout)
+    Union,
+    /// volatile (prevent optimization of memory access)
+    Volatile,
     
     // ============ Identifiers and Literals ============
     /// Identifier (variable name, function name, etc.)
@@ -132,14 +167,20 @@ pub enum TokenKind {
     StarEq,
     /// /=
     SlashEq,
-    /// ->
-    Arrow,
+    /// >>=
+    ShrEq,
     /// =>
     FatArrow,
+    /// ->
+    Arrow,
+    /// .
+    Dot,
     /// ..
     DotDot,
     /// ::
     ColonColon,
+    /// ?
+    Question,
     
     // ============ Delimiters ============
     /// (
@@ -156,12 +197,16 @@ pub enum TokenKind {
     RBracket,
     /// ,
     Comma,
-    /// .
-    Dot,
     /// :
     Colon,
     /// ;
     Semicolon,
+    /// @ (annotation)
+    At,
+    /// # (attribute)
+    Hash,
+    /// ~ (bitwise not)
+    Tilde,
     
     // ============ Special ============
     /// End of file
@@ -199,6 +244,23 @@ impl TokenKind {
                 | TokenKind::True
                 | TokenKind::False
                 | TokenKind::Asm
+                | TokenKind::As
+                // AI-Native keywords
+                | TokenKind::Type
+                | TokenKind::Trait
+                | TokenKind::Pub
+                | TokenKind::Where
+                | TokenKind::Shared
+                | TokenKind::Pure
+                | TokenKind::Effect
+                | TokenKind::Requires
+                | TokenKind::Ensures
+                | TokenKind::Invariant
+                // System keywords (Phase 8)
+                | TokenKind::Extern
+                | TokenKind::Static
+                | TokenKind::Union
+                | TokenKind::Volatile
         )
     }
 
@@ -229,6 +291,23 @@ impl TokenKind {
             "true" => Some(TokenKind::True),
             "false" => Some(TokenKind::False),
             "asm" => Some(TokenKind::Asm),
+            "as" => Some(TokenKind::As),
+            // AI-Native keywords
+            "type" => Some(TokenKind::Type),
+            "trait" => Some(TokenKind::Trait),
+            "pub" => Some(TokenKind::Pub),
+            "where" => Some(TokenKind::Where),
+            "shared" => Some(TokenKind::Shared),
+            "pure" => Some(TokenKind::Pure),
+            "effect" => Some(TokenKind::Effect),
+            "requires" => Some(TokenKind::Requires),
+            "ensures" => Some(TokenKind::Ensures),
+            "invariant" => Some(TokenKind::Invariant),
+            // System keywords (Phase 8)
+            "extern" => Some(TokenKind::Extern),
+            "static" => Some(TokenKind::Static),
+            "union" => Some(TokenKind::Union),
+            "volatile" => Some(TokenKind::Volatile),
             _ => None,
         }
     }
@@ -270,6 +349,9 @@ impl TokenKind {
             
             // Multiplicative (highest for binary)
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Some(11),
+            
+            // Cast (as) - binds tighter than multiplication
+            TokenKind::As => Some(12),
             
             _ => None,
         }

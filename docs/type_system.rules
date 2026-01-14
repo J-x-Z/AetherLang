@@ -1,0 +1,174 @@
+# AetherLang Type System Rules (Strict Mode)
+# Format: [Context] ⊢ [Expression] : [Type] | [Condition]
+# Machine-readable type inference rules for AI/Compiler
+
+## Core Judgments
+
+### Literals
+```
+⊢ Integer : i64
+⊢ Float : f64
+⊢ String : String
+⊢ Char : char
+⊢ true : bool
+⊢ false : bool
+```
+
+### Variables
+```
+Γ, x: T ⊢ x : T
+```
+
+### Let Binding (STRICT - No implicit conversion)
+```
+Γ ⊢ e : T₂
+Γ ⊢ let x: T₁ = e : ()
+  REQUIRE: T₁ == T₂ OR T₂ == Unknown
+  ERROR: TypeMismatch(expected: T₁, got: T₂) if T₁ ≠ T₂
+```
+
+### Function Call
+```
+Γ ⊢ f : fn(T₁, ..., Tₙ) -> R
+Γ ⊢ e₁ : T₁, ..., eₙ : Tₙ
+─────────────────────────────
+Γ ⊢ f(e₁, ..., eₙ) : R
+```
+
+### Binary Operations (STRICT - Operand types must match)
+```
+Γ ⊢ e₁ : T
+Γ ⊢ e₂ : T
+op ∈ {+, -, *, /, %}
+────────────────────
+Γ ⊢ e₁ op e₂ : T
+  REQUIRE: T₁ == T₂
+  ERROR: TypeMismatch if T₁ ≠ T₂
+
+Γ ⊢ e₁ : T
+Γ ⊢ e₂ : T
+op ∈ {==, !=, <, <=, >, >=}
+────────────────────────────
+Γ ⊢ e₁ op e₂ : bool
+
+Γ ⊢ e₁ : bool
+Γ ⊢ e₂ : bool
+op ∈ {&&, ||}
+─────────────
+Γ ⊢ e₁ op e₂ : bool
+```
+
+### Pointer Types
+```
+Γ ⊢ e : T
+─────────────
+Γ ⊢ &e : &T
+
+Γ ⊢ e : &mut T
+─────────────
+Γ ⊢ &mut e : &mut T
+
+Γ ⊢ e : &T
+─────────────
+Γ ⊢ *e : T
+```
+
+### Array Types
+```
+Γ ⊢ e₁ : T, ..., eₙ : T
+─────────────────────────
+Γ ⊢ [e₁, ..., eₙ] : [T; n]
+
+Γ ⊢ e : [T; n]
+Γ ⊢ i : usize
+────────────────
+Γ ⊢ e[i] : T
+```
+
+### Struct Types
+```
+struct S { f₁: T₁, ..., fₙ: Tₙ }
+Γ ⊢ e₁ : T₁, ..., eₙ : Tₙ
+─────────────────────────────────
+Γ ⊢ S { f₁: e₁, ..., fₙ: eₙ } : S
+
+Γ ⊢ e : S
+S has field f : T
+──────────────────
+Γ ⊢ e.f : T
+```
+
+### If Expression
+```
+Γ ⊢ cond : bool
+Γ ⊢ then_branch : T
+Γ ⊢ else_branch : T
+────────────────────────────────
+Γ ⊢ if cond { then } else { else } : T
+  REQUIRE: then_type == else_type
+```
+
+### Match Expression
+```
+Γ ⊢ scrutinee : S
+∀ arm: Γ ⊢ arm.pattern matches S
+         Γ ⊢ arm.body : T
+──────────────────────────────────
+Γ ⊢ match scrutinee { arms } : T
+  REQUIRE: All arms have same type
+```
+
+### Unsafe Block (Phase 9)
+```
+Γ ⊢ unsafe(reason=R, verifier=V) { body } : T
+  WHERE: body : T
+  AI_METADATA: { reason: R, verifier: V }
+```
+
+### Cast Expression (Explicit only)
+```
+Γ ⊢ e : T₁
+cast T₁ -> T₂ is explicit_allowed
+─────────────────────────────────
+Γ ⊢ e as T₂ : T₂
+
+explicit_allowed:
+  - *T -> usize (in unsafe)
+  - usize -> *T (in unsafe)
+  - Numeric widening (i32 -> i64)
+  
+NOT_ALLOWED (STRICT MODE):
+  - Implicit numeric conversion
+  - Implicit pointer conversion
+```
+
+## Effect System Rules
+
+### Pure Functions
+```
+fn f() effect pure { body }
+────────────────────────────
+∀ call g() in body: g must be pure
+ERROR: EffectViolation if calling impure from pure
+```
+
+### Effect Propagation
+```
+fn f() effect[io] { body }
+─────────────────────────
+f can call: pure functions OR effect[io] functions
+```
+
+## Compatibility Rules
+
+### Type Compatibility (types_compatible)
+```
+compatible(Unknown, T) = true
+compatible(T, Unknown) = true
+compatible(Primitive(a), Primitive(b)) = a == b
+compatible(Pointer(a), Pointer(b)) = compatible(a, b)
+compatible(Struct{name: a}, Struct{name: b}) = a == b
+compatible(Array{elem: a, size: n}, Array{elem: b, size: m}) = n == m && compatible(a, b)
+compatible(T, T) = true
+compatible(_, _) = false
+```

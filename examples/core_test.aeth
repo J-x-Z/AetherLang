@@ -1,0 +1,44 @@
+// Core Library Usage Example
+// Tests Option, Result, and Slice from core.aeth
+
+// Import core types (manually copy for now, no module system)
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+struct Slice<T> {
+    ptr: *T,
+    len: usize,
+}
+
+// Example: Division that returns Option
+fn safe_div(a: i64, b: i64) -> Option<i64> {
+    if b == 0 {
+        return Option::None;
+    }
+    return Option::Some(a / b);
+}
+
+// Example: Fallible operation with Result
+fn parse_positive(val: i64) -> Result<i64, i64> {
+    if val < 0 {
+        return Result::Err(-1);
+    }
+    return Result::Ok(val);
+}
+
+fn main() {
+    // Test Option
+    let div_result: Option<i64> = safe_div(10, 2);
+    
+    // Test Result
+    let parse_result: Result<i64, i64> = parse_positive(42);
+    
+    println_i64(42); // Success marker
+}

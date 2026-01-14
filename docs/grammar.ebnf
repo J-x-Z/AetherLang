@@ -1,0 +1,134 @@
+(* AetherLang Grammar Specification v1.0 *)
+(* EBNF Format - Machine-readable truth source for AI/Parser *)
+
+(* ========================================================================== *)
+(* AETHER SCRIPT GRAMMAR (.ath) - EXPERIMENTAL *)
+(* ========================================================================== *)
+(* Python-like indentation based syntax *)
+
+ScriptProgram = { ScriptItem } ;
+
+ScriptItem = script_function_def 
+           | script_struct_def
+           | script_statement 
+           ;
+
+script_function_def = [ "@comptime" ] "def" IDENTIFIER "(" [ script_params ] ")" [ "->" type ] ":" NEWLINE INDENT script_block DEDENT ;
+
+script_block = { script_statement } ;
+
+script_statement = script_expr NEWLINE
+                 | "return" [ script_expr ] NEWLINE
+                 | "if" script_expr ":" NEWLINE INDENT script_block DEDENT [ "else" ":" NEWLINE INDENT script_block DEDENT ]
+                 ;
+
+script_expr = (* ... expression rules similar to python ... *)
+            ;
+
+(* ============ Program Structure ============ *)
+program = { item } ;
+item = function_def | struct_def | enum_def | impl_block | interface_def 
+     | const_def | extern_block | static_def | union_def | module_def | use_decl ;
+
+(* ============ Functions ============ *)
+function_def = [ "pub" ] , "fn" , IDENT , [ generic_params ] , params , [ "->" , type ] 
+             , [ contract_block ] , [ effect_annotation ] , block ;
+params = "(" , [ param , { "," , param } ] , ")" ;
+param = [ ownership ] , IDENT , ":" , type ;
+ownership = "own" | "ref" | "mut" | "shared" ;
+
+(* ============ Contracts ============ *)
+contract_block = "[" , { contract_clause } , "]" ;
+contract_clause = ( "requires" | "ensures" | "invariant" ) , expr , { "," , expr } ;
+effect_annotation = "pure" | ( "effect" , "[" , IDENT , { "," , IDENT } , "]" ) ;
+
+(* ============ Types ============ *)
+type = named_type | pointer_type | ref_type | array_type | slice_type 
+     | tuple_type | function_type | owned_type | volatile_type | "!" | "()" | "_" ;
+named_type = IDENT , [ generic_args ] ;
+pointer_type = "*" , type ;
+ref_type = "&" , [ "mut" ] , type ;
+array_type = "[" , type , ";" , INTEGER , "]" ;
+slice_type = "[" , type , "]" ;
+tuple_type = "(" , [ type , { "," , type } ] , ")" ;
+function_type = "fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type ;
+owned_type = ( "own" | "shared" ) , type ;
+volatile_type = "*" , "volatile" , type ;
+generic_params = "<" , IDENT , { "," , IDENT } , ">" ;
+generic_args = "<" , type , { "," , type } , ">" ;
+
+(* ============ Struct / Enum / Union ============ *)
+struct_def = [ "pub" ] , "struct" , IDENT , [ generic_params ] , "{" , { field } , "}" ;
+field = IDENT , ":" , type , "," ;
+enum_def = [ "pub" ] , "enum" , IDENT , [ generic_params ] , "{" , { variant } , "}" ;
+variant = IDENT , [ "(" , type , { "," , type } , ")" | "{" , { field } , "}" ] , "," ;
+union_def = [ "pub" ] , "union" , IDENT , "{" , { field } , "}" ;
+
+(* ============ FFI (Phase 8) ============ *)
+extern_block = "extern" , [ STRING ] , "{" , { foreign_item } , "}" ;
+foreign_item = { annotation } , "fn" , IDENT , params , [ "->" , type ] , ";" 
+             | "static" , [ "mut" ] , IDENT , ":" , type , ";" ;
+static_def = [ "pub" ] , "static" , [ "mut" ] , IDENT , ":" , type , [ "=" , expr ] , ";" ;
+annotation = "@" , IDENT , [ "(" , [ expr , { "," , expr } ] , ")" ] ;
+
+(* ============ Unsafe (Phase 9) ============ *)
+unsafe_block = "unsafe" , [ unsafe_metadata ] , block ;
+unsafe_metadata = "(" , { IDENT , "=" , ( STRING | IDENT ) , [ "," ] } , ")" ;
+
+(* ============ Statements ============ *)
+stmt = let_stmt | expr_stmt | return_stmt | break_stmt | continue_stmt ;
+let_stmt = "let" , [ "mut" ] , IDENT , [ ":" , type ] , [ "=" , expr ] , ";" ;
+expr_stmt = expr , ";" ;
+return_stmt = "return" , [ expr ] , ";" ;
+break_stmt = "break" , ";" ;
+continue_stmt = "continue" , ";" ;
+
+(* ============ Expressions ============ *)
+expr = binary_expr | unary_expr | primary_expr | postfix_expr ;
+binary_expr = expr , binary_op , expr ;
+unary_expr = unary_op , expr ;
+postfix_expr = expr , ( call_args | field_access | index_access | "?" ) ;
+primary_expr = literal | IDENT | "(" , expr , ")" | block | if_expr | match_expr 
+             | loop_expr | while_expr | for_expr | array_lit | struct_lit | unsafe_block | asm_expr ;
+
+call_args = "(" , [ expr , { "," , expr } ] , ")" ;
+field_access = "." , IDENT ;
+index_access = "[" , expr , "]" ;
+
+if_expr = "if" , expr , block , [ "else" , ( block | if_expr ) ] ;
+match_expr = "match" , expr , "{" , { match_arm } , "}" ;
+match_arm = pattern , "=>" , expr , "," ;
+loop_expr = "loop" , block ;
+while_expr = "while" , expr , block ;
+for_expr = "for" , IDENT , "in" , expr , block ;
+
+block = "{" , { stmt } , [ expr ] , "}" ;
+
+(* ============ Operators ============ *)
+binary_op = "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">=" 
+          | "&&" | "||" | "&" | "|" | "^" | "<<" | ">>" | "=" | "+=" | "-=" | "*=" | "/=" ;
+unary_op = "-" | "!" | "~" | "&" | "*" ;
+
+(* ============ Literals ============ *)
+literal = INTEGER | FLOAT | STRING | CHAR | "true" | "false" ;
+array_lit = "[" , [ expr , { "," , expr } ] , "]" ;
+struct_lit = IDENT , "{" , [ IDENT , ":" , expr , { "," , IDENT , ":" , expr } ] , "}" ;
+
+(* ============ Patterns ============ *)
+pattern = "_" | literal | IDENT | tuple_pattern | struct_pattern ;
+tuple_pattern = "(" , [ pattern , { "," , pattern } ] , ")" ;
+struct_pattern = IDENT , "{" , [ IDENT , { "," , IDENT } ] , "}" ;
+
+(* ============ Module System ============ *)
+module_def = [ "pub" ] , "mod" , IDENT , ( "{" , { item } , "}" | ";" ) ;
+use_decl = [ "pub" ] , "use" , path , [ "::" , ( "*" | "{" , IDENT , { "," , IDENT } , "}" | "as" , IDENT ) ] , ";" ;
+path = IDENT , { "::" , IDENT } ;
+
+(* ============ Terminals ============ *)
+IDENT = letter , { letter | digit | "_" } ;
+INTEGER = digit , { digit } ;
+FLOAT = digit , { digit } , "." , digit , { digit } ;
+STRING = '"' , { char } , '"' ;
+CHAR = "'" , char , "'" ;
+letter = "a" | ... | "z" | "A" | ... | "Z" | "_" ;
+digit = "0" | ... | "9" ;

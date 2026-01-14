@@ -1,4 +1,5 @@
 //! LLVM Backend
+#![allow(unused_imports, dead_code)]
 
 #[cfg(feature = "llvm")]
 mod llvm_codegen;

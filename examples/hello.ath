@@ -1,0 +1,9 @@
+# Example Aether Script file
+# Tests the transpiler and CLI integration
+
+def greet(name: str) -> str:
+    return name
+
+def main():
+    print("Hello from Script!")
+    return 0

@@ -2,6 +2,11 @@
 /target/
 Cargo.lock
 
+# Generated Source (Transpiler Output)
+*.gen.aeth
+*.o
+*.out
+
 # IDE
 .idea/
 .vscode/

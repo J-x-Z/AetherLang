@@ -1,14 +1,43 @@
 //! Aether IR definitions
 //!
 //! Three-address code style IR with SSA support.
+#![allow(dead_code)]
 
 use std::fmt;
+
+/// Struct representation/layout specification
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructRepr {
+    /// Default (Rust-like) layout
+    Default,
+    /// C-compatible layout
+    C,
+    /// Packed (no padding)
+    Packed,
+    /// Transparent (single-field wrapper)
+    Transparent,
+}
+
+impl Default for StructRepr {
+    fn default() -> Self {
+        StructRepr::Default
+    }
+}
+
+/// IR Struct definition
+#[derive(Debug, Clone)]
+pub struct IRStruct {
+    pub name: String,
+    pub fields: Vec<(String, IRType)>,
+    pub repr: StructRepr,
+}
 
 /// IR Module - contains all functions
 #[derive(Debug, Clone)]
 pub struct IRModule {
     pub name: String,
     pub functions: Vec<IRFunction>,
+    pub structs: Vec<IRStruct>,
 }
 
 impl IRModule {
@@ -16,9 +45,19 @@ impl IRModule {
         Self {
             name: name.to_string(),
             functions: Vec::new(),
+            structs: Vec::new(),
         }
     }
+    
+    pub fn add_struct(&mut self, name: &str, fields: Vec<(String, IRType)>, repr: StructRepr) {
+        self.structs.push(IRStruct {
+            name: name.to_string(),
+            fields,
+            repr,
+        });
+    }
 }
+
 
 /// IR Function
 #[derive(Debug, Clone)]
@@ -28,6 +67,19 @@ pub struct IRFunction {
     pub ret_type: IRType,
     pub blocks: Vec<BasicBlock>,
     pub entry_block: BlockId,
+    /// Contract assertions for runtime checking
+    pub contracts: IRContracts,
+}
+
+/// Contract expressions for runtime assertion generation
+#[derive(Debug, Clone, Default)]
+pub struct IRContracts {
+    /// Preconditions (checked at function entry)
+    pub requires: Vec<String>,
+    /// Postconditions (checked before return)
+    pub ensures: Vec<String>,
+    /// Effect annotations (for documentation/verification)
+    pub effects: Vec<String>,
 }
 
 impl IRFunction {
@@ -38,6 +90,7 @@ impl IRFunction {
             ret_type,
             blocks: Vec::new(),
             entry_block: BlockId(0),
+            contracts: IRContracts::default(),
         }
     }
 
@@ -123,6 +176,31 @@ pub enum Instruction {
     
     /// dest = phi [(val1, block1), (val2, block2), ...]
     Phi { dest: Register, incoming: Vec<(Value, BlockId)> },
+
+    /// dest = cast value to ty
+    Cast { dest: Register, value: Value, ty: IRType },
+
+    /// Inline Assembly (Phase 11)
+    InlineAsm {
+        template: String,
+        operands: Vec<IRAsmOperand>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct IRAsmOperand {
+    pub kind: IRAsmOperandKind,
+    pub constraint: String,
+    pub input: Option<Value>,
+    pub output: Option<Register>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum IRAsmOperandKind {
+    Input,
+    Output,
+    InOut,
+    Clobber,
 }
 
 /// Block terminator

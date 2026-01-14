@@ -11,20 +11,26 @@ static void aether_print_i64(int64_t n) { printf("%lld", (long long)n); }
 static void aether_println_i64(int64_t n) { printf("%lld\n", (long long)n); }
 static void aether_assert(bool c) { if(!c) { fprintf(stderr, "Assertion failed\n"); exit(1); } }
 
+/* Struct Definitions */
+struct Point {
+    int64_t x;
+    int64_t y;
+};
+
 void main(void);
 
 void main(void) {
-    int64_t _t0;
-    int64_t _t1;
-    int64_t _t2;
-    int64_t _t3;
     int64_t _t4;
+    int64_t* _t1;
+    int64_t* _t2;
+    struct Point* _t0;
+    struct Point* _t3;
     
     struct Point _alloca__t0;
     _t0 = &_alloca__t0;
-    _t1 = &_t0[0LL];
+    _t1 = &_t0->x;
     *_t1 = 10LL;
-    _t2 = &_t0[1LL];
+    _t2 = &_t0->y;
     *_t2 = 20LL;
     _t3 = _t0;
     aether_println("Created point");

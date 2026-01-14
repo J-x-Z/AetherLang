@@ -1,6 +1,7 @@
 //! Built-in Functions Registry
 //!
 //! Defines all built-in functions available in AetherLang.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use crate::types::type_system::ResolvedType;
@@ -36,7 +37,7 @@ impl BuiltinRegistry {
         self.register(BuiltinFunc {
             name: "print".to_string(),
             params: vec![("s".to_string(), ResolvedType::String)],
-            ret_type: ResolvedType::Unit,
+            ret_type: ResolvedType::UNIT,
             c_name: "aether_print".to_string(),
             variadic: false,
         });
@@ -44,7 +45,7 @@ impl BuiltinRegistry {
         self.register(BuiltinFunc {
             name: "println".to_string(),
             params: vec![("s".to_string(), ResolvedType::String)],
-            ret_type: ResolvedType::Unit,
+            ret_type: ResolvedType::UNIT,
             c_name: "aether_println".to_string(),
             variadic: false,
         });
@@ -52,7 +53,7 @@ impl BuiltinRegistry {
         self.register(BuiltinFunc {
             name: "print_i64".to_string(),
             params: vec![("n".to_string(), ResolvedType::I64)],
-            ret_type: ResolvedType::Unit,
+            ret_type: ResolvedType::UNIT,
             c_name: "aether_print_i64".to_string(),
             variadic: false,
         });
@@ -60,7 +61,7 @@ impl BuiltinRegistry {
         self.register(BuiltinFunc {
             name: "println_i64".to_string(),
             params: vec![("n".to_string(), ResolvedType::I64)],
-            ret_type: ResolvedType::Unit,
+            ret_type: ResolvedType::UNIT,
             c_name: "aether_println_i64".to_string(),
             variadic: false,
         });
@@ -69,15 +70,15 @@ impl BuiltinRegistry {
         self.register(BuiltinFunc {
             name: "alloc".to_string(),
             params: vec![("size".to_string(), ResolvedType::U64)],
-            ret_type: ResolvedType::Ptr(Box::new(ResolvedType::U8)),
+            ret_type: ResolvedType::ptr(Box::new(ResolvedType::U8)),
             c_name: "malloc".to_string(),
             variadic: false,
         });
 
         self.register(BuiltinFunc {
             name: "free".to_string(),
-            params: vec![("ptr".to_string(), ResolvedType::Ptr(Box::new(ResolvedType::U8)))],
-            ret_type: ResolvedType::Unit,
+            params: vec![("ptr".to_string(), ResolvedType::ptr(Box::new(ResolvedType::U8)))],
+            ret_type: ResolvedType::UNIT,
             c_name: "free".to_string(),
             variadic: false,
         });
@@ -86,7 +87,7 @@ impl BuiltinRegistry {
         self.register(BuiltinFunc {
             name: "exit".to_string(),
             params: vec![("code".to_string(), ResolvedType::I32)],
-            ret_type: ResolvedType::Never,
+            ret_type: ResolvedType::NEVER,
             c_name: "exit".to_string(),
             variadic: false,
         });
@@ -94,8 +95,8 @@ impl BuiltinRegistry {
         // Debug
         self.register(BuiltinFunc {
             name: "assert".to_string(),
-            params: vec![("cond".to_string(), ResolvedType::Bool)],
-            ret_type: ResolvedType::Unit,
+            params: vec![("cond".to_string(), ResolvedType::BOOL)],
+            ret_type: ResolvedType::UNIT,
             c_name: "aether_assert".to_string(),
             variadic: false,
         });

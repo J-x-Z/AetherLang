@@ -1,0 +1,83 @@
+// Simplified Struct Test for Kernel Development
+// Tests: nested structs, pointer fields, field access
+
+#[repr(C)]
+struct GDTEntry {
+    limit_low: i64,
+    base_low: i64,
+    base_middle: i64,
+    access: i64,
+    granularity: i64,
+    base_high: i64,
+}
+
+struct GDTPointer {
+    limit: i64,
+    base: i64,
+}
+
+struct NestedStruct {
+    entry: GDTEntry,
+    count: i64,
+}
+
+fn test_struct_creation() {
+    // Simple struct literal
+    let entry = GDTEntry {
+        limit_low: 65535,
+        base_low: 0,
+        base_middle: 0,
+        access: 154,
+        granularity: 207,
+        base_high: 0,
+    }
+    
+    println_i64(entry.limit_low)
+    println_i64(entry.access)
+}
+
+fn test_pointer_field() {
+    let entry = GDTEntry {
+        limit_low: 4660,
+        base_low: 22136,
+        base_middle: 171,
+        access: 205,
+        granularity: 239,
+        base_high: 0,
+    }
+    
+    // GDT Pointer
+    let gdt_ptr = GDTPointer {
+        limit: 47,
+        base: 0xB8000 as i64,
+    }
+    
+    println_i64(gdt_ptr.limit)
+    println_i64(gdt_ptr.base)
+}
+
+fn test_nested_struct() {
+    let entry = GDTEntry {
+        limit_low: 43981,
+        base_low: 4660,
+        base_middle: 86,
+        access: 120,
+        granularity: 154,
+        base_high: 188,
+    }
+    
+    let nested = NestedStruct {
+        entry: entry,
+        count: 42,
+    }
+    
+    // Access nested field
+    println_i64(nested.entry.limit_low)
+    println_i64(nested.count)
+}
+
+fn main() {
+    test_struct_creation()
+    test_pointer_field()
+    test_nested_struct()
+}

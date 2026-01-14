@@ -1,0 +1,107 @@
+{
+  "$schema": "https://aetherlang.org/schemas/effects.v1.json",
+  "version": "1.0",
+  "description": "AetherLang Built-in Functions Effect Manifest - Machine-readable for AI/Optimizer",
+
+  "effects": {
+    "pure": {
+      "description": "No side effects, deterministic, can be memoized",
+      "can_call": ["pure"]
+    },
+    "io": {
+      "description": "Input/output operations (file, network, console)",
+      "can_call": ["pure", "io"]
+    },
+    "alloc": {
+      "description": "Memory allocation/deallocation",
+      "can_call": ["pure", "alloc"]
+    },
+    "panic": {
+      "description": "May panic or abort execution",
+      "can_call": ["pure", "panic"]
+    },
+    "unsafe": {
+      "description": "Bypasses safety checks, requires explicit unsafe block",
+      "can_call": ["pure", "io", "alloc", "panic", "unsafe"]
+    }
+  },
+
+  "builtins": {
+    "print": {
+      "signature": "fn print(msg: String)",
+      "effects": ["io"],
+      "description": "Print message to stdout"
+    },
+    "println": {
+      "signature": "fn println(msg: String)",
+      "effects": ["io"],
+      "description": "Print message with newline to stdout"
+    },
+    "panic": {
+      "signature": "fn panic(msg: String) -> !",
+      "effects": ["panic"],
+      "description": "Panic and abort execution"
+    },
+    "assert": {
+      "signature": "fn assert(condition: bool, msg: String)",
+      "effects": ["panic"],
+      "description": "Assert condition, panic if false"
+    }
+  },
+
+  "ffi_annotations": {
+    "@pure": {
+      "description": "External function has no side effects",
+      "effect": "pure",
+      "ai_hint": "Can be safely optimized, inlined, or reordered"
+    },
+    "@reads": {
+      "description": "External function only reads from specified pointers",
+      "params": ["ptr"],
+      "effect": "pure",
+      "ai_hint": "Memory pointed to by ptr may be read but not modified"
+    },
+    "@writes": {
+      "description": "External function writes to specified pointers",
+      "params": ["ptr"],
+      "effect": "io",
+      "ai_hint": "Memory pointed to by ptr will be modified"
+    },
+    "@allocs": {
+      "description": "External function allocates memory",
+      "params": ["size"],
+      "effect": "alloc",
+      "ai_hint": "Returns newly allocated memory of specified size"
+    },
+    "@frees": {
+      "description": "External function frees memory",
+      "params": ["ptr"],
+      "effect": "alloc",
+      "ai_hint": "Pointer becomes invalid after this call"
+    },
+    "@noreturn": {
+      "description": "External function never returns",
+      "effect": "panic",
+      "ai_hint": "Code after this call is unreachable"
+    }
+  },
+
+  "optimization_rules": {
+    "can_eliminate": {
+      "condition": "effect == pure && result unused",
+      "description": "Pure function calls with unused results can be eliminated"
+    },
+    "can_reorder": {
+      "condition": "effect == pure",
+      "description": "Pure function calls can be reordered freely"
+    },
+    "can_memoize": {
+      "condition": "effect == pure && inputs identical",
+      "description": "Pure function calls with same inputs return same result"
+    },
+    "requires_barrier": {
+      "condition": "effect in [io, alloc, panic]",
+      "description": "Effectful operations cannot be reordered across each other"
+    }
+  }
+}

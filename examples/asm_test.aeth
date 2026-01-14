@@ -1,0 +1,17 @@
+fn main() {
+    let mut x: i64 = 10;
+    unsafe {
+        // Test Input
+        asm!("/* Input Test */ mov rax, $0", in("r") x);
+        
+        // Test Output
+        let mut y: i64 = 0;
+        asm!("/* Output Test */ mov $0, 20", out("r") y);
+        
+        // Test InOut
+        asm!("/* InOut Test */ add $0, 5", inout("r") x);
+        
+        // Test Clobber
+        asm!("/* Clobber Test */ nop", clobber("memory"));
+    }
+}

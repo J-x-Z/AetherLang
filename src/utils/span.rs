@@ -1,4 +1,5 @@
 //! Source location tracking
+#![allow(dead_code)]
 
 /// A span represents a range in the source code
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

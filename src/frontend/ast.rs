@@ -1,4 +1,7 @@
 //! Abstract Syntax Tree definitions for AetherLang
+//!
+//! Note: Many fields are reserved for future features (LLVM backend, advanced analysis).
+#![allow(dead_code)]
 
 use crate::utils::Span;
 
@@ -17,6 +20,18 @@ pub enum Item {
     Impl(ImplBlock),
     Interface(InterfaceDef),
     Const(ConstDef),
+    /// Macro definition
+    Macro(MacroDef),
+    /// Module definition
+    Module(ModuleDef),
+    /// Use/import statement
+    Use(UseDecl),
+    /// Extern block (FFI)
+    Extern(ExternBlock),
+    /// Static variable (global)
+    Static(StaticDef),
+    /// Union definition
+    Union(UnionDef),
 }
 
 /// Function definition
@@ -27,6 +42,12 @@ pub struct Function {
     pub ret_type: Option<Type>,
     pub body: Block,
     pub span: Span,
+    // AI-Native extensions
+    pub annotations: Vec<Annotation>,
+    pub contracts: Vec<Contract>,
+    pub effects: EffectSet,
+    pub is_pub: bool,
+    pub type_params: Vec<Ident>,
 }
 
 /// Function parameter
@@ -41,12 +62,14 @@ pub struct Param {
 /// Ownership modifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ownership {
-    /// Owned value (default)
+    /// Owned value (default, move semantics)
     Own,
     /// Immutable borrow
     Ref,
     /// Mutable borrow
     Mut,
+    /// Shared ownership (reference counted)
+    Shared,
 }
 
 impl Default for Ownership {
@@ -55,12 +78,62 @@ impl Default for Ownership {
     }
 }
 
+// ==================== AI-Native AST Extensions ====================
+
+/// Annotation (e.g., @inline, @test, @static)
+#[derive(Debug, Clone)]
+pub struct Annotation {
+    pub name: Ident,
+    pub args: Vec<Expr>,
+    pub span: Span,
+}
+
+/// Contract clause (requires/ensures/invariant)
+#[derive(Debug, Clone)]
+pub struct Contract {
+    pub kind: ContractKind,
+    pub condition: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContractKind {
+    /// Precondition: caller must satisfy
+    Requires,
+    /// Postcondition: function guarantees
+    Ensures,
+    /// Type invariant: always holds
+    Invariant,
+}
+
+/// Effect set for a function
+#[derive(Debug, Clone, Default)]
+pub struct EffectSet {
+    pub is_pure: bool,
+    pub effects: Vec<Effect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    Read,
+    Write,
+    IO,
+    Alloc,
+    Panic,
+}
+
+
 /// Struct definition
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: Ident,
     pub fields: Vec<Field>,
     pub span: Span,
+    // AI-Native extensions
+    pub annotations: Vec<Annotation>,
+    pub invariants: Vec<Contract>,
+    pub is_pub: bool,
+    pub type_params: Vec<Ident>,
 }
 
 /// Struct field
@@ -77,6 +150,7 @@ pub struct EnumDef {
     pub name: Ident,
     pub variants: Vec<Variant>,
     pub span: Span,
+    pub type_params: Vec<Ident>,
 }
 
 /// Enum variant
@@ -96,20 +170,45 @@ pub struct ImplBlock {
     pub span: Span,
 }
 
-/// Interface definition
+/// Trait definition (interface with optional default implementations)
 #[derive(Debug, Clone)]
 pub struct InterfaceDef {
     pub name: Ident,
+    /// Type parameters (generics)
+    pub type_params: Vec<Ident>,
+    /// Method signatures (without default implementation)
     pub methods: Vec<FunctionSig>,
+    /// Methods with default implementations
+    pub default_methods: Vec<Function>,
+    /// Associated types
+    pub associated_types: Vec<AssociatedType>,
+    /// Supertraits (traits this trait extends)
+    pub supertraits: Vec<Type>,
+    pub span: Span,
+    pub is_pub: bool,
+}
+
+/// Associated type in a trait
+#[derive(Debug, Clone)]
+pub struct AssociatedType {
+    pub name: Ident,
+    /// Optional default type
+    pub default_ty: Option<Type>,
+    /// Trait bounds on the associated type
+    pub bounds: Vec<Type>,
     pub span: Span,
 }
 
-/// Function signature (for interfaces)
+/// Function signature (for traits/interfaces)
 #[derive(Debug, Clone)]
 pub struct FunctionSig {
     pub name: Ident,
     pub params: Vec<Param>,
     pub ret_type: Option<Type>,
+    /// Effect annotations
+    pub effects: EffectSet,
+    /// Contract clauses
+    pub contracts: Vec<Contract>,
     pub span: Span,
 }
 
@@ -120,6 +219,166 @@ pub struct ConstDef {
     pub ty: Option<Type>,
     pub value: Expr,
     pub span: Span,
+}
+
+// ==================== Macro System ====================
+
+/// Macro definition
+#[derive(Debug, Clone)]
+pub struct MacroDef {
+    pub name: Ident,
+    pub kind: MacroKind,
+    pub span: Span,
+    pub is_pub: bool,
+}
+
+/// Kind of macro
+#[derive(Debug, Clone)]
+pub enum MacroKind {
+    /// Declarative macro (pattern matching)
+    Declarative {
+        rules: Vec<MacroRule>,
+    },
+    /// Procedural macro (code transformation)
+    Procedural {
+        /// Function to call for transformation
+        handler: Ident,
+    },
+}
+
+/// A single macro rule (pattern => template)
+#[derive(Debug, Clone)]
+pub struct MacroRule {
+    /// Pattern to match
+    pub pattern: MacroPattern,
+    /// Template to expand
+    pub template: MacroTemplate,
+    pub span: Span,
+}
+
+/// Macro pattern (simplified)
+#[derive(Debug, Clone)]
+pub struct MacroPattern {
+    pub tokens: Vec<MacroToken>,
+}
+
+/// Macro template (simplified)
+#[derive(Debug, Clone)]
+pub struct MacroTemplate {
+    pub tokens: Vec<MacroToken>,
+}
+
+/// Token in a macro pattern/template
+#[derive(Debug, Clone)]
+pub enum MacroToken {
+    /// Literal token
+    Literal(String),
+    /// Variable (e.g., $expr, $ident)
+    Variable { name: String, kind: String },
+    /// Repetition (e.g., $($x:expr),*)
+    Repetition { pattern: Vec<MacroToken>, separator: Option<String> },
+}
+
+// ==================== Module System ====================
+
+/// Module definition
+#[derive(Debug, Clone)]
+pub struct ModuleDef {
+    pub name: Ident,
+    /// Inline module items (if Some) or external file (if None)
+    pub items: Option<Vec<Item>>,
+    pub span: Span,
+    pub is_pub: bool,
+}
+
+/// Use/import declaration
+#[derive(Debug, Clone)]
+pub struct UseDecl {
+    /// Path to import (e.g., std::io::File)
+    pub path: Vec<Ident>,
+    /// Kind of import
+    pub kind: UseKind,
+    pub span: Span,
+    pub is_pub: bool,
+}
+
+/// Kind of use declaration
+#[derive(Debug, Clone)]
+pub enum UseKind {
+    /// Import single item (use foo::bar)
+    Simple,
+    /// Import with alias (use foo::bar as baz)
+    Alias(Ident),
+    /// Import all (use foo::*)
+    Glob,
+    /// Import multiple (use foo::{a, b, c})
+    Group(Vec<UseDecl>),
+}
+
+// ==================== FFI System (Phase 8) ====================
+
+/// Extern block for FFI declarations
+#[derive(Debug, Clone)]
+pub struct ExternBlock {
+    /// ABI specification (e.g., "C", "stdcall")
+    pub abi: Option<String>,
+    /// Foreign function declarations
+    pub items: Vec<ForeignItem>,
+    pub span: Span,
+}
+
+/// Foreign item (function or static) declaration
+#[derive(Debug, Clone)]
+pub enum ForeignItem {
+    /// Foreign function with optional contracts
+    Fn {
+        name: Ident,
+        params: Vec<Param>,
+        ret_type: Option<Type>,
+        /// Annotations for AI understanding (@pure, @reads, @allocs, etc.)
+        annotations: Vec<Annotation>,
+        span: Span,
+    },
+    /// Foreign static variable
+    Static {
+        name: Ident,
+        ty: Type,
+        is_mut: bool,
+        span: Span,
+    },
+}
+
+/// Static variable definition (global)
+#[derive(Debug, Clone)]
+pub struct StaticDef {
+    pub name: Ident,
+    pub ty: Type,
+    pub value: Option<Expr>,
+    pub is_mut: bool,
+    pub is_pub: bool,
+    pub span: Span,
+}
+
+/// Union definition (overlapping memory layout)
+#[derive(Debug, Clone)]
+pub struct UnionDef {
+    pub name: Ident,
+    pub fields: Vec<Field>,
+    pub span: Span,
+    pub is_pub: bool,
+    /// Memory representation (C, packed, etc.)
+    pub repr: Option<Repr>,
+}
+
+/// Memory representation attribute
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repr {
+    /// C-compatible layout
+    C,
+    /// Packed (no padding)
+    Packed,
+    /// Transparent (single-field wrapper)
+    Transparent,
 }
 
 /// Code block
@@ -162,6 +421,11 @@ pub enum Expr {
     Literal(Literal),
     /// Identifier
     Ident(Ident),
+    /// Path (e.g. Option::Some)
+    Path {
+        segments: Vec<Ident>,
+        span: Span,
+    },
     /// Binary operation
     Binary {
         left: Box<Expr>,
@@ -272,15 +536,24 @@ pub enum Expr {
         end: Option<Box<Expr>>,
         span: Span,
     },
-    /// Unsafe block
+    /// Unsafe block with optional AI metadata
     Unsafe {
         body: Block,
+        /// Optional reason explaining why this is unsafe (for AI understanding)
+        reason: Option<String>,
+        /// Optional verifier function to call for validation
+        verifier: Option<Ident>,
         span: Span,
     },
     /// Inline assembly
     Asm {
         template: String,
         operands: Vec<AsmOperand>,
+        span: Span,
+    },
+    /// Error propagation (expr?)
+    Try {
+        expr: Box<Expr>,
         span: Span,
     },
 }
@@ -323,8 +596,17 @@ pub enum Pattern {
 /// Inline assembly operand
 #[derive(Debug, Clone)]
 pub struct AsmOperand {
-    pub constraint: String,
-    pub expr: Expr,
+    pub kind: AsmOperandKind,
+    pub options: String, // "reg", "memory", etc.
+    pub expr: Option<Expr>, // None for clobber
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AsmOperandKind {
+    Input,  // in(reg) val
+    Output, // out(reg) val
+    InOut,  // inout(reg) val
+    Clobber, // clobber("memory")
 }
 
 /// Literal value
@@ -403,8 +685,10 @@ pub enum UnOp {
 /// Type representation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    /// Named type (i32, String, MyStruct)
+    /// Named type (i32, String)
     Named(String, Span),
+    /// Generic type instantiation (Option<T>, Vec<i32>)
+    Generic(String, Vec<Type>, Span),
     /// Pointer type (*T)
     Pointer(Box<Type>, Span),
     /// Reference type (&T or &mut T)
@@ -435,12 +719,21 @@ pub enum Type {
     Unit(Span),
     /// Inferred type (_)
     Infer(Span),
+    /// Owned type with explicit ownership (own T, shared T)
+    Owned {
+        inner: Box<Type>,
+        ownership: Ownership,
+        span: Span,
+    },
+    /// Volatile type (*volatile T) - prevents compiler optimization of memory access
+    Volatile(Box<Type>, Span),
 }
 
 impl Type {
     pub fn span(&self) -> Span {
         match self {
             Type::Named(_, s) => *s,
+            Type::Generic(_, _, s) => *s,
             Type::Pointer(_, s) => *s,
             Type::Ref { span, .. } => *span,
             Type::Array { span, .. } => *span,
@@ -450,6 +743,8 @@ impl Type {
             Type::Never(s) => *s,
             Type::Unit(s) => *s,
             Type::Infer(s) => *s,
+            Type::Owned { span, .. } => *span,
+            Type::Volatile(_, s) => *s,
         }
     }
 }

@@ -1,0 +1,17 @@
+
+// Generic Struct
+struct Box<T> {
+    inner: T
+}
+
+// Generic Enum
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+// Function with Generic Types
+fn main() {
+    let b: Box<i64> = Box { inner: 42 };
+    let o: Option<i64> = Option::Some(100);
+}

@@ -8,6 +8,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Compiler error
 #[derive(Error, Debug, Clone)]
+#[allow(dead_code)]
 pub enum Error {
     // ==================== Parser Errors ====================
     
@@ -17,6 +18,10 @@ pub enum Error {
         got: String,
         span: Span,
     },
+
+    #[error("Expected {0}")]
+    Expected(String, Span),
+
     
     #[error("Expected identifier")]
     ExpectedIdent { span: Span },
@@ -99,7 +104,10 @@ pub enum Error {
     #[error("Cannot borrow mutably: {var}")]
     CannotBorrowMutably { var: String, span: Span },
     
-    // ==================== Backend Errors ====================
+    // ==================== AI-Native: Effect Errors ====================
+    
+    #[error("Effect violation: {message}")]
+    EffectViolation { message: String, span: Span },
     
     #[error("IO error: {0}")]
     Io(String),
@@ -116,6 +124,7 @@ impl Error {
     pub fn span(&self) -> Option<Span> {
         match self {
             Self::UnexpectedToken { span, .. } => Some(*span),
+            Self::Expected(_, span) => Some(*span),
             Self::ExpectedIdent { span } => Some(*span),
             Self::ExpectedType { span } => Some(*span),
             Self::ExpectedExpr { span } => Some(*span),
@@ -139,6 +148,7 @@ impl Error {
             Self::CannotMutBorrowTwice { span, .. } => Some(*span),
             Self::CannotMoveOutOfBorrow { span, .. } => Some(*span),
             Self::CannotBorrowMutably { span, .. } => Some(*span),
+            Self::EffectViolation { span, .. } => Some(*span),
             Self::Io(_) | Self::Llvm(_) | Self::CodeGen(_) => None,
         }
     }

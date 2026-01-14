@@ -1,0 +1,20 @@
+// Multiboot Header for GRUB Bootloader
+// Simplified version without attributes (manual layout control)
+
+struct MultibootHeader {
+    magic: u32,
+    flags: u32,
+    checksum: u32,
+}
+
+// Multiboot constants
+static MULTIBOOT_MAGIC: u32 = 0x1BADB002;
+static MULTIBOOT_FLAGS: u32 = 0x00000003;
+
+fn get_multiboot_header() -> MultibootHeader {
+    return MultibootHeader {
+        magic: 0x1BADB002,
+        flags: 0x00000003,
+        checksum: 0xE4524FFB,
+    };
+}

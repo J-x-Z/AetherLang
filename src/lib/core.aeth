@@ -1,0 +1,32 @@
+// AetherLang Core Library (no_std)
+// This module provides fundamental types without libc dependency.
+
+// ============== Option<T> ==============
+// Represents an optional value: either Some(value) or None.
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+// ============== Result<T, E> ==============
+// Represents success (Ok) or failure (Err) with error information.
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+// ============== Slice<T> ==============
+// A view into a contiguous sequence of elements.
+// Raw pointer + length, no ownership.
+struct Slice<T> {
+    ptr: *T,
+    len: usize,
+}
+
+// ============== Unit Type Marker ==============
+// Explicit unit type for functions returning nothing.
+struct Unit {}
+
+// ============== Never Type Marker ==============
+// For functions that never return (e.g., panic, infinite loop).
+enum Never {}

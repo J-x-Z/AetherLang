@@ -1,11 +1,10 @@
 //! C Code Generator
 //!
 //! Translates Aether IR to C code for compilation with clang/gcc.
+#![allow(dead_code)]
 
-use std::fmt::Write;
 use std::collections::HashMap;
 use std::process::Command;
-use std::path::Path;
 use std::fs;
 
 use crate::backend::codegen::CodeGen;
@@ -23,6 +22,14 @@ pub struct CCodeGen {
     var_counter: usize,
     /// Map from block ID to label name
     block_labels: HashMap<usize, String>,
+    
+    // Structure layouts (struct name -> fields)
+    struct_layouts: HashMap<String, Vec<(String, IRType)>>,
+    
+    // Type tracking
+    reg_types: HashMap<Register, IRType>,
+    param_types: HashMap<usize, IRType>,
+    func_ret_types: HashMap<String, IRType>,
 }
 
 impl CCodeGen {
@@ -34,7 +41,13 @@ impl CCodeGen {
             var_names: HashMap::new(),
             var_counter: 0,
             block_labels: HashMap::new(),
+            struct_layouts: HashMap::new(),
+            reg_types: HashMap::new(),
+            param_types: HashMap::new(),
+            func_ret_types: HashMap::new(),
         }
+
+
     }
 
     /// Generate a unique variable name
@@ -133,12 +146,86 @@ impl CCodeGen {
         }
     }
 
+    /// Analyze instruction for type inference
+    fn analyze_instruction(&mut self, inst: &Instruction) {
+        match inst {
+            Instruction::Assign { dest, value } => {
+                if let Some(ty) = self.get_value_type(value) {
+                    self.reg_types.insert(*dest, ty);
+                }
+            }
+            Instruction::BinOp { dest, .. } => {
+                self.reg_types.insert(*dest, IRType::I64); 
+            }
+            Instruction::UnaryOp { dest, value, .. } => {
+                 if let Some(ty) = self.get_value_type(value) {
+                    self.reg_types.insert(*dest, ty);
+                }
+            }
+            Instruction::Call { dest: Some(dest), func, .. } => {
+                let ret_ty = self.func_ret_types.get(func).cloned();
+                if let Some(ty) = ret_ty {
+                    self.reg_types.insert(*dest, ty);
+                }
+            }
+            Instruction::Alloca { dest, ty } => {
+                self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty.clone())));
+            }
+            Instruction::Load { dest, ptr } => {
+                 if let Some(IRType::Ptr(inner)) = self.get_value_type(ptr) {
+                    self.reg_types.insert(*dest, *inner);
+                }
+            }
+            Instruction::GetElementPtr { dest, ptr, index } => {
+                let ptr_ty = self.get_value_type(ptr);
+                if let Some(IRType::Ptr(inner)) = &ptr_ty {
+                    if let IRType::Struct(struct_name) = &**inner {
+                         if let Value::Constant(Constant::Int(idx)) = index {
+                             let field_info = if let Some(fields) = self.struct_layouts.get(struct_name) {
+                                 fields.get(*idx as usize).cloned()
+                             } else {
+                                 None
+                             };
+                             
+                             if let Some((_, field_type)) = field_info {
+                                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(field_type)));
+                                 return; // Handled
+                             }
+                         }
+                    }
+                }
+                // Fallback
+                if let Some(IRType::Ptr(inner)) = ptr_ty {
+                      self.reg_types.insert(*dest, IRType::Ptr(inner));
+                }
+            }
+            Instruction::Phi { dest, incoming } => {
+                if let Some((val, _)) = incoming.first() {
+                    if let Some(ty) = self.get_value_type(val) {
+                        self.reg_types.insert(*dest, ty);
+                    }
+                }
+            }
+            Instruction::Cast { dest, ty, .. } => {
+                self.reg_types.insert(*dest, ty.clone());
+            }
+            _ => {}
+        }
+    }
+
     /// Generate C code for a function
     fn generate_function(&mut self, func: &IRFunction) -> Result<()> {
         // Reset state for new function
         self.var_names.clear();
         self.var_counter = 0;
         self.block_labels.clear();
+        self.reg_types.clear();
+        self.param_types.clear();
+
+        // Populate param types
+        for (i, (_, ty)) in func.params.iter().enumerate() {
+            self.param_types.insert(i, ty.clone());
+        }
 
         // Generate block labels with L_ prefix to avoid C reserved words
         for (i, block) in func.blocks.iter().enumerate() {
@@ -152,9 +239,31 @@ impl CCodeGen {
             .map(|(i, (_, ty))| format!("{} _arg{}", self.ir_type_to_c(ty), i))
             .collect();
         
+        // Generate effect annotations as comments (for documentation/static analysis)
+        if !func.contracts.effects.is_empty() {
+            let effects_str = func.contracts.effects.join(", ");
+            self.writeln(&format!("/* @effects: {} */", effects_str));
+        }
+        
         let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
         self.writeln(&format!("{} {}({}) {{", ret_type, func.name, params_str));
         self.indent += 1;
+
+        // Generate precondition assertions (requires clauses)
+        if !func.contracts.requires.is_empty() {
+            self.writeln("/* Precondition assertions */");
+            for (i, require) in func.contracts.requires.iter().enumerate() {
+                self.writeln(&format!("assert({});  /* requires #{} */", require, i + 1));
+            }
+            self.writeln("");
+        }
+
+        // Pass 1: Analyze types
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                self.analyze_instruction(inst);
+            }
+        }
 
         // Declare all variables upfront (C89 style for compatibility)
         let mut declarations = Vec::new();
@@ -167,25 +276,43 @@ impl CCodeGen {
                     Instruction::Alloca { dest, .. } |
                     Instruction::Load { dest, .. } |
                     Instruction::GetElementPtr { dest, .. } |
-                    Instruction::Phi { dest, .. } => {
+                    Instruction::Phi { dest, .. } |
+                    Instruction::Cast { dest, .. } => {
                         let var = self.get_var(*dest);
-                        // Use int64_t as default type (we'd need type info for proper types)
-                        declarations.push(format!("int64_t {};", var));
+                        let c_type = self.reg_types.get(dest)
+                            .map(|t| self.ir_type_to_c(t))
+                            .unwrap_or("int64_t".to_string());
+                        declarations.push(format!("{} {};", c_type, var));
                     }
                     Instruction::Call { dest: Some(dest), .. } => {
                         let var = self.get_var(*dest);
-                        declarations.push(format!("int64_t {};", var));
+                        let c_type = self.reg_types.get(dest)
+                            .map(|t| self.ir_type_to_c(t))
+                            .unwrap_or("int64_t".to_string());
+                        declarations.push(format!("{} {};", c_type, var));
+                    }
+                    Instruction::InlineAsm { operands, .. } => {
+                        for op in operands {
+                            if let Some(reg) = op.output {
+                                let var = self.get_var(reg);
+                                // Default to int64_t for asm outputs for not
+                                declarations.push(format!("int64_t {};", var));
+                            }
+                        }
                     }
                     _ => {}
                 }
             }
         }
 
-        // Remove duplicates and emit declarations
+        // Remove duplicates and emit declarations (skip void types)
         declarations.sort();
         declarations.dedup();
         for decl in declarations {
-            self.writeln(&decl);
+            // Skip void declarations
+            if !decl.starts_with("void ") {
+                self.writeln(&decl);
+            }
         }
         if !func.blocks.is_empty() {
             self.writeln("");
@@ -220,13 +347,28 @@ impl CCodeGen {
         Ok(())
     }
 
+    /// Get type of a value if known
+    fn get_value_type(&self, val: &Value) -> Option<IRType> {
+        match val {
+            Value::Register(reg) => self.reg_types.get(reg).cloned(),
+            Value::Parameter(idx) => self.param_types.get(idx).cloned(),
+            _ => None,
+        }
+    }
+
     /// Generate C code for an instruction
+
     fn generate_instruction(&mut self, inst: &Instruction) -> Result<()> {
         match inst {
             Instruction::Assign { dest, value } => {
                 let var = self.get_var(*dest);
                 let val = self.value_to_c(value);
                 self.writeln(&format!("{} = {};", var, val));
+                
+                // Track type
+                if let Some(ty) = self.get_value_type(value) {
+                    self.reg_types.insert(*dest, ty);
+                }
             }
             
             Instruction::BinOp { dest, op, left, right } => {
@@ -235,6 +377,7 @@ impl CCodeGen {
                 let r = self.value_to_c(right);
                 let op_str = self.binop_to_c(*op);
                 self.writeln(&format!("{} = {} {} {};", var, l, op_str, r));
+                self.reg_types.insert(*dest, IRType::I64); // Default to I64 for now
             }
             
             Instruction::UnaryOp { dest, op, value } => {
@@ -246,13 +389,16 @@ impl CCodeGen {
                     UnaryOp::BitNot => "~",
                 };
                 self.writeln(&format!("{} = {}{};", var, op_str, val));
+                if let Some(ty) = self.get_value_type(value) {
+                    self.reg_types.insert(*dest, ty);
+                }
             }
             
             Instruction::Call { dest, func, args } => {
                 let args_str: Vec<_> = args.iter().map(|a| self.value_to_c(a)).collect();
                 
                 // Map built-in function names to C runtime functions
-                let (c_func, is_void) = match func.as_str() {
+                let (c_func, is_builtin_void) = match func.as_str() {
                     "print" => ("aether_print", true),
                     "println" => ("aether_println", true),
                     "print_i64" => ("aether_print_i64", true),
@@ -264,6 +410,10 @@ impl CCodeGen {
                     _ => (func.as_str(), false),
                 };
                 
+                // Check if user-defined function returns void
+                let ret_ty = self.func_ret_types.get(func).cloned();
+                let is_void = is_builtin_void || matches!(ret_ty, Some(IRType::Void)) || matches!(ret_ty, None);
+                
                 let call = format!("{}({})", c_func, args_str.join(", "));
                 
                 // For void functions, don't assign to a variable
@@ -272,10 +422,12 @@ impl CCodeGen {
                 } else if let Some(d) = dest {
                     let var = self.get_var(*d);
                     self.writeln(&format!("{} = {};", var, call));
+                    
+                    if let Some(ty) = ret_ty {
+                        self.reg_types.insert(*d, ty);
+                    }
                 }
             }
-
-
             
             Instruction::Alloca { dest, ty } => {
                 let var = self.get_var(*dest);
@@ -283,25 +435,142 @@ impl CCodeGen {
                 // Alloca in C is just a local variable
                 self.writeln(&format!("{} _alloca_{};", c_type, var));
                 self.writeln(&format!("{} = &_alloca_{};", var, var));
+                
+                self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty.clone())));
             }
             
             Instruction::Load { dest, ptr } => {
                 let var = self.get_var(*dest);
                 let p = self.value_to_c(ptr);
                 self.writeln(&format!("{} = *{};", var, p));
+                
+                if let Some(IRType::Ptr(inner)) = self.get_value_type(ptr) {
+                    self.reg_types.insert(*dest, *inner);
+                }
             }
             
             Instruction::Store { ptr, value } => {
                 let p = self.value_to_c(ptr);
                 let val = self.value_to_c(value);
+                
+                // Check if we're storing a struct pointer to a struct field
+                // In that case, we need to dereference the value
+                let ptr_ty = self.get_value_type(ptr);
+                let val_ty = self.get_value_type(value);
+                
+                if let (Some(IRType::Ptr(ptr_inner)), Some(IRType::Ptr(val_inner))) = (&ptr_ty, &val_ty) {
+                    // Both are pointers - check if storing struct* to struct field
+                    if let IRType::Struct(_) = &**ptr_inner {
+                        if let IRType::Struct(_) = &**val_inner {
+                            // Dereference the value: *ptr = *val
+                            self.writeln(&format!("*{} = *{};", p, val));
+                            return Ok(());
+                        }
+                    }
+                }
+                
                 self.writeln(&format!("*{} = {};", p, val));
             }
             
             Instruction::GetElementPtr { dest, ptr, index } => {
+                let ptr_ty = self.get_value_type(ptr);
+                let mut handled = false;
+                
+                // Check if this is a struct field access
+                if let Some(IRType::Ptr(inner)) = &ptr_ty {
+                    if let IRType::Struct(struct_name) = &**inner {
+                        if let Value::Constant(Constant::Int(idx)) = index {
+                             let field_info = if let Some(fields) = self.struct_layouts.get(struct_name) {
+                                 fields.get(*idx as usize).cloned()
+                             } else {
+                                 None
+                             };
+
+                             if let Some((field_name, field_type)) = field_info {
+                                 let var = self.get_var(*dest);
+                                 let p = self.value_to_c(ptr);
+                                 self.writeln(&format!("{} = &{}->{};", var, p, field_name));
+                                 
+                                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(field_type)));
+                                 handled = true;
+                             }
+                        }
+                    }
+                }
+                
+                if !handled {
+                    let var = self.get_var(*dest);
+                    let p = self.value_to_c(ptr);
+                    let idx = self.value_to_c(index);
+                    self.writeln(&format!("{} = &{}[{}];", var, p, idx));
+                    
+                    if let Some(IRType::Ptr(inner)) = ptr_ty {
+                         self.reg_types.insert(*dest, IRType::Ptr(inner));
+                     }
+                }
+            }
+
+            Instruction::Cast { dest, value, ty } => {
                 let var = self.get_var(*dest);
-                let p = self.value_to_c(ptr);
-                let idx = self.value_to_c(index);
-                self.writeln(&format!("{} = &{}[{}];", var, p, idx));
+                let val = self.value_to_c(value);
+                let type_name = self.ir_type_to_c(ty);
+                self.writeln(&format!("{} = ({}){};", var, type_name, val));
+                self.reg_types.insert(*dest, ty.clone());
+            }
+
+            Instruction::InlineAsm { template, operands } => {
+                let mut inputs = Vec::new();
+                let mut outputs = Vec::new();
+                let mut clobbers = Vec::new();
+                
+                for op in operands {
+                    match op.kind {
+                        IRAsmOperandKind::Input => {
+                            if let Some(ref val) = op.input {
+                                let val_str = self.value_to_c(val);
+                                inputs.push(format!("\"{}\" ({})", op.constraint, val_str));
+                            }
+                        }
+                        IRAsmOperandKind::Output => {
+                            if let Some(reg) = op.output {
+                                let var = self.get_var(reg);
+                                let constraint = if !op.constraint.starts_with('=') && !op.constraint.starts_with('+') {
+                                    format!("={}", op.constraint)
+                                } else {
+                                    op.constraint.clone()
+                                };
+                                outputs.push(format!("\"{}\" ({})", constraint, var));
+                                self.reg_types.insert(reg, IRType::I64); // Default to I64
+                            }
+                        }
+                        IRAsmOperandKind::InOut => {
+                             if let Some(reg) = op.output {
+                                 let var = self.get_var(reg);
+                                 if let Some(ref val) = op.input {
+                                     let val_str = self.value_to_c(val);
+                                     self.writeln(&format!("{} = {};", var, val_str));
+                                 }
+                                 let constraint = if !op.constraint.starts_with('+') {
+                                    format!("+{}", op.constraint)
+                                } else {
+                                    op.constraint.clone()
+                                };
+                                outputs.push(format!("\"{}\" ({})", constraint, var));
+                                self.reg_types.insert(reg, IRType::I64); 
+                             }
+                        }
+                        IRAsmOperandKind::Clobber => {
+                             clobbers.push(format!("\"{}\"", op.constraint));
+                        }
+                    }
+                }
+                
+                let outputs_str = outputs.join(", ");
+                let inputs_str = inputs.join(", ");
+                let clobbers_str = clobbers.join(", ");
+                
+                self.writeln(&format!("__asm__ volatile (\"{}\" : {} : {} : {});", 
+                    template, outputs_str, inputs_str, clobbers_str));
             }
             
             Instruction::Phi { dest, incoming } => {
@@ -311,11 +580,16 @@ impl CCodeGen {
                     let var = self.get_var(*dest);
                     let v = self.value_to_c(val);
                     self.writeln(&format!("{} = {};", var, v));
+                    
+                    if let Some(ty) = self.get_value_type(val) {
+                        self.reg_types.insert(*dest, ty);
+                    }
                 }
             }
         }
         Ok(())
     }
+
 
     /// Generate C code for a terminator
     fn generate_terminator(&mut self, term: &Terminator) -> Result<()> {
@@ -368,6 +642,35 @@ impl CCodeGen {
         self.writeln("static void aether_println_i64(int64_t n) { printf(\"%lld\\n\", (long long)n); }");
         self.writeln("static void aether_assert(bool c) { if(!c) { fprintf(stderr, \"Assertion failed\\n\"); exit(1); } }");
         self.writeln("");
+        
+        // Struct definitions
+        self.writeln("/* Struct Definitions */");
+        for struct_def in &module.structs {
+            // Add GCC attributes based on repr
+            let attr = match struct_def.repr {
+                StructRepr::C => "",  // C layout is default for GCC structs
+                StructRepr::Packed => " __attribute__((packed))",
+                StructRepr::Transparent => "",  // Transparent is a Rust concept, no direct C equivalent
+                StructRepr::Default => "",  // No special attribute
+            };
+            self.writeln(&format!("struct {}{} {{", struct_def.name, attr));
+            for (field_name, field_type) in &struct_def.fields {
+                let c_type = self.ir_type_to_c(field_type);
+                self.writeln(&format!("    {} {};", c_type, field_name));
+            }
+            self.writeln("};");
+            self.writeln("");
+        }
+            
+        // Populate layout map
+        for struct_def in &module.structs {
+            self.struct_layouts.insert(struct_def.name.clone(), struct_def.fields.clone());
+        }
+        
+        // Populate function return types
+        for func in &module.functions {
+            self.func_ret_types.insert(func.name.clone(), func.ret_type.clone());
+        }
         
         // Forward declarations
         for func in &module.functions {

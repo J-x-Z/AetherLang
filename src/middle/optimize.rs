@@ -1,6 +1,7 @@
 //! IR Optimizer for AetherLang
 //!
 //! Implements various optimization passes on Aether IR.
+#![allow(dead_code)]
 
 use crate::middle::ir::*;
 

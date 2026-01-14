@@ -1,6 +1,7 @@
 //! IR Printer - Pretty print Aether IR
 //!
 //! Outputs human-readable IR for debugging.
+#![allow(dead_code)]
 
 use std::fmt::Write;
 use crate::middle::ir::*;
@@ -90,6 +91,9 @@ impl IRPrinter {
                     self.value_str(right)
                 ).unwrap();
             }
+            Instruction::Cast { dest, value, ty } => {
+                write!(self.output, "{} = cast {} to {:?}", dest, self.value_str(value), ty).unwrap();
+            }
             Instruction::UnaryOp { dest, op, value } => {
                 let op_str = match op {
                     UnaryOp::Neg => "neg",
@@ -137,6 +141,36 @@ impl IRPrinter {
                     }
                     write!(self.output, "[{}, bb{}]", self.value_str(val), block.0).unwrap();
                 }
+            }
+            Instruction::InlineAsm { template, operands } => {
+                write!(self.output, "asm!(\"{}\"", template).unwrap();
+                for op in operands {
+                    write!(self.output, ", ").unwrap();
+                    match op.kind {
+                        IRAsmOperandKind::Input => {
+                            if let Some(ref val) = op.input {
+                                write!(self.output, "in(\"{}\") {}", op.constraint, self.value_str(val)).unwrap();
+                            }
+                        }
+                        IRAsmOperandKind::Output => {
+                            if let Some(reg) = op.output {
+                                write!(self.output, "out(\"{}\") %{}", op.constraint, reg.0).unwrap();
+                            }
+                        }
+                        IRAsmOperandKind::InOut => {
+                            if let Some(reg) = op.output {
+                                 write!(self.output, "inout(\"{}\") ", op.constraint).unwrap();
+                                 if let Some(ref val) = op.input {
+                                     write!(self.output, "{} -> %{}", self.value_str(val), reg.0).unwrap();
+                                 }
+                            }
+                        }
+                        IRAsmOperandKind::Clobber => {
+                             write!(self.output, "clobber(\"{}\")", op.constraint).unwrap();
+                        }
+                    }
+                }
+                write!(self.output, ")").unwrap();
             }
         }
     }

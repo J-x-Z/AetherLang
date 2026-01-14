@@ -1,0 +1,45 @@
+// AetherLang AI-Native Feature Test
+// This file demonstrates the new AI-Native syntax features
+
+// 1. Pure function with contract
+fn divide(a: i32, b: i32) -> i32 [requires b != 0] pure {
+    a / b
+}
+
+// 2. Function with effect annotation
+fn log_message(msg: str) effect[io] {
+    println(msg)
+}
+
+// 3. Public function with precondition
+pub fn binary_search(arr: i32, target: i32) -> i32 
+    [requires arr != 0, requires target >= 0] 
+{
+    // Implementation here
+    return 0
+}
+
+// 4. Function with shared ownership parameter
+fn process_shared(data: shared Vec) {
+    // data is reference-counted shared ownership
+}
+
+// 5. Function with own ownership parameter (explicit move)
+fn consume(data: own String) -> i32 {
+    // data ownership is moved here
+    return 42
+}
+
+// 6. Struct definition (will have invariants in future)
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+// 7. Regular function (backwards compatible)
+fn main() {
+    let a = 10
+    let b = 2
+    let result = divide(a, b)
+    println(result)
+}

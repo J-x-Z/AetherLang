@@ -1,4 +1,5 @@
 //! Type System for AetherLang
+#![allow(dead_code)]
 
 /// Primitive types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -60,6 +61,10 @@ pub enum ResolvedType {
     Struct { name: String, fields: Vec<(String, ResolvedType)> },
     Enum { name: String },
     Function { params: Vec<ResolvedType>, ret: Box<ResolvedType> },
+    /// Generic type instantiation (e.g. Option<i32>)
+    Generic(String, Vec<ResolvedType>),
+    /// Generic Type Parameter (e.g. T in struct Foo<T>)
+    GenericParam(String),
     /// String type (pointer to char array)
     String,
     Unknown,
@@ -83,9 +88,9 @@ impl ResolvedType {
     }
     
     // Constants for common types
-    pub const Unit: Self = Self::Primitive(PrimitiveType::Unit);
-    pub const Never: Self = Self::Primitive(PrimitiveType::Never);
-    pub const Bool: Self = Self::Primitive(PrimitiveType::Bool);
+    pub const UNIT: Self = Self::Primitive(PrimitiveType::Unit);
+    pub const NEVER: Self = Self::Primitive(PrimitiveType::Never);
+    pub const BOOL: Self = Self::Primitive(PrimitiveType::Bool);
     pub const I8: Self = Self::Primitive(PrimitiveType::I8);
     pub const I16: Self = Self::Primitive(PrimitiveType::I16);
     pub const I32: Self = Self::Primitive(PrimitiveType::I32);
@@ -98,7 +103,7 @@ impl ResolvedType {
     pub const F64: Self = Self::Primitive(PrimitiveType::F64);
     
     /// Create a pointer type
-    pub fn Ptr(inner: Box<ResolvedType>) -> Self {
+    pub fn ptr(inner: Box<ResolvedType>) -> Self {
         Self::Pointer(inner)
     }
 }
