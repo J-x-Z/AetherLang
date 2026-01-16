@@ -1,0 +1,17 @@
+enum Color {
+    Red,
+    Blue,
+    Green,
+}
+
+fn test(c: Color) -> i32 {
+    match c {
+        Color::Red => 1,
+        Color::Blue => 2,
+        _ => 0,
+    }
+}
+
+fn main() {
+    let x: i32 = test(Color::Red);
+}

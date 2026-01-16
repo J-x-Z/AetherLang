@@ -1,0 +1,6 @@
+fn main() {
+    let x: i32 = 0;
+    while !true {
+        let y: i32 = 1;
+    }
+}

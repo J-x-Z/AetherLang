@@ -1147,7 +1147,17 @@ impl Parser {
         let then_block = self.parse_block()?;
 
         let else_block = if self.consume(&TokenKind::Else) {
-            Some(self.parse_block()?)
+            if self.check(&TokenKind::If) {
+                // else if: parse as nested if expression wrapped in a block
+                let nested_if = self.parse_if_expr()?;
+                let span = nested_if.span();
+                Some(Block {
+                    stmts: vec![Stmt::Expr(nested_if)],
+                    span,
+                })
+            } else {
+                Some(self.parse_block()?)
+            }
         } else {
             None
         };
@@ -1210,11 +1220,46 @@ impl Parser {
             }
             TokenKind::Ident(name) => {
                 self.advance();
-                Ok(Pattern::Binding {
-                    name: Ident { name: name.clone(), span: token.span },
-                    mutable: false,
-                    span: token.span,
-                })
+                let first_ident = Ident { name: name.clone(), span: token.span };
+                
+                // Check for path pattern (e.g., Color::Red)
+                if self.consume(&TokenKind::ColonColon) {
+                    let variant = self.parse_ident()?;
+                    let end_span = variant.span;
+                    
+                    // Check for optional tuple payload (e.g., Some(x))
+                    let fields = if self.consume(&TokenKind::LParen) {
+                        let mut fields = vec![];
+                        if !self.check(&TokenKind::RParen) {
+                            fields.push(self.parse_pattern()?);
+                            while self.consume(&TokenKind::Comma) {
+                                if self.check(&TokenKind::RParen) { break; }
+                                fields.push(self.parse_pattern()?);
+                            }
+                        }
+                        self.expect(TokenKind::RParen)?;
+                        fields
+                    } else {
+                        vec![]
+                    };
+                    
+                    Ok(Pattern::Variant {
+                        enum_name: Some(first_ident),
+                        variant,
+                        fields,
+                        span: token.span.merge(&end_span),
+                    })
+                } else {
+                    if name == "_" {
+                        Ok(Pattern::Wildcard { span: token.span })
+                    } else {
+                        Ok(Pattern::Binding {
+                            name: first_ident,
+                            mutable: false,
+                            span: token.span,
+                        })
+                    }
+                }
             }
             TokenKind::IntLit(n) => {
                 self.advance();
