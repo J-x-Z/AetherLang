@@ -674,12 +674,17 @@ impl SemanticAnalyzer {
 
 
             Expr::Path { segments, span } => {
-                // Phase 11: Basic path resolution for Enum constructors
+                // Phase 11: Basic path resolution for Enum constructors and Struct static methods
                 if segments.len() >= 2 {
                     let type_name = &segments[0].name;
                     
                     if let Some(symbol) = self.symbols.lookup(type_name) {
+                         // Enum variant (e.g., TokenKind::Eof)
                          if matches!(symbol.kind, SymbolKind::Enum { .. }) {
+                             return Ok(ResolvedType::Unknown);
+                         }
+                         // Struct static method (e.g., String::new)
+                         if matches!(symbol.kind, SymbolKind::Struct { .. }) {
                              return Ok(ResolvedType::Unknown);
                          }
                     }
@@ -765,6 +770,8 @@ impl SemanticAnalyzer {
                 let expr_ty = self.check_expr(expr)?;
                 
                 let struct_ty = if let ResolvedType::Pointer(inner) = &expr_ty {
+                    inner.as_ref()
+                } else if let ResolvedType::Reference { inner, .. } = &expr_ty {
                     inner.as_ref()
                 } else {
                     &expr_ty
