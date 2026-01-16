@@ -1,0 +1,15 @@
+interface Drop {
+    fn drop(self: &mut Self);
+}
+
+struct Foo {
+    x: i32,
+}
+
+impl Drop for Foo {
+    fn drop(self: &mut Foo) {
+    }
+}
+
+fn main() {
+}

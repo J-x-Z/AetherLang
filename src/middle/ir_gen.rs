@@ -936,6 +936,18 @@ impl IRGenerator {
                  // Array logic hack
                  IRType::Ptr(Box::new(self.ast_type_to_ir(elem))) 
             }
+            AstType::Ref { inner, .. } => {
+                // References are implemented as pointers at the IR level
+                IRType::Ptr(Box::new(self.ast_type_to_ir(inner)))
+            }
+            AstType::Tuple(elements, _) => {
+                if elements.is_empty() {
+                    IRType::Void // Unit tuple ()
+                } else {
+                    IRType::Void // TODO: proper tuple support
+                }
+            }
+            AstType::Unit(_) => IRType::Void,
             _ => IRType::Void,
         }
     }

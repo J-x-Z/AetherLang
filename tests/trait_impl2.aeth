@@ -1,0 +1,11 @@
+struct Foo {
+    x: i32,
+}
+
+impl Drop for Foo {
+    fn drop(self: *Foo) {
+    }
+}
+
+fn main() {
+}

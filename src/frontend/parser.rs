@@ -120,13 +120,25 @@ impl Parser {
         // Handle pub modifier - peek ahead to see what comes next
         match self.current_kind() {
             TokenKind::Pub => {
-                // pub can precede fn, struct, etc.
+                // pub can precede fn, struct, enum, impl, interface, etc.
                 if let Some(next) = self.peek() {
                     match &next.kind {
                         TokenKind::Fn => Ok(Item::Function(self.parse_function()?)),
                         TokenKind::Struct => Ok(Item::Struct(self.parse_struct_with_attrs(attributes)?)),
+                        TokenKind::Enum => {
+                            self.advance(); // consume 'pub'
+                            Ok(Item::Enum(self.parse_enum()?))
+                        },
+                        TokenKind::Impl => {
+                            self.advance(); // consume 'pub'
+                            Ok(Item::Impl(self.parse_impl()?))
+                        },
+                        TokenKind::Interface => {
+                            self.advance(); // consume 'pub'
+                            Ok(Item::Interface(self.parse_interface()?))
+                        },
                         _ => Err(Error::UnexpectedToken {
-                            expected: "fn or struct after pub".to_string(),
+                            expected: "fn, struct, enum, impl or interface after pub".to_string(),
                             got: format!("{:?}", next.kind),
                             span: next.span,
                         }),
@@ -1259,6 +1271,9 @@ impl Parser {
 
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            // Allow optional 'pub' visibility on fields (currently ignored)
+            let _is_pub_field = self.consume(&TokenKind::Pub);
+            
             let field_name = self.parse_ident()?;
             self.expect(TokenKind::Colon)?;
             let ty = self.parse_type()?;

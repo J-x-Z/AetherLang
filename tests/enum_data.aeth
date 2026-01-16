@@ -1,0 +1,8 @@
+pub enum TokenKind {
+    Fn,
+    Let,
+    Unknown(u8),
+}
+
+fn main() {
+}
