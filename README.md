@@ -4,6 +4,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 ![Tests](https://img.shields.io/badge/tests-42%20passing-green)
+![Self-Hosting](https://img.shields.io/badge/self--hosting-8%25-yellow)
 
 ## 🎯 Vision
 
@@ -12,6 +13,18 @@ AetherLang is an **AI-Native Programming Language** built from the ground up to:
 1. **Reduce AI Hallucinations** - Explicit interfaces, constrained syntax, semantic annotations
 2. **Enable AI Self-Iteration** - AI-readable IR, structured feedback, sandboxed optimization
 3. **Maintain Rigor & Safety** - Contract programming, effect system, ownership semantics
+
+## 🔄 Self-Hosting Progress
+
+AetherLang is being **rewritten in itself**! Current progress:
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Lexer** | 🔄 90% | Parsing ✅, Semantic ✅, IR ✅, Codegen 🔄 |
+| Parser | ⏳ 0% | Planned |
+| Semantic Analyzer | ⏳ 0% | Planned |
+| IR Generator | ⏳ 0% | Planned |
+| LLVM Codegen | ⏳ 0% | Planned |
 
 ## ✨ Dual-Layer Architecture
 
@@ -69,6 +82,7 @@ cargo run -- build examples/kernel/main.aeth
 | **Script Layer** | ✅ | Script Frontend, Transpiler, Source Mapping |
 | **AI-IR Layer** | ✅ | Semantic Graph, Intent Propagation |
 | **System Features**| ✅ | FFI, Unions, Volatile, Inline ASM |
+| **Self-Hosting** | 🔄 | Lexer 90%, Goal: Rust < 20% |
 | **Backend** | 🚧 | ELF Builder (Partial), C-Gen (Partial) |
 
 **Tests: 42 passing** ✅

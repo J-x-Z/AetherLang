@@ -742,9 +742,19 @@ impl SemanticAnalyzer {
                 
                 match func_ty {
                     ResolvedType::Function { params, ret } => {
-                        if args.len() != params.len() {
+                        // For method calls (func is field access), skip the self parameter
+                        let expected_args = if matches!(func.as_ref(), Expr::Field { .. }) && !params.is_empty() {
+                            params.len() - 1  // Exclude self parameter
+                        } else {
+                            params.len()
+                        };
+                        
+                        // Skip arg count check for variadic C functions
+                        let is_variadic = matches!(func.as_ref(), Expr::Ident(ident) if ident.name == "printf");
+                        
+                        if !is_variadic && args.len() != expected_args {
                             return Err(Error::ArgCountMismatch {
-                                expected: params.len(),
+                                expected: expected_args,
                                 got: args.len(),
                                 span: *span,
                             });
@@ -795,7 +805,7 @@ impl SemanticAnalyzer {
 
             Expr::If { cond, then_block, else_block, .. } => {
                 let cond_ty = self.check_expr(cond)?;
-                if cond_ty != ResolvedType::bool() {
+                if cond_ty != ResolvedType::bool() && cond_ty != ResolvedType::Unknown {
                     self.errors.push(Error::TypeMismatch {
                         expected: "bool".to_string(),
                         got: format!("{:?}", cond_ty),
@@ -834,7 +844,7 @@ impl SemanticAnalyzer {
 
             Expr::While { cond, body, .. } => {
                 let cond_ty = self.check_expr(cond)?;
-                if cond_ty != ResolvedType::bool() {
+                if cond_ty != ResolvedType::bool() && cond_ty != ResolvedType::Unknown {
                     self.errors.push(Error::TypeMismatch {
                         expected: "bool".to_string(),
                         got: format!("{:?}", cond_ty),
