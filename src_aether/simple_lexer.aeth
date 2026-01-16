@@ -1,0 +1,50 @@
+// Minimal Lexer for Bootstrap Verification - v2
+// Uses only verified features
+
+extern "C" {
+    fn putchar(c: i32) -> i32;
+    fn printf(fmt: *u8) -> i32;
+}
+
+// Token type constants
+pub fn token_eof() -> i32 { return 0; }
+pub fn token_int() -> i32 { return 1; }
+pub fn token_ident() -> i32 { return 2; }
+pub fn token_plus() -> i32 { return 3; }
+
+// Helper functions
+pub fn is_digit(c: i32) -> bool {
+    return c >= 48 && c <= 57;
+}
+
+pub fn is_alpha(c: i32) -> bool {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+}
+
+// Print token type
+pub fn print_token(t: i32) {
+    if t == 0 { printf("EOF\n"); }
+    if t == 1 { printf("INT\n"); }
+    if t == 2 { printf("IDENT\n"); }
+    if t == 3 { printf("PLUS\n"); }
+}
+
+fn main() {
+    printf("Lexer Bootstrap Test\n");
+    
+    // Test token identification
+    print_token(token_int());
+    print_token(token_ident());
+    print_token(token_plus());
+    print_token(token_eof());
+    
+    // Test character classification
+    if is_digit(48) {
+        printf("'0' is a digit\n");
+    }
+    if is_alpha(65) {
+        printf("'A' is alpha\n");
+    }
+    
+    printf("Bootstrap complete!\n");
+}

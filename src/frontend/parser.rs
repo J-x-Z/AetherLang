@@ -756,7 +756,19 @@ impl Parser {
                 let ident = self.parse_ident()?;
                 
                 // Check if this is a struct literal: TypeName { field: value, ... }
-                if self.check(&TokenKind::LBrace) {
+                // Use lookahead: only parse as struct lit if { is followed by ident:
+                // This avoids ambiguity with `if cond { ... }`
+                let is_struct_lit = if self.check(&TokenKind::LBrace) {
+                    // Look ahead: check if next token after { is Ident followed by Colon
+                    self.pos + 1 < self.tokens.len() && 
+                    matches!(&self.tokens[self.pos + 1].kind, TokenKind::Ident(_)) &&
+                    self.pos + 2 < self.tokens.len() &&
+                    matches!(&self.tokens[self.pos + 2].kind, TokenKind::Colon)
+                } else {
+                    false
+                };
+
+                if is_struct_lit {
                     let start_span = ident.span;
                     self.advance(); // consume '{'
                     

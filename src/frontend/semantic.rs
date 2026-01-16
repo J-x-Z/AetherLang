@@ -1071,6 +1071,11 @@ impl SemanticAnalyzer {
                     // Pointer to Pointer
                     (ResolvedType::Pointer(_), ResolvedType::Pointer(_)) => true,
                     
+                    // Reference to Pointer (same inner type or compatible)
+                    (ResolvedType::Reference { inner, .. }, ResolvedType::Pointer(ptr_inner)) => {
+                        inner.as_ref() == ptr_inner.as_ref()
+                    },
+                    
                     // Unknown source (permissive for now)
                     (ResolvedType::Unknown, _) => true,
                     
@@ -1097,7 +1102,7 @@ impl SemanticAnalyzer {
         match lit {
             Literal::Int(_, _) => ResolvedType::Primitive(PrimitiveType::I64), // Default to i64
             Literal::Float(_, _) => ResolvedType::Primitive(PrimitiveType::F64),
-            Literal::String(_, _) => ResolvedType::String, // String type for string literals
+            Literal::String(_, _) => ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8))), // C-style string pointer
             Literal::Char(_, _) => ResolvedType::Primitive(PrimitiveType::Char),
             Literal::Bool(_, _) => ResolvedType::Primitive(PrimitiveType::Bool),
         }

@@ -1,0 +1,8 @@
+fn test(cond: bool) {
+    if cond {
+        let x: i32 = 1;
+    }
+}
+
+fn main() {
+}

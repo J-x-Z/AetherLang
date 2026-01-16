@@ -1,0 +1,12 @@
+extern "C" {
+    fn exit(status: i32);
+}
+
+pub fn my_assert(cond: bool) {
+    if !cond {
+        exit(1);
+    }
+}
+
+fn main() {
+}

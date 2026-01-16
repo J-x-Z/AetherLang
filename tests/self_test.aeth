@@ -1,0 +1,12 @@
+struct Foo {
+    x: i32,
+}
+
+impl Foo {
+    pub fn get_x(self: &Foo) -> i32 {
+        self.x
+    }
+}
+
+fn main() {
+}

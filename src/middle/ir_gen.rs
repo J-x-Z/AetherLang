@@ -345,6 +345,20 @@ impl IRGenerator {
                         });
                         return Ok(right_val);
                     }
+                    
+                    // 4. Fallback: If we get here with Assign, the target is not in locals
+                    // This can happen with re-assignment to variables. Handle by storing to the register.
+                    if let Expr::Ident(ident) = left.as_ref() {
+                        // Variable exists but not in locals - likely needs alloca
+                        return Err(crate::utils::Error::CodeGen(
+                            format!("Cannot assign to '{}': variable not found in locals. Consider using 'let mut' for mutable variables.", ident.name)
+                        ));
+                    }
+                    
+                    // For any other Assign target, return an error
+                    return Err(crate::utils::Error::CodeGen(
+                        "Invalid assignment target".to_string()
+                    ));
                 }
                 
                 let ir_op = self.ast_binop_to_ir(*op);

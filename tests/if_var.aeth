@@ -1,0 +1,5 @@
+fn main() {
+    let cond: bool = true;
+    if cond {
+    }
+}
