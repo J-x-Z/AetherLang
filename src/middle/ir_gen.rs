@@ -232,7 +232,24 @@ impl IRGenerator {
 
             Stmt::Return { value, .. } => {
                 let ret_val = if let Some(expr) = value {
-                    Some(self.generate_expr(expr)?)
+                    let mut val = self.generate_expr(expr)?;
+                    
+                    // Convert to function return type if needed
+                    if let Some(func) = &self.current_fn {
+                        let expected_ty = func.ret_type.clone();
+                        if let Some(actual_ty) = self.get_value_type(&val) {
+                            if Self::is_integer_type(&expected_ty) && Self::is_integer_type(&actual_ty) && expected_ty != actual_ty {
+                                let cast_dest = self.alloc_register();
+                                self.emit_current_with_type(Instruction::Cast {
+                                    dest: cast_dest,
+                                    value: val,
+                                    ty: expected_ty.clone(),
+                                }, expected_ty);
+                                val = Value::Register(cast_dest);
+                            }
+                        }
+                    }
+                    Some(val)
                 } else {
                     None
                 };
@@ -364,17 +381,37 @@ impl IRGenerator {
                 let ir_op = self.ast_binop_to_ir(*op);
                 let dest = self.alloc_register();
                 
+                // Unify types for binary operations: convert right to left's type if different integers
+                let left_ty = self.get_value_type(&left_val);
+                let right_ty = self.get_value_type(&right_val);
+                let unified_right = if let (Some(lt), Some(rt)) = (&left_ty, &right_ty) {
+                    if Self::is_integer_type(lt) && Self::is_integer_type(rt) && lt != rt {
+                        // Cast right to left's type
+                        let cast_dest = self.alloc_register();
+                        self.emit_current_with_type(Instruction::Cast {
+                            dest: cast_dest,
+                            value: right_val.clone(),
+                            ty: lt.clone(),
+                        }, lt.clone());
+                        Value::Register(cast_dest)
+                    } else {
+                        right_val
+                    }
+                } else {
+                    right_val
+                };
+                
                 // Result of binary op is usually primitive or bool (I64/Bool)
                 let res_ty = match ir_op {
                     IRBinOp::Eq | IRBinOp::Ne | IRBinOp::Lt | IRBinOp::Le | IRBinOp::Gt | IRBinOp::Ge => IRType::Bool,
-                    _ => IRType::I64, // Default assumption
+                    _ => left_ty.unwrap_or(IRType::I64), // Use left type for arithmetic
                 };
 
                 self.emit_current_with_type(Instruction::BinOp {
                     dest,
                     op: ir_op,
                     left: left_val,
-                    right: right_val,
+                    right: unified_right,
                 }, res_ty);
                 
                 Ok(Value::Register(dest))
@@ -404,20 +441,67 @@ impl IRGenerator {
                     "indirect".to_string()
                 };
 
-                let arg_vals: Vec<Value> = args
-                    .iter()
-                    .map(|a| self.generate_expr(a))
-                    .collect::<Result<Vec<_>>>()?;
-
-                let dest = self.alloc_register();
-                // Assume unknown return type I64 unless we search module functions
-                self.emit_current_with_type(Instruction::Call {
-                    dest: Some(dest),
-                    func: func_name,
-                    args: arg_vals,
-                }, IRType::I64);
+                // Generate argument values
+                let mut arg_vals: Vec<Value> = Vec::new();
                 
-                Ok(Value::Register(dest))
+                // Look up function signature for type conversion
+                let param_types: Vec<IRType> = self.module.functions.iter()
+                    .find(|f| f.name == func_name)
+                    .map(|f| f.params.iter().map(|(_, ty)| ty.clone()).collect())
+                    .or_else(|| {
+                        self.module.externs.iter()
+                            .find(|e| e.name == func_name)
+                            .map(|e| e.params.iter().map(|(_, ty)| ty.clone()).collect())
+                    })
+                    .unwrap_or_default();
+                
+                for (i, arg) in args.iter().enumerate() {
+                    let mut val = self.generate_expr(arg)?;
+                    
+                    // If we have type info, check and convert if needed
+                    if let (Some(expected_ty), Some(actual_ty)) = (param_types.get(i), self.get_value_type(&val)) {
+                        // Allow implicit integer conversions (e.g., i64 -> i32)
+                        if Self::is_integer_type(expected_ty) && Self::is_integer_type(&actual_ty) && expected_ty != &actual_ty {
+                            let dest = self.alloc_register();
+                            self.emit_current_with_type(Instruction::Cast {
+                                dest,
+                                value: val,
+                                ty: expected_ty.clone(),
+                            }, expected_ty.clone());
+                            val = Value::Register(dest);
+                        }
+                    }
+                    arg_vals.push(val);
+                }
+
+                // Get return type from function signature if available
+                let ret_type = self.module.functions.iter()
+                    .find(|f| f.name == func_name)
+                    .map(|f| f.ret_type.clone())
+                    .or_else(|| {
+                        self.module.externs.iter()
+                            .find(|e| e.name == func_name)
+                            .map(|e| e.ret_type.clone())
+                    })
+                    .unwrap_or(IRType::I64);
+                
+                // For void functions, don't allocate a dest register
+                if ret_type == IRType::Void {
+                    self.emit_current_with_type(Instruction::Call {
+                        dest: None,
+                        func: func_name,
+                        args: arg_vals,
+                    }, IRType::Void);
+                    Ok(Value::Unit)
+                } else {
+                    let dest = self.alloc_register();
+                    self.emit_current_with_type(Instruction::Call {
+                        dest: Some(dest),
+                        func: func_name,
+                        args: arg_vals,
+                    }, ret_type);
+                    Ok(Value::Register(dest))
+                }
             }
 
             Expr::If { cond, then_block, else_block, .. } => {
@@ -455,28 +539,21 @@ impl IRGenerator {
 
                 self.current_block = merge_id;
                 
-                // Phi node logic
-                if (then_result.is_some() || else_result.is_some()) && (then_jumps_to_merge || else_jumps_to_merge) {
-                    let dest = self.alloc_register();
-                    let mut incoming = Vec::new();
-                    let mut phi_ty = IRType::Void;
-                    
-                    if then_jumps_to_merge {
-                         if let Some(val) = then_result {
-                             incoming.push((val.clone(), then_exit));
-                             if let Some(t) = self.get_value_type(&val) { phi_ty = t; }
-                         }
-                    }
-                     if else_jumps_to_merge {
-                         if let Some(val) = else_result {
-                             incoming.push((val.clone(), else_exit));
-                              if let Some(t) = self.get_value_type(&val) { phi_ty = t; }
-                         }
-                    }
-                    
-                    if !incoming.is_empty() {
-                         self.emit_current_with_type(Instruction::Phi { dest, incoming }, phi_ty);
-                         return Ok(Value::Register(dest));
+                // Phi node logic - only generate if BOTH branches jump to merge AND both have values
+                // For statement-level if (no else or no return value), just return Unit
+                if then_jumps_to_merge && else_jumps_to_merge {
+                    if let (Some(then_val), Some(else_val)) = (&then_result, &else_result) {
+                        let dest = self.alloc_register();
+                        let mut incoming = Vec::new();
+                        let mut phi_ty = IRType::Void;
+                        
+                        incoming.push((then_val.clone(), then_exit));
+                        if let Some(t) = self.get_value_type(then_val) { phi_ty = t; }
+                        
+                        incoming.push((else_val.clone(), else_exit));
+                        
+                        self.emit_current_with_type(Instruction::Phi { dest, incoming }, phi_ty);
+                        return Ok(Value::Register(dest));
                     }
                 }
                 Ok(Value::Unit)
@@ -745,6 +822,12 @@ impl IRGenerator {
             self.reg_types.insert(*dest, ty);
         }
         self.emit_current(inst);
+    }
+    
+    /// Check if an IR type is an integer type
+    fn is_integer_type(ty: &IRType) -> bool {
+        matches!(ty, IRType::I8 | IRType::I16 | IRType::I32 | IRType::I64 |
+                     IRType::U8 | IRType::U16 | IRType::U32 | IRType::U64)
     }
     
     fn get_value_type(&self, val: &Value) -> Option<IRType> {

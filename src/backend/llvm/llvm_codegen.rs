@@ -314,8 +314,44 @@ impl LLVMCodeGen {
                     let val = self.get_value(value)?;
                     let dest_ty = self.ir_type_to_llvm(ty);
                     let name = CString::new("").unwrap();
-                    // For now, use bitcast for all casts (simplified)
-                    let result = LLVMBuildBitCast(self.builder, val, dest_ty, name.as_ptr());
+                    
+                    // Determine correct cast instruction based on types
+                    let src_ty = LLVMTypeOf(val);
+                    let src_kind = LLVMGetTypeKind(src_ty);
+                    let dest_kind = LLVMGetTypeKind(dest_ty);
+                    
+                    let result = match (src_kind, dest_kind) {
+                        // Integer to Integer: use trunc, sext, or zext based on size
+                        (llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind, llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind) => {
+                            let src_bits = LLVMGetIntTypeWidth(src_ty);
+                            let dest_bits = LLVMGetIntTypeWidth(dest_ty);
+                            if dest_bits < src_bits {
+                                LLVMBuildTrunc(self.builder, val, dest_ty, name.as_ptr())
+                            } else if dest_bits > src_bits {
+                                // Use sign-extend for signed types (i*), zero-extend for unsigned (u*)
+                                // For now, use zero-extend as a safe default
+                                LLVMBuildZExt(self.builder, val, dest_ty, name.as_ptr())
+                            } else {
+                                val // Same size, no conversion needed
+                            }
+                        }
+                        // Pointer to Integer
+                        (llvm_sys::LLVMTypeKind::LLVMPointerTypeKind, llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind) => {
+                            LLVMBuildPtrToInt(self.builder, val, dest_ty, name.as_ptr())
+                        }
+                        // Integer to Pointer
+                        (llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind, llvm_sys::LLVMTypeKind::LLVMPointerTypeKind) => {
+                            LLVMBuildIntToPtr(self.builder, val, dest_ty, name.as_ptr())
+                        }
+                        // Pointer to Pointer: use bitcast
+                        (llvm_sys::LLVMTypeKind::LLVMPointerTypeKind, llvm_sys::LLVMTypeKind::LLVMPointerTypeKind) => {
+                            LLVMBuildBitCast(self.builder, val, dest_ty, name.as_ptr())
+                        }
+                        // Default: use bitcast
+                        _ => {
+                            LLVMBuildBitCast(self.builder, val, dest_ty, name.as_ptr())
+                        }
+                    };
                     self.value_map.insert(*dest, result);
                 }
                 
