@@ -1,0 +1,13 @@
+enum Color {
+    Red,
+    Blue,
+}
+
+struct Point {
+    x: i32,
+    color: Color,
+}
+
+fn main() {
+    let p: Point = Point { x: 10, color: Color::Red };
+}
