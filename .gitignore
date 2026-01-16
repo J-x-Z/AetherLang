@@ -25,3 +25,4 @@ ir_output.txt
 
 # Project internal docs (not for public)
 项目书.txt
+*.exe
