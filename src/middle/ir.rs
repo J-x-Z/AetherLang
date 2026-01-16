@@ -38,6 +38,15 @@ pub struct IRModule {
     pub name: String,
     pub functions: Vec<IRFunction>,
     pub structs: Vec<IRStruct>,
+    pub externs: Vec<IRExtern>,
+}
+
+/// External function declaration
+#[derive(Debug, Clone)]
+pub struct IRExtern {
+    pub name: String,
+    pub params: Vec<(String, IRType)>,
+    pub ret_type: IRType,
 }
 
 impl IRModule {
@@ -46,6 +55,7 @@ impl IRModule {
             name: name.to_string(),
             functions: Vec::new(),
             structs: Vec::new(),
+            externs: Vec::new(),
         }
     }
     

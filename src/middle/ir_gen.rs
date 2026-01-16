@@ -10,7 +10,7 @@ use crate::frontend::ast::{
 use crate::middle::ir::{
     IRModule, IRFunction, IRType, BlockId, Register,
     Instruction, Terminator, Value, Constant, UnaryOp,
-    BinOp as IRBinOp, IRAsmOperand, IRAsmOperandKind,
+    BinOp as IRBinOp, IRAsmOperand, IRAsmOperandKind, IRExtern,
 };
 use crate::utils::Result;
 
@@ -105,8 +105,31 @@ impl IRGenerator {
                 Ok(())
             }
             Item::Use(_) => Ok(()),
-            // Phase 8: FFI and System features
-            Item::Extern(_) => Ok(()), // FFI declarations - no IR generation needed for declarations
+            Item::Extern(ext) => {
+                // Register extern functions in IR module
+                for foreign_item in &ext.items {
+                    match foreign_item {
+                        ast::ForeignItem::Fn { name, params, ret_type, .. } => {
+                            let ir_params: Vec<(String, IRType)> = params.iter()
+                                .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
+                                .collect();
+                            let ir_ret = ret_type.as_ref()
+                                .map(|t| self.ast_type_to_ir(t))
+                                .unwrap_or(IRType::Void);
+                            
+                            self.module.externs.push(IRExtern {
+                                name: name.name.clone(),
+                                params: ir_params,
+                                ret_type: ir_ret,
+                            });
+                        }
+                        ast::ForeignItem::Static { .. } => {
+                            // TODO: Handle static extern variables
+                        }
+                    }
+                }
+                Ok(())
+            }
             Item::Static(_) => Ok(()), // TODO: Generate global variable IR
             Item::Union(_) => Ok(()), // TODO: Generate union type IR
         }
@@ -782,11 +805,18 @@ impl IRGenerator {
         match ty {
             AstType::Named(name, _) => {
                 match name.as_str() {
+                    "i8" => IRType::I8,
+                    "i16" => IRType::I16,
+                    "i32" => IRType::I32,
                     "i64" | "int" => IRType::I64,
+                    "u8" | "byte" => IRType::U8,
+                    "u16" => IRType::U16,
+                    "u32" => IRType::U32,
+                    "u64" => IRType::U64,
+                    "f32" => IRType::F32,
                     "f64" | "float" => IRType::F64,
                     "bool" => IRType::Bool,
-                    "void" => IRType::Void,
-                    "u8" | "byte" => IRType::U8,
+                    "void" | "()" => IRType::Void,
                     s => IRType::Struct(s.to_string()),
                 }
 

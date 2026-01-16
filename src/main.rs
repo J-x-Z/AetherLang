@@ -338,7 +338,11 @@ fn compile_file(input: &PathBuf, output: Option<PathBuf>, cli: &Cli) {
         #[cfg(feature = "llvm")]
         "llvm" => {
             use backend::llvm::LLVMCodeGen;
-            let mut codegen = LLVMCodeGen::new("x86_64-pc-windows-gnu");
+            // Use native target triple for current platform
+            #[cfg(target_os = "macos")]
+            let mut codegen = LLVMCodeGen::new("arm64-apple-darwin");
+            #[cfg(not(target_os = "macos"))]
+            let mut codegen = LLVMCodeGen::new("x86_64-unknown-linux-gnu");
             
             match codegen.generate(&ir_module) {
                 Ok(bytes) => {

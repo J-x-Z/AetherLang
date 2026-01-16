@@ -1,0 +1,8 @@
+// Minimal test: call printf
+extern "C" {
+    fn printf(fmt: *u8) -> i32;
+}
+
+fn main() {
+    printf("Hello from Aether!\n");
+}

@@ -417,6 +417,43 @@ impl SemanticAnalyzer {
                     mutable: false,
                 })?;
             }
+            Item::Extern(ext) => {
+                // Register extern functions in symbol table
+                for foreign_item in &ext.items {
+                    match foreign_item {
+                        crate::frontend::ast::ForeignItem::Fn { name, params, ret_type, .. } => {
+                            let param_types: Vec<ResolvedType> = params.iter()
+                                .map(|p| self.resolve_type(&p.ty))
+                                .collect::<Result<Vec<_>>>()?;
+                            let ret = ret_type.as_ref()
+                                .map(|t| self.resolve_type(t))
+                                .transpose()?
+                                .unwrap_or(ResolvedType::unit());
+
+                            self.symbols.define(Symbol {
+                                name: name.name.clone(),
+                                kind: SymbolKind::Function { params: param_types.clone(), ret: ret.clone() },
+                                ty: ResolvedType::Function {
+                                    params: param_types,
+                                    ret: Box::new(ret),
+                                },
+                                span: name.span,
+                                mutable: false,
+                            })?;
+                        }
+                        crate::frontend::ast::ForeignItem::Static { name, ty, .. } => {
+                            let resolved_ty = self.resolve_type(ty)?;
+                            self.symbols.define(Symbol {
+                                name: name.name.clone(),
+                                kind: SymbolKind::Variable,
+                                ty: resolved_ty,
+                                span: name.span,
+                                mutable: false,
+                            })?;
+                        }
+                    }
+                }
+            }
             _ => {} // Impl and Interface handled separately
         }
         Ok(())

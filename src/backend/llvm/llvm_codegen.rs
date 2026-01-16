@@ -228,7 +228,12 @@ impl LLVMCodeGen {
                         .map(|a| self.get_value(a))
                         .collect::<Result<Vec<_>>>()?;
                     
-                    let name = CString::new("").unwrap();
+                    let name = if dest.is_some() { 
+                        CString::new("call").unwrap() 
+                    } else { 
+                        CString::new("").unwrap() 
+                    };
+                    // Use LLVMGlobalGetValueType for opaque pointers (LLVM 18+)
                     let func_ty = LLVMGlobalGetValueType(callee);
                     let result = LLVMBuildCall2(
                         self.builder,
@@ -380,14 +385,10 @@ impl LLVMCodeGen {
                             Ok(LLVMConstInt(i1_ty, *b as u64, 0))
                         }
                         Constant::String(s) => {
-                            let bytes = s.as_bytes();
-                            let len = bytes.len() as u32;
-                            Ok(LLVMConstStringInContext(
-                                self.context,
-                                bytes.as_ptr() as *const i8,
-                                len,
-                                0 // don't null-terminate
-                            ))
+                            // Create global string pointer (returns i8*)
+                            let s_c = CString::new(s.as_str()).unwrap();
+                            let name_c = CString::new("str").unwrap();
+                            Ok(LLVMBuildGlobalStringPtr(self.builder, s_c.as_ptr(), name_c.as_ptr()))
                         }
                         Constant::Null => {
                             let ptr_ty = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
@@ -543,10 +544,39 @@ impl CodeGen for LLVMCodeGen {
             LLVMSetModuleIdentifier(self.module, name.as_ptr(), module.name.len());
         }
         
+        // Declare extern functions first
+        for ext in &module.externs {
+            unsafe {
+                let func_name = CString::new(ext.name.as_str()).unwrap();
+                
+                // Check if function already exists
+                if !LLVMGetNamedFunction(self.module, func_name.as_ptr()).is_null() {
+                    continue;
+                }
+                
+                // Build function type
+                let ret_ty = self.ir_type_to_llvm(&ext.ret_type);
+                let mut param_types: Vec<LLVMTypeRef> = ext.params.iter()
+                    .map(|(_, ty)| self.ir_type_to_llvm(ty))
+                    .collect();
+                let func_ty = LLVMFunctionType(
+                    ret_ty,
+                    param_types.as_mut_ptr(),
+                    param_types.len() as u32,
+                    0 // not variadic
+                );
+                
+                // Add function declaration
+                LLVMAddFunction(self.module, func_name.as_ptr(), func_ty);
+            }
+        }
+        
         // Generate code for each function
         for func in &module.functions {
             self.generate_function(func)?;
         }
+        // Debug: Print LLVM IR before verification
+        eprintln!("LLVM IR:\n{}", self.print_ir());
         
         // Verify
         self.verify_module()?;
