@@ -1,0 +1,6 @@
+// Test negation of variable
+pub fn my_assert(cond: bool) {
+    if !cond {
+        let x: i64 = 1;
+    }
+}

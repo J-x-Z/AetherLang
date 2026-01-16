@@ -1,0 +1,117 @@
+// AetherLang Standard Library: Vec Module
+// Provides a heap-allocated, growable array type
+
+use core::{malloc, free, realloc, memcpy}
+
+/// A heap-allocated, growable array
+pub struct Vec<T> {
+    /// Pointer to the array data
+    data: *T,
+    /// Number of elements
+    len: u64,
+    /// Allocated capacity (in elements)
+    capacity: u64,
+}
+
+impl<T> Vec<T> {
+    /// Create a new empty vector
+    pub fn new() -> Vec<T> {
+        Vec {
+            data: 0 as *T,  // null pointer
+            len: 0,
+            capacity: 0,
+        }
+    }
+    
+    /// Create a vector with pre-allocated capacity
+    pub fn with_capacity(cap: u64) -> Vec<T> {
+        let elem_size: u64 = 8;  // TODO: sizeof<T>
+        let data: *T = malloc(cap * elem_size) as *T;
+        
+        Vec {
+            data: data,
+            len: 0,
+            capacity: cap,
+        }
+    }
+    
+    /// Get the number of elements
+    pub fn len(self: &Vec<T>) -> u64 {
+        self.len
+    }
+    
+    /// Check if empty
+    pub fn is_empty(self: &Vec<T>) -> bool {
+        self.len == 0
+    }
+    
+    /// Get the capacity
+    pub fn capacity(self: &Vec<T>) -> u64 {
+        self.capacity
+    }
+    
+    /// Ensure capacity for n more elements
+    fn ensure_capacity(self: &mut Vec<T>, additional: u64) {
+        let required: u64 = self.len + additional;
+        if required > self.capacity {
+            let new_cap: u64 = if self.capacity == 0 { 8 as u64 } else { self.capacity * (2 as u64) };
+            let final_cap: u64 = if new_cap < required { required } else { new_cap };
+            
+            let elem_size: u64 = 8;  // TODO: sizeof<T>
+            let new_data: *T = malloc(final_cap * elem_size) as *T;
+            
+            if self.len > 0 {
+                memcpy(new_data as *u8, self.data as *u8, self.len * elem_size);
+            }
+            
+            if self.capacity > 0 {
+                free(self.data as *u8);
+            }
+            
+            self.data = new_data;
+            self.capacity = final_cap;
+        }
+    }
+    
+    /// Push an element to the end
+    pub fn push(self: &mut Vec<T>, value: T) {
+        self.ensure_capacity(1);
+        let ptr: *T = self.data + self.len;
+        *ptr = value;
+        self.len = self.len + 1;
+    }
+    
+    /// Pop the last element
+    pub fn pop(self: &mut Vec<T>) -> T {
+        // TODO: Return Option<T>
+        self.len = self.len - 1;
+        let ptr: *T = self.data + self.len;
+        *ptr
+    }
+    
+    /// Get element at index (no bounds checking)
+    pub fn get(self: &Vec<T>, idx: u64) -> &T {
+        let ptr: *T = self.data + idx;
+        &(*ptr)
+    }
+    
+    /// Get mutable element at index
+    pub fn get_mut(self: &mut Vec<T>, idx: u64) -> &mut T {
+        let ptr: *T = self.data + idx;
+        &mut (*ptr)
+    }
+    
+    /// Clear the vector
+    pub fn clear(self: &mut Vec<T>) {
+        self.len = 0;
+    }
+}
+
+/// Drop implementation
+impl<T> Drop for Vec<T> {
+    fn drop(self: &mut Vec<T>) {
+        if self.capacity > 0 {
+            free(self.data as *u8);
+        }
+    }
+}

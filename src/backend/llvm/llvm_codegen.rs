@@ -304,6 +304,20 @@ impl LLVMCodeGen {
                         self.value_map.insert(*dest, phi);
                     }
                 }
+                
+                Instruction::Cast { dest, value, ty } => {
+                    let val = self.get_value(value)?;
+                    let dest_ty = self.ir_type_to_llvm(ty);
+                    let name = CString::new("").unwrap();
+                    // For now, use bitcast for all casts (simplified)
+                    let result = LLVMBuildBitCast(self.builder, val, dest_ty, name.as_ptr());
+                    self.value_map.insert(*dest, result);
+                }
+                
+                Instruction::InlineAsm { .. } => {
+                    // InlineAsm not yet supported in LLVM backend
+                    return Err(Error::CodeGen("InlineAsm not supported".to_string()));
+                }
             }
         }
         Ok(())

@@ -1,0 +1,41 @@
+// AetherLang Compiler: Span Module (Self-Hosted)
+// Source location tracking
+
+/// A source span (file, start, end positions)
+pub struct Span {
+    /// File ID (for multi-file compilation)
+    pub file_id: u64,
+    /// Start byte offset
+    pub start: u64,
+    /// End byte offset
+    pub end: u64,
+}
+
+impl Span {
+    /// Create a new span
+    pub fn new(file_id: u64, start: u64, end: u64) -> Span {
+        Span {
+            file_id: file_id,
+            start: start,
+            end: end,
+        }
+    }
+    
+    /// Create an empty span at a position
+    pub fn empty(file_id: u64, pos: u64) -> Span {
+        Span {
+            file_id: file_id,
+            start: pos,
+            end: pos,
+        }
+    }
+    
+    /// Merge two spans
+    pub fn merge(self: &Span, other: &Span) -> Span {
+        Span {
+            file_id: self.file_id,
+            start: if self.start < other.start { self.start } else { other.start },
+            end: if self.end > other.end { self.end } else { other.end },
+        }
+    }
+}

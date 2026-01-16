@@ -1,0 +1,30 @@
+// AetherLang Standard Library: Core Module
+// Provides low-level FFI bindings to C stdlib
+
+extern "C" {
+    fn malloc(size: u64) -> *u8;
+    fn free(ptr: *u8);
+    fn realloc(ptr: *u8, new_size: u64) -> *u8;
+    fn memcpy(dest: *u8, src: *u8, n: u64) -> *u8;
+    fn memset(s: *u8, c: i32, n: u64) -> *u8;
+    fn printf(fmt: *u8) -> i32;
+    fn putchar(c: i32) -> i32;
+    fn getchar() -> i32;
+    fn exit(status: i32);
+    fn abort();
+    fn strlen(s: *u8) -> u64;
+    fn strcmp(s1: *u8, s2: *u8) -> i32;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn atof(nptr: *u8) -> f64;
+}
+
+pub fn my_println(s: *u8) {
+    printf(s);
+    putchar(10 as i32);
+}
+
+pub fn my_assert(cond: bool) {
+    if !cond {
+        exit(1 as i32);
+    }
+}

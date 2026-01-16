@@ -24,7 +24,7 @@ use frontend::semantic::SemanticAnalyzer;
 use middle::ir_gen::IRGenerator;
 use middle::optimize::Optimizer;
 use middle::ir_printer::print_ir;
-use backend::CCodeGen;
+use backend::{CCodeGen, codegen::CodeGen};
 
 /// AetherLang Compiler
 #[derive(Parser, Debug)]
@@ -342,7 +342,7 @@ fn compile_file(input: &PathBuf, output: Option<PathBuf>, cli: &Cli) {
             
             match codegen.generate(&ir_module) {
                 Ok(bytes) => {
-                    let _obj_path = output.unwrap_or_else(|| input.with_extension("o"));
+                    let obj_path = output.unwrap_or_else(|| input.with_extension("o"));
                     if let Err(e) = fs::write(&obj_path, &bytes) {
                         eprintln!("Error writing object file: {}", e);
                         process::exit(1);

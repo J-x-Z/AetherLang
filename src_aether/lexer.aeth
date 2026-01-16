@@ -1,0 +1,470 @@
+// AetherLang Compiler: Lexer Module (Self-Hosted)
+// Converts source code into a stream of tokens
+
+use core::{printf}
+use string::String
+use vec::Vec
+use span::Span
+use token::{Token, TokenKind, keyword_from_str}
+
+/// The lexer state
+pub struct Lexer {
+    /// Source code as bytes
+    source: *u8,
+    /// Source length
+    source_len: u64,
+    /// Current position in source
+    pos: u64,
+    /// Start position of current token
+    start: u64,
+    /// File ID for span tracking
+    file_id: u64,
+}
+
+impl Lexer {
+    /// Create a new lexer for the given source code
+    pub fn new(source: *u8, source_len: u64, file_id: u64) -> Lexer {
+        Lexer {
+            source: source,
+            source_len: source_len,
+            pos: 0,
+            start: 0,
+            file_id: file_id,
+        }
+    }
+    
+    /// Get the current character without advancing
+    fn peek(self: &Lexer) -> u8 {
+        if self.pos >= self.source_len {
+            return 0;  // null = EOF
+        }
+        let ptr: *u8 = self.source + self.pos;
+        *ptr
+    }
+    
+    /// Get the next character without advancing
+    fn peek_next(self: &Lexer) -> u8 {
+        if self.pos + 1 >= self.source_len {
+            return 0;
+        }
+        let ptr: *u8 = self.source + self.pos + 1;
+        *ptr
+    }
+    
+    /// Advance to the next character
+    fn advance(self: &mut Lexer) -> u8 {
+        let c: u8 = self.peek();
+        self.pos = self.pos + 1;
+        c
+    }
+    
+    /// Check if we've reached the end of input
+    fn is_at_end(self: &Lexer) -> bool {
+        self.pos >= self.source_len
+    }
+    
+    /// Create a span from start to current position
+    fn make_span(self: &Lexer) -> Span {
+        Span { file_id: self.file_id, start: self.start, end: self.pos }
+    }
+    
+    /// Create a token with the current span
+    fn make_token(self: &Lexer, kind: TokenKind) -> Token {
+        Token { kind: kind, span: self.make_span() }
+    }
+    
+    /// Check if character is alphabetic
+    fn is_alpha(c: u8) -> bool {
+        (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95  // A-Z, a-z, _
+    }
+    
+    /// Check if character is digit
+    fn is_digit(c: u8) -> bool {
+        c >= 48 && c <= 57  // 0-9
+    }
+    
+    /// Check if character is alphanumeric
+    fn is_alnum(c: u8) -> bool {
+        Lexer::is_alpha(c) || Lexer::is_digit(c)
+    }
+    
+    /// Check if character is whitespace
+    fn is_whitespace(c: u8) -> bool {
+        c == 32 || c == 9 || c == 10 || c == 13  // space, tab, newline, carriage return
+    }
+    
+    /// Skip whitespace and comments
+    fn skip_whitespace(self: &mut Lexer) {
+        loop {
+            let c: u8 = self.peek();
+            
+            // Whitespace
+            if Lexer::is_whitespace(c) {
+                self.advance();
+            }
+            // Line comment //
+            else if c == 47 && self.peek_next() == 47 {
+                // Skip until end of line
+                while !self.is_at_end() && self.peek() != 10 {
+                    self.advance();
+                }
+            }
+            // Block comment /* */
+            else if c == 47 && self.peek_next() == 42 {
+                self.advance();  // skip /
+                self.advance();  // skip *
+                let mut depth: i32 = 1;
+                while depth > 0 && !self.is_at_end() {
+                    let c1: u8 = self.peek();
+                    let c2: u8 = self.peek_next();
+                    if c1 == 42 && c2 == 47 {  // */
+                        self.advance();
+                        self.advance();
+                        depth = depth - 1;
+                    } else if c1 == 47 && c2 == 42 {  // /*
+                        self.advance();
+                        self.advance();
+                        depth = depth + 1;
+                    } else {
+                        self.advance();
+                    }
+                }
+            }
+            else {
+                break;
+            }
+        }
+    }
+    
+    /// Read an identifier or keyword
+    fn read_identifier(self: &mut Lexer) -> Token {
+        while Lexer::is_alnum(self.peek()) {
+            self.advance();
+        }
+        
+        // Build the identifier string
+        let len: u64 = self.pos - self.start;
+        let mut s: String = String::new();
+        let mut i: u64 = 0;
+        while i < len {
+            let ptr: *u8 = self.source + self.start + i;
+            s.push(*ptr);
+            i = i + 1;
+        }
+        
+        // Check if it's a keyword
+        let kind: TokenKind = keyword_from_str(&s);
+        self.make_token(kind)
+    }
+    
+    /// Read a number literal (integer or float)
+    fn read_number(self: &mut Lexer) -> Token {
+        let mut is_float: bool = false;
+        
+        // Check for hex literal 0x
+        if self.peek() == 48 && (self.peek_next() == 120 || self.peek_next() == 88) {
+            self.advance();  // 0
+            self.advance();  // x
+            
+            while Lexer::is_hex_digit(self.peek()) || self.peek() == 95 {
+                self.advance();
+            }
+            
+            // Parse hex value
+            let value: i64 = self.parse_hex();
+            return self.make_token(TokenKind::IntLit(value));
+        }
+        
+        // Regular decimal number
+        while Lexer::is_digit(self.peek()) || self.peek() == 95 {
+            self.advance();
+        }
+        
+        // Check for decimal point
+        if self.peek() == 46 && Lexer::is_digit(self.peek_next()) {
+            is_float = true;
+            self.advance();  // consume '.'
+            
+            while Lexer::is_digit(self.peek()) || self.peek() == 95 {
+                self.advance();
+            }
+        }
+        
+        // Check for exponent
+        if self.peek() == 101 || self.peek() == 69 {  // e or E
+            is_float = true;
+            self.advance();
+            
+            if self.peek() == 43 || self.peek() == 45 {  // + or -
+                self.advance();
+            }
+            
+            while Lexer::is_digit(self.peek()) {
+                self.advance();
+            }
+        }
+        
+        if is_float {
+            let value: f64 = self.parse_float();
+            self.make_token(TokenKind::FloatLit(value))
+        } else {
+            let value: i64 = self.parse_int();
+            self.make_token(TokenKind::IntLit(value))
+        }
+    }
+    
+    /// Check if hex digit
+    fn is_hex_digit(c: u8) -> bool {
+        Lexer::is_digit(c) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)
+    }
+    
+    /// Parse integer from current token range
+    fn parse_int(self: &Lexer) -> i64 {
+        let mut value: i64 = 0;
+        let mut i: u64 = self.start;
+        while i < self.pos {
+            let c: u8 = *(self.source + i);
+            if c != 95 {  // skip underscores
+                value = value * 10 + (c - 48) as i64;
+            }
+            i = i + 1;
+        }
+        value
+    }
+    
+    /// Parse hex integer
+    fn parse_hex(self: &Lexer) -> i64 {
+        let mut value: i64 = 0;
+        let mut i: u64 = self.start + 2;  // skip 0x
+        while i < self.pos {
+            let c: u8 = *(self.source + i);
+            if c != 95 {
+                let digit: i64 = if c >= 48 && c <= 57 {
+                    (c - 48) as i64
+                } else if c >= 65 && c <= 70 {
+                    (c - 55) as i64  // A=10
+                } else {
+                    (c - 87) as i64  // a=10
+                };
+                value = value * 16 + digit;
+            }
+            i = i + 1;
+        }
+        value
+    }
+    
+    /// Parse float (simplified)
+    fn parse_float(self: &Lexer) -> f64 {
+        // TODO: Proper float parsing
+        
+        // Build null-terminated string
+        let len: u64 = self.pos - self.start;
+        let buf: *u8 = malloc(len + 1);
+        let mut j: u64 = 0;
+        let mut i: u64 = self.start;
+        while i < self.pos {
+            let c: u8 = *(self.source + i);
+            if c != 95 {
+                *(buf + j) = c;
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        // 添加分号防止 while * 歧义
+        ;
+        *(buf + j) = 0;
+        
+        let result: f64 = atof(buf);
+        free(buf);
+        result
+    }
+    
+    /// Read a string literal
+    fn read_string(self: &mut Lexer) -> Token {
+        self.advance();  // consume opening quote
+        
+        let mut value: String = String::new();
+        
+        while !self.is_at_end() {
+            let c: u8 = self.peek();
+            
+            if c == 34 {  // closing quote
+                self.advance();
+                break;
+            } else if c == 92 {  // backslash escape
+                self.advance();
+                let esc: u8 = self.peek();
+                if esc == 110 { value.push(10); self.advance(); }       // \n
+                else if esc == 114 { value.push(13); self.advance(); }  // \r
+                else if esc == 116 { value.push(9); self.advance(); }   // \t
+                else if esc == 92 { value.push(92); self.advance(); }   // \\
+                else if esc == 34 { value.push(34); self.advance(); }   // \"
+                else if esc == 48 { value.push(0); self.advance(); }    // \0
+                else { value.push(esc); self.advance(); }
+            } else if c == 10 {  // newline - unterminated string
+                break;
+            } else {
+                value.push(c);
+                self.advance();
+            }
+        }
+        
+        self.make_token(TokenKind::StringLit(value))
+    }
+    
+    /// Read a character literal
+    fn read_char(self: &mut Lexer) -> Token {
+        self.advance();  // consume opening quote
+        
+        let c: u8 = if self.peek() == 92 {  // backslash
+            self.advance();
+            let esc: u8 = self.peek();
+            self.advance();
+            if esc == 110 { 10 }       // \n
+            else if esc == 114 { 13 }  // \r
+            else if esc == 116 { 9 }   // \t
+            else if esc == 92 { 92 }   // \\
+            else if esc == 39 { 39 }   // \'
+            else if esc == 48 { 0 }    // \0
+            else { esc }
+        } else {
+            self.advance()
+        };
+        
+        // Consume closing quote
+        if self.peek() == 39 {
+            self.advance();
+        }
+        
+        self.make_token(TokenKind::CharLit(c))
+    }
+    
+    /// Match operator tokens
+    fn match_operator(self: &mut Lexer, c: u8) -> TokenKind {
+        if c == 43 {  // +
+            if self.peek() == 61 { self.advance(); return TokenKind::PlusEq; }
+            return TokenKind::Plus;
+        }
+        if c == 45 {  // -
+            if self.peek() == 62 { self.advance(); return TokenKind::Arrow; }
+            if self.peek() == 61 { self.advance(); return TokenKind::MinusEq; }
+            return TokenKind::Minus;
+        }
+        if c == 42 {  // *
+            if self.peek() == 61 { self.advance(); return TokenKind::StarEq; }
+            return TokenKind::Star;
+        }
+        if c == 47 {  // /
+            if self.peek() == 61 { self.advance(); return TokenKind::SlashEq; }
+            return TokenKind::Slash;
+        }
+        if c == 37 { return TokenKind::Percent; }  // %
+        if c == 61 {  // =
+            if self.peek() == 61 { self.advance(); return TokenKind::EqEq; }
+            if self.peek() == 62 { self.advance(); return TokenKind::FatArrow; }
+            return TokenKind::Eq;
+        }
+        if c == 33 {  // !
+            if self.peek() == 61 { self.advance(); return TokenKind::Ne; }
+            return TokenKind::Not;
+        }
+        if c == 60 {  // <
+            if self.peek() == 61 { self.advance(); return TokenKind::Le; }
+            if self.peek() == 60 { self.advance(); return TokenKind::Shl; }
+            return TokenKind::Lt;
+        }
+        if c == 62 {  // >
+            if self.peek() == 61 { self.advance(); return TokenKind::Ge; }
+            if self.peek() == 62 { self.advance(); return TokenKind::Shr; }
+            return TokenKind::Gt;
+        }
+        if c == 38 {  // &
+            if self.peek() == 38 { self.advance(); return TokenKind::AndAnd; }
+            return TokenKind::And;
+        }
+        if c == 124 {  // |
+            if self.peek() == 124 { self.advance(); return TokenKind::OrOr; }
+            return TokenKind::Or;
+        }
+        if c == 94 { return TokenKind::Caret; }  // ^
+        if c == 46 {  // .
+            if self.peek() == 46 { self.advance(); return TokenKind::DotDot; }
+            return TokenKind::Dot;
+        }
+        if c == 58 {  // :
+            if self.peek() == 58 { self.advance(); return TokenKind::ColonColon; }
+            return TokenKind::Colon;
+        }
+        if c == 40 { return TokenKind::LParen; }   // (
+        if c == 41 { return TokenKind::RParen; }   // )
+        if c == 123 { return TokenKind::LBrace; }  // {
+        if c == 125 { return TokenKind::RBrace; }  // }
+        if c == 91 { return TokenKind::LBracket; } // [
+        if c == 93 { return TokenKind::RBracket; } // ]
+        if c == 44 { return TokenKind::Comma; }    // ,
+        if c == 59 { return TokenKind::Semicolon; } // ;
+        if c == 64 { return TokenKind::At; }       // @
+        if c == 35 { return TokenKind::Hash; }     // #
+        if c == 63 { return TokenKind::Question; } // ?
+        if c == 126 { return TokenKind::Tilde; }   // ~
+        
+        TokenKind::Unknown(c)
+    }
+    
+    /// Get the next token
+    pub fn next_token(self: &mut Lexer) -> Token {
+        self.skip_whitespace();
+        self.start = self.pos;
+        
+        if self.is_at_end() {
+            return Token::eof(self.make_span());
+        }
+        
+        let c: u8 = self.advance();
+        
+        // Identifiers and keywords
+        if Lexer::is_alpha(c) {
+            self.pos = self.pos - 1;  // back up
+            return self.read_identifier();
+        }
+        
+        // Numbers
+        if Lexer::is_digit(c) {
+            self.pos = self.pos - 1;
+            return self.read_number();
+        }
+        
+        // String literals
+        if c == 34 {  // "
+            self.pos = self.pos - 1;
+            return self.read_string();
+        }
+        
+        // Character literals
+        if c == 39 {  // '
+            self.pos = self.pos - 1;
+            return self.read_char();
+        }
+        
+        // Operators and punctuation
+        let kind: TokenKind = self.match_operator(c);
+        self.make_token(kind)
+    }
+    
+    /// Tokenize the entire source and return all tokens
+    pub fn tokenize(self: &mut Lexer) -> Vec<Token> {
+        let mut tokens: Vec<Token> = Vec::new();
+        loop {
+            let token: Token = self.next_token();
+            let is_eof: bool = match token.kind {
+                TokenKind::Eof => true,
+                _ => false,
+            };
+            tokens.push(token);
+            if is_eof {
+                break;
+            }
+        }
+        tokens
+    }
+}

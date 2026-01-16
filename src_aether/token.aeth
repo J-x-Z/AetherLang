@@ -1,0 +1,202 @@
+// AetherLang Compiler: Token Module (Self-Hosted)
+// Token definitions for the lexer
+
+use span::Span
+use string::String
+
+/// Token kind enumeration
+pub enum TokenKind {
+    // ============ Keywords ============
+    Fn,
+    Let,
+    Mut,
+    If,
+    Else,
+    Loop,
+    While,
+    For,
+    In,
+    Return,
+    Match,
+    Struct,
+    Impl,
+    Enum,
+    Interface,
+    Own,
+    Ref,
+    Const,
+    Unsafe,
+    Break,
+    Continue,
+    True,
+    False,
+    Asm,
+    As,
+    
+    // AI-Native Keywords
+    Type,
+    Trait,
+    Pub,
+    Where,
+    Shared,
+    Pure,
+    Effect,
+    Requires,
+    Ensures,
+    Invariant,
+    
+    // System Keywords
+    Extern,
+    Static,
+    Union,
+    Volatile,
+    
+    // ============ Literals ============
+    Ident(String),
+    IntLit(i64),
+    FloatLit(f64),
+    StringLit(String),
+    CharLit(u8),
+    
+    // ============ Operators ============
+    Plus,       // +
+    Minus,      // -
+    Star,       // *
+    Slash,      // /
+    Percent,    // %
+    Eq,         // =
+    EqEq,       // ==
+    Ne,         // !=
+    Lt,         // <
+    Le,         // <=
+    Gt,         // >
+    Ge,         // >=
+    AndAnd,     // &&
+    OrOr,       // ||
+    Not,        // !
+    And,        // &
+    Or,         // |
+    Caret,      // ^
+    Shl,        // <<
+    Shr,        // >>
+    PlusEq,     // +=
+    MinusEq,    // -=
+    StarEq,     // *=
+    SlashEq,    // /=
+    ShrEq,      // >>=
+    FatArrow,   // =>
+    Arrow,      // ->
+    Dot,        // .
+    DotDot,     // ..
+    ColonColon, // ::
+    Question,   // ?
+    
+    // ============ Delimiters ============
+    LParen,     // (
+    RParen,     // )
+    LBrace,     // {
+    RBrace,     // }
+    LBracket,   // [
+    RBracket,   // ]
+    Comma,      // ,
+    Colon,      // :
+    Semicolon,  // ;
+    At,         // @
+    Hash,       // #
+    Tilde,      // ~
+    
+    // ============ Special ============
+    Eof,
+    Unknown(u8),
+}
+
+/// A token with its source span
+pub struct Token {
+    pub kind: TokenKind,
+    pub span: Span,
+}
+
+impl Token {
+    /// Create a new token
+    pub fn new(kind: TokenKind, span: Span) -> Token {
+        Token { kind: kind, span: span }
+    }
+    
+    /// Create an EOF token
+    pub fn eof(span: Span) -> Token {
+        Token { kind: TokenKind::Eof, span: span }
+    }
+}
+
+/// Helper to compare string with literal
+fn strcmp_lit(s: *u8, lit: *u8) -> bool {
+    // Uses C strcmp
+    strcmp(s, lit) == 0
+}
+/// Check if an identifier is a keyword and return the token kind
+pub fn keyword_from_str(s: &String) -> TokenKind {
+    // This is a simplified version - in real code we'd use a hash map
+    let ptr: *u8 = s.as_ptr();
+    let len: u64 = s.len();
+    
+    // Check common keywords by length first
+    if len == 2 {
+        if strcmp_lit(ptr, "fn") { return TokenKind::Fn; }
+        if strcmp_lit(ptr, "if") { return TokenKind::If; }
+        if strcmp_lit(ptr, "in") { return TokenKind::In; }
+        if strcmp_lit(ptr, "as") { return TokenKind::As; }
+    }
+    if len == 3 {
+        if strcmp_lit(ptr, "let") { return TokenKind::Let; }
+        if strcmp_lit(ptr, "mut") { return TokenKind::Mut; }
+        if strcmp_lit(ptr, "for") { return TokenKind::For; }
+        if strcmp_lit(ptr, "ref") { return TokenKind::Ref; }
+        if strcmp_lit(ptr, "own") { return TokenKind::Own; }
+        if strcmp_lit(ptr, "asm") { return TokenKind::Asm; }
+        if strcmp_lit(ptr, "pub") { return TokenKind::Pub; }
+    }
+    if len == 4 {
+        if strcmp_lit(ptr, "else") { return TokenKind::Else; }
+        if strcmp_lit(ptr, "loop") { return TokenKind::Loop; }
+        if strcmp_lit(ptr, "true") { return TokenKind::True; }
+        if strcmp_lit(ptr, "enum") { return TokenKind::Enum; }
+        if strcmp_lit(ptr, "impl") { return TokenKind::Impl; }
+        if strcmp_lit(ptr, "type") { return TokenKind::Type; }
+        if strcmp_lit(ptr, "pure") { return TokenKind::Pure; }
+    }
+    if len == 5 {
+        if strcmp_lit(ptr, "while") { return TokenKind::While; }
+        if strcmp_lit(ptr, "match") { return TokenKind::Match; }
+        if strcmp_lit(ptr, "break") { return TokenKind::Break; }
+        if strcmp_lit(ptr, "false") { return TokenKind::False; }
+        if strcmp_lit(ptr, "const") { return TokenKind::Const; }
+        if strcmp_lit(ptr, "trait") { return TokenKind::Trait; }
+        if strcmp_lit(ptr, "where") { return TokenKind::Where; }
+        if strcmp_lit(ptr, "union") { return TokenKind::Union; }
+    }
+    if len == 6 {
+        if strcmp_lit(ptr, "return") { return TokenKind::Return; }
+        if strcmp_lit(ptr, "struct") { return TokenKind::Struct; }
+        if strcmp_lit(ptr, "unsafe") { return TokenKind::Unsafe; }
+        if strcmp_lit(ptr, "extern") { return TokenKind::Extern; }
+        if strcmp_lit(ptr, "static") { return TokenKind::Static; }
+        if strcmp_lit(ptr, "effect") { return TokenKind::Effect; }
+        if strcmp_lit(ptr, "shared") { return TokenKind::Shared; }
+    }
+    if len == 7 {
+        if strcmp_lit(ptr, "ensures") { return TokenKind::Ensures; }
+    }
+    if len == 8 {
+        if strcmp_lit(ptr, "continue") { return TokenKind::Continue; }
+        if strcmp_lit(ptr, "requires") { return TokenKind::Requires; }
+        if strcmp_lit(ptr, "volatile") { return TokenKind::Volatile; }
+    }
+    if len == 9 {
+        if strcmp_lit(ptr, "interface") { return TokenKind::Interface; }
+        if strcmp_lit(ptr, "invariant") { return TokenKind::Invariant; }
+    }
+    
+    // Not a keyword, return as identifier
+    TokenKind::Ident(s.clone())
+}
+

@@ -1,0 +1,122 @@
+// AetherLang Standard Library: String Module
+// Provides a heap-allocated, growable string type
+
+use core::{malloc, free, realloc, memcpy, strlen, printf}
+
+/// A heap-allocated, growable UTF-8 string
+pub struct String {
+    /// Pointer to the string data (null-terminated for C compat)
+    data: *u8,
+    /// Length of the string (excluding null terminator)
+    len: u64,
+    /// Allocated capacity
+    capacity: u64,
+}
+
+impl String {
+    /// Create a new empty string
+    pub fn new() -> String {
+        let initial_cap: u64 = 16;
+        let data: *u8 = malloc(initial_cap);
+        // Null terminate
+        *(data as *u8) = 0;
+        
+        String {
+            data: data,
+            len: 0,
+            capacity: initial_cap,
+        }
+    }
+    
+    /// Create a string from a C string literal
+    pub fn from_cstr(s: *u8) -> String {
+        let src_len: u64 = strlen(s);
+        let cap: u64 = src_len + 1;
+        let data: *u8 = malloc(cap);
+        memcpy(data, s, cap);
+        
+        String {
+            data: data,
+            len: src_len,
+            capacity: cap,
+        }
+    }
+    
+    /// Get the length of the string
+    pub fn len(self: &String) -> u64 {
+        self.len
+    }
+    
+    /// Check if the string is empty
+    pub fn is_empty(self: &String) -> bool {
+        self.len == 0
+    }
+    
+    /// Get a pointer to the underlying C string
+    pub fn as_ptr(self: &String) -> *u8 {
+        self.data
+    }
+    
+    /// Ensure the string has enough capacity for n more bytes
+    fn ensure_capacity(self: &mut String, additional: u64) {
+        let required: u64 = self.len + additional + 1;  // +1 for null
+        if required > self.capacity {
+            let new_cap: u64 = required * 2;
+            self.data = realloc(self.data, new_cap);
+            self.capacity = new_cap;
+        }
+    }
+    
+    /// Append a single byte/char to the string
+    pub fn push(self: &mut String, c: u8) {
+        self.ensure_capacity(1);
+        // Set the character
+        let ptr: *u8 = self.data + self.len;
+        *ptr = c;
+        self.len = self.len + 1;
+        // Null terminate
+        let end: *u8 = self.data + self.len;
+        *end = 0;
+    }
+    
+    /// Append another string
+    pub fn push_str(self: &mut String, other: &String) {
+        self.ensure_capacity(other.len);
+        memcpy(self.data + self.len, other.data, other.len);
+        self.len = self.len + other.len;
+        // Null terminate
+        let end: *u8 = self.data + self.len;
+        *end = 0;
+    }
+    
+    /// Clear the string
+    pub fn clear(self: &mut String) {
+        self.len = 0;
+        *(self.data) = 0;
+    }
+    
+    /// Get character at index (no bounds checking)
+    pub fn char_at(self: &String, idx: u64) -> u8 {
+        let ptr: *u8 = self.data + idx;
+        *ptr
+
+    }
+    
+    /// Print the string to stdout
+    pub fn print(self: &String) {
+        printf(self.data);
+    }
+    /// Clone the string
+    pub fn clone(self: &String) -> String {
+        let mut s: String = String::new();
+        s.push_str(self);
+        s
+    }
+}
+
+/// Drop implementation - free the allocated memory
+impl Drop for String {
+    fn drop(self: &mut String) {
+        free(self.data);
+    }
+}
