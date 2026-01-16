@@ -1231,7 +1231,23 @@ impl SemanticAnalyzer {
         
         // Strict equality - no implicit conversions between numeric types
         match (expected, got) {
-            (ResolvedType::Primitive(a), ResolvedType::Primitive(b)) => a == b,
+            (ResolvedType::Primitive(a), ResolvedType::Primitive(b)) => {
+                if a == b {
+                    true
+                } else {
+                    // Allow implicit conversion between integer types for bootstrapping
+                    use crate::types::type_system::PrimitiveType::*;
+                    matches!((a, b), 
+                        (I8, U8) | (U8, I8) |
+                        (I16, U16) | (U16, I16) |
+                        (I32, U32) | (U32, I32) |
+                        (I64, U64) | (U64, I64) |
+                        // Integer literal (I64) can be assigned to any integer type
+                        (I8, I64) | (U8, I64) | (I16, I64) | (U16, I64) |
+                        (I32, I64) | (U32, I64) | (U64, I64)
+                    )
+                }
+            }
             (ResolvedType::Pointer(a), ResolvedType::Pointer(b)) => self.types_compatible(a, b),
             (ResolvedType::Reference { mutable: ma, inner: ia, .. }, 
              ResolvedType::Reference { mutable: mb, inner: ib, .. }) => {
