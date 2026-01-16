@@ -575,8 +575,6 @@ impl CodeGen for LLVMCodeGen {
         for func in &module.functions {
             self.generate_function(func)?;
         }
-        // Debug: Print LLVM IR before verification
-        eprintln!("LLVM IR:\n{}", self.print_ir());
         
         // Verify
         self.verify_module()?;
