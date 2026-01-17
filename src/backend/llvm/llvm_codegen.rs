@@ -151,7 +151,8 @@ impl LLVMCodeGen {
                         // This is a temporary fix for enum types which don't have a separate IRType
                         LLVMInt32TypeInContext(self.context)
                     } else {
-                        ty
+                        // Struct values are passed/returned as pointers in our ABI
+                        LLVMPointerType(ty, 0)
                     }
                 }
                 IRType::Function { params, ret } => {
