@@ -741,6 +741,29 @@ impl CodeGen for LLVMCodeGen {
             }
         }
         
+        // Declare struct types
+        for ir_struct in &module.structs {
+            unsafe {
+                let name_c = CString::new(ir_struct.name.as_str()).unwrap();
+                let existing = LLVMGetTypeByName2(self.context, name_c.as_ptr());
+                if existing.is_null() {
+                    // Create struct type
+                    let struct_ty = LLVMStructCreateNamed(self.context, name_c.as_ptr());
+                    // Convert field types
+                    let mut field_types: Vec<LLVMTypeRef> = ir_struct.fields.iter()
+                        .map(|(_, ty)| self.ir_type_to_llvm(ty))
+                        .collect();
+                    // Set struct body
+                    LLVMStructSetBody(
+                        struct_ty,
+                        field_types.as_mut_ptr(),
+                        field_types.len() as u32,
+                        0 // not packed
+                    );
+                }
+            }
+        }
+        
         // Generate code for each function
         for func in &module.functions {
             self.generate_function(func)?;
