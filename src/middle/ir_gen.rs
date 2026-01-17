@@ -183,7 +183,7 @@ impl IRGenerator {
         self.current_fn = Some(ir_func);
 
         // Generate function body
-        self.generate_block(&func.body)?;
+        let last_value = self.generate_block(&func.body)?;
 
         // Add implicit return if needed (same as generate_function)
         if let Some(ref mut ir_func) = self.current_fn {
@@ -193,8 +193,11 @@ impl IRGenerator {
                     // Only add return void for void functions
                     if ret_type == IRType::Void {
                         block.set_terminator(Terminator::Return { value: None });
+                    } else if let Some(val) = last_value {
+                        // Use last expression value as implicit return
+                        block.set_terminator(Terminator::Return { value: Some(val) });
                     } else {
-                        // For non-void functions without explicit return, add unreachable
+                        // For non-void functions without value, add unreachable
                         block.set_terminator(Terminator::Unreachable);
                     }
                 }
@@ -247,7 +250,7 @@ impl IRGenerator {
         self.current_fn = Some(ir_func);
 
         // Generate body
-        self.generate_block(&func.body)?;
+        let last_value = self.generate_block(&func.body)?;
 
         // Add implicit return if needed
         if let Some(ref mut ir_func) = self.current_fn {
@@ -257,8 +260,11 @@ impl IRGenerator {
                     // Only add return void for void functions
                     if ret_type == IRType::Void {
                         block.set_terminator(Terminator::Return { value: None });
+                    } else if let Some(val) = last_value {
+                        // Use last expression value as implicit return
+                        block.set_terminator(Terminator::Return { value: Some(val) });
                     } else {
-                        // For non-void functions without explicit return, add unreachable
+                        // For non-void functions without value, add unreachable
                         block.set_terminator(Terminator::Unreachable);
                     }
                 }
