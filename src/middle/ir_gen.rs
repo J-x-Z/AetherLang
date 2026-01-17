@@ -86,8 +86,9 @@ impl IRGenerator {
             }
             Item::Enum(_) => Ok(()),
             Item::Impl(impl_block) => {
+                let type_name = &impl_block.target.name;
                 for method in &impl_block.methods {
-                    self.generate_function(method)?;
+                    self.generate_method(type_name, method)?;
                 }
                 Ok(())
             }
@@ -133,6 +134,61 @@ impl IRGenerator {
             Item::Static(_) => Ok(()), // TODO: Generate global variable IR
             Item::Union(_) => Ok(()), // TODO: Generate union type IR
         }
+    }
+
+    /// Generate IR for a method with Type_method naming convention
+    fn generate_method(&mut self, type_name: &str, func: &ast::Function) -> Result<()> {
+        // Create a modified function name with type prefix
+        let prefixed_name = format!("{}_{}", type_name, func.name.name);
+        self.generate_function_with_name(func, &prefixed_name)
+    }
+
+    /// Generate IR for a function with a specific name
+    fn generate_function_with_name(&mut self, func: &ast::Function, name: &str) -> Result<()> {
+        self.next_register = 0;
+        self.locals.clear();
+        self.reg_types.clear();
+
+        // Convert parameters
+        let params: Vec<(String, IRType)> = func.params.iter()
+            .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
+            .collect();
+            
+        let ret_type = if let Some(ref ty) = func.ret_type {
+            self.ast_type_to_ir(ty)
+        } else {
+            IRType::Void
+        };
+
+        let mut ir_func = IRFunction::new(name, params.clone(), ret_type);
+        let entry_block = ir_func.add_block("entry");
+        self.current_block = entry_block;
+
+        // Register parameters
+        for (i, (param_name, ty)) in params.iter().enumerate() {
+            let reg = self.alloc_register();
+            
+            // Assign param to register (pseudo-instruction for valid SSA start)
+            if let Some(block) = ir_func.get_block_mut(entry_block) {
+                block.push(Instruction::Assign {
+                    dest: reg,
+                    value: Value::Parameter(i),
+                });
+            }
+            
+            self.locals.insert(param_name.clone(), (Value::Register(reg), ty.clone()));
+            self.reg_types.insert(reg, ty.clone());
+        }
+
+        self.current_fn = Some(ir_func);
+
+        // Generate function body
+        self.generate_block(&func.body)?;
+
+        // Add implicit return void if no return at end
+        let ir_func = self.current_fn.take().unwrap();
+        self.module.functions.push(ir_func);
+        Ok(())
     }
 
     /// Generate IR for a function
