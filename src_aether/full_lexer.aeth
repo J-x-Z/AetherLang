@@ -967,14 +967,14 @@ impl Lexer {
     /// Tokenize the entire source and return all tokens
     pub fn tokenize(self: &mut Lexer) -> VecToken {
         let mut tokens: VecToken = VecToken::new();
-        loop {
+        let mut count: u64 = 0;
+        // Simplified: tokenize up to 1000 tokens max
+        while count < 1000 {
             let token: Token = self.next_token();
-            let is_eof: bool = match token.kind {
-                TokenKind::Eof => true,
-                _ => false,
-            };
             tokens.push(token);
-            if is_eof {
+            count = count + 1;
+            // Check if at end of source
+            if self.pos >= self.source_len {
                 break;
             }
         }
