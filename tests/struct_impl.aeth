@@ -8,7 +8,7 @@ struct Counter {
 
 impl Counter {
     fn new() -> Counter {
-        Counter { val: 0 }
+        return Counter { val: 0 };
     }
     
     fn inc(self: &mut Counter) {
@@ -16,7 +16,7 @@ impl Counter {
     }
     
     fn get(self: &Counter) -> i64 {
-        self.val
+        return self.val;
     }
 }
 
