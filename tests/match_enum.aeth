@@ -1,0 +1,16 @@
+enum Kind {
+    A,
+    B(i32),
+}
+
+fn test(k: Kind) -> i32 {
+    match k {
+        Kind::A => 1,
+        Kind::B(_) => 2,
+    }
+}
+
+fn main() {
+    let k: Kind = Kind::A;
+    let x: i32 = test(k);
+}

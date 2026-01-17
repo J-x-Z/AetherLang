@@ -147,8 +147,9 @@ impl LLVMCodeGen {
                     let name_c = CString::new(name.as_str()).unwrap();
                     let ty = LLVMGetTypeByName2(self.context, name_c.as_ptr());
                     if ty.is_null() {
-                        // Create opaque struct if not found
-                        LLVMStructCreateNamed(self.context, name_c.as_ptr())
+                        // Unknown type - treat as i32 (enum discriminant or simple type)
+                        // This is a temporary fix for enum types which don't have a separate IRType
+                        LLVMInt32TypeInContext(self.context)
                     } else {
                         ty
                     }
@@ -550,7 +551,14 @@ impl LLVMCodeGen {
                     if global.is_null() {
                         Err(Error::CodeGen(format!("Unknown global: {}", name)))
                     } else {
-                        Ok(global)
+                        // For enum variants (auto-declared), load the value
+                        if name.contains('_') {
+                            let i32_ty = LLVMInt32TypeInContext(self.context);
+                            let load_name = CString::new("load").unwrap();
+                            Ok(LLVMBuildLoad2(self.builder, i32_ty, global, load_name.as_ptr()))
+                        } else {
+                            Ok(global)
+                        }
                     }
                 }
                 Value::Unit => {
