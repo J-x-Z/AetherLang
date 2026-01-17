@@ -1,0 +1,37 @@
+struct Lexer {
+    val: i32,
+}
+
+impl Lexer {
+    fn peek(self: &Lexer) -> i32 {
+        self.val
+    }
+    
+    fn advance(self: &mut Lexer) {
+        self.val = self.val + 1;
+    }
+}
+
+enum Kind {
+    A,
+    B,
+    C,
+    D,
+}
+
+fn test(s: &mut Lexer, c: i32) -> Kind {
+    if c == 1 {
+        if s.peek() == 10 { s.advance(); return Kind::A; }
+        return Kind::B;
+    }
+    if c == 2 {
+        if s.peek() == 20 { s.advance(); return Kind::C; }
+        return Kind::D;
+    }
+    return Kind::A;
+}
+
+fn main() {
+    let mut s: Lexer = Lexer { val: 10 };
+    let k: Kind = test(&mut s, 1);
+}

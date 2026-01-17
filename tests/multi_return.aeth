@@ -1,0 +1,15 @@
+enum Kind {
+    A,
+    B,
+    C,
+}
+
+fn test(c: i32) -> Kind {
+    if c == 1 { return Kind::A; }
+    if c == 2 { return Kind::B; }
+    return Kind::C;
+}
+
+fn main() {
+    let k: Kind = test(1);
+}
