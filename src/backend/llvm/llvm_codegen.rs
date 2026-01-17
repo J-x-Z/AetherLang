@@ -245,9 +245,37 @@ impl LLVMCodeGen {
                 }
                 
                 Instruction::BinOp { dest, op, left, right } => {
-                    let lhs = self.get_value(left)?;
-                    let rhs = self.get_value(right)?;
+                    let mut lhs = self.get_value(left)?;
+                    let mut rhs = self.get_value(right)?;
                     let name = CString::new("").unwrap();
+                    
+                    // Ensure operands have the same type
+                    let lhs_ty = LLVMTypeOf(lhs);
+                    let rhs_ty = LLVMTypeOf(rhs);
+                    if lhs_ty != rhs_ty {
+                        let lhs_kind = LLVMGetTypeKind(lhs_ty);
+                        let rhs_kind = LLVMGetTypeKind(rhs_ty);
+                        
+                        // Convert to larger integer type if both are integers
+                        if lhs_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
+                           && rhs_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                            let lhs_bits = LLVMGetIntTypeWidth(lhs_ty);
+                            let rhs_bits = LLVMGetIntTypeWidth(rhs_ty);
+                            if lhs_bits > rhs_bits {
+                                rhs = LLVMBuildZExt(self.builder, rhs, lhs_ty, name.as_ptr());
+                            } else if rhs_bits > lhs_bits {
+                                lhs = LLVMBuildZExt(self.builder, lhs, rhs_ty, name.as_ptr());
+                            }
+                        } else if lhs_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind 
+                                  && rhs_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                            // Pointer + integer: convert pointer to integer
+                            lhs = LLVMBuildPtrToInt(self.builder, lhs, rhs_ty, name.as_ptr());
+                        } else if lhs_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
+                                  && rhs_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind {
+                            // Integer + pointer: convert pointer to integer
+                            rhs = LLVMBuildPtrToInt(self.builder, rhs, lhs_ty, name.as_ptr());
+                        }
+                    }
                     
                     let result = match op {
                         BinOp::Add => LLVMBuildAdd(self.builder, lhs, rhs, name.as_ptr()),
@@ -326,6 +354,45 @@ impl LLVMCodeGen {
                         .map(|a| self.get_value(a))
                         .collect::<Result<Vec<_>>>()?;
                     
+                    // Cast arguments to match expected parameter types
+                    let func_ty = LLVMGlobalGetValueType(callee);
+                    let param_count = LLVMCountParamTypes(func_ty);
+                    if param_count > 0 {
+                        let mut param_types = vec![std::ptr::null_mut(); param_count as usize];
+                        LLVMGetParamTypes(func_ty, param_types.as_mut_ptr());
+                        
+                        for (i, (arg, &expected_ty)) in llvm_args.iter_mut().zip(param_types.iter()).enumerate() {
+                            if i >= param_count as usize { break; }
+                            let actual_ty = LLVMTypeOf(*arg);
+                            if actual_ty != expected_ty && !expected_ty.is_null() {
+                                let name = CString::new("").unwrap();
+                                let expected_kind = LLVMGetTypeKind(expected_ty);
+                                let actual_kind = LLVMGetTypeKind(actual_ty);
+                                
+                                *arg = if expected_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind 
+                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                                    LLVMBuildIntToPtr(self.builder, *arg, expected_ty, name.as_ptr())
+                                } else if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
+                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind {
+                                    LLVMBuildPtrToInt(self.builder, *arg, expected_ty, name.as_ptr())
+                                } else if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
+                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                                    let expected_bits = LLVMGetIntTypeWidth(expected_ty);
+                                    let actual_bits = LLVMGetIntTypeWidth(actual_ty);
+                                    if expected_bits > actual_bits {
+                                        LLVMBuildZExt(self.builder, *arg, expected_ty, name.as_ptr())
+                                    } else if expected_bits < actual_bits {
+                                        LLVMBuildTrunc(self.builder, *arg, expected_ty, name.as_ptr())
+                                    } else {
+                                        *arg
+                                    }
+                                } else {
+                                    *arg // Keep as-is if can't convert
+                                };
+                            }
+                        }
+                    }
+                    
                     let name = if dest.is_some() { 
                         CString::new("call").unwrap() 
                     } else { 
@@ -380,8 +447,16 @@ impl LLVMCodeGen {
                 }
                 
                 Instruction::Store { ptr, value } => {
-                    let ptr_val = self.get_value(ptr)?;
+                    let mut ptr_val = self.get_value(ptr)?;
                     let store_val = self.get_value(value)?;
+                    // Ensure ptr_val is a pointer type
+                    let ptr_ty = LLVMTypeOf(ptr_val);
+                    if LLVMGetTypeKind(ptr_ty) != llvm_sys::LLVMTypeKind::LLVMPointerTypeKind {
+                        // Convert integer to pointer
+                        let name = CString::new("").unwrap();
+                        let ptr_type = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
+                        ptr_val = LLVMBuildIntToPtr(self.builder, ptr_val, ptr_type, name.as_ptr());
+                    }
                     LLVMBuildStore(self.builder, store_val, ptr_val);
                 }
                 
@@ -486,7 +561,48 @@ impl LLVMCodeGen {
                 Terminator::Return { value } => {
                     if let Some(val) = value {
                         let ret_val = self.get_value(val)?;
-                        LLVMBuildRet(self.builder, ret_val);
+                        // Get expected return type from current function
+                        if let Some(func) = self.current_function {
+                            let func_ty = LLVMGlobalGetValueType(func);
+                            let expected_ret_ty = LLVMGetReturnType(func_ty);
+                            let actual_ty = LLVMTypeOf(ret_val);
+                            
+                            // If types don't match, try to cast
+                            let final_val = if actual_ty != expected_ret_ty {
+                                let name = CString::new("").unwrap();
+                                // Use inttoptr/ptrtoint for integer/pointer conversions
+                                let expected_kind = LLVMGetTypeKind(expected_ret_ty);
+                                let actual_kind = LLVMGetTypeKind(actual_ty);
+                                
+                                if expected_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind 
+                                   && actual_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                                    LLVMBuildIntToPtr(self.builder, ret_val, expected_ret_ty, name.as_ptr())
+                                } else if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
+                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind {
+                                    LLVMBuildPtrToInt(self.builder, ret_val, expected_ret_ty, name.as_ptr())
+                                } else if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
+                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                                    // Integer size conversion
+                                    let expected_bits = LLVMGetIntTypeWidth(expected_ret_ty);
+                                    let actual_bits = LLVMGetIntTypeWidth(actual_ty);
+                                    if expected_bits > actual_bits {
+                                        LLVMBuildZExt(self.builder, ret_val, expected_ret_ty, name.as_ptr())
+                                    } else if expected_bits < actual_bits {
+                                        LLVMBuildTrunc(self.builder, ret_val, expected_ret_ty, name.as_ptr())
+                                    } else {
+                                        ret_val
+                                    }
+                                } else {
+                                    // Fallback: bitcast
+                                    LLVMBuildBitCast(self.builder, ret_val, expected_ret_ty, name.as_ptr())
+                                }
+                            } else {
+                                ret_val
+                            };
+                            LLVMBuildRet(self.builder, final_val);
+                        } else {
+                            LLVMBuildRet(self.builder, ret_val);
+                        }
                     } else {
                         LLVMBuildRetVoid(self.builder);
                     }
@@ -498,9 +614,20 @@ impl LLVMCodeGen {
                 }
                 
                 Terminator::Branch { cond, then_target, else_target } => {
-                    let cond_val = self.get_value(cond)?;
+                    let mut cond_val = self.get_value(cond)?;
                     let then_block = self.block_map[&then_target.0];
                     let else_block = self.block_map[&else_target.0];
+                    
+                    // Ensure condition is i1 type
+                    let cond_ty = LLVMTypeOf(cond_val);
+                    let i1_ty = LLVMInt1TypeInContext(self.context);
+                    if cond_ty != i1_ty {
+                        // Convert to i1: compare with 0 (non-zero = true)
+                        let name = CString::new("").unwrap();
+                        let zero = LLVMConstInt(cond_ty, 0, 0);
+                        cond_val = LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntNE, cond_val, zero, name.as_ptr());
+                    }
+                    
                     LLVMBuildCondBr(self.builder, cond_val, then_block, else_block);
                 }
                 
