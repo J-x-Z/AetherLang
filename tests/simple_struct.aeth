@@ -1,0 +1,13 @@
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn main() {
+    let p: Point = Point { x: 10, y: 20 };
+    puts("Point created!");
+}

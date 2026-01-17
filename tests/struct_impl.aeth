@@ -1,0 +1,29 @@
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+struct Counter {
+    val: i64,
+}
+
+impl Counter {
+    fn new() -> Counter {
+        Counter { val: 0 }
+    }
+    
+    fn inc(self: &mut Counter) {
+        self.val = self.val + 1;
+    }
+    
+    fn get(self: &Counter) -> i64 {
+        self.val
+    }
+}
+
+fn main() {
+    let mut c: Counter = Counter::new();
+    c.inc();
+    c.inc();
+    c.inc();
+    puts("Counter test passed!");
+}

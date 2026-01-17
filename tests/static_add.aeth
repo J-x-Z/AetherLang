@@ -1,0 +1,18 @@
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+struct Math {
+    dummy: i64,
+}
+
+impl Math {
+    fn add(a: i64, b: i64) -> i64 {
+        a + b
+    }
+}
+
+fn main() {
+    let x: i64 = Math::add(10, 20);
+    puts("Math::add works!");
+}

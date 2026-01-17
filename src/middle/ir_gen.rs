@@ -185,7 +185,23 @@ impl IRGenerator {
         // Generate function body
         self.generate_block(&func.body)?;
 
-        // Add implicit return void if no return at end
+        // Add implicit return if needed (same as generate_function)
+        if let Some(ref mut ir_func) = self.current_fn {
+            let ret_type = ir_func.ret_type.clone();
+            if let Some(block) = ir_func.get_block_mut(self.current_block) {
+                if block.terminator.is_none() {
+                    // Only add return void for void functions
+                    if ret_type == IRType::Void {
+                        block.set_terminator(Terminator::Return { value: None });
+                    } else {
+                        // For non-void functions without explicit return, add unreachable
+                        block.set_terminator(Terminator::Unreachable);
+                    }
+                }
+            }
+        }
+
+        // Finalize function
         let ir_func = self.current_fn.take().unwrap();
         self.module.functions.push(ir_func);
         Ok(())
@@ -235,9 +251,16 @@ impl IRGenerator {
 
         // Add implicit return if needed
         if let Some(ref mut ir_func) = self.current_fn {
+            let ret_type = ir_func.ret_type.clone();
             if let Some(block) = ir_func.get_block_mut(self.current_block) {
                 if block.terminator.is_none() {
-                    block.set_terminator(Terminator::Return { value: None });
+                    // Only add return void for void functions
+                    if ret_type == IRType::Void {
+                        block.set_terminator(Terminator::Return { value: None });
+                    } else {
+                        // For non-void functions without explicit return, add unreachable
+                        block.set_terminator(Terminator::Unreachable);
+                    }
                 }
             }
         }
