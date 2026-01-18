@@ -1078,6 +1078,133 @@ impl Parser {
         // if check(Arrow) { advance(); parse_type(); }
         return true;
     }
+    
+    // ==================== Comma Sequences ====================
+    
+    /// Parse comma-separated sequence until end token
+    /// Generic helper for lists: (a, b, c), [1, 2, 3], {x: 1, y: 2}
+    pub fn parse_comma_sequence(self: &mut Parser) -> u64 {
+        let mut count: u64 = 0;
+        
+        while !self.is_at_end() {
+            // Would check for end token (], ), }, >)
+            count = count + 1;
+            
+            // Parse element
+            let _elem: i64 = self.parse_expr();
+            
+            // Consume comma if present
+            // if !check(end_token) { expect(Comma); }
+        }
+        
+        return count;
+    }
+    
+    // ==================== Path Parsing ====================
+    
+    /// Parse a path: std, std::io, std::io::File
+    pub fn parse_path(self: &mut Parser) -> bool {
+        // Parse first segment (identifier)
+        self.advance();
+        
+        // Parse additional segments: ::ident
+        while !self.is_at_end() {
+            // Would check for ::
+            // if !check(ColonColon) { break; }
+            // self.advance(); // ::
+            // self.advance(); // ident
+            break;
+        }
+        
+        return true;
+    }
+    
+    /// Parse generic arguments: <T, U, i32>
+    /// Used when calling/using generic types: Vec<i32>, Option<T>
+    pub fn parse_generic_args(self: &mut Parser) -> bool {
+        // Consume <
+        self.advance();
+        
+        // Parse type arguments
+        while !self.is_at_end() {
+            // Would check for >
+            self.parse_type();
+            // self.consume(Comma);
+        }
+        
+        // Consume >
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse a path with optional generic args: std::vec::Vec<T>
+    pub fn parse_path_with_generics(self: &mut Parser) -> bool {
+        // Parse path segments
+        self.parse_path();
+        
+        // Check for generic args
+        // if check(Lt) { parse_generic_args(); }
+        
+        return true;
+    }
+    
+    // ==================== Pattern Matching ====================
+    
+    /// Parse struct pattern: Point { x, y } or Point { x: a, y: b }
+    pub fn parse_struct_pattern(self: &mut Parser) -> bool {
+        // Parse struct name path
+        self.parse_path();
+        
+        // Consume {
+        self.advance();
+        
+        // Parse field patterns
+        while !self.is_at_end() {
+            // Would check for }
+            // Parse field_name [: pattern]
+            self.advance(); // field name
+            // Optional : binding
+            // if check(Colon) { advance(); parse_pattern(); }
+        }
+        
+        // Consume }
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse tuple pattern: (a, b, c)
+    pub fn parse_tuple_pattern(self: &mut Parser) -> bool {
+        // Consume (
+        self.advance();
+        
+        // Parse element patterns
+        while !self.is_at_end() {
+            // Would check for )
+            self.parse_pattern();
+            // self.consume(Comma);
+        }
+        
+        // Consume )
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse enum variant pattern: Some(x) or None
+    pub fn parse_enum_pattern(self: &mut Parser) -> bool {
+        // Parse path (could be EnumName::Variant)
+        self.parse_path();
+        
+        // Check for tuple payload
+        // if check(LParen) { parse_tuple_pattern(); }
+        
+        // Check for struct payload
+        // if check(LBrace) { parse fields; }
+        
+        return true;
+    }
 }
 
 // ==================== Main ====================
