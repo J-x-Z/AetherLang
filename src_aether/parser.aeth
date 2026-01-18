@@ -206,10 +206,22 @@ impl Parser {
 // ==================== Main ====================
 
 fn main() {
-    puts("Parser helpers defined!");
+    puts("Parser self-hosting test!");
     
-    // Create a dummy token
+    // Create a dummy token array (just one token for testing)
     let tok: Token = Token::new(TokenKind::IntLit, 0, 5);
     
-    puts("Parser ready!");
+    // Create parser with token pointer
+    let tokens: *Token = &tok as *Token;
+    let mut parser: Parser = Parser::new(tokens, 1);
+    
+    // Test basic operations
+    let pos: u64 = parser.get_pos();
+    puts("Created parser successfully!");
+    
+    // Test expression parsing
+    let val: i64 = parser.parse_expr();
+    puts("Parsed expression!");
+    
+    puts("Parser self-hosting working!");
 }
