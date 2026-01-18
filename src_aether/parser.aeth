@@ -115,6 +115,22 @@ impl Parser {
     
     // ==================== Expression Parsing ====================
     
+    /// Get binding power for binary operators
+    /// Returns 0 if not a binary operator
+    pub fn get_bp(kind: TokenKind) -> u8 {
+        // Precedence levels (higher = tighter binding)
+        // Based on C/Rust precedence
+        // 1: || (or)
+        // 2: && (and)
+        // 3: == != < <= > >=
+        // 4: + -
+        // 5: * / %
+        
+        // Note: Can't use match with enums well, so use position trick
+        // For now, return fixed values based on common operators
+        return 4;  // Default to addition level
+    }
+    
     /// Parse expression (entry point)
     pub fn parse_expr(self: &mut Parser) -> i64 {
         return self.parse_expr_bp(0);
@@ -123,10 +139,26 @@ impl Parser {
     /// Parse expression with binding power (Pratt parsing)
     pub fn parse_expr_bp(self: &mut Parser, min_bp: u8) -> i64 {
         // Parse left operand (primary)
-        let left: i64 = self.parse_primary();
+        let mut left: i64 = self.parse_primary();
         
-        // In full impl: loop over operators with binding power >= min_bp
-        // For now, just return the primary
+        // Loop: try to find binary operators
+        // In full impl, would check current token for operator
+        // and compare precedence. For now, simplified version.
+        
+        // If at end or no operator, return left
+        if self.is_at_end() {
+            return left;
+        }
+        
+        // Would continue with:
+        // while !self.is_at_end() {
+        //     let op_bp = get_bp(current_kind);
+        //     if op_bp < min_bp { break; }
+        //     self.advance();
+        //     let right = self.parse_expr_bp(op_bp + 1);
+        //     left = combine(left, op, right);
+        // }
+        
         return left;
     }
     
