@@ -91,6 +91,27 @@ impl Parser {
     pub fn get_pos(self: &Parser) -> u64 {
         return self.pos;
     }
+    
+    /// Consume token if it matches kind (simplified: check by position)
+    pub fn consume_let(self: &mut Parser) -> bool {
+        // In a real impl, we'd check current token kind
+        // For now, just advance
+        self.advance();
+        return true;
+    }
+    
+    /// Skip semicolons
+    pub fn skip_semicolon(self: &mut Parser) {
+        self.advance();
+    }
+    
+    /// Parse an integer literal (simplified)
+    pub fn parse_int(self: &mut Parser) -> i64 {
+        // Would get value from current token
+        let val: i64 = 42;
+        self.advance();
+        return val;
+    }
 }
 
 // ==================== Main ====================
