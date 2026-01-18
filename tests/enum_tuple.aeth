@@ -1,0 +1,15 @@
+// Test enum with tuple variants (Aether supported syntax)
+
+pub enum Type {
+    Named(i64),
+    Ptr(i64),
+    Unit,
+}
+
+fn main() {
+    puts("test");
+}
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}

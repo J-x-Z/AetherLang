@@ -1,0 +1,14 @@
+// Test enum with struct variant
+
+pub enum Type {
+    Named { name: i64 },
+    Unit,
+}
+
+fn main() {
+    puts("test");
+}
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}

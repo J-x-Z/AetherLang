@@ -1,0 +1,18 @@
+// Minimal test for ast syntax
+
+pub struct Ident {
+    pub name: i64,
+}
+
+pub enum BinOp {
+    Add,
+    Sub,
+}
+
+fn main() {
+    puts("test");
+}
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}

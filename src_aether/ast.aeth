@@ -1,17 +1,23 @@
 // AetherLang AST Types
 // Simplified AST for self-hosting parser
+// Note: Using tuple variants instead of struct variants (Aether syntax limitation)
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn malloc(size: u64) -> *u8;
+}
 
 // ==================== Basic Types ====================
 
-/// Identifier with span
+/// Identifier with span (simplified - just name for now)
 pub struct Ident {
-    pub name: String,
-    pub span: Span,
+    pub name: *u8,  // C-string pointer
+    pub len: u64,
 }
 
 impl Ident {
-    pub fn new(name: String, span: Span) -> Ident {
-        return Ident { name: name, span: span };
+    pub fn new(name: *u8, len: u64) -> Ident {
+        return Ident { name: name, len: len };
     }
 }
 
@@ -33,305 +39,330 @@ impl Span {
 
 // ==================== Types ====================
 
-/// Type representation
-pub enum Type {
-    /// Named type: i32, String, MyStruct
-    Named { name: Ident },
-    /// Pointer type: *T, *mut T
-    Ptr { inner: *Type, is_mut: bool },
-    /// Reference type: &T, &mut T
-    Ref { inner: *Type, is_mut: bool },
-    /// Array type: [T; N]
-    Array { elem: *Type, size: u64 },
-    /// Function type: fn(A, B) -> R
-    Func { params: *VecType, ret: *Type },
-    /// Tuple type: (A, B, C)
-    Tuple { elems: *VecType },
-    /// Unit type: ()
+/// Type tag (discriminant for Type union)
+pub enum TypeKind {
+    Named,
+    Ptr,
+    Ref,
+    Array,
+    Func,
+    Tuple,
     Unit,
+}
+
+/// Type representation (use struct + tag instead of enum with data)
+pub struct Type {
+    pub kind: TypeKind,
+    pub name: Ident,        // For Named
+    pub inner: *Type,       // For Ptr, Ref
+    pub is_mut: bool,       // For Ptr, Ref
+    pub size: u64,          // For Array
+    pub span: Span,
+}
+
+impl Type {
+    pub fn new_named(name: Ident) -> Type {
+        return Type { 
+            kind: TypeKind::Named, 
+            name: name,
+            inner: 0 as *Type,
+            is_mut: false,
+            size: 0,
+            span: Span::dummy(),
+        };
+    }
+    
+    pub fn new_unit() -> Type {
+        return Type {
+            kind: TypeKind::Unit,
+            name: Ident::new(0 as *u8, 0),
+            inner: 0 as *Type,
+            is_mut: false,
+            size: 0,
+            span: Span::dummy(),
+        };
+    }
+}
+
+// ==================== Binary/Unary Operators ====================
+
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    And,
+    Or,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+pub enum UnOp {
+    Neg,
+    Not,
+    Deref,
+    Ref,
+}
+
+// ==================== Literals ====================
+
+pub enum LitKind {
+    Int,
+    Bool,
+    String,
+    Char,
+}
+
+pub struct Literal {
+    pub kind: LitKind,
+    pub int_val: i64,
+    pub bool_val: bool,
+    pub str_ptr: *u8,
+    pub str_len: u64,
+}
+
+impl Literal {
+    pub fn new_int(val: i64) -> Literal {
+        return Literal {
+            kind: LitKind::Int,
+            int_val: val,
+            bool_val: false,
+            str_ptr: 0 as *u8,
+            str_len: 0,
+        };
+    }
+    
+    pub fn new_bool(val: bool) -> Literal {
+        return Literal {
+            kind: LitKind::Bool,
+            int_val: 0,
+            bool_val: val,
+            str_ptr: 0 as *u8,
+            str_len: 0,
+        };
+    }
 }
 
 // ==================== Expressions ====================
 
-/// Binary operator
-pub enum BinOp {
-    Add,    // +
-    Sub,    // -
-    Mul,    // *
-    Div,    // /
-    Mod,    // %
-    And,    // &&
-    Or,     // ||
-    BitAnd, // &
-    BitOr,  // |
-    BitXor, // ^
-    Shl,    // <<
-    Shr,    // >>
-    Eq,     // ==
-    Ne,     // !=
-    Lt,     // <
-    Le,     // <=
-    Gt,     // >
-    Ge,     // >=
+pub enum ExprKind {
+    Lit,
+    Ident,
+    Binary,
+    Unary,
+    Call,
+    Field,
+    Index,
+    If,
+    While,
+    Block,
+    Return,
+    Break,
+    Continue,
 }
 
-/// Unary operator
-pub enum UnOp {
-    Neg,    // -
-    Not,    // !
-    BitNot, // ~
-    Deref,  // *
-    Ref,    // &
-    RefMut, // &mut
-}
-
-/// Literal values
-pub enum Literal {
-    Int { value: i64 },
-    Float { value: f64 },
-    String { value: String },
-    Char { value: i32 },
-    Bool { value: bool },
-}
-
-/// Expression
-pub enum Expr {
-    /// Literal value
-    Lit { lit: Literal, span: Span },
-    /// Identifier
-    Ident { name: Ident },
-    /// Path: Foo::Bar::baz
-    Path { segments: *VecIdent, span: Span },
-    /// Binary operation: a + b
-    Binary { left: *Expr, op: BinOp, right: *Expr, span: Span },
-    /// Unary operation: -a, !b
-    Unary { op: UnOp, expr: *Expr, span: Span },
-    /// Function call: foo(a, b)
-    Call { func: *Expr, args: *VecExpr, span: Span },
-    /// Field access: expr.field
-    Field { expr: *Expr, field: Ident, span: Span },
-    /// Method call: expr.method(args)
-    Method { expr: *Expr, method: Ident, args: *VecExpr, span: Span },
-    /// Index: expr[index]
-    Index { expr: *Expr, index: *Expr, span: Span },
-    /// Block: { stmts }
-    Block { block: *Block },
-    /// If: if cond { then } else { else }
-    If { cond: *Expr, then_block: *Block, else_block: *Block, span: Span },
-    /// While: while cond { body }
-    While { cond: *Expr, body: *Block, span: Span },
-    /// For: for x in iter { body }
-    For { var: Ident, iter: *Expr, body: *Block, span: Span },
-    /// Loop: loop { body }
-    Loop { body: *Block, span: Span },
-    /// Struct literal: Foo { a: 1, b: 2 }
-    StructLit { name: Ident, fields: *VecFieldInit, span: Span },
-    /// Array: [a, b, c]
-    Array { elems: *VecExpr, span: Span },
-    /// Cast: expr as Type
-    Cast { expr: *Expr, ty: *Type, span: Span },
-    /// Return: return expr
-    Return { value: *Expr, span: Span },
-    /// Break
-    Break { span: Span },
-    /// Continue
-    Continue { span: Span },
-}
-
-/// Field initializer for struct literal
-pub struct FieldInit {
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+    
+    // Lit
+    pub lit: Literal,
+    
+    // Ident
     pub name: Ident,
-    pub value: Expr,
+    
+    // Binary
+    pub bin_op: BinOp,
+    pub left: *Expr,
+    pub right: *Expr,
+    
+    // Unary
+    pub un_op: UnOp,
+    pub operand: *Expr,
+    
+    // Call
+    pub callee: *Expr,
+    pub args: *ExprList,
+    
+    // Field
+    pub object: *Expr,
+    pub field: Ident,
+    
+    // If
+    pub cond: *Expr,
+    pub then_block: *Block,
+    pub else_block: *Block,
+    
+    // While
+    pub body: *Block,
 }
 
 // ==================== Statements ====================
 
-/// Statement
-pub enum Stmt {
-    /// let [mut] name [: type] = expr
-    Let { name: Ident, is_mut: bool, ty: *Type, value: *Expr, span: Span },
-    /// Expression statement
-    Expr { expr: Expr },
-    /// Return statement
-    Return { value: *Expr, span: Span },
-    /// Break
-    Break { span: Span },
-    /// Continue
-    Continue { span: Span },
-    /// Empty
-    Empty { span: Span },
+pub enum StmtKind {
+    Let,
+    Expr,
+    Return,
+    Break,
+    Continue,
+    Empty,
 }
 
-/// Block of statements
-pub struct Block {
-    pub stmts: *VecStmt,
+pub struct Stmt {
+    pub kind: StmtKind,
     pub span: Span,
+    
+    // Let
+    pub let_name: Ident,
+    pub let_type: *Type,
+    pub let_value: *Expr,
+    pub is_mut: bool,
+    
+    // Expr
+    pub expr: *Expr,
+    
+    // Return
+    pub ret_value: *Expr,
 }
 
-impl Block {
-    pub fn new() -> Block {
-        return Block { stmts: 0 as *VecStmt, span: Span::dummy() };
-    }
+pub struct Block {
+    pub stmts: *StmtList,
+    pub span: Span,
 }
 
 // ==================== Items ====================
 
-/// Function parameter
 pub struct Param {
     pub name: Ident,
     pub ty: Type,
-    pub is_mut: bool,
     pub span: Span,
 }
 
-/// Function definition
 pub struct Function {
     pub name: Ident,
-    pub params: *VecParam,
+    pub params: *ParamList,
     pub ret_type: *Type,
     pub body: Block,
     pub is_pub: bool,
     pub span: Span,
 }
 
-/// Struct field
-pub struct Field {
+pub struct StructField {
     pub name: Ident,
     pub ty: Type,
     pub is_pub: bool,
-    pub span: Span,
 }
 
-/// Struct definition
 pub struct StructDef {
     pub name: Ident,
-    pub fields: *VecField,
+    pub fields: *FieldList,
     pub is_pub: bool,
     pub span: Span,
 }
 
-/// Enum variant
-pub struct Variant {
+pub struct EnumVariant {
     pub name: Ident,
-    pub fields: *VecType,
     pub span: Span,
 }
 
-/// Enum definition
 pub struct EnumDef {
     pub name: Ident,
-    pub variants: *VecVariant,
+    pub variants: *VariantList,
     pub is_pub: bool,
     pub span: Span,
 }
 
-/// Impl block
 pub struct ImplBlock {
     pub target: Ident,
-    pub methods: *VecFunction,
+    pub methods: *FunctionList,
     pub span: Span,
 }
 
-/// Extern function
 pub struct ExternFn {
     pub name: Ident,
-    pub params: *VecParam,
+    pub params: *ParamList,
     pub ret_type: *Type,
     pub span: Span,
 }
 
-/// Extern block
 pub struct ExternBlock {
-    pub abi: String,
-    pub items: *VecExternFn,
+    pub abi: *u8,
+    pub items: *ExternFnList,
     pub span: Span,
 }
 
-/// Top-level item
-pub enum Item {
-    Function { func: Function },
-    Struct { def: StructDef },
-    Enum { def: EnumDef },
-    Impl { block: ImplBlock },
-    Extern { block: ExternBlock },
+pub enum ItemKind {
+    Function,
+    Struct,
+    Enum,
+    Impl,
+    Extern,
 }
 
-/// Program (compilation unit)
+pub struct Item {
+    pub kind: ItemKind,
+    pub func: Function,
+    pub struct_def: StructDef,
+    pub enum_def: EnumDef,
+    pub impl_block: ImplBlock,
+    pub extern_block: ExternBlock,
+}
+
 pub struct Program {
-    pub items: *VecItem,
+    pub items: *ItemList,
 }
 
-impl Program {
-    pub fn new() -> Program {
-        return Program { items: 0 as *VecItem };
-    }
-}
+// ==================== List Types ====================
 
-// ==================== Vector Types (manual) ====================
-// These are placeholder types - actual implementation uses Vec<T>
-
-pub struct VecType {
-    pub data: *Type,
-    pub len: u64,
-    pub cap: u64,
-}
-
-pub struct VecExpr {
+pub struct ExprList {
     pub data: *Expr,
     pub len: u64,
     pub cap: u64,
 }
 
-pub struct VecStmt {
+pub struct StmtList {
     pub data: *Stmt,
     pub len: u64,
     pub cap: u64,
 }
 
-pub struct VecIdent {
-    pub data: *Ident,
-    pub len: u64,
-    pub cap: u64,
-}
-
-pub struct VecParam {
+pub struct ParamList {
     pub data: *Param,
     pub len: u64,
     pub cap: u64,
 }
 
-pub struct VecField {
-    pub data: *Field,
+pub struct FieldList {
+    pub data: *StructField,
     pub len: u64,
     pub cap: u64,
 }
 
-pub struct VecVariant {
-    pub data: *Variant,
+pub struct VariantList {
+    pub data: *EnumVariant,
     pub len: u64,
     pub cap: u64,
 }
 
-pub struct VecFunction {
+pub struct FunctionList {
     pub data: *Function,
     pub len: u64,
     pub cap: u64,
 }
 
-pub struct VecExternFn {
+pub struct ExternFnList {
     pub data: *ExternFn,
     pub len: u64,
     pub cap: u64,
 }
 
-pub struct VecItem {
+pub struct ItemList {
     pub data: *Item,
-    pub len: u64,
-    pub cap: u64,
-}
-
-pub struct VecFieldInit {
-    pub data: *FieldInit,
     pub len: u64,
     pub cap: u64,
 }
@@ -340,8 +371,4 @@ pub struct VecFieldInit {
 
 fn main() {
     puts("AST types defined!");
-}
-
-extern "C" {
-    fn puts(s: *u8) -> i32;
 }
