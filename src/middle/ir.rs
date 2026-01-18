@@ -175,8 +175,8 @@ pub enum Instruction {
     /// dest = alloca type
     Alloca { dest: Register, ty: IRType },
     
-    /// dest = load ptr
-    Load { dest: Register, ptr: Value },
+    /// dest = load ptr (with explicit element type for LLVM opaque pointers)
+    Load { dest: Register, ptr: Value, ty: IRType },
     
     /// store value, ptr
     Store { ptr: Value, value: Value },

@@ -118,7 +118,7 @@ impl IRPrinter {
             Instruction::Alloca { dest, ty } => {
                 write!(self.output, "{} = alloca {}", dest, self.type_str(ty)).unwrap();
             }
-            Instruction::Load { dest, ptr } => {
+            Instruction::Load { dest, ptr, ty } => {
                 write!(self.output, "{} = load {}", dest, self.value_str(ptr)).unwrap();
             }
             Instruction::Store { ptr, value } => {

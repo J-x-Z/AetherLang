@@ -171,7 +171,7 @@ impl CCodeGen {
             Instruction::Alloca { dest, ty } => {
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty.clone())));
             }
-            Instruction::Load { dest, ptr } => {
+            Instruction::Load { dest, ptr, ty: _ } => {
                  if let Some(IRType::Ptr(inner)) = self.get_value_type(ptr) {
                     self.reg_types.insert(*dest, *inner);
                 }
@@ -439,7 +439,7 @@ impl CCodeGen {
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty.clone())));
             }
             
-            Instruction::Load { dest, ptr } => {
+            Instruction::Load { dest, ptr, ty: _ } => {
                 let var = self.get_var(*dest);
                 let p = self.value_to_c(ptr);
                 self.writeln(&format!("{} = *{};", var, p));

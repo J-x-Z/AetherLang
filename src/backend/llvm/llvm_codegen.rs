@@ -436,12 +436,11 @@ impl LLVMCodeGen {
                     self.value_map.insert(*dest, ptr);
                 }
                 
-                Instruction::Load { dest, ptr } => {
+                Instruction::Load { dest, ptr, ty } => {
                     let ptr_val = self.get_value(ptr)?;
                     let name = CString::new("").unwrap();
-                    // For opaque pointers (LLVM 18+), we can't get element type from pointer
-                    // Use i64 as default type for most integer/pointer values
-                    let elem_ty = LLVMInt64TypeInContext(self.context);
+                    // Use the actual element type from IR
+                    let elem_ty = self.ir_type_to_llvm(ty);
                     let result = LLVMBuildLoad2(self.builder, elem_ty, ptr_val, name.as_ptr());
                     self.value_map.insert(*dest, result);
                 }

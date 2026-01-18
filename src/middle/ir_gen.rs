@@ -691,6 +691,7 @@ impl IRGenerator {
                              self.emit_current_with_type(Instruction::Load {
                                  dest: load_dest,
                                  ptr: Value::Register(dest),
+                                 ty: field_ty.clone(),
                              }, field_ty.clone());
                              
                              return Ok(Value::Register(load_dest));
@@ -771,7 +772,24 @@ impl IRGenerator {
             },
             Expr::Index { .. } => Ok(Value::Unit),
             Expr::Ref { .. } => Ok(Value::Unit),
-            Expr::Deref { .. } => Ok(Value::Unit),
+            Expr::Deref { expr: ptr_expr, .. } => {
+                // Generate the pointer value
+                let ptr_val = self.generate_expr(ptr_expr)?;
+                
+                // Use U8 as the default element type for pointer dereference
+                // This handles the common case of *u8 pointers (e.g., string access)
+                let elem_type = IRType::U8;
+                
+                // Generate Load instruction
+                let dest = self.alloc_register();
+                self.emit_current_with_type(Instruction::Load {
+                    dest,
+                    ptr: ptr_val,
+                    ty: elem_type.clone(),
+                }, elem_type);
+                
+                Ok(Value::Register(dest))
+            },
             Expr::Unsafe { body, .. } => Ok(self.generate_block(body)?.unwrap_or(Value::Unit)),
             Expr::Cast { expr, ty, .. } => {
                 let val = self.generate_expr(expr)?;
