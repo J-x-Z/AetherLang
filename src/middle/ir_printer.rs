@@ -124,7 +124,7 @@ impl IRPrinter {
             Instruction::Store { ptr, value } => {
                 write!(self.output, "store {}, {}", self.value_str(value), self.value_str(ptr)).unwrap();
             }
-            Instruction::GetElementPtr { dest, ptr, index } => {
+            Instruction::GetElementPtr { dest, ptr, index, elem_ty: _ } => {
                 write!(
                     self.output, 
                     "{} = gep {}, {}", 

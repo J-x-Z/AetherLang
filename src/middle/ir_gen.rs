@@ -426,6 +426,7 @@ impl IRGenerator {
                                      dest,
                                      ptr: base_val,
                                      index: idx_val,
+                                     elem_ty: IRType::Struct(struct_name.clone()),
                                  }, IRType::Ptr(Box::new(field_ty.clone())));
                                  
                                  // Store directly to field pointer
@@ -678,6 +679,7 @@ impl IRGenerator {
                              dest,
                              ptr: base_val,
                              index: Value::Constant(Constant::Int(idx as i64)),
+                             elem_ty: IRType::Struct(struct_name.clone()),
                          }, IRType::Ptr(Box::new(field_ty.clone())));
                          
                          // If field is a struct, return the pointer (for chained field access)
@@ -727,6 +729,7 @@ impl IRGenerator {
                          dest: field_ptr,
                          ptr: Value::Register(ptr),
                          index: Value::Constant(Constant::Int(idx as i64)),
+                         elem_ty: struct_type.clone(),
                      }, IRType::Ptr(Box::new(field_ty.clone())));
                      
                      self.emit_current(Instruction::Store {
@@ -759,6 +762,7 @@ impl IRGenerator {
                              dest,
                              ptr: ptr_val,
                              index: offset_val,
+                             elem_ty: (*inner).clone(),
                          }, result_ty);
                          
                          Ok(Value::Register(dest))
@@ -1017,7 +1021,8 @@ impl IRGenerator {
                     "f64" | "float" => IRType::F64,
                     "bool" => IRType::Bool,
                     "void" | "()" => IRType::Void,
-                    s => IRType::Struct(s.to_string()),
+                    // Structs are passed by pointer in our IR
+                    s => IRType::Ptr(Box::new(IRType::Struct(s.to_string()))),
                 }
 
             }

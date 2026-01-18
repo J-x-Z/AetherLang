@@ -181,8 +181,8 @@ pub enum Instruction {
     /// store value, ptr
     Store { ptr: Value, value: Value },
     
-    /// dest = gep ptr, index
-    GetElementPtr { dest: Register, ptr: Value, index: Value },
+    /// dest = gep ptr, index (with explicit element type for LLVM opaque pointers)
+    GetElementPtr { dest: Register, ptr: Value, index: Value, elem_ty: IRType },
     
     /// dest = phi [(val1, block1), (val2, block2), ...]
     Phi { dest: Register, incoming: Vec<(Value, BlockId)> },

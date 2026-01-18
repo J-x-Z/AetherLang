@@ -151,8 +151,9 @@ impl LLVMCodeGen {
                         // This is a temporary fix for enum types which don't have a separate IRType
                         LLVMInt32TypeInContext(self.context)
                     } else {
-                        // Struct values are passed/returned as pointers in our ABI
-                        LLVMPointerType(ty, 0)
+                        // Return actual struct type (not pointer)
+                        // Callers that need pointer should apply Ptr wrapper
+                        ty
                     }
                 }
                 IRType::Function { params, ret } => {
@@ -459,19 +460,26 @@ impl LLVMCodeGen {
                     LLVMBuildStore(self.builder, store_val, ptr_val);
                 }
                 
-                Instruction::GetElementPtr { dest, ptr, index } => {
+                Instruction::GetElementPtr { dest, ptr, index, elem_ty } => {
                     let ptr_val = self.get_value(ptr)?;
-                    let idx_val = self.get_value(index)?;
                     let name = CString::new("").unwrap();
-                    let ptr_ty = LLVMTypeOf(ptr_val);
-                    let elem_ty = LLVMGetElementType(ptr_ty);
-                    let mut indices = [idx_val];
-                    let result = LLVMBuildGEP2(
+                    
+                    // Get the field index as a constant
+                    let field_idx = if let Value::Constant(Constant::Int(i)) = index {
+                        *i as u32
+                    } else {
+                        0  // Fallback for dynamic indices
+                    };
+                    
+                    // Get the struct type from IR type
+                    let struct_ty = self.ir_type_to_llvm(elem_ty);
+                    
+                    // Use LLVMBuildStructGEP2 which handles the [0, field_idx] pattern internally
+                    let result = LLVMBuildStructGEP2(
                         self.builder,
-                        elem_ty,
+                        struct_ty,
                         ptr_val,
-                        indices.as_mut_ptr(),
-                        1,
+                        field_idx,
                         name.as_ptr()
                     );
                     self.value_map.insert(*dest, result);

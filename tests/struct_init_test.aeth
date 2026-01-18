@@ -1,0 +1,44 @@
+// Test struct initialization with u64
+
+extern "C" {
+    fn putchar(c: i32) -> i32;
+}
+
+pub struct Simple {
+    pub a: u64,
+    pub b: u64,
+}
+
+impl Simple {
+    pub fn new(a: u64, b: u64) -> Simple {
+        return Simple {
+            a: a,
+            b: b,
+        };
+    }
+}
+
+fn main() -> i32 {
+    puts("=== Struct Init Test ===");
+    
+    let x: u64 = 5;
+    let y: u64 = 10;
+    
+    putchar(48 + (x as i32));
+    puts(" = x (should be 5)");
+    
+    putchar(48 + (y as i32));
+    puts(" = y (should be :)");
+    
+    let s: Simple = Simple::new(x, y);
+    
+    putchar(48 + (s.a as i32));
+    puts(" = s.a (should be 5)");
+    
+    putchar(48 + (s.b as i32));
+    puts(" = s.b (should be :)");
+    
+    puts("Done!");
+    
+    return 0;
+}

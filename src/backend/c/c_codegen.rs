@@ -176,7 +176,7 @@ impl CCodeGen {
                     self.reg_types.insert(*dest, *inner);
                 }
             }
-            Instruction::GetElementPtr { dest, ptr, index } => {
+            Instruction::GetElementPtr { dest, ptr, index, elem_ty: _ } => {
                 let ptr_ty = self.get_value_type(ptr);
                 if let Some(IRType::Ptr(inner)) = &ptr_ty {
                     if let IRType::Struct(struct_name) = &**inner {
@@ -472,7 +472,7 @@ impl CCodeGen {
                 self.writeln(&format!("*{} = {};", p, val));
             }
             
-            Instruction::GetElementPtr { dest, ptr, index } => {
+            Instruction::GetElementPtr { dest, ptr, index, elem_ty: _ } => {
                 let ptr_ty = self.get_value_type(ptr);
                 let mut handled = false;
                 

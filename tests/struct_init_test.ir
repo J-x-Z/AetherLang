@@ -1,0 +1,57 @@
+; Module: struct_init_test
+; Functions: 2
+
+fn Simple_new(a: u64, b: u64) -> *Simple {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Simple
+    %3 = gep %2, 0
+    store %0, %3
+    %4 = gep %2, 1
+    store %1, %4
+    ret %2
+}
+
+fn main() -> i32 {
+  entry:
+    %0 = call puts("=== Struct Init Test ===")
+    %1 = 5
+    %2 = 10
+    %3 = cast %1 to I32
+    %5 = cast %3 to I64
+    %4 = add 48 %5
+    %6 = cast %4 to I32
+    %7 = call putchar(%6)
+    %8 = call puts(" = x (should be 5)")
+    %9 = cast %2 to I32
+    %11 = cast %9 to I64
+    %10 = add 48 %11
+    %12 = cast %10 to I32
+    %13 = call putchar(%12)
+    %14 = call puts(" = y (should be :)")
+    %16 = cast %1 to U64
+    %17 = cast %2 to U64
+    %18 = call Simple_new(%16, %17)
+    %15 = %18
+    %19 = gep %15, 0
+    %20 = load %19
+    %21 = cast %20 to I32
+    %23 = cast %21 to I64
+    %22 = add 48 %23
+    %24 = cast %22 to I32
+    %25 = call putchar(%24)
+    %26 = call puts(" = s.a (should be 5)")
+    %27 = gep %15, 1
+    %28 = load %27
+    %29 = cast %28 to I32
+    %31 = cast %29 to I64
+    %30 = add 48 %31
+    %32 = cast %30 to I32
+    %33 = call putchar(%32)
+    %34 = call puts(" = s.b (should be :)")
+    %35 = call puts("Done!")
+    %36 = cast 0 to I32
+    ret %36
+}
+
