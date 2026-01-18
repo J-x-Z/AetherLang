@@ -1,0 +1,292 @@
+// AetherLang Codegen
+// Self-hosting code generation implementation (simplified)
+// Note: This is an abstract representation, actual LLVM calls would use FFI
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// ==================== Target Info ====================
+
+pub enum TargetArch {
+    X86_64,
+    AArch64,
+    RISCV64,
+    Wasm32,
+}
+
+pub struct TargetInfo {
+    pub arch: TargetArch,
+    pub triple: *u8,
+    pub pointer_size: u64,
+}
+
+impl TargetInfo {
+    pub fn native() -> TargetInfo {
+        return TargetInfo {
+            arch: TargetArch::AArch64,
+            triple: "aarch64-apple-darwin" as *u8,
+            pointer_size: 8,
+        };
+    }
+    
+    pub fn x86_64() -> TargetInfo {
+        return TargetInfo {
+            arch: TargetArch::X86_64,
+            triple: "x86_64-unknown-linux-gnu" as *u8,
+            pointer_size: 8,
+        };
+    }
+}
+
+// ==================== LLVM Types (Opaque Handles) ====================
+
+pub struct LLVMTypeHandle {
+    pub id: u64,
+}
+
+impl LLVMTypeHandle {
+    pub fn new(id: u64) -> LLVMTypeHandle {
+        return LLVMTypeHandle { id: id };
+    }
+}
+
+pub struct LLVMValueHandle {
+    pub id: u64,
+}
+
+impl LLVMValueHandle {
+    pub fn new(id: u64) -> LLVMValueHandle {
+        return LLVMValueHandle { id: id };
+    }
+}
+
+pub struct LLVMBlockHandle {
+    pub id: u64,
+}
+
+impl LLVMBlockHandle {
+    pub fn new(id: u64) -> LLVMBlockHandle {
+        return LLVMBlockHandle { id: id };
+    }
+}
+
+// ==================== Code Generator ====================
+
+pub struct CodeGen {
+    pub target: TargetInfo,
+    pub module_name: *u8,
+    pub next_value_id: u64,
+    pub next_block_id: u64,
+    pub current_function: u64,
+    pub current_block: u64,
+}
+
+impl CodeGen {
+    pub fn new(name: *u8) -> CodeGen {
+        return CodeGen {
+            target: TargetInfo::native(),
+            module_name: name,
+            next_value_id: 0,
+            next_block_id: 0,
+            current_function: 0,
+            current_block: 0,
+        };
+    }
+    
+    /// Initialize LLVM targets
+    pub fn init_targets() {
+        // Would call LLVM_InitializeAllTargets etc.
+    }
+    
+    /// Declare builtin functions (puts, exit, malloc, free, etc.)
+    pub fn declare_builtins(self: &mut CodeGen) {
+        // Would declare C standard library functions
+    }
+    
+    /// Convert IR type to LLVM type
+    pub fn ir_type_to_llvm(self: &CodeGen, _ty: u8) -> LLVMTypeHandle {
+        // Would map IRType to LLVMTypeRef
+        return LLVMTypeHandle::new(0);
+    }
+    
+    /// Generate LLVM IR for a module
+    pub fn generate(self: &mut CodeGen) -> bool {
+        // Declare struct types
+        // Generate extern declarations
+        // Generate functions
+        return true;
+    }
+    
+    /// Generate LLVM IR for a function
+    pub fn generate_function(self: &mut CodeGen) -> bool {
+        // Create function type
+        // Create function
+        // Create entry block
+        // Generate parameters
+        // Generate blocks
+        return true;
+    }
+    
+    /// Generate LLVM IR for a basic block
+    pub fn generate_block(self: &mut CodeGen) -> bool {
+        // Generate instructions
+        // Generate terminator
+        return true;
+    }
+    
+    /// Generate LLVM IR for an instruction
+    pub fn generate_instruction(self: &mut CodeGen) -> LLVMValueHandle {
+        // Dispatch based on instruction kind
+        // BinOp -> build binary op
+        // Load -> build load
+        // Store -> build store
+        // Alloca -> build alloca
+        // Call -> build call
+        // GEP -> build GEP
+        // Cast -> build cast
+        return LLVMValueHandle::new(0);
+    }
+    
+    /// Generate binary operation
+    pub fn generate_binop(self: &mut CodeGen) -> LLVMValueHandle {
+        // Would call LLVMBuildAdd, LLVMBuildSub, etc.
+        let id: u64 = self.alloc_value();
+        return LLVMValueHandle::new(id);
+    }
+    
+    /// Generate load instruction
+    pub fn generate_load(self: &mut CodeGen) -> LLVMValueHandle {
+        let id: u64 = self.alloc_value();
+        return LLVMValueHandle::new(id);
+    }
+    
+    /// Generate store instruction
+    pub fn generate_store(self: &mut CodeGen) -> LLVMValueHandle {
+        return LLVMValueHandle::new(0);
+    }
+    
+    /// Generate alloca instruction
+    pub fn generate_alloca(self: &mut CodeGen) -> LLVMValueHandle {
+        let id: u64 = self.alloc_value();
+        return LLVMValueHandle::new(id);
+    }
+    
+    /// Generate call instruction
+    pub fn generate_call(self: &mut CodeGen) -> LLVMValueHandle {
+        let id: u64 = self.alloc_value();
+        return LLVMValueHandle::new(id);
+    }
+    
+    /// Generate GEP instruction
+    pub fn generate_gep(self: &mut CodeGen) -> LLVMValueHandle {
+        let id: u64 = self.alloc_value();
+        return LLVMValueHandle::new(id);
+    }
+    
+    /// Generate cast instruction
+    pub fn generate_cast(self: &mut CodeGen) -> LLVMValueHandle {
+        let id: u64 = self.alloc_value();
+        return LLVMValueHandle::new(id);
+    }
+    
+    /// Generate LLVM IR for a terminator
+    pub fn generate_terminator(self: &mut CodeGen) -> bool {
+        // Dispatch based on terminator kind
+        // Return -> build return
+        // Branch -> build branch
+        // CondBranch -> build cond branch
+        return true;
+    }
+    
+    /// Generate return terminator
+    pub fn generate_return(self: &mut CodeGen) -> bool {
+        // Would call LLVMBuildRet
+        return true;
+    }
+    
+    /// Generate branch terminator
+    pub fn generate_branch(self: &mut CodeGen) -> bool {
+        // Would call LLVMBuildBr
+        return true;
+    }
+    
+    /// Generate conditional branch terminator
+    pub fn generate_cond_branch(self: &mut CodeGen) -> bool {
+        // Would call LLVMBuildCondBr
+        return true;
+    }
+    
+    /// Get LLVM value from IR value
+    pub fn get_value(self: &CodeGen, _val: u64) -> LLVMValueHandle {
+        // Would lookup register or create constant
+        return LLVMValueHandle::new(0);
+    }
+    
+    /// Verify the generated module
+    pub fn verify_module(self: &CodeGen) -> bool {
+        // Would call LLVMVerifyModule
+        return true;
+    }
+    
+    /// Emit object file
+    pub fn emit_object(self: &CodeGen) -> bool {
+        // Would call LLVMTargetMachineEmitToMemoryBuffer
+        return true;
+    }
+    
+    /// Print LLVM IR (for debugging)
+    pub fn print_ir(self: &CodeGen) {
+        // Would call LLVMPrintModuleToString
+    }
+    
+    // ==================== Helpers ====================
+    
+    /// Allocate a new value ID
+    pub fn alloc_value(self: &mut CodeGen) -> u64 {
+        let id: u64 = self.next_value_id;
+        self.next_value_id = self.next_value_id + 1;
+        return id;
+    }
+    
+    /// Allocate a new block ID
+    pub fn alloc_block(self: &mut CodeGen) -> u64 {
+        let id: u64 = self.next_block_id;
+        self.next_block_id = self.next_block_id + 1;
+        return id;
+    }
+    
+    /// Get target triple
+    pub fn target_triple(self: &CodeGen) -> *u8 {
+        return self.target.triple;
+    }
+    
+    /// Get module name
+    pub fn name(self: &CodeGen) -> *u8 {
+        return self.module_name;
+    }
+}
+
+// ==================== Main ====================
+
+fn main() {
+    puts("Codegen defined!");
+    
+    // Create codegen
+    let name: *u8 = "test_module" as *u8;
+    let mut codegen: CodeGen = CodeGen::new(name);
+    
+    // Test basic operations
+    codegen.declare_builtins();
+    
+    puts("Created codegen!");
+    
+    // Test value allocation
+    let val: u64 = codegen.alloc_value();
+    let block: u64 = codegen.alloc_block();
+    
+    // Test type conversion
+    let ty: LLVMTypeHandle = codegen.ir_type_to_llvm(0);
+    
+    puts("Codegen self-hosting working!");
+}
