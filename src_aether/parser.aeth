@@ -298,9 +298,89 @@ impl Parser {
         
         // Parse { fields }
         self.advance(); // {
-        // ... parse fields
+        
+        // Parse fields: name: Type,
+        while !self.is_at_end() {
+            // Would check for }
+            self.advance(); // name
+            self.advance(); // :
+            self.parse_type();
+            // self.consume(Comma);
+        }
+        
         self.advance(); // }
         
+        return true;
+    }
+    
+    /// Parse an enum definition
+    pub fn parse_enum(self: &mut Parser) -> bool {
+        // Expect 'enum'
+        self.advance();
+        
+        // Parse name
+        self.advance();
+        
+        // Parse { variants }
+        self.advance(); // {
+        
+        while !self.is_at_end() {
+            // Would check for }
+            // Parse variant name
+            self.advance();
+            // Optional: tuple fields (Type, Type)
+        }
+        
+        self.advance(); // }
+        
+        return true;
+    }
+    
+    /// Parse an impl block
+    pub fn parse_impl(self: &mut Parser) -> bool {
+        // Expect 'impl'
+        self.advance();
+        
+        // Parse target type name
+        self.advance();
+        
+        // Parse { methods }
+        self.advance(); // {
+        
+        while !self.is_at_end() {
+            // Would check for }
+            // Parse method (function)
+            self.parse_function();
+        }
+        
+        self.advance(); // }
+        
+        return true;
+    }
+    
+    // ==================== Type Parsing ====================
+    
+    /// Parse a type annotation
+    pub fn parse_type(self: &mut Parser) -> bool {
+        // Types can be:
+        // - Named: i32, String, MyStruct
+        // - Pointer: *T, *mut T  
+        // - Reference: &T, &mut T
+        // - Array: [T; N]
+        
+        // For now, just consume identifier
+        self.advance();
+        return true;
+    }
+    
+    /// Parse pointer type: *T or *mut T
+    pub fn parse_ptr_type(self: &mut Parser) -> bool {
+        // Consume *
+        self.advance();
+        // Check for mut
+        // self.consume(Mut);
+        // Parse inner type
+        self.parse_type();
         return true;
     }
 }
