@@ -1,0 +1,36 @@
+// Simple parser test
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+pub enum TokenKind {
+    IntLit,
+    Eof,
+}
+
+pub struct Token {
+    pub kind: TokenKind,
+    pub start: u64,
+}
+
+impl Token {
+    pub fn new(kind: TokenKind, start: u64) -> Token {
+        return Token { kind: kind, start: start };
+    }
+}
+
+pub struct Parser {
+    pub tokens: *Token,
+    pub pos: u64,
+}
+
+impl Parser {
+    pub fn new(tokens: *Token) -> Parser {
+        return Parser { tokens: tokens, pos: 0 };
+    }
+}
+
+fn main() {
+    puts("Parser test!");
+}

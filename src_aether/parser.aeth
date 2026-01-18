@@ -1,0 +1,105 @@
+// AetherLang Parser
+// Self-hosting parser implementation (simplified)
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// ==================== Token Types ====================
+
+pub enum TokenKind {
+    IntLit,
+    StringLit,
+    Ident,
+    Fn,
+    Let,
+    Mut,
+    If,
+    Else,
+    While,
+    Return,
+    Struct,
+    Enum,
+    Impl,
+    Pub,
+    Extern,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    Comma,
+    Semicolon,
+    Colon,
+    Arrow,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Eq,
+    EqEq,
+    Eof,
+}
+
+pub struct Token {
+    pub kind: TokenKind,
+    pub start: u64,
+    pub end: u64,
+    pub int_value: i64,
+}
+
+impl Token {
+    pub fn new(kind: TokenKind, start: u64, end: u64) -> Token {
+        return Token {
+            kind: kind,
+            start: start,
+            end: end,
+            int_value: 0,
+        };
+    }
+}
+
+// ==================== Parser ====================
+
+pub struct Parser {
+    pub tokens: *Token,
+    pub token_count: u64,
+    pub pos: u64,
+}
+
+impl Parser {
+    pub fn new(tokens: *Token, count: u64) -> Parser {
+        return Parser {
+            tokens: tokens,
+            token_count: count,
+            pos: 0,
+        };
+    }
+    
+    /// Advance to next token
+    pub fn advance(self: &mut Parser) {
+        if self.pos < self.token_count - 1 {
+            self.pos = self.pos + 1;
+        }
+    }
+    
+    /// Check if at end
+    pub fn is_at_end(self: &Parser) -> bool {
+        return self.pos >= self.token_count - 1;
+    }
+    
+    /// Get current position
+    pub fn get_pos(self: &Parser) -> u64 {
+        return self.pos;
+    }
+}
+
+// ==================== Main ====================
+
+fn main() {
+    puts("Parser helpers defined!");
+    
+    // Create a dummy token
+    let tok: Token = Token::new(TokenKind::IntLit, 0, 5);
+    
+    puts("Parser ready!");
+}

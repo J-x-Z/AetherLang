@@ -1,0 +1,19 @@
+// Test pointer add method
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+pub struct Token {
+    pub kind: i64,
+    pub start: u64,
+}
+
+fn main() {
+    let tok: *Token = 0 as *Token;
+    
+    // Test pointer add
+    let next: *Token = tok.add(1);
+    
+    puts("Pointer add works!");
+}
