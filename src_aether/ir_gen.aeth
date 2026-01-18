@@ -1,0 +1,532 @@
+// AetherLang IR Generator
+// Self-hosting IR generation implementation (simplified)
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// ==================== IR Types ====================
+
+pub enum IRType {
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    Bool,
+    Void,
+    Ptr,
+    Struct,
+    Array,
+    Function,
+}
+
+// ==================== Register ====================
+
+pub struct Register {
+    pub id: u64,
+    pub ty: IRType,
+}
+
+impl Register {
+    pub fn new(id: u64, ty: IRType) -> Register {
+        return Register {
+            id: id,
+            ty: ty,
+        };
+    }
+}
+
+// ==================== Value ====================
+
+pub enum ValueKind {
+    Register,
+    Constant,
+    Global,
+}
+
+pub struct Value {
+    pub kind: ValueKind,
+    pub reg: u64,       // For Register
+    pub int_val: i64,   // For Constant
+    pub name: *u8,      // For Global
+}
+
+impl Value {
+    pub fn from_reg(reg: u64) -> Value {
+        return Value {
+            kind: ValueKind::Register,
+            reg: reg,
+            int_val: 0,
+            name: 0 as *u8,
+        };
+    }
+    
+    pub fn from_const(val: i64) -> Value {
+        return Value {
+            kind: ValueKind::Constant,
+            reg: 0,
+            int_val: val,
+            name: 0 as *u8,
+        };
+    }
+    
+    pub fn from_global(name: *u8) -> Value {
+        return Value {
+            kind: ValueKind::Global,
+            reg: 0,
+            int_val: 0,
+            name: name,
+        };
+    }
+}
+
+// ==================== Binary Operations ====================
+
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+// ==================== Instruction ====================
+
+pub enum InstrKind {
+    BinOp,
+    UnaryOp,
+    Load,
+    Store,
+    Alloca,
+    Call,
+    GetElementPtr,
+    Cast,
+    Phi,
+}
+
+pub struct Instruction {
+    pub kind: InstrKind,
+    pub dest: u64,      // Destination register
+    pub op: BinOp,      // For BinOp
+    pub src1: Value,    // First operand
+    pub src2: Value,    // Second operand
+}
+
+impl Instruction {
+    pub fn binop(dest: u64, op: BinOp, src1: Value, src2: Value) -> Instruction {
+        return Instruction {
+            kind: InstrKind::BinOp,
+            dest: dest,
+            op: op,
+            src1: src1,
+            src2: src2,
+        };
+    }
+    
+    pub fn load(dest: u64, ptr: Value) -> Instruction {
+        return Instruction {
+            kind: InstrKind::Load,
+            dest: dest,
+            op: BinOp::Add, // unused
+            src1: ptr,
+            src2: Value::from_const(0),
+        };
+    }
+    
+    pub fn store(ptr: Value, val: Value) -> Instruction {
+        return Instruction {
+            kind: InstrKind::Store,
+            dest: 0,
+            op: BinOp::Add, // unused
+            src1: ptr,
+            src2: val,
+        };
+    }
+    
+    pub fn alloca(dest: u64) -> Instruction {
+        return Instruction {
+            kind: InstrKind::Alloca,
+            dest: dest,
+            op: BinOp::Add, // unused
+            src1: Value::from_const(0),
+            src2: Value::from_const(0),
+        };
+    }
+}
+
+// ==================== Terminator ====================
+
+pub enum TerminatorKind {
+    Return,
+    Branch,
+    CondBranch,
+    Unreachable,
+}
+
+pub struct Terminator {
+    pub kind: TerminatorKind,
+    pub value: Value,       // For Return
+    pub target: u64,        // For Branch
+    pub cond: Value,        // For CondBranch
+    pub then_target: u64,   // For CondBranch
+    pub else_target: u64,   // For CondBranch
+}
+
+impl Terminator {
+    pub fn ret(value: Value) -> Terminator {
+        return Terminator {
+            kind: TerminatorKind::Return,
+            value: value,
+            target: 0,
+            cond: Value::from_const(0),
+            then_target: 0,
+            else_target: 0,
+        };
+    }
+    
+    pub fn branch(target: u64) -> Terminator {
+        return Terminator {
+            kind: TerminatorKind::Branch,
+            value: Value::from_const(0),
+            target: target,
+            cond: Value::from_const(0),
+            then_target: 0,
+            else_target: 0,
+        };
+    }
+    
+    pub fn cond_branch(cond: Value, then_bb: u64, else_bb: u64) -> Terminator {
+        return Terminator {
+            kind: TerminatorKind::CondBranch,
+            value: Value::from_const(0),
+            target: 0,
+            cond: cond,
+            then_target: then_bb,
+            else_target: else_bb,
+        };
+    }
+}
+
+// ==================== Basic Block ====================
+
+pub struct BasicBlock {
+    pub id: u64,
+    pub label: *u8,
+    pub instr_count: u64,
+    pub has_terminator: bool,
+}
+
+impl BasicBlock {
+    pub fn new(id: u64, label: *u8) -> BasicBlock {
+        return BasicBlock {
+            id: id,
+            label: label,
+            instr_count: 0,
+            has_terminator: false,
+        };
+    }
+}
+
+// ==================== IR Function ====================
+
+pub struct IRFunction {
+    pub name: *u8,
+    pub param_count: u64,
+    pub block_count: u64,
+    pub next_reg: u64,
+    pub return_type: IRType,
+}
+
+impl IRFunction {
+    pub fn new(name: *u8, ret: IRType) -> IRFunction {
+        return IRFunction {
+            name: name,
+            param_count: 0,
+            block_count: 0,
+            next_reg: 0,
+            return_type: ret,
+        };
+    }
+    
+    pub fn alloc_reg(self: &mut IRFunction) -> u64 {
+        let r: u64 = self.next_reg;
+        self.next_reg = self.next_reg + 1;
+        return r;
+    }
+    
+    pub fn add_block(self: &mut IRFunction) -> u64 {
+        let b: u64 = self.block_count;
+        self.block_count = self.block_count + 1;
+        return b;
+    }
+}
+
+// ==================== IR Module ====================
+
+pub struct IRModule {
+    pub name: *u8,
+    pub func_count: u64,
+    pub global_count: u64,
+}
+
+impl IRModule {
+    pub fn new(name: *u8) -> IRModule {
+        return IRModule {
+            name: name,
+            func_count: 0,
+            global_count: 0,
+        };
+    }
+    
+    pub fn add_function(self: &mut IRModule) -> u64 {
+        let f: u64 = self.func_count;
+        self.func_count = self.func_count + 1;
+        return f;
+    }
+}
+
+// ==================== IR Generator ====================
+
+pub struct IRGenerator {
+    pub module: IRModule,
+    pub next_reg: u64,
+    pub next_block: u64,
+    pub current_function: u64,
+    pub current_block: u64,
+}
+
+impl IRGenerator {
+    pub fn new(name: *u8) -> IRGenerator {
+        return IRGenerator {
+            module: IRModule::new(name),
+            next_reg: 0,
+            next_block: 0,
+            current_function: 0,
+            current_block: 0,
+        };
+    }
+    
+    /// Generate IR for a program
+    pub fn generate(self: &mut IRGenerator) -> bool {
+        // Would iterate over program items
+        // For each item, call generate_item
+        return true;
+    }
+    
+    /// Generate IR for a top-level item
+    pub fn generate_item(self: &mut IRGenerator) -> bool {
+        // Dispatch based on item kind
+        // Function -> generate_function
+        // Struct -> (skip, just type info)
+        // Enum -> (skip, just type info)
+        // Impl -> generate each method
+        // Extern -> generate_extern
+        return true;
+    }
+    
+    /// Generate IR for a function
+    pub fn generate_function(self: &mut IRGenerator) -> bool {
+        // Create new function
+        let _func_id: u64 = self.module.add_function();
+        
+        // Create entry block
+        self.next_block = 0;
+        let _entry: u64 = self.alloc_block();
+        
+        // Add parameters as registers
+        
+        // Generate function body
+        self.generate_block();
+        
+        return true;
+    }
+    
+    /// Generate IR for a method
+    pub fn generate_method(self: &mut IRGenerator) -> bool {
+        // Same as function but with Type_method naming
+        return self.generate_function();
+    }
+    
+    /// Generate IR for a block
+    pub fn generate_block(self: &mut IRGenerator) -> Value {
+        // Generate each statement
+        // Return the last expression value if any
+        return Value::from_const(0);
+    }
+    
+    /// Generate IR for a statement
+    pub fn generate_stmt(self: &mut IRGenerator) -> Value {
+        // Dispatch based on statement kind
+        // Let -> alloca + store
+        // Return -> generate return terminator
+        // Expr -> generate_expr
+        return Value::from_const(0);
+    }
+    
+    /// Generate IR for an expression
+    pub fn generate_expr(self: &mut IRGenerator) -> Value {
+        // Dispatch based on expression kind
+        // This is the largest method
+        return Value::from_const(0);
+    }
+    
+    /// Generate IR for a literal
+    pub fn generate_literal(self: &IRGenerator) -> Value {
+        return Value::from_const(42);
+    }
+    
+    /// Generate IR for a binary operation
+    pub fn generate_binary(self: &mut IRGenerator) -> Value {
+        // Generate left and right operands
+        // Emit BinOp instruction
+        let dest: u64 = self.alloc_reg();
+        return Value::from_reg(dest);
+    }
+    
+    /// Generate IR for a unary operation
+    pub fn generate_unary(self: &mut IRGenerator) -> Value {
+        let dest: u64 = self.alloc_reg();
+        return Value::from_reg(dest);
+    }
+    
+    /// Generate IR for a function call
+    pub fn generate_call(self: &mut IRGenerator) -> Value {
+        // Generate arguments
+        // Emit call instruction
+        let dest: u64 = self.alloc_reg();
+        return Value::from_reg(dest);
+    }
+    
+    /// Generate IR for if expression
+    pub fn generate_if(self: &mut IRGenerator) -> Value {
+        // Generate condition
+        // Create then/else/merge blocks
+        // Emit conditional branch
+        return Value::from_const(0);
+    }
+    
+    /// Generate IR for while loop
+    pub fn generate_while(self: &mut IRGenerator) -> Value {
+        // Create cond/body/exit blocks
+        // Generate loop structure
+        return Value::from_const(0);
+    }
+    
+    /// Generate IR for match expression
+    pub fn generate_match(self: &mut IRGenerator) -> Value {
+        // Generate scrutinee
+        // Create block for each arm
+        // Emit switch or chain of comparisons
+        return Value::from_const(0);
+    }
+    
+    /// Generate IR for field access
+    pub fn generate_field(self: &mut IRGenerator) -> Value {
+        // Emit GEP instruction
+        let dest: u64 = self.alloc_reg();
+        return Value::from_reg(dest);
+    }
+    
+    /// Generate IR for index access
+    pub fn generate_index(self: &mut IRGenerator) -> Value {
+        // Emit GEP instruction
+        let dest: u64 = self.alloc_reg();
+        return Value::from_reg(dest);
+    }
+    
+    // ==================== Helper Methods ====================
+    
+    /// Allocate a new register
+    pub fn alloc_reg(self: &mut IRGenerator) -> u64 {
+        let r: u64 = self.next_reg;
+        self.next_reg = self.next_reg + 1;
+        return r;
+    }
+    
+    /// Allocate a new block
+    pub fn alloc_block(self: &mut IRGenerator) -> u64 {
+        let b: u64 = self.next_block;
+        self.next_block = self.next_block + 1;
+        return b;
+    }
+    
+    /// Emit an instruction to current block
+    pub fn emit(self: &mut IRGenerator, _inst: Instruction) {
+        // Would add to current block's instruction list
+    }
+    
+    /// Set terminator for current block
+    pub fn set_terminator(self: &mut IRGenerator, _term: Terminator) {
+        // Would set current block's terminator
+    }
+    
+    /// Check if current block has terminator
+    pub fn has_terminator(self: &IRGenerator) -> bool {
+        return false;
+    }
+    
+    /// Convert AST BinOp to IR BinOp
+    pub fn ast_binop_to_ir(op: u8) -> BinOp {
+        // Map AST operators to IR operators
+        return BinOp::Add;
+    }
+    
+    /// Convert AST Type to IR Type
+    pub fn ast_type_to_ir(self: &IRGenerator) -> IRType {
+        // Map type names to IR types
+        return IRType::I64;
+    }
+    
+    /// Get type of a value
+    pub fn get_value_type(self: &IRGenerator, _val: Value) -> IRType {
+        return IRType::I64;
+    }
+    
+    /// Check if type is integer
+    pub fn is_integer_type(ty: IRType) -> bool {
+        // Would check if ty is I8/I16/I32/I64/U8/U16/U32/U64
+        return true;
+    }
+}
+
+// ==================== Main ====================
+
+fn main() {
+    puts("IR Generator defined!");
+    
+    // Create generator
+    let name: *u8 = "test_module" as *u8;
+    let mut gen: IRGenerator = IRGenerator::new(name);
+    
+    // Test basic operations
+    let reg: u64 = gen.alloc_reg();
+    let block: u64 = gen.alloc_block();
+    
+    puts("Created IR generator!");
+    
+    // Test instruction creation
+    let val1: Value = Value::from_const(10);
+    let val2: Value = Value::from_const(20);
+    let inst: Instruction = Instruction::binop(0, BinOp::Add, val1, val2);
+    
+    // Test terminator
+    let ret_val: Value = Value::from_reg(reg);
+    let term: Terminator = Terminator::ret(ret_val);
+    
+    puts("IR generation self-hosting working!");
+}
