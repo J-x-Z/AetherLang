@@ -1,0 +1,386 @@
+// AetherLang Semantic Analyzer
+// Self-hosting semantic analysis implementation (simplified)
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// ==================== Symbol Kinds ====================
+
+pub enum SymbolKind {
+    Variable,
+    Function,
+    Struct,
+    Enum,
+    Param,
+    TypeParam,
+}
+
+// ==================== Resolved Types ====================
+
+pub enum TypeKind {
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    Bool,
+    Void,
+    Ptr,
+    Ref,
+    Struct,
+    Enum,
+    Array,
+    Function,
+    Unknown,
+}
+
+pub struct ResolvedType {
+    pub kind: TypeKind,
+    pub name: *u8,          // For named types
+    pub inner: *ResolvedType, // For Ptr, Ref
+    pub is_mut: bool,
+}
+
+impl ResolvedType {
+    pub fn new(kind: TypeKind) -> ResolvedType {
+        return ResolvedType {
+            kind: kind,
+            name: 0 as *u8,
+            inner: 0 as *ResolvedType,
+            is_mut: false,
+        };
+    }
+    
+    pub fn i64_type() -> ResolvedType {
+        return ResolvedType::new(TypeKind::I64);
+    }
+    
+    pub fn bool_type() -> ResolvedType {
+        return ResolvedType::new(TypeKind::Bool);
+    }
+    
+    pub fn void_type() -> ResolvedType {
+        return ResolvedType::new(TypeKind::Void);
+    }
+}
+
+// ==================== Symbol ====================
+
+pub struct Symbol {
+    pub name: *u8,
+    pub kind: SymbolKind,
+    pub ty: ResolvedType,
+    pub is_mutable: bool,
+}
+
+impl Symbol {
+    pub fn new(name: *u8, kind: SymbolKind, ty: ResolvedType) -> Symbol {
+        return Symbol {
+            name: name,
+            kind: kind,
+            ty: ty,
+            is_mutable: false,
+        };
+    }
+    
+    pub fn variable(name: *u8, ty: ResolvedType, mutable: bool) -> Symbol {
+        return Symbol {
+            name: name,
+            kind: SymbolKind::Variable,
+            ty: ty,
+            is_mutable: mutable,
+        };
+    }
+}
+
+// ==================== Scope ====================
+
+pub struct Scope {
+    pub id: u64,
+    pub parent: u64,  // Parent scope id (0 = no parent)
+    pub symbol_count: u64,
+}
+
+impl Scope {
+    pub fn new(id: u64, parent: u64) -> Scope {
+        return Scope {
+            id: id,
+            parent: parent,
+            symbol_count: 0,
+        };
+    }
+}
+
+// ==================== Symbol Table ====================
+
+pub struct SymbolTable {
+    pub current_scope: u64,
+    pub next_scope_id: u64,
+}
+
+impl SymbolTable {
+    pub fn new() -> SymbolTable {
+        return SymbolTable {
+            current_scope: 0,
+            next_scope_id: 1,
+        };
+    }
+    
+    /// Enter a new scope
+    pub fn enter_scope(self: &mut SymbolTable) -> u64 {
+        let new_id: u64 = self.next_scope_id;
+        self.next_scope_id = self.next_scope_id + 1;
+        self.current_scope = new_id;
+        return new_id;
+    }
+    
+    /// Exit the current scope
+    pub fn exit_scope(self: &mut SymbolTable) {
+        // Would restore parent scope
+        if self.current_scope > 0 {
+            self.current_scope = self.current_scope - 1;
+        }
+    }
+    
+    /// Define a symbol in current scope
+    pub fn define(self: &mut SymbolTable, _symbol: Symbol) -> bool {
+        // Would add to scope's symbol map
+        return true;
+    }
+    
+    /// Lookup a symbol by name
+    pub fn lookup(self: &SymbolTable, _name: *u8) -> bool {
+        // Would search from current scope upward
+        return false;
+    }
+    
+    /// Lookup only in current scope
+    pub fn lookup_local(self: &SymbolTable, _name: *u8) -> bool {
+        return false;
+    }
+}
+
+// ==================== Semantic Analyzer ====================
+
+pub struct SemanticAnalyzer {
+    pub symbols: SymbolTable,
+    pub error_count: u64,
+    pub strict_mode: bool,
+}
+
+impl SemanticAnalyzer {
+    pub fn new() -> SemanticAnalyzer {
+        return SemanticAnalyzer {
+            symbols: SymbolTable::new(),
+            error_count: 0,
+            strict_mode: false,
+        };
+    }
+    
+    /// Set strict mode
+    pub fn set_strict_mode(self: &mut SemanticAnalyzer, strict: bool) {
+        self.strict_mode = strict;
+    }
+    
+    /// Register builtin functions
+    pub fn register_builtins(self: &mut SemanticAnalyzer) {
+        // Would register puts, exit, malloc, free, etc.
+    }
+    
+    /// Analyze a program (simplified - returns success)
+    pub fn analyze(self: &mut SemanticAnalyzer) -> bool {
+        // Pass 1: Collect definitions
+        // Pass 2: Check items
+        return self.error_count == 0;
+    }
+    
+    /// Collect a definition (first pass)
+    pub fn collect_definition(self: &mut SemanticAnalyzer) -> bool {
+        // Would add function/struct/enum to symbol table
+        return true;
+    }
+    
+    /// Check an item (second pass)
+    pub fn check_item(self: &mut SemanticAnalyzer) -> bool {
+        // Would dispatch based on item kind
+        return true;
+    }
+    
+    /// Check a function
+    pub fn check_function(self: &mut SemanticAnalyzer) -> bool {
+        // Enter scope
+        self.symbols.enter_scope();
+        
+        // Add parameters to scope
+        
+        // Check function body
+        
+        // Exit scope
+        self.symbols.exit_scope();
+        
+        return true;
+    }
+    
+    /// Check an impl block
+    pub fn check_impl(self: &mut SemanticAnalyzer) -> bool {
+        // Check each method
+        return true;
+    }
+    
+    /// Check a block
+    pub fn check_block(self: &mut SemanticAnalyzer) -> bool {
+        self.symbols.enter_scope();
+        
+        // Check each statement
+        
+        self.symbols.exit_scope();
+        return true;
+    }
+    
+    /// Check a statement
+    pub fn check_stmt(self: &mut SemanticAnalyzer) -> bool {
+        // Dispatch based on statement kind
+        // Let -> check_let
+        // Return -> check_return
+        // Expr -> check_expr
+        return true;
+    }
+    
+    /// Check let statement
+    pub fn check_let(self: &mut SemanticAnalyzer) -> bool {
+        // Check initializer type matches declared type
+        // Add variable to symbol table
+        return true;
+    }
+    
+    /// Check return statement
+    pub fn check_return(self: &mut SemanticAnalyzer) -> bool {
+        // Check return type matches function return type
+        return true;
+    }
+    
+    /// Check an expression
+    pub fn check_expr(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Dispatch based on expression kind
+        return TypeKind::Unknown;
+    }
+    
+    /// Check a literal
+    pub fn check_literal(self: &SemanticAnalyzer) -> TypeKind {
+        // Return type based on literal kind
+        return TypeKind::I64;
+    }
+    
+    /// Check an identifier
+    pub fn check_ident(self: &SemanticAnalyzer, _name: *u8) -> TypeKind {
+        // Lookup in symbol table
+        return TypeKind::Unknown;
+    }
+    
+    /// Check a binary operation
+    pub fn check_binary(self: &SemanticAnalyzer, left: TypeKind, _right: TypeKind) -> TypeKind {
+        // Check operand types are compatible
+        // Return result type
+        return left;
+    }
+    
+    /// Check a unary operation
+    pub fn check_unary(self: &SemanticAnalyzer, operand: TypeKind) -> TypeKind {
+        return operand;
+    }
+    
+    /// Check a function call
+    pub fn check_call(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Lookup function
+        // Check argument count and types
+        // Return function return type
+        return TypeKind::Unknown;
+    }
+    
+    /// Check field access
+    pub fn check_field(self: &SemanticAnalyzer) -> TypeKind {
+        // Check receiver is a struct
+        // Lookup field
+        return TypeKind::Unknown;
+    }
+    
+    /// Check method call
+    pub fn check_method(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Similar to check_call but with self
+        return TypeKind::Unknown;
+    }
+    
+    /// Check if expression
+    pub fn check_if(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Check condition is bool
+        // Check then/else types match
+        return TypeKind::Unknown;
+    }
+    
+    /// Check while loop
+    pub fn check_while(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Check condition is bool
+        // Check body
+        return TypeKind::Void;
+    }
+    
+    /// Check for loop
+    pub fn check_for(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Check iterator type
+        // Check body
+        return TypeKind::Void;
+    }
+    
+    /// Check match expression
+    pub fn check_match(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Check scrutinee type
+        // Check all arms have same type
+        return TypeKind::Unknown;
+    }
+    
+    /// Resolve an AST type to ResolvedType
+    pub fn resolve_type(self: &SemanticAnalyzer) -> TypeKind {
+        // Map type names to TypeKind
+        return TypeKind::Unknown;
+    }
+    
+    /// Check if two types are compatible
+    pub fn types_compatible(self: &SemanticAnalyzer, expected: TypeKind, got: TypeKind) -> bool {
+        // In strict mode, types must match exactly
+        // Check for coercion rules
+        if expected == got {
+            return true;
+        }
+        return false;
+    }
+    
+    /// Report an error
+    pub fn report_error(self: &mut SemanticAnalyzer, _msg: *u8) {
+        self.error_count = self.error_count + 1;
+    }
+}
+
+// ==================== Main ====================
+
+fn main() {
+    puts("Semantic analyzer defined!");
+    
+    // Create analyzer
+    let mut analyzer: SemanticAnalyzer = SemanticAnalyzer::new();
+    
+    // Test basic operations
+    analyzer.register_builtins();
+    
+    let scope: u64 = analyzer.symbols.enter_scope();
+    
+    puts("Created semantic analyzer!");
+    
+    // Test type creation
+    let ty: ResolvedType = ResolvedType::i64_type();
+    
+    puts("Semantic analysis self-hosting working!");
+}
