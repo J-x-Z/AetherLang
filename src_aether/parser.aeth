@@ -603,6 +603,268 @@ impl Parser {
         
         return true;
     }
+    
+    // ==================== Parameters ====================
+    
+    /// Parse function parameters: (param1, param2, ...)
+    pub fn parse_params(self: &mut Parser) -> bool {
+        // Consume (
+        self.advance();
+        
+        // Parse params until )
+        while !self.is_at_end() {
+            // Would check for )
+            self.parse_param();
+            // self.consume(Comma);
+        }
+        
+        // Consume )
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse single parameter: name: Type or mut name: Type
+    pub fn parse_param(self: &mut Parser) -> bool {
+        // Check for mut
+        // self.consume(Mut);
+        
+        // Parse name
+        self.advance();
+        
+        // Consume :
+        self.advance();
+        
+        // Parse type
+        self.parse_type();
+        
+        return true;
+    }
+    
+    /// Parse function call arguments after (
+    pub fn parse_call_rest(self: &mut Parser, _func: i64) -> i64 {
+        // Parse arguments until )
+        while !self.is_at_end() {
+            // Would check for )
+            let _arg: i64 = self.parse_expr();
+            // self.consume(Comma);
+        }
+        
+        // Consume )
+        self.advance();
+        
+        return 0;
+    }
+    
+    // ==================== Match/Pattern ====================
+    
+    /// Parse match expression: match expr { arm1, arm2, ... }
+    pub fn parse_match_expr(self: &mut Parser) -> i64 {
+        // Consume 'match'
+        self.advance();
+        
+        // Parse scrutinee expression
+        let _expr: i64 = self.parse_expr();
+        
+        // Consume {
+        self.advance();
+        
+        // Parse arms
+        while !self.is_at_end() {
+            // Would check for }
+            self.parse_match_arm();
+        }
+        
+        // Consume }
+        self.advance();
+        
+        return 0;
+    }
+    
+    /// Parse match arm: pattern => expr
+    pub fn parse_match_arm(self: &mut Parser) -> bool {
+        // Parse pattern
+        self.parse_pattern();
+        
+        // Consume =>
+        self.advance();
+        
+        // Parse arm body
+        let _body: i64 = self.parse_expr();
+        
+        // Optional comma
+        // self.consume(Comma);
+        
+        return true;
+    }
+    
+    /// Parse pattern (simplified)
+    pub fn parse_pattern(self: &mut Parser) -> bool {
+        // Patterns can be:
+        // - Literal: 1, "hello", true
+        // - Ident: x, _
+        // - Struct: Point { x, y }
+        // - Enum: Some(x), None
+        // For now, just consume identifier
+        self.advance();
+        return true;
+    }
+    
+    // ==================== More Items ====================
+    
+    /// Parse interface definition: interface Name { methods }
+    pub fn parse_interface(self: &mut Parser) -> bool {
+        // Consume 'interface'
+        self.advance();
+        
+        // Parse name
+        self.advance();
+        
+        // Consume {
+        self.advance();
+        
+        // Parse method signatures
+        while !self.is_at_end() {
+            // Would check for }
+            self.parse_fn_sig();
+        }
+        
+        // Consume }
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse function signature (for interfaces)
+    pub fn parse_fn_sig(self: &mut Parser) -> bool {
+        // Consume 'fn'
+        self.advance();
+        
+        // Parse name
+        self.advance();
+        
+        // Parse params
+        self.parse_params();
+        
+        // Optional return type
+        // if check(Arrow) { advance(); parse_type(); }
+        
+        // Consume ;
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse const definition: const NAME: Type = value;
+    pub fn parse_const(self: &mut Parser) -> bool {
+        // Consume 'const'
+        self.advance();
+        
+        // Parse name
+        self.advance();
+        
+        // Consume :
+        self.advance();
+        
+        // Parse type
+        self.parse_type();
+        
+        // Consume =
+        self.advance();
+        
+        // Parse value
+        let _val: i64 = self.parse_expr();
+        
+        // Consume ;
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse static variable: static [mut] name: Type = value;
+    pub fn parse_static(self: &mut Parser) -> bool {
+        // Consume 'static'
+        self.advance();
+        
+        // Check for mut
+        // self.consume(Mut);
+        
+        // Parse name
+        self.advance();
+        
+        // Consume :
+        self.advance();
+        
+        // Parse type
+        self.parse_type();
+        
+        // Optional initializer
+        // Consume =
+        self.advance();
+        
+        // Parse value
+        let _val: i64 = self.parse_expr();
+        
+        // Consume ;
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse union definition: union Name { fields }
+    pub fn parse_union(self: &mut Parser) -> bool {
+        // Consume 'union'
+        self.advance();
+        
+        // Parse name
+        self.advance();
+        
+        // Consume {
+        self.advance();
+        
+        // Parse fields (same as struct)
+        while !self.is_at_end() {
+            // Would check for }
+            self.advance(); // name
+            self.advance(); // :
+            self.parse_type();
+            // self.consume(Comma);
+        }
+        
+        // Consume }
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse loop expression: loop { body }
+    pub fn parse_loop_expr(self: &mut Parser) -> i64 {
+        // Consume 'loop'
+        self.advance();
+        
+        // Parse body block
+        self.parse_block();
+        
+        return 0;
+    }
+    
+    /// Parse break statement
+    pub fn parse_break(self: &mut Parser) -> bool {
+        // Consume 'break'
+        self.advance();
+        // Consume ;
+        self.advance();
+        return true;
+    }
+    
+    /// Parse continue statement
+    pub fn parse_continue(self: &mut Parser) -> bool {
+        // Consume 'continue'
+        self.advance();
+        // Consume ;
+        self.advance();
+        return true;
+    }
 }
 
 // ==================== Main ====================
