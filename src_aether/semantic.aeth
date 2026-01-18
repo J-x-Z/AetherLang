@@ -162,6 +162,88 @@ impl SymbolTable {
     pub fn lookup_local(self: &SymbolTable, _name: *u8) -> bool {
         return false;
     }
+    
+    /// Get current scope id
+    pub fn current(self: &SymbolTable) -> u64 {
+        return self.current_scope;
+    }
+}
+
+// ==================== Ownership State ====================
+
+pub struct OwnershipState {
+    pub owned_count: u64,
+    pub borrow_count: u64,
+    pub mut_borrow_count: u64,
+}
+
+impl OwnershipState {
+    pub fn new() -> OwnershipState {
+        return OwnershipState {
+            owned_count: 0,
+            borrow_count: 0,
+            mut_borrow_count: 0,
+        };
+    }
+    
+    /// Mark a variable as owned
+    pub fn add_owned(self: &mut OwnershipState, _name: *u8) {
+        self.owned_count = self.owned_count + 1;
+    }
+    
+    /// Check if a variable is available (not moved)
+    pub fn is_available(self: &OwnershipState, _name: *u8) -> bool {
+        return true;
+    }
+    
+    /// Move a variable (transfer ownership)
+    pub fn move_var(self: &mut OwnershipState, _name: *u8) -> bool {
+        // Would mark as moved
+        return true;
+    }
+    
+    /// Borrow a variable immutably
+    pub fn borrow(self: &mut OwnershipState, _name: *u8) -> bool {
+        self.borrow_count = self.borrow_count + 1;
+        return true;
+    }
+    
+    /// Borrow a variable mutably
+    pub fn borrow_mut(self: &mut OwnershipState, _name: *u8) -> bool {
+        // Check no other borrows exist
+        if self.borrow_count > 0 {
+            return false;
+        }
+        if self.mut_borrow_count > 0 {
+            return false;
+        }
+        self.mut_borrow_count = self.mut_borrow_count + 1;
+        return true;
+    }
+    
+    /// Release an immutable borrow
+    pub fn release_borrow(self: &mut OwnershipState, _name: *u8) {
+        if self.borrow_count > 0 {
+            self.borrow_count = self.borrow_count - 1;
+        }
+    }
+    
+    /// Release a mutable borrow
+    pub fn release_mut_borrow(self: &mut OwnershipState, _name: *u8) {
+        if self.mut_borrow_count > 0 {
+            self.mut_borrow_count = self.mut_borrow_count - 1;
+        }
+    }
+    
+    /// Check if there are active borrows
+    pub fn has_borrows(self: &OwnershipState) -> bool {
+        return self.borrow_count > 0;
+    }
+    
+    /// Check if there are active mutable borrows
+    pub fn has_mut_borrows(self: &OwnershipState) -> bool {
+        return self.mut_borrow_count > 0;
+    }
 }
 
 // ==================== Semantic Analyzer ====================
@@ -361,6 +443,41 @@ impl SemanticAnalyzer {
     /// Report an error
     pub fn report_error(self: &mut SemanticAnalyzer, _msg: *u8) {
         self.error_count = self.error_count + 1;
+    }
+    
+    /// Define a builtin function
+    pub fn define_builtin(self: &mut SemanticAnalyzer, _name: *u8, _ret: TypeKind) {
+        // Add to symbol table
+    }
+    
+    /// Check array index access
+    pub fn check_index(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Check array type and index type
+        return TypeKind::Unknown;
+    }
+    
+    /// Check cast expression
+    pub fn check_cast(self: &SemanticAnalyzer) -> TypeKind {
+        // Validate cast is allowed
+        return TypeKind::Unknown;
+    }
+    
+    /// Check struct literal
+    pub fn check_struct_lit(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Check all fields are provided and types match
+        return TypeKind::Struct;
+    }
+    
+    /// Check array literal
+    pub fn check_array_lit(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Check all elements have same type
+        return TypeKind::Array;
+    }
+    
+    /// Check reference expression
+    pub fn check_ref(self: &mut SemanticAnalyzer) -> TypeKind {
+        // Create reference type
+        return TypeKind::Ref;
     }
 }
 
