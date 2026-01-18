@@ -1,0 +1,30 @@
+// Minimal test for string literals and u64 values
+
+extern "C" {
+    fn putchar(c: i32) -> i32;
+}
+
+fn main() -> i32 {
+    puts("Testing basic values...");
+    
+    // Test u64 literals
+    let a: u64 = 5;
+    let b: u64 = 10;
+    
+    putchar(48 + (a as i32));
+    puts(" = a (should be 5)");
+    
+    putchar(48 + (b as i32));
+    puts(" = b (should be :)");
+    
+    // Test string literal
+    let s: *u8 = "Hello" as *u8;
+    let c0: u8 = *s;
+    
+    putchar(c0 as i32);
+    puts(" = first char of 'Hello' (should be 'H')");
+    
+    puts("Done!");
+    
+    return 0;
+}
