@@ -112,6 +112,95 @@ impl Parser {
         self.advance();
         return val;
     }
+    
+    // ==================== Expression Parsing ====================
+    
+    /// Parse expression (entry point)
+    pub fn parse_expr(self: &mut Parser) -> i64 {
+        return self.parse_expr_bp(0);
+    }
+    
+    /// Parse expression with binding power (Pratt parsing)
+    pub fn parse_expr_bp(self: &mut Parser, min_bp: u8) -> i64 {
+        // Parse left operand (primary)
+        let left: i64 = self.parse_primary();
+        
+        // In full impl: loop over operators with binding power >= min_bp
+        // For now, just return the primary
+        return left;
+    }
+    
+    /// Parse primary expression (literals, identifiers, parenthesized)
+    pub fn parse_primary(self: &mut Parser) -> i64 {
+        // In full impl: match on current token kind
+        // For now, just parse an integer
+        let val: i64 = self.parse_int();
+        return val;
+    }
+    
+    // ==================== Statement Parsing ====================
+    
+    /// Parse a statement
+    pub fn parse_stmt(self: &mut Parser) -> bool {
+        // In full impl: match on current token kind (let, return, expr, etc.)
+        // For now, just skip a token
+        self.advance();
+        return true;
+    }
+    
+    /// Parse a block of statements
+    pub fn parse_block(self: &mut Parser) -> bool {
+        // Expect { 
+        self.advance();
+        
+        // Parse statements until }
+        while !self.is_at_end() {
+            self.parse_stmt();
+        }
+        
+        // Expect }
+        self.advance();
+        return true;
+    }
+    
+    // ==================== Item Parsing ====================
+    
+    /// Parse a function definition
+    pub fn parse_function(self: &mut Parser) -> bool {
+        // Expect 'fn'
+        self.advance();
+        
+        // Parse name (identifier)
+        self.advance();
+        
+        // Parse params ()
+        self.advance(); // (
+        self.advance(); // )
+        
+        // Parse optional return type
+        // -> Type
+        
+        // Parse body block
+        self.parse_block();
+        
+        return true;
+    }
+    
+    /// Parse a struct definition
+    pub fn parse_struct(self: &mut Parser) -> bool {
+        // Expect 'struct'
+        self.advance();
+        
+        // Parse name
+        self.advance();
+        
+        // Parse { fields }
+        self.advance(); // {
+        // ... parse fields
+        self.advance(); // }
+        
+        return true;
+    }
 }
 
 // ==================== Main ====================
