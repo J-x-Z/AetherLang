@@ -505,6 +505,104 @@ impl Parser {
         
         return 0;
     }
+    
+    // ==================== Literals and Compound ====================
+    
+    /// Parse array index: expr[index]
+    pub fn parse_index(self: &mut Parser, _receiver: i64) -> i64 {
+        // Consume [
+        self.advance();
+        
+        // Parse index expression
+        let _idx: i64 = self.parse_expr();
+        
+        // Consume ]
+        self.advance();
+        
+        return 0;
+    }
+    
+    /// Parse struct literal: StructName { field: value, ... }
+    pub fn parse_struct_literal(self: &mut Parser) -> i64 {
+        // Parse struct name (already consumed)
+        
+        // Consume {
+        self.advance();
+        
+        // Parse field initializers
+        while !self.is_at_end() {
+            // Would check for }
+            // Parse field_name: value
+            self.advance(); // field name
+            self.advance(); // :
+            let _val: i64 = self.parse_expr();
+            // self.consume(Comma);
+        }
+        
+        // Consume }
+        self.advance();
+        
+        return 0;
+    }
+    
+    /// Parse array literal: [elem1, elem2, ...]
+    pub fn parse_array_literal(self: &mut Parser) -> i64 {
+        // Consume [
+        self.advance();
+        
+        // Parse elements
+        while !self.is_at_end() {
+            // Would check for ]
+            let _elem: i64 = self.parse_expr();
+            // self.consume(Comma);
+        }
+        
+        // Consume ]
+        self.advance();
+        
+        return 0;
+    }
+    
+    /// Parse cast expression: expr as Type
+    pub fn parse_cast(self: &mut Parser, receiver: i64) -> i64 {
+        // Consume 'as'
+        self.advance();
+        
+        // Parse target type
+        self.parse_type();
+        
+        return receiver;
+    }
+    
+    /// Parse unary expression: -expr, !expr, *expr, &expr
+    pub fn parse_unary(self: &mut Parser) -> i64 {
+        // Consume operator
+        self.advance();
+        
+        // Parse operand
+        let _operand: i64 = self.parse_primary();
+        
+        return 0;
+    }
+    
+    // ==================== Program Level ====================
+    
+    /// Parse a complete program
+    pub fn parse_program(self: &mut Parser) -> bool {
+        // Parse items until EOF
+        while !self.is_at_end() {
+            // Dispatch based on token kind
+            // fn -> parse_function
+            // struct -> parse_struct
+            // enum -> parse_enum
+            // impl -> parse_impl
+            // extern -> parse_extern
+            // pub -> skip and parse next item
+            self.advance();
+        }
+        
+        return true;
+    }
 }
 
 // ==================== Main ====================
