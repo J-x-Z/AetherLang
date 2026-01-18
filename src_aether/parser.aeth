@@ -865,6 +865,219 @@ impl Parser {
         self.advance();
         return true;
     }
+    
+    // ==================== Helper Methods ====================
+    
+    /// Check if current token matches kind
+    pub fn check(self: &Parser, _kind: i32) -> bool {
+        // Would compare current token kind
+        return false;
+    }
+    
+    /// Expect a token kind, error if not matched
+    pub fn expect(self: &mut Parser, _kind: i32) -> bool {
+        // Would check and advance, or error
+        self.advance();
+        return true;
+    }
+    
+    /// Get current token (simplified - returns position)
+    pub fn current(self: &Parser) -> u64 {
+        return self.pos;
+    }
+    
+    /// Peek at next token (simplified - returns position + 1)
+    pub fn peek(self: &Parser) -> u64 {
+        if self.pos + 1 < self.token_count {
+            return self.pos + 1;
+        }
+        return self.pos;
+    }
+    
+    /// Consume a token if it matches, return true if consumed
+    pub fn consume(self: &mut Parser, _kind: i32) -> bool {
+        // Would check and advance if matches
+        return false;
+    }
+    
+    // ==================== Postfix/Infix ====================
+    
+    /// Parse postfix operations: calls, fields, indexes
+    pub fn parse_postfix(self: &mut Parser, expr: i64) -> i64 {
+        // Loop while we see postfix operators
+        // . -> field or method call
+        // [ -> index
+        // ( -> call
+        return expr;
+    }
+    
+    /// Convert token kind to binary operator (simplified)
+    pub fn token_to_binop(_kind: i32) -> i32 {
+        // Would return BinOp enum value
+        // + -> 0 (Add)
+        // - -> 1 (Sub)
+        // * -> 2 (Mul)
+        // / -> 3 (Div)
+        return 0;
+    }
+    
+    // ==================== Annotations ====================
+    
+    /// Parse an attribute: #[name] or #[name(args)]
+    pub fn parse_attribute(self: &mut Parser) -> bool {
+        // Consume #
+        self.advance();
+        // Consume [
+        self.advance();
+        // Parse name
+        self.advance();
+        // Optional args
+        // Consume ]
+        self.advance();
+        return true;
+    }
+    
+    /// Parse an annotation: @name or @name(args)
+    pub fn parse_annotation(self: &mut Parser) -> bool {
+        // Consume @
+        self.advance();
+        // Parse name
+        self.advance();
+        // Optional (args)
+        return true;
+    }
+    
+    // ==================== Complex Items ====================
+    
+    /// Parse a generic parameter list: <T, U>
+    pub fn parse_generic_params(self: &mut Parser) -> bool {
+        // Consume <
+        self.advance();
+        
+        // Parse type params
+        while !self.is_at_end() {
+            // Would check for >
+            self.advance(); // type name
+            // self.consume(Comma);
+        }
+        
+        // Consume >
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse a contract block: [requires ..., ensures ...]
+    pub fn parse_contract_block(self: &mut Parser) -> bool {
+        // Consume [
+        self.advance();
+        
+        // Parse contract clauses
+        while !self.is_at_end() {
+            // Would check for ]
+            self.advance(); // requires/ensures
+            let _cond: i64 = self.parse_expr();
+            // self.consume(Comma);
+        }
+        
+        // Consume ]
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse effect annotation: pure or effect[read, write, io]
+    pub fn parse_effect_annotation(self: &mut Parser) -> bool {
+        // Consume 'pure' or 'effect'
+        self.advance();
+        
+        // If effect[...], parse effects list
+        // Consume [
+        // Parse effect names
+        // Consume ]
+        
+        return true;
+    }
+    
+    /// Parse an item with attributes
+    pub fn parse_item(self: &mut Parser) -> bool {
+        // Check for attributes/annotations
+        // Parse the actual item (fn, struct, etc.)
+        self.advance();
+        return true;
+    }
+    
+    /// Parse foreign item inside extern block
+    pub fn parse_foreign_item(self: &mut Parser) -> bool {
+        // Parse fn declaration without body
+        self.advance(); // fn
+        self.advance(); // name
+        self.parse_params();
+        // Optional return type
+        self.advance(); // ;
+        return true;
+    }
+    
+    /// Parse reference type: &T or &mut T
+    pub fn parse_ref_type(self: &mut Parser) -> bool {
+        // Consume &
+        self.advance();
+        // Check for mut
+        // self.consume(Mut);
+        // Parse inner type
+        self.parse_type();
+        return true;
+    }
+    
+    /// Parse array type: [T; N]
+    pub fn parse_array_type(self: &mut Parser) -> bool {
+        // Consume [
+        self.advance();
+        // Parse element type
+        self.parse_type();
+        // Consume ;
+        self.advance();
+        // Parse size expression
+        let _size: i64 = self.parse_expr();
+        // Consume ]
+        self.advance();
+        return true;
+    }
+    
+    /// Parse tuple type: (T1, T2, ...)
+    pub fn parse_tuple_type(self: &mut Parser) -> bool {
+        // Consume (
+        self.advance();
+        
+        // Parse element types
+        while !self.is_at_end() {
+            // Would check for )
+            self.parse_type();
+            // self.consume(Comma);
+        }
+        
+        // Consume )
+        self.advance();
+        
+        return true;
+    }
+    
+    /// Parse function type: fn(T1, T2) -> R
+    pub fn parse_fn_type(self: &mut Parser) -> bool {
+        // Consume 'fn'
+        self.advance();
+        // Parse param types
+        self.advance(); // (
+        while !self.is_at_end() {
+            // Would check for )
+            self.parse_type();
+            // self.consume(Comma);
+        }
+        self.advance(); // )
+        // Optional return type
+        // if check(Arrow) { advance(); parse_type(); }
+        return true;
+    }
 }
 
 // ==================== Main ====================
