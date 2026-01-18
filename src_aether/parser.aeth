@@ -164,9 +164,31 @@ impl Parser {
     
     /// Parse primary expression (literals, identifiers, parenthesized)
     pub fn parse_primary(self: &mut Parser) -> i64 {
-        // In full impl: match on current token kind
+        // In full impl: would check token kind and dispatch
+        // - IntLit -> parse integer
+        // - Ident -> parse identifier
+        // - LParen -> parse parenthesized expression
+        // - If -> parse if expression
         // For now, just parse an integer
         let val: i64 = self.parse_int();
+        return val;
+    }
+    
+    /// Parse identifier (returns dummy value for now)
+    pub fn parse_ident(self: &mut Parser) -> i64 {
+        // Would return identifier info
+        self.advance();
+        return 0;
+    }
+    
+    /// Parse parenthesized expression
+    pub fn parse_paren_expr(self: &mut Parser) -> i64 {
+        // Consume (
+        self.advance();
+        // Parse inner expression
+        let val: i64 = self.parse_expr();
+        // Consume )
+        self.advance();
         return val;
     }
     
@@ -174,9 +196,57 @@ impl Parser {
     
     /// Parse a statement
     pub fn parse_stmt(self: &mut Parser) -> bool {
-        // In full impl: match on current token kind (let, return, expr, etc.)
-        // For now, just skip a token
+        // In full impl: dispatch based on current token
+        // - Let -> parse_let_stmt()
+        // - Return -> parse_return_stmt()
+        // - _ -> parse_expr_stmt()
+        
+        // For now, try to parse as expression statement
+        let _val: i64 = self.parse_expr();
+        self.skip_semicolon();
+        return true;
+    }
+    
+    /// Parse let statement: let [mut] name [: type] = expr;
+    pub fn parse_let_stmt(self: &mut Parser) -> bool {
+        // Consume 'let'
         self.advance();
+        
+        // Check for 'mut' (optional)
+        // self.consume(TokenKind::Mut);
+        
+        // Parse name
+        let _name: i64 = self.parse_ident();
+        
+        // Optional: type annotation
+        // if check(Colon) { advance(); parse_type(); }
+        
+        // Consume '='
+        self.advance();
+        
+        // Parse value expression
+        let _val: i64 = self.parse_expr();
+        
+        // Consume ';'
+        self.skip_semicolon();
+        
+        return true;
+    }
+    
+    /// Parse return statement: return [expr];
+    pub fn parse_return_stmt(self: &mut Parser) -> bool {
+        // Consume 'return'
+        self.advance();
+        
+        // Check if there's an expression (not semicolon/})
+        // For now, assume there's always an expression
+        if !self.is_at_end() {
+            let _val: i64 = self.parse_expr();
+        }
+        
+        // Consume ';'
+        self.skip_semicolon();
+        
         return true;
     }
     
