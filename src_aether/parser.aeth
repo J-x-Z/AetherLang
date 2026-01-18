@@ -383,6 +383,128 @@ impl Parser {
         self.parse_type();
         return true;
     }
+    
+    // ==================== Extern Parsing ====================
+    
+    /// Parse extern block: extern "C" { fn declarations }
+    pub fn parse_extern(self: &mut Parser) -> bool {
+        // Consume 'extern'
+        self.advance();
+        
+        // Consume string literal "C" (optional ABI)
+        self.advance();
+        
+        // Consume {
+        self.advance();
+        
+        // Parse extern function declarations
+        while !self.is_at_end() {
+            // Would check for }
+            // Parse fn declaration (no body)
+            self.advance(); // fn
+            self.advance(); // name
+            self.advance(); // (
+            // Parse params
+            self.advance(); // )
+            // Optional return type
+            self.advance(); // ;
+        }
+        
+        // Consume }
+        self.advance();
+        
+        return true;
+    }
+    
+    // ==================== Control Flow ====================
+    
+    /// Parse if expression: if cond { then } [else { else }]
+    pub fn parse_if_expr(self: &mut Parser) -> i64 {
+        // Consume 'if'
+        self.advance();
+        
+        // Parse condition
+        let _cond: i64 = self.parse_expr();
+        
+        // Parse then block
+        self.parse_block();
+        
+        // Optional else
+        // if self.check(Else) { ... }
+        
+        return 0;
+    }
+    
+    /// Parse while loop: while cond { body }
+    pub fn parse_while(self: &mut Parser) -> bool {
+        // Consume 'while'
+        self.advance();
+        
+        // Parse condition
+        let _cond: i64 = self.parse_expr();
+        
+        // Parse body block
+        self.parse_block();
+        
+        return true;
+    }
+    
+    /// Parse for loop: for var in iter { body }
+    pub fn parse_for(self: &mut Parser) -> bool {
+        // Consume 'for'
+        self.advance();
+        
+        // Parse variable name
+        self.advance();
+        
+        // Consume 'in'
+        self.advance();
+        
+        // Parse iterator expression
+        let _iter: i64 = self.parse_expr();
+        
+        // Parse body block
+        self.parse_block();
+        
+        return true;
+    }
+    
+    // ==================== Method Calls ====================
+    
+    /// Parse method call on expression: expr.method(args)
+    pub fn parse_method_call(self: &mut Parser, _receiver: i64) -> i64 {
+        // Consume .
+        self.advance();
+        
+        // Parse method name
+        self.advance();
+        
+        // Consume (
+        self.advance();
+        
+        // Parse arguments
+        while !self.is_at_end() {
+            // Would check for )
+            let _arg: i64 = self.parse_expr();
+            // self.consume(Comma);
+        }
+        
+        // Consume )
+        self.advance();
+        
+        return 0;
+    }
+    
+    /// Parse field access: expr.field
+    pub fn parse_field_access(self: &mut Parser, _receiver: i64) -> i64 {
+        // Consume .
+        self.advance();
+        
+        // Parse field name
+        self.advance();
+        
+        return 0;
+    }
 }
 
 // ==================== Main ====================
