@@ -274,6 +274,7 @@ impl SemanticAnalyzer {
         // I/O functions
         self.define_builtin("print", vec![ResolvedType::String], ResolvedType::unit());
         self.define_builtin("println", vec![ResolvedType::String], ResolvedType::unit());
+        self.define_builtin("puts", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], ResolvedType::I32);
         self.define_builtin("print_i64", vec![ResolvedType::I64], ResolvedType::unit());
         self.define_builtin("println_i64", vec![ResolvedType::I64], ResolvedType::unit());
         

@@ -116,6 +116,9 @@ impl Transpiler {
         if let Some(ref ret) = f.return_type {
             self.emit(" -> ");
             self.emit(&self.map_type(ret));
+        } else if f.name == "main" {
+            // main function in C/systems needs to return int
+            self.emit(" -> i32");
         }
 
         self.emit(" {\n");
@@ -210,9 +213,14 @@ impl Transpiler {
             }
             Expr::Call { func, args, .. } => {
                 let func_name = self.transpile_expr(func);
+                // Map Script builtins to Core/C equivalents
+                let mapped_func = match func_name.as_str() {
+                    "print" => "puts",
+                    other => other,
+                };
                 let args_str: Vec<String> = args.iter().map(|a| self.transpile_expr(a)).collect();
                 // NOTE: ctx injection removed for MVP
-                format!("{}({})", func_name, args_str.join(", "))
+                format!("{}({})", mapped_func, args_str.join(", "))
             }
             Expr::FieldAccess { target, field, .. } => {
                 format!("{}.{}", self.transpile_expr(target), field)
