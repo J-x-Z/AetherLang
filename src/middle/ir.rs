@@ -75,6 +75,8 @@ pub struct IRFunction {
     pub name: String,
     pub params: Vec<(String, IRType)>,
     pub ret_type: IRType,
+    /// Original struct return type for sret functions (None if not sret)
+    pub sret_type: Option<IRType>,
     pub blocks: Vec<BasicBlock>,
     pub entry_block: BlockId,
     /// Contract assertions for runtime checking
@@ -98,6 +100,7 @@ impl IRFunction {
             name: name.to_string(),
             params,
             ret_type,
+            sret_type: None,
             blocks: Vec::new(),
             entry_block: BlockId(0),
             contracts: IRContracts::default(),

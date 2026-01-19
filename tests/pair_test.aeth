@@ -1,0 +1,57 @@
+// Detailed struct field debug test
+
+extern "C" {
+    fn putchar(c: i32) -> i32;
+}
+
+pub struct Pair {
+    pub first: u64,
+    pub second: u64,
+}
+
+impl Pair {
+    pub fn make(a: u64, b: u64) -> Pair {
+        return Pair {
+            first: a,
+            second: b,
+        };
+    }
+}
+
+fn print_num(n: u64) {
+    // Print single digit (0-9)
+    putchar(48 + (n as i32));
+}
+
+fn main() -> i32 {
+    puts("=== Pair Field Test ===");
+    
+    // Create struct directly
+    let p: Pair = Pair::make(1, 2);
+    
+    puts("Expected: 1 2");
+    puts("Got:");
+    
+    // Access fields
+    let v1: u64 = p.first;
+    let v2: u64 = p.second;
+    
+    print_num(v1);
+    putchar(32);  // space
+    print_num(v2);
+    putchar(10);  // newline
+    
+    // Direct test with larger values
+    let q: Pair = Pair::make(3, 7);
+    
+    puts("Expected: 3 7");
+    puts("Got:");
+    print_num(q.first);
+    putchar(32);
+    print_num(q.second);
+    putchar(10);
+    
+    puts("Done!");
+    
+    return 0;
+}

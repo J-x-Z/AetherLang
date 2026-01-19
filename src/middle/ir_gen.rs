@@ -30,6 +30,8 @@ pub struct IRGenerator {
     reg_types: HashMap<Register, IRType>,
     /// Struct definitions (name -> fields)
     struct_defs: HashMap<String, Vec<(String, IRType)>>,
+    /// Current function's sret pointer (for struct returns)
+    sret_ptr: Option<Value>,
 }
 
 impl IRGenerator {
@@ -42,6 +44,7 @@ impl IRGenerator {
             locals: HashMap::new(),
             reg_types: HashMap::new(),
             struct_defs: HashMap::new(),
+            sret_ptr: None,
         }
     }
 
@@ -148,9 +151,10 @@ impl IRGenerator {
         self.next_register = 0;
         self.locals.clear();
         self.reg_types.clear();
+        self.sret_ptr = None;
 
         // Convert parameters
-        let params: Vec<(String, IRType)> = func.params.iter()
+        let mut params: Vec<(String, IRType)> = func.params.iter()
             .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
             .collect();
             
@@ -159,8 +163,29 @@ impl IRGenerator {
         } else {
             IRType::Void
         };
+        
+        // Check if this function returns a struct (sret calling convention)
+        let uses_sret = if let IRType::Ptr(inner) = &ret_type {
+            matches!(inner.as_ref(), IRType::Struct(_))
+        } else {
+            false
+        };
+        
+        // For sret functions, add implicit sret parameter at position 0
+        // and change return type to void
+        let actual_ret_type = if uses_sret {
+            // Insert sret pointer as first parameter
+            params.insert(0, ("__sret".to_string(), ret_type.clone()));
+            IRType::Void
+        } else {
+            ret_type.clone()
+        };
 
-        let mut ir_func = IRFunction::new(name, params.clone(), ret_type);
+        let mut ir_func = IRFunction::new(name, params.clone(), actual_ret_type);
+        // Mark as sret function if it returns a struct
+        if uses_sret {
+            ir_func.sret_type = Some(ret_type.clone());
+        }
         let entry_block = ir_func.add_block("entry");
         self.current_block = entry_block;
 
@@ -178,6 +203,11 @@ impl IRGenerator {
             
             self.locals.insert(param_name.clone(), (Value::Register(reg), ty.clone()));
             self.reg_types.insert(reg, ty.clone());
+            
+            // If this is the sret parameter, save its value
+            if uses_sret && param_name == "__sret" {
+                self.sret_ptr = Some(Value::Register(reg));
+            }
         }
 
         self.current_fn = Some(ir_func);
@@ -190,7 +220,7 @@ impl IRGenerator {
             let ret_type = ir_func.ret_type.clone();
             if let Some(block) = ir_func.get_block_mut(self.current_block) {
                 if block.terminator.is_none() {
-                    // Only add return void for void functions
+                    // Void functions always return void, regardless of last_value
                     if ret_type == IRType::Void {
                         block.set_terminator(Terminator::Return { value: None });
                     } else if let Some(val) = last_value {
@@ -316,6 +346,24 @@ impl IRGenerator {
             }
 
             Stmt::Return { value, .. } => {
+                // Check if this is an sret function (void return type but sret_type is Some)
+                let is_sret = if let Some(func) = &self.current_fn {
+                    func.ret_type == IRType::Void && func.sret_type.is_some()
+                } else {
+                    false
+                };
+                
+                // For sret functions, the struct is already written via sret pointer,
+                // so we should return void (ignore the struct literal value)
+                if is_sret {
+                    // Still generate the expression to populate sret pointer
+                    if let Some(expr) = value {
+                        let _ = self.generate_expr(expr)?;
+                    }
+                    self.set_terminator_current(Terminator::Return { value: None });
+                    return Ok(None);
+                }
+                
                 let ret_val = if let Some(expr) = value {
                     let mut val = self.generate_expr(expr)?;
                     
@@ -560,19 +608,46 @@ impl IRGenerator {
                     arg_vals.push(val);
                 }
 
-                // Get return type from function signature if available
-                let ret_type = self.module.functions.iter()
+                // Get return type and sret type from function signature if available
+                let (ret_type, sret_type) = self.module.functions.iter()
                     .find(|f| f.name == func_name)
-                    .map(|f| f.ret_type.clone())
-                    .or_else(|| {
+                    .map(|f| (f.ret_type.clone(), f.sret_type.clone()))
+                    .unwrap_or_else(|| {
                         self.module.externs.iter()
                             .find(|e| e.name == func_name)
-                            .map(|e| e.ret_type.clone())
-                    })
-                    .unwrap_or(IRType::I64);
+                            .map(|e| (e.ret_type.clone(), None))
+                            .unwrap_or((IRType::I64, None))
+                    });
                 
-                // For void functions, don't allocate a dest register
-                if ret_type == IRType::Void {
+                // Check if this is an sret function
+                if let Some(sret_ty) = sret_type {
+                    // sret convention: caller allocates, passes pointer as first arg
+                    let sret_ptr = self.alloc_register();
+                    if let IRType::Ptr(inner) = &sret_ty {
+                        if let IRType::Struct(struct_name) = inner.as_ref() {
+                            let struct_ty = IRType::Struct(struct_name.clone());
+                            self.emit_current_with_type(
+                                Instruction::Alloca { dest: sret_ptr, ty: struct_ty },
+                                sret_ty.clone()
+                            );
+                        }
+                    }
+                    
+                    // Insert sret pointer as first argument
+                    let mut sret_args = vec![Value::Register(sret_ptr)];
+                    sret_args.extend(arg_vals);
+                    
+                    // Call function (returns void, writes to sret pointer)
+                    self.emit_current_with_type(Instruction::Call {
+                        dest: None,
+                        func: func_name,
+                        args: sret_args,
+                    }, IRType::Void);
+                    
+                    // Return the caller-allocated pointer
+                    Ok(Value::Register(sret_ptr))
+                } else if ret_type == IRType::Void {
+                    // Regular void function
                     self.emit_current_with_type(Instruction::Call {
                         dest: None,
                         func: func_name,
@@ -580,6 +655,7 @@ impl IRGenerator {
                     }, IRType::Void);
                     Ok(Value::Unit)
                 } else {
+                    // Regular non-void function
                     let dest = self.alloc_register();
                     self.emit_current_with_type(Instruction::Call {
                         dest: Some(dest),
@@ -705,9 +781,18 @@ impl IRGenerator {
 
             Expr::StructLit { name, fields, .. } => {
                 let struct_type = IRType::Struct(name.name.clone());
-                let ptr = self.alloc_register();
-                self.emit_current_with_type(Instruction::Alloca { dest: ptr, ty: struct_type.clone() }, 
-                    IRType::Ptr(Box::new(struct_type.clone())));
+                
+                // Use sret pointer if available (caller-allocated), otherwise alloca
+                let ptr_val = if let Some(sret) = &self.sret_ptr {
+                    // Use caller-provided sret pointer - no need to allocate
+                    sret.clone()
+                } else {
+                    // Fallback: allocate on current stack frame
+                    let ptr = self.alloc_register();
+                    self.emit_current_with_type(Instruction::Alloca { dest: ptr, ty: struct_type.clone() }, 
+                        IRType::Ptr(Box::new(struct_type.clone())));
+                    Value::Register(ptr)
+                };
                 
                 let struct_fields = self.struct_defs.get(&name.name).cloned().ok_or_else(|| crate::utils::Error::UndefinedType {
                     span: crate::utils::Span::dummy(), name: name.name.clone()
@@ -727,7 +812,7 @@ impl IRGenerator {
                      
                      self.emit_current_with_type(Instruction::GetElementPtr {
                          dest: field_ptr,
-                         ptr: Value::Register(ptr),
+                         ptr: ptr_val.clone(),
                          index: Value::Constant(Constant::Int(idx as i64)),
                          elem_ty: struct_type.clone(),
                      }, IRType::Ptr(Box::new(field_ty.clone())));
@@ -737,7 +822,11 @@ impl IRGenerator {
                          value: field_val,
                      });
                 }
-                Ok(Value::Register(ptr))
+                
+                // Clear sret_ptr after use (only one struct literal should use it)
+                self.sret_ptr = None;
+                
+                Ok(ptr_val)
             }
             
             // Minimal implementations for others
