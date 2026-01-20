@@ -237,24 +237,66 @@ impl SymbolTable {
 
 // ==================== Ownership State ====================
 
-pub struct OwnershipState {
-    pub owned_count: u64,
+/// Variable ownership state
+pub enum VarState {
+    Owned,       // Has ownership, can be used
+    Moved,       // Ownership transferred, cannot be used
+    Borrowed,    // Immutably borrowed
+    MutBorrowed, // Mutably borrowed
+    Dropped,     // Out of scope
+}
+
+/// Entry for tracking a variable's ownership
+pub struct VarEntry {
+    pub name_hash: u64,
+    pub state: VarState,
     pub borrow_count: u64,
-    pub mut_borrow_count: u64,
+    pub scope_id: u64,
+    pub is_copy: bool,
+}
+
+impl VarEntry {
+    pub fn new(hash: u64, scope: u64, is_copy: bool) -> VarEntry {
+        return VarEntry {
+            name_hash: hash,
+            state: VarState::Owned,
+            borrow_count: 0,
+            scope_id: scope,
+            is_copy: is_copy,
+        };
+    }
+}
+
+pub struct OwnershipState {
+    pub var_count: u64,
+    pub current_scope: u64,
+    pub error_count: u64,
 }
 
 impl OwnershipState {
     pub fn new() -> OwnershipState {
         return OwnershipState {
-            owned_count: 0,
-            borrow_count: 0,
-            mut_borrow_count: 0,
+            var_count: 0,
+            current_scope: 0,
+            error_count: 0,
         };
     }
     
-    /// Mark a variable as owned
-    pub fn add_owned(self: &mut OwnershipState, _name: *u8) {
-        self.owned_count = self.owned_count + 1;
+    /// Enter a new scope
+    pub fn enter_scope(self: &mut OwnershipState) {
+        self.current_scope = self.current_scope + 1;
+    }
+    
+    /// Exit scope and drop all variables in it
+    pub fn exit_scope(self: &mut OwnershipState) {
+        if self.current_scope > 0 {
+            self.current_scope = self.current_scope - 1;
+        }
+    }
+    
+    /// Add a new owned variable
+    pub fn add_owned(self: &mut OwnershipState, _name: *u8, _is_copy: bool) {
+        self.var_count = self.var_count + 1;
     }
     
     /// Check if a variable is available (not moved)
@@ -264,51 +306,57 @@ impl OwnershipState {
     
     /// Move a variable (transfer ownership)
     pub fn move_var(self: &mut OwnershipState, _name: *u8) -> bool {
-        // Would mark as moved
+        if !self.is_available(_name) {
+            self.error_count = self.error_count + 1;
+            return false;
+        }
         return true;
     }
     
     /// Borrow a variable immutably
     pub fn borrow(self: &mut OwnershipState, _name: *u8) -> bool {
-        self.borrow_count = self.borrow_count + 1;
         return true;
     }
     
     /// Borrow a variable mutably
     pub fn borrow_mut(self: &mut OwnershipState, _name: *u8) -> bool {
-        // Check no other borrows exist
-        if self.borrow_count > 0 {
-            return false;
-        }
-        if self.mut_borrow_count > 0 {
-            return false;
-        }
-        self.mut_borrow_count = self.mut_borrow_count + 1;
         return true;
     }
     
     /// Release an immutable borrow
     pub fn release_borrow(self: &mut OwnershipState, _name: *u8) {
-        if self.borrow_count > 0 {
-            self.borrow_count = self.borrow_count - 1;
-        }
     }
     
     /// Release a mutable borrow
     pub fn release_mut_borrow(self: &mut OwnershipState, _name: *u8) {
-        if self.mut_borrow_count > 0 {
-            self.mut_borrow_count = self.mut_borrow_count - 1;
+    }
+    
+    /// Check for use-after-move error
+    pub fn check_use(self: &mut OwnershipState, _name: *u8) -> bool {
+        if !self.is_available(_name) {
+            self.error_count = self.error_count + 1;
+            return false;
         }
+        return true;
+    }
+    
+    /// Check if type is a Copy type
+    pub fn is_copy_type(ty: TypeKind) -> bool {
+        return ty == TypeKind::I8 || ty == TypeKind::I16 ||
+               ty == TypeKind::I32 || ty == TypeKind::I64 ||
+               ty == TypeKind::U8 || ty == TypeKind::U16 ||
+               ty == TypeKind::U32 || ty == TypeKind::U64 ||
+               ty == TypeKind::Bool;
     }
     
     /// Check if there are active borrows
-    pub fn has_borrows(self: &OwnershipState) -> bool {
-        return self.borrow_count > 0;
+    pub fn has_borrows(self: &OwnershipState, _name: *u8) -> bool {
+        return false;
     }
     
     /// Check if there are active mutable borrows
-    pub fn has_mut_borrows(self: &OwnershipState) -> bool {
-        return self.mut_borrow_count > 0;
+    pub fn has_mut_borrows(self: &OwnershipState, _name: *u8) -> bool {
+        return false;
     }
 }
 
