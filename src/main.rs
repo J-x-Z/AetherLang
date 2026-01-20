@@ -59,6 +59,10 @@ struct Cli {
     /// Backend to use (c, llvm)
     #[arg(long, default_value = "c")]
     backend: String,
+    
+    /// Target triple (native, x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, etc.)
+    #[arg(long, default_value = "native")]
+    target: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -86,6 +90,38 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+}
+
+/// Get the target triple for code generation
+fn get_target_triple(target: &str) -> String {
+    if target == "native" {
+        // Auto-detect native target
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        return "arm64-apple-darwin".to_string();
+        
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        return "x86_64-apple-darwin".to_string();
+        
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        return "x86_64-unknown-linux-gnu".to_string();
+        
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        return "aarch64-unknown-linux-gnu".to_string();
+        
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        return "x86_64-pc-windows-msvc".to_string();
+        
+        // Fallback
+        #[cfg(not(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "macos", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "aarch64"),
+            all(target_os = "windows", target_arch = "x86_64"),
+        )))]
+        return "x86_64-unknown-linux-gnu".to_string();
+    }
+    target.to_string()
 }
 
 fn main() {
@@ -338,11 +374,9 @@ fn compile_file(input: &PathBuf, output: Option<PathBuf>, cli: &Cli) {
         #[cfg(feature = "llvm")]
         "llvm" => {
             use backend::llvm::LLVMCodeGen;
-            // Use native target triple for current platform
-            #[cfg(target_os = "macos")]
-            let mut codegen = LLVMCodeGen::new("arm64-apple-darwin");
-            #[cfg(not(target_os = "macos"))]
-            let mut codegen = LLVMCodeGen::new("x86_64-unknown-linux-gnu");
+            // Get target triple from CLI or auto-detect native
+            let target_triple = get_target_triple(&cli.target);
+            let mut codegen = LLVMCodeGen::new(&target_triple);
             
             match codegen.generate(&ir_module) {
                 Ok(bytes) => {
