@@ -1,0 +1,24 @@
+// Generic Test for AetherLang
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// Generic struct
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
+// Generic function
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+fn main() -> i32 {
+    // Test with i64
+    let a: i64 = identity(42);
+    
+    puts("Generic test running!" as *u8);
+    return 0;
+}

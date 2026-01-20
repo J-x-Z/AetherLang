@@ -1344,7 +1344,15 @@ impl IRGenerator {
                     "bool" => IRType::Bool,
                     "void" | "()" => IRType::Void,
                     // Structs are passed by pointer in our IR
-                    s => IRType::Ptr(Box::new(IRType::Struct(s.to_string()))),
+                    // But single uppercase letters are generic type params - use i64 (type erasure)
+                    s => {
+                        if s.len() == 1 && s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                            // Generic type parameter like T, U, V - use i64 as type erasure
+                            IRType::I64
+                        } else {
+                            IRType::Ptr(Box::new(IRType::Struct(s.to_string())))
+                        }
+                    }
                 }
 
             }

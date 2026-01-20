@@ -32,7 +32,7 @@ pub struct Symbol {
 #[derive(Debug, Clone)]
 pub enum SymbolKind {
     Variable,
-    Function { params: Vec<ResolvedType>, ret: ResolvedType },
+    Function { params: Vec<ResolvedType>, ret: ResolvedType, type_params: Vec<String> },
     Struct { fields: Vec<(String, ResolvedType)>, type_params: Vec<String> },
     Enum { variants: Vec<String> },
     Param { ownership: Ownership },
@@ -303,7 +303,7 @@ impl SemanticAnalyzer {
     fn define_builtin(&mut self, name: &str, params: Vec<ResolvedType>, ret: ResolvedType) {
         let symbol = Symbol {
             name: name.to_string(),
-            kind: SymbolKind::Function { params, ret },
+            kind: SymbolKind::Function { params, ret, type_params: vec![] },
             ty: ResolvedType::Unknown, // Function type handled by kind
             span: Span::dummy(), // Built-in, no source location
             mutable: false,
@@ -344,7 +344,7 @@ impl SemanticAnalyzer {
 
                 self.symbols.define(Symbol {
                     name: func.name.name.clone(),
-                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone() },
+                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: func.type_params.iter().map(|p| p.name.clone()).collect() },
                     ty: ResolvedType::Function {
                         params,
                         ret: Box::new(ret),
@@ -440,7 +440,7 @@ impl SemanticAnalyzer {
 
                             self.symbols.define(Symbol {
                                 name: name.name.clone(),
-                                kind: SymbolKind::Function { params: param_types.clone(), ret: ret.clone() },
+                                kind: SymbolKind::Function { params: param_types.clone(), ret: ret.clone(), type_params: vec![] },
                                 ty: ResolvedType::Function {
                                     params: param_types,
                                     ret: Box::new(ret),
@@ -664,7 +664,7 @@ impl SemanticAnalyzer {
             Expr::Ident(ident) => {
                 if let Some(symbol) = self.symbols.lookup(&ident.name) {
                     // For functions, return the function type from SymbolKind
-                    if let SymbolKind::Function { params, ret } = &symbol.kind {
+                    if let SymbolKind::Function { params, ret, type_params: _ } = &symbol.kind {
                         Ok(ResolvedType::Function {
                             params: params.clone(),
                             ret: Box::new(ret.clone()),
@@ -767,11 +767,20 @@ impl SemanticAnalyzer {
                                 span: *span,
                             });
                         }
-                        for (arg, _param_ty) in args.iter().zip(params.iter()) {
-                            let _arg_ty = self.check_expr(arg)?;
-                            // TODO: Check arg_ty matches param_ty
+                        
+                        // Infer generic type parameters from arguments
+                        let mut type_substitutions: HashMap<String, ResolvedType> = HashMap::new();
+                        for (arg, param_ty) in args.iter().zip(params.iter()) {
+                            let arg_ty = self.check_expr(arg)?;
+                            // If param is a generic type, bind it to the actual arg type
+                            if let ResolvedType::GenericParam(name) = param_ty {
+                                type_substitutions.insert(name.clone(), arg_ty);
+                            }
                         }
-                        Ok(*ret)
+                        
+                        // Substitute generic params in return type
+                        let actual_ret = self.substitute_type(&ret, &type_substitutions);
+                        Ok(actual_ret)
                     }
                     ResolvedType::Unknown => {
                         // Allow calling unknown functions (e.g. enum constructors for now)
@@ -1163,6 +1172,44 @@ impl SemanticAnalyzer {
             UnOp::BitNot => Ok(ty.clone()),
         }
     }
+    
+    /// Substitute generic type parameters with actual types
+    fn substitute_type(&self, ty: &ResolvedType, substitutions: &HashMap<String, ResolvedType>) -> ResolvedType {
+        match ty {
+            ResolvedType::GenericParam(name) => {
+                substitutions.get(name).cloned().unwrap_or_else(|| ty.clone())
+            }
+            ResolvedType::Pointer(inner) => {
+                ResolvedType::Pointer(Box::new(self.substitute_type(inner, substitutions)))
+            }
+            ResolvedType::Reference { mutable, inner } => {
+                ResolvedType::Reference {
+                    mutable: *mutable,
+                    inner: Box::new(self.substitute_type(inner, substitutions)),
+                }
+            }
+            ResolvedType::Array { elem, size } => {
+                ResolvedType::Array {
+                    elem: Box::new(self.substitute_type(elem, substitutions)),
+                    size: *size,
+                }
+            }
+            ResolvedType::Slice(inner) => {
+                ResolvedType::Slice(Box::new(self.substitute_type(inner, substitutions)))
+            }
+            ResolvedType::Tuple(types) => {
+                ResolvedType::Tuple(types.iter().map(|t| self.substitute_type(t, substitutions)).collect())
+            }
+            ResolvedType::Function { params, ret } => {
+                ResolvedType::Function {
+                    params: params.iter().map(|p| self.substitute_type(p, substitutions)).collect(),
+                    ret: Box::new(self.substitute_type(ret, substitutions)),
+                }
+            }
+            // Other types pass through unchanged
+            _ => ty.clone(),
+        }
+    }
 
     /// Resolve an AST type to a ResolvedType
     fn resolve_type(&self, ty: &Type) -> Result<ResolvedType> {
@@ -1186,12 +1233,22 @@ impl SemanticAnalyzer {
                     _ => {
                         // Look up in symbol table
                         if let Some(sym) = self.symbols.lookup(name) {
-                            Ok(sym.ty.clone())
+                            // Check if it's a type parameter
+                            if matches!(sym.kind, SymbolKind::TypeParam) {
+                                Ok(ResolvedType::GenericParam(name.clone()))
+                            } else {
+                                Ok(sym.ty.clone())
+                            }
                         } else {
-                            Ok(ResolvedType::Struct { 
-                                name: name.clone(), 
-                                fields: Vec::new() 
-                            })
+                            // Check if it's a single uppercase letter (common type param convention)
+                            if name.len() == 1 && name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                                Ok(ResolvedType::GenericParam(name.clone()))
+                            } else {
+                                Ok(ResolvedType::Struct { 
+                                    name: name.clone(), 
+                                    fields: Vec::new() 
+                                })
+                            }
                         }
                     }
                 }
