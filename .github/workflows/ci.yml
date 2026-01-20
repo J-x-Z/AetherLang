@@ -15,41 +15,35 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Install LLVM and dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y llvm-14 llvm-14-dev libpolly-14-dev clang-14 lld-14
-        echo "LLVM_SYS_140_PREFIX=/usr/lib/llvm-14" >> $GITHUB_ENV
-    
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
       
-    - name: Build (without LLVM first)
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      
+    - name: Build
       run: cargo build --release
       
     - name: Run tests
       run: cargo test
-      
-    - name: Build with LLVM
-      run: cargo build --features llvm --release
-      continue-on-error: true
-      
-    - name: Test compilation
+        
+    - name: Test C backend
       run: |
-        if [ -f ./target/release/aethc ]; then
-          ./target/release/aethc --backend c build tests/hello.aeth --output hello.c
-          echo "C backend test passed"
-        fi
+        ./target/release/aethc --backend c build tests/hello.aeth --output hello.c
+        echo "C backend test passed"
 
   build-macos:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v4
     
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
       
-    - name: Build (without LLVM)
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      
+    - name: Build
       run: cargo build --release
       
     - name: Run tests
@@ -65,8 +59,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
       
     - name: Build
       run: cargo build --release
