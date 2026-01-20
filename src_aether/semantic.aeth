@@ -117,9 +117,32 @@ impl Scope {
 
 // ==================== Symbol Table ====================
 
+// Simple symbol entry for storage
+pub struct SymbolEntry {
+    pub name_hash: u64,      // Hash of symbol name for fast lookup
+    pub kind: SymbolKind,
+    pub type_kind: TypeKind,
+    pub scope_id: u64,
+    pub is_mutable: bool,
+}
+
+impl SymbolEntry {
+    pub fn new(hash: u64, kind: SymbolKind, ty: TypeKind, scope: u64) -> SymbolEntry {
+        return SymbolEntry {
+            name_hash: hash,
+            kind: kind,
+            type_kind: ty,
+            scope_id: scope,
+            is_mutable: false,
+        };
+    }
+}
+
 pub struct SymbolTable {
     pub current_scope: u64,
     pub next_scope_id: u64,
+    pub symbol_count: u64,
+    // Note: In real impl, would use dynamic array, here simplified
 }
 
 impl SymbolTable {
@@ -127,7 +150,19 @@ impl SymbolTable {
         return SymbolTable {
             current_scope: 0,
             next_scope_id: 1,
+            symbol_count: 0,
         };
+    }
+    
+    /// Simple hash function for symbol names
+    pub fn hash_name(name: *u8) -> u64 {
+        let mut hash: u64 = 5381;
+        let mut ptr: *u8 = name;
+        while *ptr != 0 {
+            hash = ((hash << 5) + hash) + ((*ptr) as u64);
+            ptr = (ptr as u64 + 1) as *u8;
+        }
+        return hash;
     }
     
     /// Enter a new scope
@@ -140,7 +175,6 @@ impl SymbolTable {
     
     /// Exit the current scope
     pub fn exit_scope(self: &mut SymbolTable) {
-        // Would restore parent scope
         if self.current_scope > 0 {
             self.current_scope = self.current_scope - 1;
         }
@@ -148,14 +182,46 @@ impl SymbolTable {
     
     /// Define a symbol in current scope
     pub fn define(self: &mut SymbolTable, _symbol: Symbol) -> bool {
-        // Would add to scope's symbol map
+        self.symbol_count = self.symbol_count + 1;
         return true;
     }
     
-    /// Lookup a symbol by name
+    /// Define a symbol with type (simplified)
+    pub fn define_typed(self: &mut SymbolTable, _name: *u8, _kind: SymbolKind, _ty: TypeKind) -> bool {
+        self.symbol_count = self.symbol_count + 1;
+        return true;
+    }
+    
+    /// Lookup a symbol by name (returns found status)
     pub fn lookup(self: &SymbolTable, _name: *u8) -> bool {
         // Would search from current scope upward
         return false;
+    }
+    
+    /// Lookup type of a symbol by name
+    pub fn lookup_type(self: &SymbolTable, name: *u8) -> TypeKind {
+        // Simplified: check builtin functions
+        let hash: u64 = SymbolTable::hash_name(name);
+        
+        // "puts" hash for quick check
+        let puts_hash: u64 = SymbolTable::hash_name("puts" as *u8);
+        if hash == puts_hash {
+            return TypeKind::I32;  // puts returns i32
+        }
+        
+        // "malloc" 
+        let malloc_hash: u64 = SymbolTable::hash_name("malloc" as *u8);
+        if hash == malloc_hash {
+            return TypeKind::Ptr;
+        }
+        
+        // "putchar"
+        let putchar_hash: u64 = SymbolTable::hash_name("putchar" as *u8);
+        if hash == putchar_hash {
+            return TypeKind::I32;
+        }
+        
+        return TypeKind::Unknown;
     }
     
     /// Lookup only in current scope
@@ -351,36 +417,73 @@ impl SemanticAnalyzer {
         return TypeKind::Unknown;
     }
     
-    /// Check a literal
-    pub fn check_literal(self: &SemanticAnalyzer) -> TypeKind {
-        // Return type based on literal kind
-        return TypeKind::I64;
-    }
-    
-    /// Check an identifier
-    pub fn check_ident(self: &SemanticAnalyzer, _name: *u8) -> TypeKind {
-        // Lookup in symbol table
+    /// Check a literal (lit_kind: 0=Int, 1=Float, 2=Bool, 3=String, 4=Char)
+    pub fn check_literal(self: &SemanticAnalyzer, lit_kind: u8) -> TypeKind {
+        if lit_kind == 0 {
+            return TypeKind::I64;  // Integer literal
+        } else if lit_kind == 1 {
+            return TypeKind::I64;  // Float - treat as i64 for now
+        } else if lit_kind == 2 {
+            return TypeKind::Bool; // Boolean literal
+        } else if lit_kind == 3 {
+            return TypeKind::Ptr;  // String literal (*u8)
+        } else if lit_kind == 4 {
+            return TypeKind::U8;   // Char literal
+        }
         return TypeKind::Unknown;
     }
     
-    /// Check a binary operation
-    pub fn check_binary(self: &SemanticAnalyzer, left: TypeKind, _right: TypeKind) -> TypeKind {
-        // Check operand types are compatible
-        // Return result type
+    /// Check an identifier - lookup its type in symbol table
+    pub fn check_ident(self: &SemanticAnalyzer, name: *u8) -> TypeKind {
+        return self.symbols.lookup_type(name);
+    }
+    
+    /// Check a binary operation (op: 0-5=arith, 6-11=cmp, 12-13=logical)
+    pub fn check_binary(self: &SemanticAnalyzer, op: u8, left: TypeKind, right: TypeKind) -> TypeKind {
+        // Comparison operators always return Bool
+        if op >= 6 && op <= 11 {
+            return TypeKind::Bool;
+        }
+        
+        // Logical operators (&&, ||) require Bool operands
+        if op >= 12 {
+            if left != TypeKind::Bool || right != TypeKind::Bool {
+                // Would report error
+            }
+            return TypeKind::Bool;
+        }
+        
+        // Arithmetic: return the "wider" type (simplified: prefer left)
+        if !self.types_compatible(left, right) {
+            // Would report error
+        }
         return left;
     }
     
     /// Check a unary operation
-    pub fn check_unary(self: &SemanticAnalyzer, operand: TypeKind) -> TypeKind {
+    pub fn check_unary(self: &SemanticAnalyzer, op: u8, operand: TypeKind) -> TypeKind {
+        // Negation (-) keeps the type
+        if op == 0 {
+            return operand;
+        }
+        // Logical not (!) requires Bool
+        if op == 1 {
+            return TypeKind::Bool;
+        }
+        // Dereference (*) returns inner type
+        if op == 2 {
+            return TypeKind::Unknown; // Would need pointer inner type
+        }
+        // Reference (&) returns Ref
+        if op == 3 {
+            return TypeKind::Ref;
+        }
         return operand;
     }
     
-    /// Check a function call
-    pub fn check_call(self: &mut SemanticAnalyzer) -> TypeKind {
-        // Lookup function
-        // Check argument count and types
-        // Return function return type
-        return TypeKind::Unknown;
+    /// Check a function call - lookup return type
+    pub fn check_call(self: &mut SemanticAnalyzer, func_name: *u8) -> TypeKind {
+        return self.symbols.lookup_type(func_name);
     }
     
     /// Check field access
@@ -430,13 +533,36 @@ impl SemanticAnalyzer {
         return TypeKind::Unknown;
     }
     
+    /// Check if a type is an integer type
+    pub fn is_integer_type(ty: TypeKind) -> bool {
+        return ty == TypeKind::I8 || ty == TypeKind::I16 ||
+               ty == TypeKind::I32 || ty == TypeKind::I64 ||
+               ty == TypeKind::U8 || ty == TypeKind::U16 ||
+               ty == TypeKind::U32 || ty == TypeKind::U64;
+    }
+    
     /// Check if two types are compatible
     pub fn types_compatible(self: &SemanticAnalyzer, expected: TypeKind, got: TypeKind) -> bool {
-        // In strict mode, types must match exactly
-        // Check for coercion rules
+        // Exact match
         if expected == got {
             return true;
         }
+        
+        // Integer types are compatible with each other (implicit conversion)
+        if SemanticAnalyzer::is_integer_type(expected) && SemanticAnalyzer::is_integer_type(got) {
+            return true;
+        }
+        
+        // Void accepts any type (for discarding values)
+        if expected == TypeKind::Void {
+            return true;
+        }
+        
+        // Unknown is compatible with anything (for error recovery)
+        if expected == TypeKind::Unknown || got == TypeKind::Unknown {
+            return true;
+        }
+        
         return false;
     }
     
