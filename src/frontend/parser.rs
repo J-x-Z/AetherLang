@@ -454,12 +454,21 @@ impl Parser {
             ));
         }
 
-        // Reference type
+        // Reference type with optional lifetime: &T or &'a T or &'a mut T
         if self.consume(&TokenKind::And) {
+            // Check for optional lifetime: &'a
+            let lifetime = if let TokenKind::Lifetime(name) = self.current_kind() {
+                let lt = name.clone();
+                self.advance();
+                Some(lt)
+            } else {
+                None
+            };
             let mutable = self.consume(&TokenKind::Mut);
             let inner = self.parse_type()?;
             return Ok(Type::Ref {
                 mutable,
+                lifetime,
                 inner: Box::new(inner),
                 span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
             });

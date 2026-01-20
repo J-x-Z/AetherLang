@@ -1,0 +1,19 @@
+// Lifetime Annotation Test for AetherLang
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// Simple reference with lifetime annotation
+fn get_ref(x: &'static i64) -> &'static i64 {
+    return x;
+}
+
+fn main() -> i32 {
+    let a: i64 = 10;
+    // Simple reference type test
+    let r: &i64 = &a;
+    
+    puts("Lifetime annotation test passed!" as *u8);
+    return 0;
+}

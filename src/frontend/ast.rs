@@ -721,9 +721,11 @@ pub enum Type {
     Generic(String, Vec<Type>, Span),
     /// Pointer type (*T)
     Pointer(Box<Type>, Span),
-    /// Reference type (&T or &mut T)
+    /// Reference type (&T or &mut T or &'a T)
     Ref {
         mutable: bool,
+        /// Optional lifetime annotation ('a, 'static)
+        lifetime: Option<String>,
         inner: Box<Type>,
         span: Span,
     },

@@ -208,6 +208,10 @@ pub enum TokenKind {
     /// ~ (bitwise not)
     Tilde,
     
+    // ============ Lifetime ============
+    /// Lifetime parameter ('a, 'static)
+    Lifetime(String),
+    
     // ============ Special ============
     /// End of file
     Eof,

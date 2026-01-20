@@ -241,10 +241,41 @@ impl Lexer {
         self.make_token(TokenKind::StringLit(value))
     }
     
-    /// Read a character literal
+    /// Read a character literal or lifetime parameter
     fn read_char(&mut self) -> Token {
         self.advance(); // consume opening quote
         
+        // Check if this could be a lifetime: 'a followed by non-quote
+        // vs char literal: 'a' with closing quote
+        let first_char = self.peek();
+        
+        // If it's alphabetic and followed by something other than quote, it's a lifetime
+        if let Some(c) = first_char {
+            if c.is_alphabetic() || c == '_' {
+                // Collect the lifetime name
+                let mut name = String::new();
+                while let Some(ch) = self.peek() {
+                    if ch.is_alphanumeric() || ch == '_' {
+                        name.push(ch);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                
+                // Check if there's a closing quote (char literal) or not (lifetime)
+                if self.peek() == Some('\'') && name.len() == 1 {
+                    // It's a character literal like 'a'
+                    self.advance(); // consume closing quote
+                    return self.make_token(TokenKind::CharLit(name.chars().next().unwrap()));
+                } else {
+                    // It's a lifetime like 'a or 'static
+                    return self.make_token(TokenKind::Lifetime(name));
+                }
+            }
+        }
+        
+        // Handle escape sequences for char literals
         let c = if self.peek() == Some('\\') {
             self.advance();
             match self.peek() {
