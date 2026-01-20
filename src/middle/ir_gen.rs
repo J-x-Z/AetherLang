@@ -536,11 +536,42 @@ impl IRGenerator {
                     ));
                 }
                 
+                // Check for pointer arithmetic: ptr + offset or ptr - offset
+                let left_ty = self.get_value_type(&left_val);
+                if let Some(IRType::Ptr(inner)) = &left_ty {
+                    if *op == ast::BinOp::Add || *op == ast::BinOp::Sub {
+                        // This is pointer arithmetic, use GEP instead of add
+                        let dest = self.alloc_register();
+                        let offset_val = if *op == ast::BinOp::Sub {
+                            // For subtraction, negate the offset
+                            let neg_dest = self.alloc_register();
+                            let zero = Value::Constant(Constant::Int(0));
+                            self.emit_current_with_type(Instruction::BinOp {
+                                dest: neg_dest,
+                                op: IRBinOp::Sub,
+                                left: zero,
+                                right: right_val.clone(),
+                            }, IRType::I64);
+                            Value::Register(neg_dest)
+                        } else {
+                            right_val
+                        };
+                        
+                        self.emit_current_with_type(Instruction::GetElementPtr {
+                            dest,
+                            ptr: left_val,
+                            index: offset_val,
+                            elem_ty: (**inner).clone(),
+                        }, IRType::Ptr(inner.clone()));
+                        
+                        return Ok(Value::Register(dest));
+                    }
+                }
+                
                 let ir_op = self.ast_binop_to_ir(*op);
                 let dest = self.alloc_register();
                 
                 // Unify types for binary operations: convert right to left's type if different integers
-                let left_ty = self.get_value_type(&left_val);
                 let right_ty = self.get_value_type(&right_val);
                 let unified_right = if let (Some(lt), Some(rt)) = (&left_ty, &right_ty) {
                     if Self::is_integer_type(lt) && Self::is_integer_type(rt) && lt != rt {

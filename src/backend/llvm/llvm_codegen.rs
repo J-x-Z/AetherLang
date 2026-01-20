@@ -464,25 +464,41 @@ impl LLVMCodeGen {
                     let ptr_val = self.get_value(ptr)?;
                     let name = CString::new("").unwrap();
                     
-                    // Get the field index as a constant
-                    let field_idx = if let Value::Constant(Constant::Int(i)) = index {
-                        *i as u32
-                    } else {
-                        0  // Fallback for dynamic indices
-                    };
-                    
-                    // Get the struct type from IR type
-                    let struct_ty = self.ir_type_to_llvm(elem_ty);
-                    
-                    // Use LLVMBuildStructGEP2 which handles the [0, field_idx] pattern internally
-                    let result = LLVMBuildStructGEP2(
-                        self.builder,
-                        struct_ty,
-                        ptr_val,
-                        field_idx,
-                        name.as_ptr()
-                    );
-                    self.value_map.insert(*dest, result);
+                    // Check if this is struct field access or pointer arithmetic
+                    match elem_ty {
+                        IRType::Struct(struct_name) => {
+                            // Struct field access: use LLVMBuildStructGEP2
+                            let field_idx = if let Value::Constant(Constant::Int(i)) = index {
+                                *i as u32
+                            } else {
+                                0
+                            };
+                            let struct_ty = self.ir_type_to_llvm(elem_ty);
+                            let result = LLVMBuildStructGEP2(
+                                self.builder,
+                                struct_ty,
+                                ptr_val,
+                                field_idx,
+                                name.as_ptr()
+                            );
+                            self.value_map.insert(*dest, result);
+                        }
+                        _ => {
+                            // Pointer arithmetic: use LLVMBuildGEP2 with single index
+                            let elem_llvm_ty = self.ir_type_to_llvm(elem_ty);
+                            let idx_val = self.get_value(index)?;
+                            let mut indices = [idx_val];
+                            let result = LLVMBuildGEP2(
+                                self.builder,
+                                elem_llvm_ty,
+                                ptr_val,
+                                indices.as_mut_ptr(),
+                                1,  // Single index for pointer arithmetic
+                                name.as_ptr()
+                            );
+                            self.value_map.insert(*dest, result);
+                        }
+                    }
                 }
                 
                 Instruction::Phi { dest, incoming } => {
