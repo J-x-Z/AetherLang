@@ -1,9 +1,77 @@
 // AetherLang Codegen
-// Self-hosting code generation implementation (simplified)
-// Note: This is an abstract representation, actual LLVM calls would use FFI
+// Self-hosting code generation implementation
+// Uses LLVM C API via FFI
 
 extern "C" {
     fn puts(s: *u8) -> i32;
+    
+    // ==================== LLVM C API ====================
+    // Module
+    fn LLVMModuleCreateWithName(name: *u8) -> *u8;
+    fn LLVMDisposeModule(module: *u8);
+    fn LLVMPrintModuleToString(module: *u8) -> *u8;
+    fn LLVMVerifyModule(module: *u8, action: u32, out_msg: **u8) -> i32;
+    
+    // Types
+    fn LLVMInt1Type() -> *u8;
+    fn LLVMInt8Type() -> *u8;
+    fn LLVMInt16Type() -> *u8;
+    fn LLVMInt32Type() -> *u8;
+    fn LLVMInt64Type() -> *u8;
+    fn LLVMVoidType() -> *u8;
+    fn LLVMPointerType(elem_ty: *u8, addr_space: u32) -> *u8;
+    fn LLVMFunctionType(ret: *u8, params: **u8, param_count: u32, is_vararg: i32) -> *u8;
+    fn LLVMStructCreateNamed(ctx: *u8, name: *u8) -> *u8;
+    fn LLVMStructSetBody(struct_ty: *u8, elems: **u8, elem_count: u32, packed: i32);
+    
+    // Functions
+    fn LLVMAddFunction(module: *u8, name: *u8, fn_ty: *u8) -> *u8;
+    fn LLVMGetParam(func: *u8, index: u32) -> *u8;
+    fn LLVMAppendBasicBlock(func: *u8, name: *u8) -> *u8;
+    
+    // Builder
+    fn LLVMCreateBuilder() -> *u8;
+    fn LLVMDisposeBuilder(builder: *u8);
+    fn LLVMPositionBuilderAtEnd(builder: *u8, block: *u8);
+    
+    // Instructions
+    fn LLVMBuildAdd(builder: *u8, lhs: *u8, rhs: *u8, name: *u8) -> *u8;
+    fn LLVMBuildSub(builder: *u8, lhs: *u8, rhs: *u8, name: *u8) -> *u8;
+    fn LLVMBuildMul(builder: *u8, lhs: *u8, rhs: *u8, name: *u8) -> *u8;
+    fn LLVMBuildSDiv(builder: *u8, lhs: *u8, rhs: *u8, name: *u8) -> *u8;
+    fn LLVMBuildICmp(builder: *u8, pred: u32, lhs: *u8, rhs: *u8, name: *u8) -> *u8;
+    fn LLVMBuildLoad2(builder: *u8, ty: *u8, ptr: *u8, name: *u8) -> *u8;
+    fn LLVMBuildStore(builder: *u8, val: *u8, ptr: *u8) -> *u8;
+    fn LLVMBuildAlloca(builder: *u8, ty: *u8, name: *u8) -> *u8;
+    fn LLVMBuildCall2(builder: *u8, fn_ty: *u8, func: *u8, args: **u8, arg_count: u32, name: *u8) -> *u8;
+    fn LLVMBuildGEP2(builder: *u8, ty: *u8, ptr: *u8, indices: **u8, idx_count: u32, name: *u8) -> *u8;
+    fn LLVMBuildStructGEP2(builder: *u8, ty: *u8, ptr: *u8, idx: u32, name: *u8) -> *u8;
+    fn LLVMBuildIntCast(builder: *u8, val: *u8, dest_ty: *u8, name: *u8) -> *u8;
+    fn LLVMBuildBitCast(builder: *u8, val: *u8, dest_ty: *u8, name: *u8) -> *u8;
+    
+    // Terminators
+    fn LLVMBuildRet(builder: *u8, val: *u8) -> *u8;
+    fn LLVMBuildRetVoid(builder: *u8) -> *u8;
+    fn LLVMBuildBr(builder: *u8, dest: *u8) -> *u8;
+    fn LLVMBuildCondBr(builder: *u8, cond: *u8, then_bb: *u8, else_bb: *u8) -> *u8;
+    
+    // Constants
+    fn LLVMConstInt(ty: *u8, val: u64, sign_extend: i32) -> *u8;
+    fn LLVMConstNull(ty: *u8) -> *u8;
+    fn LLVMBuildGlobalStringPtr(builder: *u8, str: *u8, name: *u8) -> *u8;
+    
+    // Target Machine
+    fn LLVMGetDefaultTargetTriple() -> *u8;
+    fn LLVMGetTargetFromTriple(triple: *u8, target: **u8, err_msg: **u8) -> i32;
+    fn LLVMCreateTargetMachine(target: *u8, triple: *u8, cpu: *u8, features: *u8, level: u32, reloc: u32, code_model: u32) -> *u8;
+    fn LLVMTargetMachineEmitToMemoryBuffer(tm: *u8, module: *u8, codegen: u32, err_msg: **u8, out_buf: **u8) -> i32;
+    fn LLVMGetBufferStart(buf: *u8) -> *u8;
+    fn LLVMGetBufferSize(buf: *u8) -> u64;
+    fn LLVMDisposeMemoryBuffer(buf: *u8);
+    fn LLVMDisposeTargetMachine(tm: *u8);
+    
+    // Context
+    fn LLVMGetGlobalContext() -> *u8;
 }
 
 // ==================== Target Info ====================
@@ -80,10 +148,19 @@ pub struct CodeGen {
     pub next_block_id: u64,
     pub current_function: u64,
     pub current_block: u64,
+    // LLVM handles
+    pub llvm_module: *u8,
+    pub llvm_builder: *u8,
+    pub llvm_context: *u8,
 }
 
 impl CodeGen {
     pub fn new(name: *u8) -> CodeGen {
+        // Create LLVM module and builder
+        let module: *u8 = LLVMModuleCreateWithName(name);
+        let builder: *u8 = LLVMCreateBuilder();
+        let ctx: *u8 = LLVMGetGlobalContext();
+        
         return CodeGen {
             target: TargetInfo::native(),
             module_name: name,
@@ -91,23 +168,45 @@ impl CodeGen {
             next_block_id: 0,
             current_function: 0,
             current_block: 0,
+            llvm_module: module,
+            llvm_builder: builder,
+            llvm_context: ctx,
         };
     }
     
-    /// Initialize LLVM targets
+    /// Initialize LLVM targets (would be called at startup)
     pub fn init_targets() {
-        // Would call LLVM_InitializeAllTargets etc.
+        // LLVMInitializeAllTargets(); etc.
     }
     
     /// Declare builtin functions (puts, exit, malloc, free, etc.)
     pub fn declare_builtins(self: &mut CodeGen) {
-        // Would declare C standard library functions
+        // Declare puts
+        let i32_ty: *u8 = LLVMInt32Type();
+        let i8_ptr: *u8 = LLVMPointerType(LLVMInt8Type(), 0);
+        let puts_ty: *u8 = LLVMFunctionType(i32_ty, &i8_ptr as **u8, 1, 0);
+        LLVMAddFunction(self.llvm_module, "puts" as *u8, puts_ty);
     }
     
     /// Convert IR type to LLVM type
-    pub fn ir_type_to_llvm(self: &CodeGen, _ty: u8) -> LLVMTypeHandle {
-        // Would map IRType to LLVMTypeRef
-        return LLVMTypeHandle::new(0);
+    pub fn ir_type_to_llvm(self: &CodeGen, ty: u8) -> *u8 {
+        // ty: 0=I8, 1=I16, 2=I32, 3=I64, 4=U8, 5=U16, 6=U32, 7=U64, 8=Bool, 9=Void, 10=Ptr
+        if ty == 0 || ty == 4 {
+            return LLVMInt8Type();
+        } else if ty == 1 || ty == 5 {
+            return LLVMInt16Type();
+        } else if ty == 2 || ty == 6 {
+            return LLVMInt32Type();
+        } else if ty == 3 || ty == 7 {
+            return LLVMInt64Type();
+        } else if ty == 8 {
+            return LLVMInt1Type();
+        } else if ty == 9 {
+            return LLVMVoidType();
+        } else if ty == 10 {
+            return LLVMPointerType(LLVMInt8Type(), 0);
+        }
+        return LLVMInt64Type(); // Default
     }
     
     /// Generate LLVM IR for a module
@@ -148,43 +247,88 @@ impl CodeGen {
         return LLVMValueHandle::new(0);
     }
     
-    /// Generate binary operation
+    /// Generate binary operation using LLVM builder
+    /// op: 0=Add, 1=Sub, 2=Mul, 3=Div
+    pub fn generate_binop_ffi(self: &mut CodeGen, op: u8, lhs: *u8, rhs: *u8) -> *u8 {
+        let name: *u8 = "binop" as *u8;
+        if op == 0 {
+            return LLVMBuildAdd(self.llvm_builder, lhs, rhs, name);
+        } else if op == 1 {
+            return LLVMBuildSub(self.llvm_builder, lhs, rhs, name);
+        } else if op == 2 {
+            return LLVMBuildMul(self.llvm_builder, lhs, rhs, name);
+        } else if op == 3 {
+            return LLVMBuildSDiv(self.llvm_builder, lhs, rhs, name);
+        }
+        return LLVMBuildAdd(self.llvm_builder, lhs, rhs, name);
+    }
+    
+    /// Generate binary operation (stub for compatibility)
     pub fn generate_binop(self: &mut CodeGen) -> LLVMValueHandle {
-        // Would call LLVMBuildAdd, LLVMBuildSub, etc.
         let id: u64 = self.alloc_value();
         return LLVMValueHandle::new(id);
     }
     
-    /// Generate load instruction
+    /// Generate load instruction using LLVM
+    pub fn generate_load_ffi(self: &mut CodeGen, ty: *u8, ptr: *u8) -> *u8 {
+        return LLVMBuildLoad2(self.llvm_builder, ty, ptr, "load" as *u8);
+    }
+    
+    /// Generate load instruction (stub)
     pub fn generate_load(self: &mut CodeGen) -> LLVMValueHandle {
         let id: u64 = self.alloc_value();
         return LLVMValueHandle::new(id);
     }
     
-    /// Generate store instruction
+    /// Generate store instruction using LLVM
+    pub fn generate_store_ffi(self: &mut CodeGen, val: *u8, ptr: *u8) -> *u8 {
+        return LLVMBuildStore(self.llvm_builder, val, ptr);
+    }
+    
+    /// Generate store instruction (stub)
     pub fn generate_store(self: &mut CodeGen) -> LLVMValueHandle {
         return LLVMValueHandle::new(0);
     }
     
-    /// Generate alloca instruction
+    /// Generate alloca instruction using LLVM
+    pub fn generate_alloca_ffi(self: &mut CodeGen, ty: *u8) -> *u8 {
+        return LLVMBuildAlloca(self.llvm_builder, ty, "alloca" as *u8);
+    }
+    
+    /// Generate alloca instruction (stub)
     pub fn generate_alloca(self: &mut CodeGen) -> LLVMValueHandle {
         let id: u64 = self.alloc_value();
         return LLVMValueHandle::new(id);
     }
     
-    /// Generate call instruction
+    /// Generate call instruction using LLVM
+    pub fn generate_call_ffi(self: &mut CodeGen, fn_ty: *u8, func: *u8, args: **u8, arg_count: u32) -> *u8 {
+        return LLVMBuildCall2(self.llvm_builder, fn_ty, func, args, arg_count, "call" as *u8);
+    }
+    
+    /// Generate call instruction (stub)
     pub fn generate_call(self: &mut CodeGen) -> LLVMValueHandle {
         let id: u64 = self.alloc_value();
         return LLVMValueHandle::new(id);
     }
     
-    /// Generate GEP instruction
+    /// Generate GEP instruction using LLVM
+    pub fn generate_gep_ffi(self: &mut CodeGen, ty: *u8, ptr: *u8, idx: u32) -> *u8 {
+        return LLVMBuildStructGEP2(self.llvm_builder, ty, ptr, idx, "gep" as *u8);
+    }
+    
+    /// Generate GEP instruction (stub)
     pub fn generate_gep(self: &mut CodeGen) -> LLVMValueHandle {
         let id: u64 = self.alloc_value();
         return LLVMValueHandle::new(id);
     }
     
-    /// Generate cast instruction
+    /// Generate cast instruction using LLVM
+    pub fn generate_cast_ffi(self: &mut CodeGen, val: *u8, dest_ty: *u8) -> *u8 {
+        return LLVMBuildIntCast(self.llvm_builder, val, dest_ty, "cast" as *u8);
+    }
+    
+    /// Generate cast instruction (stub)
     pub fn generate_cast(self: &mut CodeGen) -> LLVMValueHandle {
         let id: u64 = self.alloc_value();
         return LLVMValueHandle::new(id);
