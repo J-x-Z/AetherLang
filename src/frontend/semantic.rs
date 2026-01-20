@@ -86,7 +86,14 @@ impl SymbolTable {
     /// Define a symbol in the current scope
     pub fn define(&mut self, symbol: Symbol) -> Result<()> {
         let scope = &mut self.scopes[self.current.0];
-        if scope.symbols.contains_key(&symbol.name) {
+        if let Some(existing) = scope.symbols.get(&symbol.name) {
+            // Allow extern functions to override builtin function definitions
+            if matches!(existing.kind, SymbolKind::Function { .. }) 
+               && matches!(symbol.kind, SymbolKind::Function { .. }) {
+                // Silently replace - extern declaration overrides builtin
+                scope.symbols.insert(symbol.name.clone(), symbol);
+                return Ok(());
+            }
             return Err(Error::DuplicateDefinition {
                 name: symbol.name.clone(),
                 span: symbol.span,
