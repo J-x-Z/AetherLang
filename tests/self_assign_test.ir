@@ -1,0 +1,70 @@
+; Module: self_assign_test
+; Functions: 4
+
+fn Counter_inc(self: **Counter) -> void {
+  entry:
+    %0 = arg0
+    %1 = load %0
+    %2 = gep %1, 0
+    %3 = load %2
+    %4 = load %0
+    %5 = gep %4, 0
+    %6 = load %5
+    %8 = cast 1 to U64
+    %7 = add %6 %8
+    %9 = load %0
+    %10 = gep %9, 0
+    store %7, %10
+    ret void
+}
+
+fn Counter_get(self: **Counter) -> u64 {
+  entry:
+    %0 = arg0
+    %1 = load %0
+    %2 = gep %1, 0
+    %3 = load %2
+    ret %3
+}
+
+fn print_num(n: u64) -> void {
+  entry:
+    %0 = arg0
+    %1 = cast %0 to I32
+    %3 = cast %1 to I64
+    %2 = add 48 %3
+    %4 = cast %2 to I32
+    %5 = call putchar(%4)
+    ret void
+}
+
+fn main() -> i32 {
+  entry:
+    %0 = call puts("=== Self Field Assignment Test ===")
+    %2 = alloca Counter
+    %3 = gep %2, 0
+    store 0, %3
+    %1 = %2
+    %4 = call puts("Initial:")
+    %5 = gep %1, 0
+    %6 = load %5
+    call print_num(%6)
+    %7 = call puts(" = c.value (should be 0)")
+    call Counter_inc(%1)
+    %8 = call puts("After inc:")
+    %9 = gep %1, 0
+    %10 = load %9
+    call print_num(%10)
+    %11 = call puts(" = c.value (should be 1)")
+    call Counter_inc(%1)
+    call Counter_inc(%1)
+    %12 = call puts("After 2 more inc:")
+    %13 = gep %1, 0
+    %14 = load %13
+    call print_num(%14)
+    %15 = call puts(" = c.value (should be 3)")
+    %16 = call puts("Done!")
+    %17 = cast 0 to I32
+    ret %17
+}
+

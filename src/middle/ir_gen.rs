@@ -447,10 +447,34 @@ impl IRGenerator {
                     // 2. Assign to Field
                     else if let Expr::Field { expr: base, field, .. } = left.as_ref() {
                          // We need the address of the field (LValue)
-                         let base_val = self.generate_expr(base)?;
+                         let mut base_val = self.generate_expr(base)?;
                          let base_ty = self.get_value_type(&base_val);
                          
-                         if let Some(IRType::Ptr(inner)) = base_ty {
+                         // Handle Ptr(Ptr(Struct)) case - &mut self where self is a reference
+                         // Load the inner pointer first
+                         let effective_ty = if let Some(IRType::Ptr(inner)) = &base_ty {
+                             if let IRType::Ptr(inner2) = inner.as_ref() {
+                                 if let IRType::Struct(_) = inner2.as_ref() {
+                                     // Load the inner pointer to get Ptr(Struct)
+                                     let deref_dest = self.alloc_register();
+                                     self.emit_current_with_type(Instruction::Load {
+                                         dest: deref_dest,
+                                         ptr: base_val.clone(),
+                                         ty: (**inner).clone(),
+                                     }, (**inner).clone());
+                                     base_val = Value::Register(deref_dest);
+                                     Some((**inner).clone())
+                                 } else {
+                                     base_ty.clone()
+                                 }
+                             } else {
+                                 base_ty.clone()
+                             }
+                         } else {
+                             base_ty.clone()
+                         };
+                         
+                         if let Some(IRType::Ptr(inner)) = effective_ty {
                             if let IRType::Struct(struct_name) = *inner {
                                  let fields = self.struct_defs.get(&struct_name).cloned()
                                      .ok_or_else(|| crate::utils::Error::UndefinedType { 
@@ -730,10 +754,33 @@ impl IRGenerator {
             }
 
             Expr::Field { expr: base, field, .. } => {
-                let base_val = self.generate_expr(base)?;
+                let mut base_val = self.generate_expr(base)?;
                 let base_ty = self.get_value_type(&base_val);
                 
-                if let Some(IRType::Ptr(inner)) = base_ty {
+                // Handle Ptr(Ptr(Struct)) case - &mut self where self is a reference
+                let effective_ty = if let Some(IRType::Ptr(inner)) = &base_ty {
+                    if let IRType::Ptr(inner2) = inner.as_ref() {
+                        if let IRType::Struct(_) = inner2.as_ref() {
+                            // Load the inner pointer to get Ptr(Struct)
+                            let deref_dest = self.alloc_register();
+                            self.emit_current_with_type(Instruction::Load {
+                                dest: deref_dest,
+                                ptr: base_val.clone(),
+                                ty: (**inner).clone(),
+                            }, (**inner).clone());
+                            base_val = Value::Register(deref_dest);
+                            Some((**inner).clone())
+                        } else {
+                            base_ty.clone()
+                        }
+                    } else {
+                        base_ty.clone()
+                    }
+                } else {
+                    base_ty.clone()
+                };
+                
+                if let Some(IRType::Ptr(inner)) = effective_ty {
                     if let IRType::Struct(struct_name) = *inner {
                          let fields = self.struct_defs.get(&struct_name).cloned()
                              .ok_or_else(|| crate::utils::Error::UndefinedType { 
@@ -860,7 +907,86 @@ impl IRGenerator {
                          Ok(Value::Unit) 
                      }
                  } else {
-                     Ok(Value::Unit)
+                     // General method call: receiver.method(args...) 
+                     // -> Struct_method(&receiver, args...)
+                     let receiver_val = self.generate_expr(receiver)?;
+                     let receiver_ty = self.get_value_type(&receiver_val);
+                     
+                     // Determine struct name from receiver type
+                     let struct_name = match &receiver_ty {
+                         Some(IRType::Ptr(inner)) => match inner.as_ref() {
+                             IRType::Struct(name) => Some(name.clone()),
+                             IRType::Ptr(inner2) => match inner2.as_ref() {
+                                 IRType::Struct(name) => Some(name.clone()),
+                                 _ => None,
+                             },
+                             _ => None,
+                         },
+                         Some(IRType::Struct(name)) => Some(name.clone()),
+                         _ => None,
+                     };
+                     
+                     if let Some(struct_name) = struct_name {
+                         // Generate mangled function name: Struct_method
+                         let func_name = format!("{}_{}", struct_name, method.name);
+                         
+                         // Generate arg values
+                         let mut arg_vals = vec![receiver_val]; // self as first arg
+                         for arg in args {
+                             arg_vals.push(self.generate_expr(arg)?);
+                         }
+                         
+                         // Look up function return type and sret info
+                         let (ret_type, sret_type) = self.module.functions.iter()
+                             .find(|f| f.name == func_name)
+                             .map(|f| (f.ret_type.clone(), f.sret_type.clone()))
+                             .unwrap_or((IRType::Void, None));
+                         
+                         // Check if this is an sret function
+                         if let Some(sret_ty) = sret_type {
+                             let sret_ptr = self.alloc_register();
+                             if let IRType::Ptr(inner) = &sret_ty {
+                                 if let IRType::Struct(s_name) = inner.as_ref() {
+                                     let struct_ty = IRType::Struct(s_name.clone());
+                                     self.emit_current_with_type(
+                                         Instruction::Alloca { dest: sret_ptr, ty: struct_ty },
+                                         sret_ty.clone()
+                                     );
+                                 }
+                             }
+                             
+                             let mut sret_args = vec![Value::Register(sret_ptr)];
+                             sret_args.extend(arg_vals);
+                             
+                             self.emit_current_with_type(Instruction::Call {
+                                 dest: None,
+                                 func: func_name,
+                                 args: sret_args,
+                             }, IRType::Void);
+                             
+                             Ok(Value::Register(sret_ptr))
+                         } else if ret_type == IRType::Void {
+                             // Void return
+                             self.emit_current_with_type(Instruction::Call {
+                                 dest: None,
+                                 func: func_name,
+                                 args: arg_vals,
+                             }, IRType::Void);
+                             Ok(Value::Unit)
+                         } else {
+                             // Returns a value
+                             let dest = self.alloc_register();
+                             self.emit_current_with_type(Instruction::Call {
+                                 dest: Some(dest),
+                                 func: func_name,
+                                 args: arg_vals,
+                             }, ret_type);
+                             Ok(Value::Register(dest))
+                         }
+                     } else {
+                         // Unknown struct type for method call
+                         Ok(Value::Unit)
+                     }
                  }
             },
             Expr::Index { .. } => Ok(Value::Unit),
@@ -1135,7 +1261,14 @@ impl IRGenerator {
             }
             AstType::Ref { inner, .. } => {
                 // References are implemented as pointers at the IR level
-                IRType::Ptr(Box::new(self.ast_type_to_ir(inner)))
+                // But structs are already Ptr(Struct), so don't add extra level
+                let inner_ty = self.ast_type_to_ir(inner);
+                if let IRType::Ptr(_) = &inner_ty {
+                    // Already a pointer (e.g., struct), don't wrap again
+                    inner_ty
+                } else {
+                    IRType::Ptr(Box::new(inner_ty))
+                }
             }
             AstType::Tuple(elements, _) => {
                 if elements.is_empty() {

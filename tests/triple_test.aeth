@@ -1,0 +1,54 @@
+// Test for 3-field struct initialization
+
+extern "C" {
+    fn putchar(c: i32) -> i32;
+}
+
+pub struct Triple {
+    pub a: u64,
+    pub b: u64,
+    pub c: u64,
+}
+
+impl Triple {
+    pub fn new(x: u64, y: u64, z: u64) -> Triple {
+        return Triple {
+            a: x,
+            b: y,
+            c: z,
+        };
+    }
+}
+
+fn print_num(n: u64) {
+    putchar(48 + (n as i32));
+}
+
+fn main() -> i32 {
+    puts("=== Triple Field Test ===");
+    
+    let t: Triple = Triple::new(1, 2, 3);
+    
+    puts("Expected: 1 2 3");
+    puts("Got:");
+    print_num(t.a);
+    putchar(32);
+    print_num(t.b);
+    putchar(32);
+    print_num(t.c);
+    putchar(10);
+    
+    // Test with different values
+    let t2: Triple = Triple::new(5, 6, 7);
+    puts("Expected: 5 6 7");
+    puts("Got:");
+    print_num(t2.a);
+    putchar(32);
+    print_num(t2.b);
+    putchar(32);
+    print_num(t2.c);
+    putchar(10);
+    
+    puts("Done!");
+    return 0;
+}

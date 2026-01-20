@@ -1,0 +1,58 @@
+// Test for mixed-type struct (like Lexer)
+
+extern "C" {
+    fn putchar(c: i32) -> i32;
+}
+
+pub struct Mixed {
+    pub ptr: *u8,
+    pub len: u64,
+    pub pos: u64,
+}
+
+impl Mixed {
+    pub fn new(ptr: *u8, len: u64) -> Mixed {
+        return Mixed {
+            ptr: ptr,
+            len: len,
+            pos: 0,
+        };
+    }
+}
+
+fn print_num(n: u64) {
+    putchar(48 + (n as i32));
+}
+
+fn main() -> i32 {
+    puts("=== Mixed Type Struct Test ===");
+    
+    let s: *u8 = "hello" as *u8;
+    let m: Mixed = Mixed::new(s, 24);
+    
+    puts("Expected len=24, pos=0");
+    
+    // Print first char of ptr
+    putchar((*m.ptr) as i32);
+    puts(" = *ptr (should be 'h')");
+    
+    print_num(m.len);
+    puts(" = len (should be 24... but 24 is 'X'-48, so it will show garbage)");
+    
+    // Actually print as number
+    puts("len value:");
+    let len_val: u64 = m.len;
+    if len_val == 24 {
+        puts("len is 24 - CORRECT!");
+    } else if len_val == 0 {
+        puts("len is 0 - WRONG!");
+    } else {
+        puts("len is something else - WRONG!");
+    }
+    
+    print_num(m.pos);
+    puts(" = pos (should be 0)");
+    
+    puts("Done!");
+    return 0;
+}
