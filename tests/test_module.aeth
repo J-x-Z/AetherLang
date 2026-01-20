@@ -1,0 +1,14 @@
+// Test module: defines a public struct and function for import testing
+
+pub struct Point {
+    x: i64,
+    y: i64,
+}
+
+pub fn create_point(x: i64, y: i64) -> Point {
+    Point { x: x, y: y }
+}
+
+pub fn distance_squared(p: &Point) -> i64 {
+    p.x * p.x + p.y * p.y
+}

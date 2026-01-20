@@ -1,0 +1,13 @@
+// Module import test - verifies dynamic module loading
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// Import from test_module
+use test_module::{Point, create_point}
+
+fn main() -> i32 {
+    puts("Module import test passed!" as *u8);
+    return 0;
+}

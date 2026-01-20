@@ -117,6 +117,9 @@ pub enum Error {
     
     #[error("Code generation error: {0}")]
     CodeGen(String),
+    
+    #[error("Module error: {0}")]
+    ModuleError(String),
 }
 
 impl Error {
@@ -149,7 +152,7 @@ impl Error {
             Self::CannotMoveOutOfBorrow { span, .. } => Some(*span),
             Self::CannotBorrowMutably { span, .. } => Some(*span),
             Self::EffectViolation { span, .. } => Some(*span),
-            Self::Io(_) | Self::Llvm(_) | Self::CodeGen(_) => None,
+            Self::Io(_) | Self::Llvm(_) | Self::CodeGen(_) | Self::ModuleError(_) => None,
         }
     }
 }
