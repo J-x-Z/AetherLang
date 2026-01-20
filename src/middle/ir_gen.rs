@@ -1194,6 +1194,13 @@ impl IRGenerator {
                 // For now just evaluate expression
                 self.generate_expr(expr)
             }
+            
+            Expr::Closure { body, .. } => {
+                // Simplified closure: just evaluate body and return
+                // Full implementation would create closure struct with captured environment
+                // For now, inline the body as a simple function
+                self.generate_expr(body)
+            }
         }
     }
 

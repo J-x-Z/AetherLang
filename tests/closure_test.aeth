@@ -1,0 +1,17 @@
+// Closure Test for AetherLang
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+fn apply(f: i64, x: i64) -> i64 {
+    return x + 1;  // Placeholder - real impl would call f(x)
+}
+
+fn main() -> i32 {
+    // Simple closure that adds 1
+    let add_one = |x: i64| -> i64 { x + 1 };
+    
+    puts("Closure parsing test passed!" as *u8);
+    return 0;
+}

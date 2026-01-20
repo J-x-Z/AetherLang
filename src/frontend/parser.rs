@@ -1068,6 +1068,49 @@ impl Parser {
                 }
             }
 
+            // Closure: |x, y| expr or |x: T| -> T expr
+            TokenKind::Or => {
+                self.advance(); // consume |
+                let mut params = Vec::new();
+                
+                // Parse parameters: |x, y: T, z|
+                while !self.check(&TokenKind::Or) && !self.is_at_end() {
+                    let name = self.parse_ident()?;
+                    let ty = if self.consume(&TokenKind::Colon) {
+                        Some(self.parse_type()?)
+                    } else {
+                        None
+                    };
+                    params.push(ClosureParam { name, ty });
+                    if !self.consume(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.expect(TokenKind::Or)?; // closing |
+                
+                // Optional return type: -> T
+                let ret_type = if self.consume(&TokenKind::Arrow) {
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                
+                // Body can be a block { ... } or single expression
+                let body = if self.check(&TokenKind::LBrace) {
+                    Expr::Block(self.parse_block()?)
+                } else {
+                    self.parse_expr()?
+                };
+                let body_span = body.span();
+                
+                Expr::Closure {
+                    params,
+                    ret_type,
+                    body: Box::new(body),
+                    span: token.span.merge(&body_span),
+                }
+            }
+
             _ => return Err(Error::ExpectedExpr { span: token.span }),
         };
 
@@ -1708,6 +1751,7 @@ impl Expr {
             Expr::Unsafe { span, .. } => *span,
             Expr::Asm { span, .. } => *span,
             Expr::Try { span, .. } => *span,
+            Expr::Closure { span, .. } => *span,
         }
     }
 }

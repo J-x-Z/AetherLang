@@ -1128,6 +1128,46 @@ impl SemanticAnalyzer {
             }
             Expr::Range { .. } => Ok(ResolvedType::Unknown),
             Expr::Asm { .. } => Ok(ResolvedType::unit()),
+            
+            Expr::Closure { params, ret_type, body, .. } => {
+                // Enter a new scope for closure parameters
+                self.symbols.enter_scope();
+                
+                // Add parameters to scope
+                let mut param_types = Vec::new();
+                for param in params {
+                    let ty = if let Some(t) = &param.ty {
+                        self.resolve_type(t)?
+                    } else {
+                        // Infer type from usage (for now, default to i64)
+                        ResolvedType::Primitive(PrimitiveType::I64)
+                    };
+                    param_types.push(ty.clone());
+                    self.symbols.define(Symbol {
+                        name: param.name.name.clone(),
+                        kind: SymbolKind::Variable,
+                        ty,
+                        span: param.name.span,
+                        mutable: false,
+                    })?;
+                }
+                
+                // Check body and determine return type
+                let body_ty = self.check_expr(body)?;
+                
+                let ret_ty = if let Some(t) = ret_type {
+                    self.resolve_type(t)?
+                } else {
+                    body_ty
+                };
+                
+                self.symbols.exit_scope();
+                
+                Ok(ResolvedType::Function {
+                    params: param_types,
+                    ret: Box::new(ret_ty),
+                })
+            }
         }
     }
 

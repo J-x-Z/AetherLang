@@ -556,6 +556,13 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
+    /// Closure/Lambda expression (|x, y| x + y)
+    Closure {
+        params: Vec<ClosureParam>,
+        ret_type: Option<Type>,
+        body: Box<Expr>,
+        span: Span,
+    },
 }
 
 /// Match arm
@@ -599,6 +606,13 @@ pub struct AsmOperand {
     pub kind: AsmOperandKind,
     pub options: String, // "reg", "memory", etc.
     pub expr: Option<Expr>, // None for clobber
+}
+
+/// Closure parameter (optionally typed)
+#[derive(Debug, Clone)]
+pub struct ClosureParam {
+    pub name: Ident,
+    pub ty: Option<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
