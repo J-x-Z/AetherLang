@@ -378,75 +378,194 @@ impl IRGenerator {
         return Value::from_const(0);
     }
     
-    /// Generate IR for an expression
+    /// Generate IR for an expression (dispatcher)
+    /// expr_kind: 0=Literal, 1=Ident, 2=Binary, 3=Unary, 4=Call, 5=Field, 6=Index, 7=If, 8=Block
+    pub fn generate_expr_kind(self: &mut IRGenerator, expr_kind: u8, int_val: i64, op: u8) -> Value {
+        if expr_kind == 0 {
+            // Literal
+            return Value::from_const(int_val);
+        } else if expr_kind == 1 {
+            // Ident - would lookup variable
+            return Value::from_reg(0);
+        } else if expr_kind == 2 {
+            // Binary operation
+            return self.generate_binary_op(op);
+        } else if expr_kind == 3 {
+            // Unary operation
+            return self.generate_unary_op(op);
+        } else if expr_kind == 4 {
+            // Function call
+            return self.generate_call_instr();
+        } else if expr_kind == 5 {
+            // Field access
+            return self.generate_field_access();
+        } else if expr_kind == 6 {
+            // Index access
+            return self.generate_index_access();
+        } else if expr_kind == 7 {
+            // If expression
+            return self.generate_if_expr();
+        }
+        return Value::from_const(0);
+    }
+    
+    /// Generate IR for an expression (old stub for compatibility)
     pub fn generate_expr(self: &mut IRGenerator) -> Value {
-        // Dispatch based on expression kind
-        // This is the largest method
         return Value::from_const(0);
     }
     
     /// Generate IR for a literal
-    pub fn generate_literal(self: &IRGenerator) -> Value {
-        return Value::from_const(42);
+    pub fn generate_literal(self: &IRGenerator, val: i64) -> Value {
+        return Value::from_const(val);
     }
     
     /// Generate IR for a binary operation
-    pub fn generate_binary(self: &mut IRGenerator) -> Value {
-        // Generate left and right operands
-        // Emit BinOp instruction
+    pub fn generate_binary_op(self: &mut IRGenerator, op: u8) -> Value {
+        // Assume left and right have been generated and are on a "stack"
+        // In real impl, would pass Value arguments
         let dest: u64 = self.alloc_reg();
+        
+        // Convert AST op to IR op
+        let ir_op: BinOp = IRGenerator::ast_binop_to_ir(op);
+        
+        // Create and emit instruction
+        let left: Value = Value::from_reg(0);  // Would get from context
+        let right: Value = Value::from_reg(1); // Would get from context
+        let inst: Instruction = Instruction::binop(dest, ir_op, left, right);
+        self.emit(inst);
+        
         return Value::from_reg(dest);
+    }
+    
+    /// Generate IR for a binary operation (simplified stub)
+    pub fn generate_binary(self: &mut IRGenerator) -> Value {
+        return self.generate_binary_op(0);
     }
     
     /// Generate IR for a unary operation
-    pub fn generate_unary(self: &mut IRGenerator) -> Value {
+    pub fn generate_unary_op(self: &mut IRGenerator, op: u8) -> Value {
         let dest: u64 = self.alloc_reg();
+        // op: 0=Neg, 1=Not, 2=Deref, 3=Ref
+        // Emit appropriate instruction
         return Value::from_reg(dest);
     }
     
-    /// Generate IR for a function call
-    pub fn generate_call(self: &mut IRGenerator) -> Value {
-        // Generate arguments
-        // Emit call instruction
+    /// Generate IR for a unary operation (stub)
+    pub fn generate_unary(self: &mut IRGenerator) -> Value {
+        return self.generate_unary_op(0);
+    }
+    
+    /// Generate IR for a function call instruction
+    pub fn generate_call_instr(self: &mut IRGenerator) -> Value {
+        // Would get function name and args from context
         let dest: u64 = self.alloc_reg();
+        // Emit Call instruction
         return Value::from_reg(dest);
+    }
+    
+    /// Generate IR for a function call (stub)
+    pub fn generate_call(self: &mut IRGenerator) -> Value {
+        return self.generate_call_instr();
     }
     
     /// Generate IR for if expression
-    pub fn generate_if(self: &mut IRGenerator) -> Value {
-        // Generate condition
-        // Create then/else/merge blocks
-        // Emit conditional branch
+    pub fn generate_if_expr(self: &mut IRGenerator) -> Value {
+        // Create blocks
+        let then_block: u64 = self.alloc_block();
+        let else_block: u64 = self.alloc_block();
+        let merge_block: u64 = self.alloc_block();
+        
+        // Emit conditional branch using condition (would get from context)
+        let cond: Value = Value::from_reg(0);
+        let term: Terminator = Terminator::cond_branch(cond, then_block, else_block);
+        self.set_terminator(term);
+        
+        // Generate then block
+        self.current_block = then_block;
+        // Would generate then body here
+        
+        // Branch to merge
+        let br: Terminator = Terminator::branch(merge_block);
+        self.set_terminator(br);
+        
+        // Generate else block
+        self.current_block = else_block;
+        // Would generate else body here
+        
+        // Branch to merge
+        self.set_terminator(Terminator::branch(merge_block));
+        
+        // Continue at merge block
+        self.current_block = merge_block;
+        
         return Value::from_const(0);
     }
     
+    /// Generate IR for if expression (stub)
+    pub fn generate_if(self: &mut IRGenerator) -> Value {
+        return self.generate_if_expr();
+    }
+    
     /// Generate IR for while loop
-    pub fn generate_while(self: &mut IRGenerator) -> Value {
-        // Create cond/body/exit blocks
-        // Generate loop structure
+    pub fn generate_while_loop(self: &mut IRGenerator) -> Value {
+        // Create blocks
+        let cond_block: u64 = self.alloc_block();
+        let body_block: u64 = self.alloc_block();
+        let exit_block: u64 = self.alloc_block();
+        
+        // Branch to condition
+        self.set_terminator(Terminator::branch(cond_block));
+        
+        // Generate condition
+        self.current_block = cond_block;
+        let cond: Value = Value::from_reg(0); // Would generate condition expr
+        self.set_terminator(Terminator::cond_branch(cond, body_block, exit_block));
+        
+        // Generate body
+        self.current_block = body_block;
+        // Would generate body here
+        self.set_terminator(Terminator::branch(cond_block));
+        
+        // Continue at exit
+        self.current_block = exit_block;
+        
         return Value::from_const(0);
+    }
+    
+    /// Generate IR for while loop (stub)
+    pub fn generate_while(self: &mut IRGenerator) -> Value {
+        return self.generate_while_loop();
     }
     
     /// Generate IR for match expression
     pub fn generate_match(self: &mut IRGenerator) -> Value {
-        // Generate scrutinee
-        // Create block for each arm
-        // Emit switch or chain of comparisons
+        // Would create block for each arm
+        // Generate switch or comparison chain
         return Value::from_const(0);
     }
     
     /// Generate IR for field access
-    pub fn generate_field(self: &mut IRGenerator) -> Value {
-        // Emit GEP instruction
+    pub fn generate_field_access(self: &mut IRGenerator) -> Value {
         let dest: u64 = self.alloc_reg();
+        // Would emit GEP instruction with field index
         return Value::from_reg(dest);
     }
     
+    /// Generate IR for field access (stub)
+    pub fn generate_field(self: &mut IRGenerator) -> Value {
+        return self.generate_field_access();
+    }
+    
     /// Generate IR for index access
-    pub fn generate_index(self: &mut IRGenerator) -> Value {
-        // Emit GEP instruction
+    pub fn generate_index_access(self: &mut IRGenerator) -> Value {
         let dest: u64 = self.alloc_reg();
+        // Would emit GEP instruction with index
         return Value::from_reg(dest);
+    }
+    
+    /// Generate IR for index access (stub)
+    pub fn generate_index(self: &mut IRGenerator) -> Value {
+        return self.generate_index_access();
     }
     
     // ==================== Helper Methods ====================
