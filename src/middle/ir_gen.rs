@@ -32,6 +32,8 @@ pub struct IRGenerator {
     struct_defs: HashMap<String, Vec<(String, IRType)>>,
     /// Current function's sret pointer (for struct returns)
     sret_ptr: Option<Value>,
+    /// Pre-scanned function signatures for forward reference (name -> (ret_type, sret_type))
+    function_signatures: HashMap<String, (IRType, Option<IRType>)>,
 }
 
 impl IRGenerator {
@@ -45,15 +47,80 @@ impl IRGenerator {
             reg_types: HashMap::new(),
             struct_defs: HashMap::new(),
             sret_ptr: None,
+            function_signatures: HashMap::new(),
         }
     }
 
     /// Generate IR for a program
     pub fn generate(&mut self, program: &Program) -> Result<IRModule> {
+        // Phase 1: Collect all function signatures (for forward reference)
+        for item in &program.items {
+            self.collect_signatures(item);
+        }
+        
+        // Phase 2: Generate IR for all items
         for item in &program.items {
             self.generate_item(item)?;
         }
         Ok(self.module.clone())
+    }
+    
+    /// Collect function signatures for forward reference
+    fn collect_signatures(&mut self, item: &Item) {
+        match item {
+            Item::Function(func) => {
+                let func_name = func.name.name.clone();
+                let ret_type = if let Some(ref ty) = func.ret_type {
+                    self.ast_type_to_ir(ty)
+                } else {
+                    IRType::Void
+                };
+                
+                // Check if this is an sret function
+                let sret_type = if let IRType::Ptr(inner) = &ret_type {
+                    if matches!(inner.as_ref(), IRType::Struct(_)) {
+                        Some(ret_type.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                
+                self.function_signatures.insert(func_name, (ret_type, sret_type));
+            }
+            Item::Impl(impl_block) => {
+                let type_name = &impl_block.target.name;
+                for method in &impl_block.methods {
+                    let func_name = format!("{}_{}", type_name, method.name.name);
+                    let ret_type = if let Some(ref ty) = method.ret_type {
+                        self.ast_type_to_ir(ty)
+                    } else {
+                        IRType::Void
+                    };
+                    
+                    let sret_type = if let IRType::Ptr(inner) = &ret_type {
+                        if matches!(inner.as_ref(), IRType::Struct(_)) {
+                            Some(ret_type.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    
+                    self.function_signatures.insert(func_name, (ret_type, sret_type));
+                }
+            }
+            Item::Module(m) => {
+                if let Some(items) = &m.items {
+                    for sub_item in items {
+                        self.collect_signatures(sub_item);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Generate IR for a top-level item
@@ -663,10 +730,14 @@ impl IRGenerator {
                     arg_vals.push(val);
                 }
 
-                // Get return type and sret type from function signature if available
-                let (ret_type, sret_type) = self.module.functions.iter()
-                    .find(|f| f.name == func_name)
-                    .map(|f| (f.ret_type.clone(), f.sret_type.clone()))
+                // Get return type and sret type from pre-scanned signatures first
+                let (ret_type, sret_type) = self.function_signatures.get(&func_name)
+                    .cloned()
+                    .or_else(|| {
+                        self.module.functions.iter()
+                            .find(|f| f.name == func_name)
+                            .map(|f| (f.ret_type.clone(), f.sret_type.clone()))
+                    })
                     .unwrap_or_else(|| {
                         self.module.externs.iter()
                             .find(|e| e.name == func_name)
@@ -967,10 +1038,15 @@ impl IRGenerator {
                              arg_vals.push(self.generate_expr(arg)?);
                          }
                          
-                         // Look up function return type and sret info
-                         let (ret_type, sret_type) = self.module.functions.iter()
-                             .find(|f| f.name == func_name)
-                             .map(|f| (f.ret_type.clone(), f.sret_type.clone()))
+                         // Look up function return type and sret info from pre-scanned signatures
+                         let (ret_type, sret_type) = self.function_signatures.get(&func_name)
+                             .cloned()
+                             .or_else(|| {
+                                 // Fallback to module.functions if not in signatures
+                                 self.module.functions.iter()
+                                     .find(|f| f.name == func_name)
+                                     .map(|f| (f.ret_type.clone(), f.sret_type.clone()))
+                             })
                              .unwrap_or((IRType::Void, None));
                          
                          // Check if this is an sret function

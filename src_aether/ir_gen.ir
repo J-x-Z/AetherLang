@@ -1,0 +1,820 @@
+; Module: ir_gen
+; Functions: 52
+
+fn Register_new(__sret: *Register, id: u64, ty: *IRType) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    %3 = gep %0, 0
+    store %1, %3
+    %4 = gep %0, 1
+    store %2, %4
+    ret void
+}
+
+fn Value_from_reg(__sret: *Value, reg: u64) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = gep %0, 0
+    store @ValueKind_Register, %2
+    %3 = gep %0, 1
+    store %1, %3
+    %4 = gep %0, 2
+    store 0, %4
+    %5 = cast 0 to Ptr(U8)
+    %6 = gep %0, 3
+    store %5, %6
+    ret void
+}
+
+fn Value_from_const(__sret: *Value, val: i64) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = gep %0, 0
+    store @ValueKind_Constant, %2
+    %3 = gep %0, 1
+    store 0, %3
+    %4 = gep %0, 2
+    store %1, %4
+    %5 = cast 0 to Ptr(U8)
+    %6 = gep %0, 3
+    store %5, %6
+    ret void
+}
+
+fn Value_from_global(__sret: *Value, name: *u8) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = gep %0, 0
+    store @ValueKind_Global, %2
+    %3 = gep %0, 1
+    store 0, %3
+    %4 = gep %0, 2
+    store 0, %4
+    %5 = gep %0, 3
+    store %1, %5
+    ret void
+}
+
+fn Instruction_binop(__sret: *Instruction, dest: u64, op: *BinOp, src1: *Value, src2: *Value) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    %3 = arg3
+    %4 = arg4
+    %5 = gep %0, 0
+    store @InstrKind_BinOp, %5
+    %6 = gep %0, 1
+    store %1, %6
+    %7 = gep %0, 2
+    store %2, %7
+    %8 = gep %0, 3
+    store %3, %8
+    %9 = gep %0, 4
+    store %4, %9
+    ret void
+}
+
+fn Instruction_load(__sret: *Instruction, dest: u64, ptr: *Value) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    %3 = gep %0, 0
+    store @InstrKind_Load, %3
+    %4 = gep %0, 1
+    store %1, %4
+    %5 = gep %0, 2
+    store @BinOp_Add, %5
+    %6 = gep %0, 3
+    store %2, %6
+    %7 = alloca Value
+    call Value_from_const(%7, 0)
+    %8 = gep %0, 4
+    store %7, %8
+    ret void
+}
+
+fn Instruction_store(__sret: *Instruction, ptr: *Value, val: *Value) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    %3 = gep %0, 0
+    store @InstrKind_Store, %3
+    %4 = gep %0, 1
+    store 0, %4
+    %5 = gep %0, 2
+    store @BinOp_Add, %5
+    %6 = gep %0, 3
+    store %1, %6
+    %7 = gep %0, 4
+    store %2, %7
+    ret void
+}
+
+fn Instruction_alloca(__sret: *Instruction, dest: u64) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = gep %0, 0
+    store @InstrKind_Alloca, %2
+    %3 = gep %0, 1
+    store %1, %3
+    %4 = gep %0, 2
+    store @BinOp_Add, %4
+    %5 = alloca Value
+    call Value_from_const(%5, 0)
+    %6 = gep %0, 3
+    store %5, %6
+    %7 = alloca Value
+    call Value_from_const(%7, 0)
+    %8 = gep %0, 4
+    store %7, %8
+    ret void
+}
+
+fn Terminator_ret(__sret: *Terminator, value: *Value) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = gep %0, 0
+    store @TerminatorKind_Return, %2
+    %3 = gep %0, 1
+    store %1, %3
+    %4 = gep %0, 2
+    store 0, %4
+    %5 = alloca Value
+    call Value_from_const(%5, 0)
+    %6 = gep %0, 3
+    store %5, %6
+    %7 = gep %0, 4
+    store 0, %7
+    %8 = gep %0, 5
+    store 0, %8
+    ret void
+}
+
+fn Terminator_branch(__sret: *Terminator, target: u64) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = gep %0, 0
+    store @TerminatorKind_Branch, %2
+    %3 = alloca Value
+    call Value_from_const(%3, 0)
+    %4 = gep %0, 1
+    store %3, %4
+    %5 = gep %0, 2
+    store %1, %5
+    %6 = alloca Value
+    call Value_from_const(%6, 0)
+    %7 = gep %0, 3
+    store %6, %7
+    %8 = gep %0, 4
+    store 0, %8
+    %9 = gep %0, 5
+    store 0, %9
+    ret void
+}
+
+fn Terminator_cond_branch(__sret: *Terminator, cond: *Value, then_bb: u64, else_bb: u64) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    %3 = arg3
+    %4 = gep %0, 0
+    store @TerminatorKind_CondBranch, %4
+    %5 = alloca Value
+    call Value_from_const(%5, 0)
+    %6 = gep %0, 1
+    store %5, %6
+    %7 = gep %0, 2
+    store 0, %7
+    %8 = gep %0, 3
+    store %1, %8
+    %9 = gep %0, 4
+    store %2, %9
+    %10 = gep %0, 5
+    store %3, %10
+    ret void
+}
+
+fn BasicBlock_new(__sret: *BasicBlock, id: u64, label: *u8) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    %3 = gep %0, 0
+    store %1, %3
+    %4 = gep %0, 1
+    store %2, %4
+    %5 = gep %0, 2
+    store 0, %5
+    %6 = gep %0, 3
+    store false, %6
+    ret void
+}
+
+fn IRFunction_new(__sret: *IRFunction, name: *u8, ret: *IRType) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    %3 = gep %0, 0
+    store %1, %3
+    %4 = gep %0, 1
+    store 0, %4
+    %5 = gep %0, 2
+    store 0, %5
+    %6 = gep %0, 3
+    store 0, %6
+    %7 = gep %0, 4
+    store %2, %7
+    ret void
+}
+
+fn IRFunction_alloc_reg(self: *IRFunction) -> u64 {
+  entry:
+    %0 = arg0
+    %2 = gep %0, 3
+    %3 = load %2
+    %1 = %3
+    %4 = gep %0, 3
+    %5 = load %4
+    %6 = gep %0, 3
+    %7 = load %6
+    %9 = cast 1 to U64
+    %8 = add %7 %9
+    %10 = gep %0, 3
+    store %8, %10
+    ret %1
+}
+
+fn IRFunction_add_block(self: *IRFunction) -> u64 {
+  entry:
+    %0 = arg0
+    %2 = gep %0, 2
+    %3 = load %2
+    %1 = %3
+    %4 = gep %0, 2
+    %5 = load %4
+    %6 = gep %0, 2
+    %7 = load %6
+    %9 = cast 1 to U64
+    %8 = add %7 %9
+    %10 = gep %0, 2
+    store %8, %10
+    ret %1
+}
+
+fn IRModule_new(__sret: *IRModule, name: *u8) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = gep %0, 0
+    store %1, %2
+    %3 = gep %0, 1
+    store 0, %3
+    %4 = gep %0, 2
+    store 0, %4
+    ret void
+}
+
+fn IRModule_add_function(self: *IRModule) -> u64 {
+  entry:
+    %0 = arg0
+    %2 = gep %0, 1
+    %3 = load %2
+    %1 = %3
+    %4 = gep %0, 1
+    %5 = load %4
+    %6 = gep %0, 1
+    %7 = load %6
+    %9 = cast 1 to U64
+    %8 = add %7 %9
+    %10 = gep %0, 1
+    store %8, %10
+    ret %1
+}
+
+fn IRGenerator_new(__sret: *IRGenerator, name: *u8) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca IRModule
+    call IRModule_new(%2, %1)
+    %3 = gep %0, 0
+    store %2, %3
+    %4 = gep %0, 1
+    store 0, %4
+    %5 = gep %0, 2
+    store 0, %5
+    %6 = gep %0, 3
+    store 0, %6
+    %7 = gep %0, 4
+    store 0, %7
+    ret void
+}
+
+fn IRGenerator_generate(self: *IRGenerator) -> bool {
+  entry:
+    %0 = arg0
+    ret true
+}
+
+fn IRGenerator_generate_item(self: *IRGenerator) -> bool {
+  entry:
+    %0 = arg0
+    ret true
+}
+
+fn IRGenerator_generate_function(self: *IRGenerator) -> bool {
+  entry:
+    %0 = arg0
+    %2 = gep %0, 0
+    %3 = load %2
+    %4 = call IRModule_add_function(%3)
+    %1 = %4
+    %5 = gep %0, 2
+    %6 = load %5
+    %7 = gep %0, 2
+    store 0, %7
+    call IRGenerator_alloc_block(%0)
+    %8 = ()
+    call IRGenerator_generate_block(%0)
+    ret true
+}
+
+fn IRGenerator_generate_method(self: *IRGenerator) -> bool {
+  entry:
+    %0 = arg0
+    %1 = call IRGenerator_generate_function(%0)
+    ret %1
+}
+
+fn IRGenerator_generate_block(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call Value_from_const(%2, 0)
+    ret void
+}
+
+fn IRGenerator_generate_stmt(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call Value_from_const(%2, 0)
+    ret void
+}
+
+fn IRGenerator_generate_expr_kind(__sret: *Value, self: *IRGenerator, expr_kind: u8, int_val: i64, op: u8) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    %3 = arg3
+    %4 = arg4
+    %6 = cast 0 to U8
+    %5 = eq %2 %6
+    br %5, bb1, bb2
+  then:
+    %7 = alloca Value
+    call Value_from_const(%7, %3)
+    ret void
+  else:
+    %9 = cast 1 to U8
+    %8 = eq %2 %9
+    br %8, bb4, bb5
+  merge:
+    %23 = alloca Value
+    call Value_from_const(%23, 0)
+    ret void
+  then:
+    %10 = alloca Value
+    call Value_from_reg(%10, 0)
+    ret void
+  else:
+    %12 = cast 2 to U8
+    %11 = eq %2 %12
+    br %11, bb7, bb8
+  merge:
+    br bb3
+  then:
+    call IRGenerator_generate_binary_op(%1, %4)
+    ret void
+  else:
+    %14 = cast 3 to U8
+    %13 = eq %2 %14
+    br %13, bb10, bb11
+  merge:
+    br bb6
+  then:
+    call IRGenerator_generate_unary_op(%1, %4)
+    ret void
+  else:
+    %16 = cast 4 to U8
+    %15 = eq %2 %16
+    br %15, bb13, bb14
+  merge:
+    br bb9
+  then:
+    call IRGenerator_generate_call_instr(%1)
+    ret void
+  else:
+    %18 = cast 5 to U8
+    %17 = eq %2 %18
+    br %17, bb16, bb17
+  merge:
+    br bb12
+  then:
+    call IRGenerator_generate_field_access(%1)
+    ret void
+  else:
+    %20 = cast 6 to U8
+    %19 = eq %2 %20
+    br %19, bb19, bb20
+  merge:
+    br bb15
+  then:
+    call IRGenerator_generate_index_access(%1)
+    ret void
+  else:
+    %22 = cast 7 to U8
+    %21 = eq %2 %22
+    br %21, bb22, bb23
+  merge:
+    br bb18
+  then:
+    call IRGenerator_generate_if_expr(%1)
+    ret void
+  else:
+    br bb24
+  merge:
+    br bb21
+}
+
+fn IRGenerator_generate_expr(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call Value_from_const(%2, 0)
+    ret void
+}
+
+fn IRGenerator_generate_literal(__sret: *Value, self: *IRGenerator, val: i64) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    %3 = alloca Value
+    call Value_from_const(%3, %2)
+    ret void
+}
+
+fn IRGenerator_generate_binary_op(__sret: *Value, self: *IRGenerator, op: u8) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    call IRGenerator_alloc_reg(%1)
+    %3 = ()
+    %5 = call IRGenerator_ast_binop_to_ir(%2)
+    %4 = %5
+    %7 = alloca Value
+    call Value_from_reg(%7, 0)
+    %6 = %7
+    %9 = alloca Value
+    call Value_from_reg(%9, 1)
+    %8 = %9
+    %11 = cast %4 to U64
+    %12 = alloca Instruction
+    call Instruction_binop(%12, %3, %11, %6, %8)
+    %10 = %12
+    call IRGenerator_emit(%1, %10)
+    %13 = alloca Value
+    call Value_from_reg(%13, %3)
+    ret void
+}
+
+fn IRGenerator_generate_binary(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call IRGenerator_generate_binary_op(%2, %1, 0)
+    ret void
+}
+
+fn IRGenerator_generate_unary_op(__sret: *Value, self: *IRGenerator, op: u8) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    call IRGenerator_alloc_reg(%1)
+    %3 = ()
+    %4 = alloca Value
+    call Value_from_reg(%4, %3)
+    ret void
+}
+
+fn IRGenerator_generate_unary(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call IRGenerator_generate_unary_op(%2, %1, 0)
+    ret void
+}
+
+fn IRGenerator_generate_call_instr(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    call IRGenerator_alloc_reg(%1)
+    %2 = ()
+    %3 = alloca Value
+    call Value_from_reg(%3, %2)
+    ret void
+}
+
+fn IRGenerator_generate_call(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call IRGenerator_generate_call_instr(%2, %1)
+    ret void
+}
+
+fn IRGenerator_generate_if_expr(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    call IRGenerator_alloc_block(%1)
+    %2 = ()
+    call IRGenerator_alloc_block(%1)
+    %3 = ()
+    call IRGenerator_alloc_block(%1)
+    %4 = ()
+    %6 = alloca Value
+    call Value_from_reg(%6, 0)
+    %5 = %6
+    %8 = alloca Terminator
+    call Terminator_cond_branch(%8, %5, %2, %3)
+    %7 = %8
+    call IRGenerator_set_terminator(%1, %7)
+    %9 = gep %1, 4
+    %10 = load %9
+    %11 = gep %1, 4
+    store %2, %11
+    %13 = alloca Terminator
+    call Terminator_branch(%13, %4)
+    %12 = %13
+    call IRGenerator_set_terminator(%1, %12)
+    %14 = gep %1, 4
+    %15 = load %14
+    %16 = gep %1, 4
+    store %3, %16
+    %17 = alloca Terminator
+    call Terminator_branch(%17, %4)
+    call IRGenerator_set_terminator(%1, %17)
+    %18 = gep %1, 4
+    %19 = load %18
+    %20 = gep %1, 4
+    store %4, %20
+    %21 = alloca Value
+    call Value_from_const(%21, 0)
+    ret void
+}
+
+fn IRGenerator_generate_if(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call IRGenerator_generate_if_expr(%2, %1)
+    ret void
+}
+
+fn IRGenerator_generate_while_loop(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    call IRGenerator_alloc_block(%1)
+    %2 = ()
+    call IRGenerator_alloc_block(%1)
+    %3 = ()
+    call IRGenerator_alloc_block(%1)
+    %4 = ()
+    %5 = alloca Terminator
+    call Terminator_branch(%5, %2)
+    call IRGenerator_set_terminator(%1, %5)
+    %6 = gep %1, 4
+    %7 = load %6
+    %8 = gep %1, 4
+    store %2, %8
+    %10 = alloca Value
+    call Value_from_reg(%10, 0)
+    %9 = %10
+    %11 = alloca Terminator
+    call Terminator_cond_branch(%11, %9, %3, %4)
+    call IRGenerator_set_terminator(%1, %11)
+    %12 = gep %1, 4
+    %13 = load %12
+    %14 = gep %1, 4
+    store %3, %14
+    %15 = alloca Terminator
+    call Terminator_branch(%15, %2)
+    call IRGenerator_set_terminator(%1, %15)
+    %16 = gep %1, 4
+    %17 = load %16
+    %18 = gep %1, 4
+    store %4, %18
+    %19 = alloca Value
+    call Value_from_const(%19, 0)
+    ret void
+}
+
+fn IRGenerator_generate_while(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call IRGenerator_generate_while_loop(%2, %1)
+    ret void
+}
+
+fn IRGenerator_generate_match(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call Value_from_const(%2, 0)
+    ret void
+}
+
+fn IRGenerator_generate_field_access(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    call IRGenerator_alloc_reg(%1)
+    %2 = ()
+    %3 = alloca Value
+    call Value_from_reg(%3, %2)
+    ret void
+}
+
+fn IRGenerator_generate_field(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call IRGenerator_generate_field_access(%2, %1)
+    ret void
+}
+
+fn IRGenerator_generate_index_access(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    call IRGenerator_alloc_reg(%1)
+    %2 = ()
+    %3 = alloca Value
+    call Value_from_reg(%3, %2)
+    ret void
+}
+
+fn IRGenerator_generate_index(__sret: *Value, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = alloca Value
+    call IRGenerator_generate_index_access(%2, %1)
+    ret void
+}
+
+fn IRGenerator_alloc_reg(self: *IRGenerator) -> u64 {
+  entry:
+    %0 = arg0
+    %2 = gep %0, 1
+    %3 = load %2
+    %1 = %3
+    %4 = gep %0, 1
+    %5 = load %4
+    %6 = gep %0, 1
+    %7 = load %6
+    %9 = cast 1 to U64
+    %8 = add %7 %9
+    %10 = gep %0, 1
+    store %8, %10
+    ret %1
+}
+
+fn IRGenerator_alloc_block(self: *IRGenerator) -> u64 {
+  entry:
+    %0 = arg0
+    %2 = gep %0, 2
+    %3 = load %2
+    %1 = %3
+    %4 = gep %0, 2
+    %5 = load %4
+    %6 = gep %0, 2
+    %7 = load %6
+    %9 = cast 1 to U64
+    %8 = add %7 %9
+    %10 = gep %0, 2
+    store %8, %10
+    ret %1
+}
+
+fn IRGenerator_emit(self: *IRGenerator, _inst: *Instruction) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    ret void
+}
+
+fn IRGenerator_set_terminator(self: *IRGenerator, _term: *Terminator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    ret void
+}
+
+fn IRGenerator_has_terminator(self: *IRGenerator) -> bool {
+  entry:
+    %0 = arg0
+    ret false
+}
+
+fn IRGenerator_ast_binop_to_ir(__sret: *BinOp, op: u8) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    ret void
+}
+
+fn IRGenerator_ast_type_to_ir(__sret: *IRType, self: *IRGenerator) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    ret void
+}
+
+fn IRGenerator_get_value_type(__sret: *IRType, self: *IRGenerator, _val: *Value) -> void {
+  entry:
+    %0 = arg0
+    %1 = arg1
+    %2 = arg2
+    ret void
+}
+
+fn IRGenerator_is_integer_type(ty: *IRType) -> bool {
+  entry:
+    %0 = arg0
+    ret true
+}
+
+fn main() -> void {
+  entry:
+    %0 = call puts("IR Generator defined!")
+    %2 = cast "test_module" to Ptr(U8)
+    %1 = %2
+    %4 = alloca IRGenerator
+    call IRGenerator_new(%4, %1)
+    %3 = %4
+    %6 = call IRGenerator_alloc_reg(%3)
+    %5 = %6
+    %8 = call IRGenerator_alloc_block(%3)
+    %7 = %8
+    %9 = call puts("Created IR generator!")
+    %11 = alloca Value
+    call Value_from_const(%11, 10)
+    %10 = %11
+    %13 = alloca Value
+    call Value_from_const(%13, 20)
+    %12 = %13
+    %15 = alloca Instruction
+    call Instruction_binop(%15, 0, @BinOp_Add, %10, %12)
+    %14 = %15
+    %17 = alloca Value
+    call Value_from_reg(%17, %5)
+    %16 = %17
+    %19 = alloca Terminator
+    call Terminator_ret(%19, %16)
+    %18 = %19
+    %20 = call puts("IR generation self-hosting working!")
+    ret void
+}
+
