@@ -1,0 +1,18 @@
+// Float Operations Test
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+fn main() -> i32 {
+    let a: f64 = 3.0;
+    let b: f64 = 2.0;
+    
+    let sum: f64 = a + b;
+    let diff: f64 = a - b;
+    let prod: f64 = a * b;
+    let quot: f64 = a / b;
+    
+    puts("Float test passed!" as *u8);
+    return 0;
+}

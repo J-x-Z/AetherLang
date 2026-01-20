@@ -278,23 +278,51 @@ impl LLVMCodeGen {
                         }
                     }
                     
-                    let result = match op {
-                        BinOp::Add => LLVMBuildAdd(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::Sub => LLVMBuildSub(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::Mul => LLVMBuildMul(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::Div => LLVMBuildSDiv(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::Mod => LLVMBuildSRem(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::And => LLVMBuildAnd(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::Or => LLVMBuildOr(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::Xor => LLVMBuildXor(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::Shl => LLVMBuildShl(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::Shr => LLVMBuildAShr(self.builder, lhs, rhs, name.as_ptr()),
-                        BinOp::Eq => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntEQ, lhs, rhs, name.as_ptr()),
-                        BinOp::Ne => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntNE, lhs, rhs, name.as_ptr()),
-                        BinOp::Lt => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSLT, lhs, rhs, name.as_ptr()),
-                        BinOp::Le => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSLE, lhs, rhs, name.as_ptr()),
-                        BinOp::Gt => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSGT, lhs, rhs, name.as_ptr()),
-                        BinOp::Ge => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSGE, lhs, rhs, name.as_ptr()),
+                    // Check if operands are floating point
+                    let lhs_ty = LLVMTypeOf(lhs);
+                    let is_float = LLVMGetTypeKind(lhs_ty) == llvm_sys::LLVMTypeKind::LLVMFloatTypeKind
+                                || LLVMGetTypeKind(lhs_ty) == llvm_sys::LLVMTypeKind::LLVMDoubleTypeKind;
+                    
+                    let result = if is_float {
+                        // Use floating-point instructions
+                        match op {
+                            BinOp::Add => LLVMBuildFAdd(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Sub => LLVMBuildFSub(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Mul => LLVMBuildFMul(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Div => LLVMBuildFDiv(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Mod => LLVMBuildFRem(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Eq => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealOEQ, lhs, rhs, name.as_ptr()),
+                            BinOp::Ne => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealONE, lhs, rhs, name.as_ptr()),
+                            BinOp::Lt => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealOLT, lhs, rhs, name.as_ptr()),
+                            BinOp::Le => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealOLE, lhs, rhs, name.as_ptr()),
+                            BinOp::Gt => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealOGT, lhs, rhs, name.as_ptr()),
+                            BinOp::Ge => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealOGE, lhs, rhs, name.as_ptr()),
+                            // Bitwise ops don't apply to floats, return 0
+                            BinOp::And | BinOp::Or | BinOp::Xor | BinOp::Shl | BinOp::Shr => {
+                                let i64_ty = LLVMInt64TypeInContext(self.context);
+                                LLVMConstInt(i64_ty, 0, 0)
+                            }
+                        }
+                    } else {
+                        // Use integer instructions
+                        match op {
+                            BinOp::Add => LLVMBuildAdd(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Sub => LLVMBuildSub(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Mul => LLVMBuildMul(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Div => LLVMBuildSDiv(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Mod => LLVMBuildSRem(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::And => LLVMBuildAnd(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Or => LLVMBuildOr(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Xor => LLVMBuildXor(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Shl => LLVMBuildShl(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Shr => LLVMBuildAShr(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Eq => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntEQ, lhs, rhs, name.as_ptr()),
+                            BinOp::Ne => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntNE, lhs, rhs, name.as_ptr()),
+                            BinOp::Lt => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSLT, lhs, rhs, name.as_ptr()),
+                            BinOp::Le => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSLE, lhs, rhs, name.as_ptr()),
+                            BinOp::Gt => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSGT, lhs, rhs, name.as_ptr()),
+                            BinOp::Ge => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSGE, lhs, rhs, name.as_ptr()),
+                        }
                     };
                     self.value_map.insert(*dest, result);
                 }
