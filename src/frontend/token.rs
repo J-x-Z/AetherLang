@@ -95,6 +95,8 @@ pub enum TokenKind {
     Ensures,
     /// invariant (type invariant)
     Invariant,
+    /// use (import statement)
+    Use,
     
     // ============ System Keywords (Phase 8) ============
     /// extern (foreign function interface)
@@ -260,6 +262,7 @@ impl TokenKind {
                 | TokenKind::Requires
                 | TokenKind::Ensures
                 | TokenKind::Invariant
+                | TokenKind::Use
                 // System keywords (Phase 8)
                 | TokenKind::Extern
                 | TokenKind::Static
@@ -307,6 +310,7 @@ impl TokenKind {
             "requires" => Some(TokenKind::Requires),
             "ensures" => Some(TokenKind::Ensures),
             "invariant" => Some(TokenKind::Invariant),
+            "use" => Some(TokenKind::Use),
             // System keywords (Phase 8)
             "extern" => Some(TokenKind::Extern),
             "static" => Some(TokenKind::Static),

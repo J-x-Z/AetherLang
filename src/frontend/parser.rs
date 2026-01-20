@@ -164,8 +164,10 @@ impl Parser {
             // P1 Phase B: Trait and Type alias
             TokenKind::Trait => Ok(Item::Trait(self.parse_trait_def()?)),
             TokenKind::Type => Ok(Item::TypeAlias(self.parse_type_alias()?)),
+            // Use/import statement
+            TokenKind::Use => Ok(Item::Use(self.parse_use()?)),
             _ => Err(Error::UnexpectedToken {
-                expected: "item (fn, struct, enum, impl, interface, const, extern, static, union, trait, type)".to_string(),
+                expected: "item (fn, struct, enum, impl, interface, const, extern, static, union, trait, type, use)".to_string(),
                 got: format!("{:?}", self.current_kind()),
                 span: self.current().span,
             }),
@@ -1627,6 +1629,51 @@ impl Parser {
             ty,
             is_pub: false,
             span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
+        })
+    }
+    
+    /// Parse use declaration: use path::{items} or use path::item
+    fn parse_use(&mut self) -> Result<UseDecl> {
+        let start = self.current().span;
+        self.expect(TokenKind::Use)?;
+        
+        // Parse path: foo::bar or foo::{a, b}
+        let mut path = Vec::new();
+        path.push(self.parse_ident()?);
+        
+        // Parse optional path segments and kind
+        let mut kind = UseKind::Simple;
+        
+        while self.consume(&TokenKind::ColonColon) {
+            // Check for glob: use foo::*
+            if self.consume(&TokenKind::Star) {
+                kind = UseKind::Glob;
+                break;
+            }
+            
+            // Check for multiple imports: use foo::{a, b}
+            // Simplified: just skip the braces content for now
+            if self.consume(&TokenKind::LBrace) {
+                while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+                    self.advance();
+                }
+                self.expect(TokenKind::RBrace)?;
+                kind = UseKind::Simple; // Simplified - treat as simple import
+                break;
+            }
+            
+            // Regular path segment
+            path.push(self.parse_ident()?);
+        }
+        
+        // Optional semicolon
+        self.consume(&TokenKind::Semicolon);
+        
+        Ok(UseDecl {
+            path,
+            kind,
+            span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
+            is_pub: false,
         })
     }
 
