@@ -37,6 +37,7 @@ pub enum SymbolKind {
     Enum { variants: Vec<String> },
     Param { ownership: Ownership },
     TypeParam,
+    TypeAlias { target: ResolvedType },
 }
 
 /// A scope containing symbols
@@ -462,6 +463,17 @@ impl SemanticAnalyzer {
                     }
                 }
             }
+            Item::TypeAlias(alias) => {
+                // Resolve the target type
+                let target = self.resolve_type(&alias.ty)?;
+                self.symbols.define(Symbol {
+                    name: alias.name.name.clone(),
+                    kind: SymbolKind::TypeAlias { target: target.clone() },
+                    ty: target,
+                    span: alias.span,
+                    mutable: false,
+                })?;
+            }
             _ => {} // Impl and Interface handled separately
         }
         Ok(())
@@ -495,6 +507,8 @@ impl SemanticAnalyzer {
             Item::Extern(_) => Ok(()), // FFI - external symbols registered elsewhere
             Item::Static(_) => Ok(()), // TODO: Check static variable type
             Item::Union(_) => Ok(()), // TODO: Check union field types
+            Item::Trait(_) => Ok(()), // Trait definitions checked in collect phase
+            Item::TypeAlias(_) => Ok(()), // Type aliases resolved in collect phase
         }
     }
 
@@ -1276,6 +1290,9 @@ impl SemanticAnalyzer {
                             // Check if it's a type parameter
                             if matches!(sym.kind, SymbolKind::TypeParam) {
                                 Ok(ResolvedType::GenericParam(name.clone()))
+                            } else if let SymbolKind::TypeAlias { target } = &sym.kind {
+                                // Expand type alias
+                                Ok(target.clone())
                             } else {
                                 Ok(sym.ty.clone())
                             }

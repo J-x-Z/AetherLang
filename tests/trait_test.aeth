@@ -1,0 +1,27 @@
+// Trait and Type Alias Test for AetherLang
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// Type alias
+type Int = i64;
+type Ptr<T> = *T;
+
+// Simple trait definition
+trait Display {
+    fn display(self: &Self);
+}
+
+// Trait with generic
+trait Add<T> {
+    fn add(self: &Self, other: T) -> T;
+}
+
+fn main() -> i32 {
+    // Use type alias
+    let x: Int = 42;
+    
+    puts("Trait and TypeAlias test passed!" as *u8);
+    return 0;
+}

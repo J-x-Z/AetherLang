@@ -203,6 +203,8 @@ impl IRGenerator {
             }
             Item::Static(_) => Ok(()), // TODO: Generate global variable IR
             Item::Union(_) => Ok(()), // TODO: Generate union type IR
+            Item::Trait(_) => Ok(()), // Trait definitions don't generate IR directly
+            Item::TypeAlias(_) => Ok(()), // Type aliases are resolved at semantic level
         }
     }
 

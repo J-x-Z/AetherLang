@@ -161,8 +161,11 @@ impl Parser {
             TokenKind::Extern => Ok(Item::Extern(self.parse_extern_block()?)),
             TokenKind::Static => Ok(Item::Static(self.parse_static_item()?)),
             TokenKind::Union => Ok(Item::Union(self.parse_union_def()?)),
+            // P1 Phase B: Trait and Type alias
+            TokenKind::Trait => Ok(Item::Trait(self.parse_trait_def()?)),
+            TokenKind::Type => Ok(Item::TypeAlias(self.parse_type_alias()?)),
             _ => Err(Error::UnexpectedToken {
-                expected: "item (fn, struct, enum, impl, interface, const, extern, static, union)".to_string(),
+                expected: "item (fn, struct, enum, impl, interface, const, extern, static, union, trait, type)".to_string(),
                 got: format!("{:?}", self.current_kind()),
                 span: self.current().span,
             }),
@@ -1533,6 +1536,87 @@ impl Parser {
             name,
             ty,
             value,
+            span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
+        })
+    }
+
+    // ==================== P1 Phase B: Trait and Type Alias ====================
+    
+    /// Parse trait definition: trait Name { fn method_sig; ... }
+    fn parse_trait_def(&mut self) -> Result<InterfaceDef> {
+        let start = self.current().span;
+        self.expect(TokenKind::Trait)?;
+
+        let name = self.parse_ident()?;
+        
+        // Optional type parameters: trait Name<T, U>
+        let type_params = if self.consume(&TokenKind::Lt) {
+            let mut params = Vec::new();
+            while !self.check(&TokenKind::Gt) && !self.is_at_end() {
+                params.push(self.parse_ident()?);
+                if !self.consume(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(TokenKind::Gt)?;
+            params
+        } else {
+            Vec::new()
+        };
+        
+        self.expect(TokenKind::LBrace)?;
+
+        let mut methods = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            methods.push(self.parse_fn_sig()?);
+            self.consume(&TokenKind::Semicolon);
+        }
+
+        self.expect(TokenKind::RBrace)?;
+
+        Ok(InterfaceDef {
+            name,
+            type_params,
+            methods,
+            default_methods: Vec::new(),
+            associated_types: Vec::new(),
+            supertraits: Vec::new(),
+            span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
+            is_pub: false,
+        })
+    }
+    
+    /// Parse type alias: type Name = Type
+    fn parse_type_alias(&mut self) -> Result<TypeAliasDef> {
+        let start = self.current().span;
+        self.expect(TokenKind::Type)?;
+        
+        let name = self.parse_ident()?;
+        
+        // Optional type parameters: type Name<T>
+        let type_params = if self.consume(&TokenKind::Lt) {
+            let mut params = Vec::new();
+            while !self.check(&TokenKind::Gt) && !self.is_at_end() {
+                params.push(self.parse_ident()?);
+                if !self.consume(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(TokenKind::Gt)?;
+            params
+        } else {
+            Vec::new()
+        };
+        
+        self.expect(TokenKind::Eq)?;
+        let ty = self.parse_type()?;
+        self.consume(&TokenKind::Semicolon);
+        
+        Ok(TypeAliasDef {
+            name,
+            type_params,
+            ty,
+            is_pub: false,
             span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
         })
     }

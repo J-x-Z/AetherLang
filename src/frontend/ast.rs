@@ -32,6 +32,10 @@ pub enum Item {
     Static(StaticDef),
     /// Union definition
     Union(UnionDef),
+    /// Trait definition (uses InterfaceDef as underlying structure)
+    Trait(InterfaceDef),
+    /// Type alias (type Foo = Bar)
+    TypeAlias(TypeAliasDef),
 }
 
 /// Function definition
@@ -218,6 +222,18 @@ pub struct ConstDef {
     pub name: Ident,
     pub ty: Option<Type>,
     pub value: Expr,
+    pub span: Span,
+}
+
+/// Type alias definition (type Foo = Bar)
+#[derive(Debug, Clone)]
+pub struct TypeAliasDef {
+    pub name: Ident,
+    /// Type parameters for generic aliases
+    pub type_params: Vec<Ident>,
+    /// The type this alias refers to
+    pub ty: Type,
+    pub is_pub: bool,
     pub span: Span,
 }
 
