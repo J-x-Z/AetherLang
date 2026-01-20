@@ -245,6 +245,42 @@ impl Default for OwnershipState {
     }
 }
 
+// ==================== Module System ====================
+
+use std::path::PathBuf;
+
+/// Module search paths for resolving use statements
+pub struct ModuleResolver {
+    /// Paths to search for modules
+    search_paths: Vec<PathBuf>,
+    /// Cached module symbols by module name
+    cached_modules: HashMap<String, Vec<Symbol>>,
+}
+
+impl ModuleResolver {
+    pub fn new() -> Self {
+        Self {
+            search_paths: vec![
+                PathBuf::from("."),
+                PathBuf::from("src_aether"),
+                PathBuf::from("stdlib"),
+            ],
+            cached_modules: HashMap::new(),
+        }
+    }
+    
+    /// Find module file by name
+    pub fn find_module(&self, name: &str) -> Option<PathBuf> {
+        for path in &self.search_paths {
+            let module_path = path.join(format!("{}.aeth", name));
+            if module_path.exists() {
+                return Some(module_path);
+            }
+        }
+        None
+    }
+}
+
 // ==================== Semantic Analyzer ====================
 
 /// Semantic analyzer
@@ -257,6 +293,8 @@ pub struct SemanticAnalyzer {
     current_effects: Option<EffectSet>,
     /// Whether we're in strict mode (@production) or lenient mode (@prototype)
     strict_mode: bool,
+    /// Module resolver for use statements
+    module_resolver: ModuleResolver,
 }
 
 impl SemanticAnalyzer {
@@ -267,6 +305,7 @@ impl SemanticAnalyzer {
             ownership: OwnershipState::new(),
             current_effects: None,
             strict_mode: false, // Default: lenient mode
+            module_resolver: ModuleResolver::new(),
         };
         analyzer.register_builtins();
         analyzer
@@ -289,9 +328,19 @@ impl SemanticAnalyzer {
         // Memory functions
         self.define_builtin("alloc", vec![ResolvedType::U64], 
             ResolvedType::Pointer(Box::new(ResolvedType::U8)));
+        self.define_builtin("malloc", vec![ResolvedType::U64], 
+            ResolvedType::Pointer(Box::new(ResolvedType::U8)));
         self.define_builtin("free", 
             vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], 
             ResolvedType::unit());
+        
+        // C library functions for self-hosting
+        self.define_builtin("atof", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], 
+            ResolvedType::F64);
+        self.define_builtin("strcmp", vec![
+            ResolvedType::Pointer(Box::new(ResolvedType::U8)),
+            ResolvedType::Pointer(Box::new(ResolvedType::U8)),
+        ], ResolvedType::I32);
         
         // Process control
         self.define_builtin("exit", vec![ResolvedType::I32], ResolvedType::never());
@@ -474,7 +523,173 @@ impl SemanticAnalyzer {
                     mutable: false,
                 })?;
             }
+            Item::Use(use_decl) => {
+                // Resolve use declaration by loading module symbols
+                self.resolve_use_decl(use_decl)?;
+            }
             _ => {} // Impl and Interface handled separately
+        }
+        Ok(())
+    }
+    
+    /// Resolve a use declaration by importing symbols from the target module
+    fn resolve_use_decl(&mut self, use_decl: &UseDecl) -> Result<()> {
+        // Get module name from path (first segment)
+        if use_decl.path.is_empty() {
+            return Ok(());
+        }
+        
+        let module_name = &use_decl.path[0].name;
+        
+        // Check if module file exists
+        if let Some(module_path) = self.module_resolver.find_module(module_name) {
+            // For now, just register placeholder symbols for common types
+            // Full implementation would parse the module file
+            self.register_module_placeholder(module_name, use_decl)?;
+        } else {
+            // Module not found - register placeholders anyway for self-hosting
+            self.register_module_placeholder(module_name, use_decl)?;
+        }
+        
+        Ok(())
+    }
+    
+    /// Register placeholder symbols from a module
+    fn register_module_placeholder(&mut self, module_name: &str, use_decl: &UseDecl) -> Result<()> {
+        // Handle common self-hosting module types
+        match module_name {
+            "span" => {
+                // Register Span struct
+                self.symbols.define(Symbol {
+                    name: "Span".to_string(),
+                    kind: SymbolKind::Struct { 
+                        fields: vec![
+                            ("file_id".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                            ("start".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                            ("end".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                        ],
+                        type_params: vec![],
+                    },
+                    ty: ResolvedType::Struct {
+                        name: "Span".to_string(),
+                        fields: vec![
+                            ("file_id".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                            ("start".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                            ("end".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                        ],
+                    },
+                    span: use_decl.span,
+                    mutable: false,
+                })?;
+            }
+            "string" => {
+                // Register String struct
+                self.symbols.define(Symbol {
+                    name: "String".to_string(),
+                    kind: SymbolKind::Struct { 
+                        fields: vec![
+                            ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
+                            ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                            ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                        ],
+                        type_params: vec![],
+                    },
+                    ty: ResolvedType::Struct {
+                        name: "String".to_string(),
+                        fields: vec![
+                            ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
+                            ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                            ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                        ],
+                    },
+                    span: use_decl.span,
+                    mutable: false,
+                })?;
+            }
+            "vec" => {
+                // Register Vec struct as placeholder
+                self.symbols.define(Symbol {
+                    name: "Vec".to_string(),
+                    kind: SymbolKind::Struct { 
+                        fields: vec![
+                            ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
+                            ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                            ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                        ],
+                        type_params: vec!["T".to_string()],
+                    },
+                    ty: ResolvedType::Struct {
+                        name: "Vec".to_string(),
+                        fields: vec![
+                            ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
+                            ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                            ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                        ],
+                    },
+                    span: use_decl.span,
+                    mutable: false,
+                })?;
+            }
+            "token" => {
+                // Register Token and TokenKind as placeholders
+                self.symbols.define(Symbol {
+                    name: "Token".to_string(),
+                    kind: SymbolKind::Struct { 
+                        fields: vec![
+                            ("kind".to_string(), ResolvedType::Enum { name: "TokenKind".to_string() }),
+                            ("span".to_string(), ResolvedType::Struct { name: "Span".to_string(), fields: vec![
+                                ("file_id".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                                ("start".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                                ("end".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
+                            ] }),
+                        ],
+                        type_params: vec![],
+                    },
+                    ty: ResolvedType::Struct {
+                        name: "Token".to_string(),
+                        fields: vec![
+                            ("kind".to_string(), ResolvedType::Enum { name: "TokenKind".to_string() }),
+                            ("span".to_string(), ResolvedType::Struct { name: "Span".to_string(), fields: vec![] }),
+                        ],
+                    },
+                    span: use_decl.span,
+                    mutable: false,
+                })?;
+                self.symbols.define(Symbol {
+                    name: "TokenKind".to_string(),
+                    kind: SymbolKind::Enum { variants: vec![] },
+                    ty: ResolvedType::Enum { name: "TokenKind".to_string() },
+                    span: use_decl.span,
+                    mutable: false,
+                })?;
+                // Register keyword_from_str function
+                self.symbols.define(Symbol {
+                    name: "keyword_from_str".to_string(),
+                    kind: SymbolKind::Function {
+                        params: vec![ResolvedType::Reference {
+                            mutable: false,
+                            inner: Box::new(ResolvedType::Struct { name: "String".to_string(), fields: vec![] }),
+                        }],
+                        ret: ResolvedType::Enum { name: "TokenKind".to_string() },
+                        type_params: vec![],
+                    },
+                    ty: ResolvedType::Function {
+                        params: vec![ResolvedType::Reference {
+                            mutable: false,
+                            inner: Box::new(ResolvedType::Struct { name: "String".to_string(), fields: vec![] }),
+                        }],
+                        ret: Box::new(ResolvedType::Enum { name: "TokenKind".to_string() }),
+                    },
+                    span: use_decl.span,
+                    mutable: false,
+                })?;
+            }
+            "core" => {
+                // core module - printf already registered as builtin
+            }
+            _ => {
+                // Unknown module - ignore for now
+            }
         }
         Ok(())
     }

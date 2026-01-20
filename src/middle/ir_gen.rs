@@ -53,6 +53,9 @@ impl IRGenerator {
 
     /// Generate IR for a program
     pub fn generate(&mut self, program: &Program) -> Result<IRModule> {
+        // Phase 0: Register C library extern functions for self-hosting
+        self.register_c_library_externs();
+        
         // Phase 1: Collect all function signatures (for forward reference)
         for item in &program.items {
             self.collect_signatures(item);
@@ -63,6 +66,40 @@ impl IRGenerator {
             self.generate_item(item)?;
         }
         Ok(self.module.clone())
+    }
+    
+    /// Register C library extern functions for self-hosting
+    fn register_c_library_externs(&mut self) {
+        // atof - string to float conversion
+        self.module.externs.push(IRExtern {
+            name: "atof".to_string(),
+            params: vec![("s".to_string(), IRType::Ptr(Box::new(IRType::I8)))],
+            ret_type: IRType::F64,
+        });
+        
+        // strcmp - string comparison
+        self.module.externs.push(IRExtern {
+            name: "strcmp".to_string(),
+            params: vec![
+                ("s1".to_string(), IRType::Ptr(Box::new(IRType::I8))),
+                ("s2".to_string(), IRType::Ptr(Box::new(IRType::I8))),
+            ],
+            ret_type: IRType::I32,
+        });
+        
+        // malloc - memory allocation
+        self.module.externs.push(IRExtern {
+            name: "malloc".to_string(),
+            params: vec![("size".to_string(), IRType::I64)],
+            ret_type: IRType::Ptr(Box::new(IRType::I8)),
+        });
+        
+        // free - memory deallocation
+        self.module.externs.push(IRExtern {
+            name: "free".to_string(),
+            params: vec![("ptr".to_string(), IRType::Ptr(Box::new(IRType::I8)))],
+            ret_type: IRType::Void,
+        });
     }
     
     /// Collect function signatures for forward reference
@@ -175,7 +212,14 @@ impl IRGenerator {
                 }
                 Ok(())
             }
-            Item::Use(_) => Ok(()),
+            Item::Use(use_decl) => {
+                // Generate IR struct definitions for imported types
+                if !use_decl.path.is_empty() {
+                    let module_name = &use_decl.path[0].name;
+                    self.generate_module_types(module_name)?;
+                }
+                Ok(())
+            },
             Item::Extern(ext) => {
                 // Register extern functions in IR module
                 for foreign_item in &ext.items {
@@ -206,6 +250,70 @@ impl IRGenerator {
             Item::Trait(_) => Ok(()), // Trait definitions don't generate IR directly
             Item::TypeAlias(_) => Ok(()), // Type aliases are resolved at semantic level
         }
+    }
+    
+    /// Generate IR struct definitions for imported module types
+    fn generate_module_types(&mut self, module_name: &str) -> Result<()> {
+        match module_name {
+            "span" => {
+                if !self.struct_defs.contains_key("Span") {
+                    let fields = vec![
+                        ("file_id".to_string(), IRType::I64),
+                        ("start".to_string(), IRType::I64),
+                        ("end".to_string(), IRType::I64),
+                    ];
+                    self.struct_defs.insert("Span".to_string(), fields.clone());
+                    self.module.add_struct("Span", fields, crate::middle::ir::StructRepr::Default);
+                }
+            }
+            "string" => {
+                if !self.struct_defs.contains_key("String") {
+                    let fields = vec![
+                        ("data".to_string(), IRType::Ptr(Box::new(IRType::I8))),
+                        ("len".to_string(), IRType::I64),
+                        ("cap".to_string(), IRType::I64),
+                    ];
+                    self.struct_defs.insert("String".to_string(), fields.clone());
+                    self.module.add_struct("String", fields, crate::middle::ir::StructRepr::Default);
+                }
+            }
+            "vec" => {
+                if !self.struct_defs.contains_key("Vec") {
+                    let fields = vec![
+                        ("data".to_string(), IRType::Ptr(Box::new(IRType::I8))),
+                        ("len".to_string(), IRType::I64),
+                        ("cap".to_string(), IRType::I64),
+                    ];
+                    self.struct_defs.insert("Vec".to_string(), fields.clone());
+                    self.module.add_struct("Vec", fields, crate::middle::ir::StructRepr::Default);
+                }
+            }
+            "token" => {
+                // First ensure Span is defined
+                self.generate_module_types("span")?;
+                
+                if !self.struct_defs.contains_key("TokenKind") {
+                    // TokenKind is an enum, represented as i64 tag + data
+                    let fields = vec![
+                        ("tag".to_string(), IRType::I64),
+                        ("data".to_string(), IRType::I64),
+                    ];
+                    self.struct_defs.insert("TokenKind".to_string(), fields.clone());
+                    self.module.add_struct("TokenKind", fields, crate::middle::ir::StructRepr::Default);
+                }
+                
+                if !self.struct_defs.contains_key("Token") {
+                    let fields = vec![
+                        ("kind".to_string(), IRType::Struct("TokenKind".to_string())),
+                        ("span".to_string(), IRType::Struct("Span".to_string())),
+                    ];
+                    self.struct_defs.insert("Token".to_string(), fields.clone());
+                    self.module.add_struct("Token", fields, crate::middle::ir::StructRepr::Default);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Generate IR for a method with Type_method naming convention
