@@ -101,6 +101,16 @@ void Lexer_match_operator(struct TokenKind*, struct Lexer*, uint8_t);
 void Lexer_next_token(struct Token*, struct Lexer*);
 void Lexer_tokenize(struct VecToken*, struct Lexer*);
 uint8_t* read_file(uint8_t*);
+/* Enum Variant Constructor Stubs (auto-generated) */
+void TokenKind_CharLit(void* _arg0) { /* enum stub */ }
+void TokenKind_FloatLit(void* _arg0) { /* enum stub */ }
+void TokenKind_Ident(void* _arg0) { /* enum stub */ }
+void TokenKind_IntLit(void* _arg0) { /* enum stub */ }
+void TokenKind_StringLit(void* _arg0) { /* enum stub */ }
+void TokenKind_Unknown(void* _arg0) { /* enum stub */ }
+void Token_eof(void* _arg0) { /* enum stub */ }
+
+
 int32_t main(void);
 
 void my_println(uint8_t* _arg0) {

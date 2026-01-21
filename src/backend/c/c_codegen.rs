@@ -33,6 +33,9 @@ pub struct CCodeGen {
     
     // Track globals used (for enum variants)
     globals_used: HashSet<String>,
+    
+    // Track calls to undefined functions (potential enum variant constructors)
+    undefined_calls: HashSet<(String, usize)>,  // (func_name, arg_count)
 }
 
 impl CCodeGen {
@@ -49,6 +52,7 @@ impl CCodeGen {
             param_types: HashMap::new(),
             func_ret_types: HashMap::new(),
             globals_used: HashSet::new(),
+            undefined_calls: HashSet::new(),
         }
 
 
@@ -500,6 +504,13 @@ impl CCodeGen {
                 
                 // Check if user-defined function returns void
                 let ret_ty = self.func_ret_types.get(func).cloned();
+                let is_undefined_call = ret_ty.is_none() && !is_builtin_void;
+                
+                // Track undefined calls - might be enum variant constructors
+                if is_undefined_call && !func.starts_with("_") {
+                    self.undefined_calls.insert((func.clone(), args.len()));
+                }
+                
                 let is_void = is_builtin_void || matches!(ret_ty, Some(IRType::Void)) || matches!(ret_ty, None);
                 
                 let call = format!("{}({})", c_func, args_str.join(", "));
@@ -813,6 +824,40 @@ impl CCodeGen {
             // Insert after "/* Struct Definitions */" line
             if let Some(pos) = self.output.find("/* Struct Definitions */") {
                 self.output.insert_str(pos, &globals_code);
+            }
+        }
+        
+        // Generate stub functions for undefined calls (enum variant constructors)
+        if !self.undefined_calls.is_empty() {
+            let mut stubs = String::new();
+            stubs.push_str("\n/* Enum Variant Constructor Stubs (auto-generated) */\n");
+            
+            let mut calls_sorted: Vec<_> = self.undefined_calls.iter().cloned().collect();
+            calls_sorted.sort();
+            
+            for (func_name, arg_count) in calls_sorted.iter() {
+                // Generate a stub that takes N void* arguments
+                // This allows enum variant constructors to compile
+                if *arg_count == 0 {
+                    stubs.push_str(&format!("void {}(void) {{ /* enum stub */ }}\n", func_name));
+                } else {
+                    let params: Vec<_> = (0..*arg_count).map(|i| format!("void* _arg{}", i)).collect();
+                    stubs.push_str(&format!("void {}({}) {{ /* enum stub */ }}\n", func_name, params.join(", ")));
+                }
+            }
+            stubs.push_str("\n");
+            
+            // Insert before function definitions (after struct definitions)
+            // Find "/* Struct Definitions */" and insert after it
+            if let Some(struct_pos) = self.output.find("/* Struct Definitions */") {
+                // Find the first function definition after structs
+                if let Some(func_pos) = self.output[struct_pos..].find("\nint32_t ") {
+                    let insert_pos = struct_pos + func_pos;
+                    self.output.insert_str(insert_pos, &stubs);
+                } else if let Some(func_pos) = self.output[struct_pos..].find("\nvoid ") {
+                    let insert_pos = struct_pos + func_pos;
+                    self.output.insert_str(insert_pos, &stubs);
+                }
             }
         }
         
