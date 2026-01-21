@@ -1,22 +1,17 @@
 // AetherLang Bootstrap Compiler Entry Point
-// Simplified version for LLVM backend (no embedded NUL chars)
+// Simplified version without LLVM initialization macros
 
 extern "C" {
     fn puts(s: *u8) -> i32;
-    fn exit(code: i32);
     fn malloc(size: u64) -> *u8;
     fn free(ptr: *void);
     
-    // LLVM C API
+    // LLVM C API (only real library functions)
     fn LLVMModuleCreateWithName(name: *u8) -> *void;
     fn LLVMDisposeModule(m: *void);
     fn LLVMCreateBuilder() -> *void;
     fn LLVMDisposeBuilder(b: *void);
     fn LLVMWriteBitcodeToFile(m: *void, path: *u8) -> i32;
-    fn LLVMInitializeAllTargetInfos();
-    fn LLVMInitializeAllTargets();
-    fn LLVMInitializeAllTargetMCs();
-    fn LLVMInitializeAllAsmPrinters();
 }
 
 // ==================== Compile function ====================
@@ -46,11 +41,6 @@ fn compile() -> i32 {
 // ==================== Main ====================
 
 fn main() -> i32 {
-    LLVMInitializeAllTargetInfos()
-    LLVMInitializeAllTargets()
-    LLVMInitializeAllTargetMCs()
-    LLVMInitializeAllAsmPrinters()
-    
     puts("Bootstrap compiler ready" as *u8)
     return compile()
 }
