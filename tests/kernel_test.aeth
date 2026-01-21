@@ -1,0 +1,17 @@
+// Kernel Annotations Test
+// Test @naked and @interrupt attributes
+
+@naked
+fn naked_entry() {
+    // Pure assembly function, no prologue/epilogue
+    asm!("ret")
+}
+
+@interrupt
+fn timer_irq() {
+    // Interrupt handler
+}
+
+fn main() {
+    println("Kernel annotations test!")
+}

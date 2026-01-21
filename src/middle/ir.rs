@@ -83,6 +83,10 @@ pub struct IRFunction {
     pub contracts: IRContracts,
     /// SIMD annotation - enable auto-vectorization hints
     pub simd: bool,
+    /// Naked function - no prologue/epilogue (for asm)
+    pub naked: bool,
+    /// Interrupt handler function
+    pub interrupt: bool,
 }
 
 /// Contract expressions for runtime assertion generation
@@ -107,6 +111,8 @@ impl IRFunction {
             entry_block: BlockId(0),
             contracts: IRContracts::default(),
             simd: false,
+            naked: false,
+            interrupt: false,
         }
     }
 

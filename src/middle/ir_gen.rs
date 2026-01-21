@@ -436,10 +436,13 @@ impl IRGenerator {
 
         let mut ir_func = IRFunction::new(&func.name.name, params.clone(), ret_type);
         
-        // Check for @simd annotation
+        // Check for function annotations (@simd, @naked, @interrupt, #[naked], #[interrupt])
         for annotation in &func.annotations {
-            if annotation.name.name == "simd" {
-                ir_func.simd = true;
+            match annotation.name.name.as_str() {
+                "simd" => ir_func.simd = true,
+                "naked" => ir_func.naked = true,
+                "interrupt" => ir_func.interrupt = true,
+                _ => {}
             }
         }
         

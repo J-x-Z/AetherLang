@@ -1,0 +1,95 @@
+// AetherLang Atomic Operations Library
+// Platform-independent atomic primitives for concurrent programming
+
+// ==================== Atomic Load/Store ====================
+
+// Atomic load (acquire ordering)
+pub fn atomic_load_u32(ptr: *u32) -> u32 {
+    return __atomic_load_u32(ptr)
+}
+
+pub fn atomic_load_u64(ptr: *u64) -> u64 {
+    return __atomic_load_u64(ptr)
+}
+
+// Atomic store (release ordering)
+pub fn atomic_store_u32(ptr: *u32, val: u32) {
+    __atomic_store_u32(ptr, val)
+}
+
+pub fn atomic_store_u64(ptr: *u64, val: u64) {
+    __atomic_store_u64(ptr, val)
+}
+
+// ==================== Atomic Arithmetic ====================
+
+// Atomic add, returns old value
+pub fn atomic_add_u32(ptr: *u32, val: u32) -> u32 {
+    return __atomic_fetch_add_u32(ptr, val)
+}
+
+pub fn atomic_add_u64(ptr: *u64, val: u64) -> u64 {
+    return __atomic_fetch_add_u64(ptr, val)
+}
+
+// Atomic sub, returns old value
+pub fn atomic_sub_u32(ptr: *u32, val: u32) -> u32 {
+    return __atomic_fetch_sub_u32(ptr, val)
+}
+
+// Atomic increment
+pub fn atomic_inc_u32(ptr: *u32) -> u32 {
+    return atomic_add_u32(ptr, 1)
+}
+
+// Atomic decrement
+pub fn atomic_dec_u32(ptr: *u32) -> u32 {
+    return atomic_sub_u32(ptr, 1)
+}
+
+// ==================== Atomic Compare-and-Swap ====================
+
+// CAS: compare and swap, returns true if successful
+pub fn atomic_cas_u32(ptr: *u32, expected: u32, desired: u32) -> bool {
+    return __atomic_compare_exchange_u32(ptr, expected, desired)
+}
+
+pub fn atomic_cas_u64(ptr: *u64, expected: u64, desired: u64) -> bool {
+    return __atomic_compare_exchange_u64(ptr, expected, desired)
+}
+
+// ==================== Memory Barriers ====================
+
+// Full memory fence
+pub fn memory_fence() {
+    __atomic_thread_fence()
+}
+
+// Compiler barrier (prevent reordering)
+pub fn compiler_barrier() {
+    asm!("" ::: "memory")
+}
+
+// ==================== Spinlock ====================
+
+pub struct Spinlock {
+    locked: u32,
+}
+
+pub fn spinlock_init(lock: *Spinlock) {
+    atomic_store_u32(&lock.locked, 0)
+}
+
+pub fn spinlock_acquire(lock: *Spinlock) {
+    while !atomic_cas_u32(&lock.locked, 0, 1) {
+        // Spin
+    }
+}
+
+pub fn spinlock_release(lock: *Spinlock) {
+    atomic_store_u32(&lock.locked, 0)
+}
+
+pub fn spinlock_try_acquire(lock: *Spinlock) -> bool {
+    return atomic_cas_u32(&lock.locked, 0, 1)
+}

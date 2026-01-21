@@ -280,6 +280,22 @@ impl CCodeGen {
             self.writeln("#endif");
         }
         
+        // Generate naked function attribute (no prologue/epilogue)
+        if func.naked {
+            self.writeln("/* @naked: no prologue/epilogue */");
+            self.writeln("#if defined(__GNUC__) || defined(__clang__)");
+            self.writeln("__attribute__((naked))");
+            self.writeln("#endif");
+        }
+        
+        // Generate interrupt handler attribute
+        if func.interrupt {
+            self.writeln("/* @interrupt: interrupt handler */");
+            self.writeln("#if defined(__GNUC__) || defined(__clang__)");
+            self.writeln("__attribute__((interrupt))");
+            self.writeln("#endif");
+        }
+        
         let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
         self.writeln(&format!("{} {}({}) {{", ret_type, func.name, params_str));
         self.indent += 1;
