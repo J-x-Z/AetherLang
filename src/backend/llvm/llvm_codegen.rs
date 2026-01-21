@@ -498,7 +498,7 @@ impl LLVMCodeGen {
                     
                     // Check if this is struct field access or pointer arithmetic
                     match elem_ty {
-                        IRType::Struct(struct_name) => {
+                        IRType::Struct(_struct_name) => {
                             // Struct field access: use LLVMBuildStructGEP2
                             let field_idx = if let Value::Constant(Constant::Int(i)) = index {
                                 *i as u32

@@ -310,7 +310,7 @@ impl Parser {
     }
     
     fn parse_equality(&mut self) -> Result<Expr, String> {
-        let mut expr = self.parse_term()?; // actually parse_add_sub etc.
+        let expr = self.parse_term()?; // actually parse_add_sub etc.
         // Simplified: just call primary for now to test structure
         // TODO: Implement full precedence (Eq, Add, Mul, Unary, Primary)
         Ok(expr)

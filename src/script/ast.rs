@@ -1,4 +1,4 @@
-use super::token::{TokenKind, Span};
+use super::token::Span;
 
 #[derive(Debug, Clone)]
 pub struct ScriptModule {

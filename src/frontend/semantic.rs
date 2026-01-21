@@ -592,7 +592,7 @@ impl SemanticAnalyzer {
         let module_name = &use_decl.path[0].name;
         
         // Check if module file exists
-        if let Some(module_path) = self.module_resolver.find_module(module_name) {
+        if let Some(_module_path) = self.module_resolver.find_module(module_name) {
             // For now, just register placeholder symbols for common types
             // Full implementation would parse the module file
             self.register_module_placeholder(module_name, use_decl)?;
