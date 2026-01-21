@@ -3,7 +3,7 @@
 //! Translates Aether IR to C code for compilation with clang/gcc.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::fs;
 
@@ -30,6 +30,9 @@ pub struct CCodeGen {
     reg_types: HashMap<Register, IRType>,
     param_types: HashMap<usize, IRType>,
     func_ret_types: HashMap<String, IRType>,
+    
+    // Track globals used (for enum variants)
+    globals_used: HashSet<String>,
 }
 
 impl CCodeGen {
@@ -45,6 +48,7 @@ impl CCodeGen {
             reg_types: HashMap::new(),
             param_types: HashMap::new(),
             func_ret_types: HashMap::new(),
+            globals_used: HashSet::new(),
         }
 
 
@@ -168,7 +172,11 @@ impl CCodeGen {
                 Constant::Null => "NULL".to_string(),
             },
             Value::Parameter(i) => format!("_arg{}", i),
-            Value::Global(name) => name.clone(),
+            Value::Global(name) => {
+                // Track this global for later definition generation
+                self.globals_used.insert(name.clone());
+                name.clone()
+            },
             Value::Unit => "((void)0)".to_string(),
         }
     }
@@ -784,6 +792,28 @@ impl CCodeGen {
         // Function definitions
         for func in &module.functions {
             self.generate_function(func)?;
+        }
+        
+        // Generate enum variant constants that were collected during function generation
+        // Insert them at the beginning of the output (after headers, before structs)
+        if !self.globals_used.is_empty() {
+            let mut globals_code = String::new();
+            globals_code.push_str("\n/* Enum Variant Constants (auto-generated) */\n");
+            
+            let mut globals_sorted: Vec<_> = self.globals_used.iter().cloned().collect();
+            globals_sorted.sort();
+            
+            for (idx, name) in globals_sorted.iter().enumerate() {
+                // Generate a unique integer for each enum variant
+                // For proper tagged unions, we'd need more info, but this works for simple comparisons
+                globals_code.push_str(&format!("static const intptr_t {} = {};\n", name, idx + 1));
+            }
+            globals_code.push_str("\n");
+            
+            // Insert after "/* Struct Definitions */" line
+            if let Some(pos) = self.output.find("/* Struct Definitions */") {
+                self.output.insert_str(pos, &globals_code);
+            }
         }
         
         Ok(self.output.clone())
