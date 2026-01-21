@@ -713,11 +713,12 @@ impl CCodeGen {
         self.writeln("#include <stdio.h>");
         self.writeln("#include <stdlib.h>");
         // SIMD headers (platform-specific)
-        if self.target_triple.contains("aarch64") || self.target_triple.contains("arm") {
+        if self.target_triple.contains("aarch64") || self.target_triple.contains("arm64") || self.target_triple.contains("arm") {
             self.writeln("#include <arm_neon.h>");
-        } else {
+        } else if self.target_triple.contains("x86") || self.target_triple.contains("i686") || self.target_triple.contains("x86_64") {
             self.writeln("#include <immintrin.h>  /* SSE/AVX */");
         }
+        // Skip SIMD headers for other platforms
         self.writeln("");
         
         // Runtime support functions (skip for no_std)

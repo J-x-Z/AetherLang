@@ -308,7 +308,7 @@ fn compile_file(input: &PathBuf, output: Option<PathBuf>, cli: &Cli) {
     // 7. Code Generation
     match cli.backend.as_str() {
         "c" => {
-            let mut codegen = CCodeGen::new("x86_64-pc-windows-msvc");
+            let mut codegen = CCodeGen::new(&cli.target);
             
             // Generate C source
             let c_source = match codegen.generate_source(&ir_module) {

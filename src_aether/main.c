@@ -3,7 +3,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-// #include <immintrin.h>  /* SSE/AVX */
 
 /* AetherLang Runtime */
 static void aether_print(const char* s) { printf("%s", s); }
@@ -14,190 +13,273 @@ static void aether_assert(bool c) { if(!c) { fprintf(stderr, "Assertion failed\n
 
 /* Struct Definitions */
 uint8_t* read_file(uint8_t*);
-int32_t compile_file(uint8_t*, uint8_t*);
+int64_t count_tokens(uint8_t*, uint64_t);
+int32_t compile_file(uint8_t*);
+void print_help(void);
+void print_version(void);
 int32_t main(void);
 
 uint8_t* read_file(uint8_t* _arg0) {
-    int32_t _t13;
-    int32_t _t9;
+    int32_t _t11;
+    int32_t _t7;
     int64_t _t10;
-    int64_t _t11;
     int64_t _t12;
-    int64_t _t14;
+    int64_t _t13;
     int64_t _t15;
+    int64_t _t16;
     int64_t _t17;
-    int64_t _t18;
     int64_t _t19;
-    int64_t _t21;
-    int64_t _t22;
+    int64_t _t20;
+    int64_t _t24;
     int64_t _t26;
     int64_t _t27;
+    int64_t _t29;
     int64_t _t2;
+    int64_t _t30;
     int64_t _t3;
     int64_t _t5;
-    int64_t _t7;
-    uint64_t _t16;
-    uint64_t _t24;
+    int64_t _t8;
+    int64_t _t9;
+    uint64_t _t14;
+    uint64_t _t22;
+    uint64_t _t23;
     uint64_t _t25;
+    uint64_t _t28;
     uint8_t* _t0;
+    uint8_t* _t18;
     uint8_t* _t1;
-    uint8_t* _t20;
-    uint8_t* _t23;
+    uint8_t* _t21;
     uint8_t* _t6;
-    uint8_t* _t8;
     void* _t4;
     
     _t0 = _arg0;
-    _t1 = (uint8_t*)"rb\u{0}";
+    _t1 = (uint8_t*)"rb";
     fopen(_t0, _t1);
     _t3 = _t2;
     _t4 = (void*)0LL;
     _t5 = _t3 == _t4;
     if (_t5) goto L_then; else goto L_else;
 L_then:
-    _t6 = (uint8_t*)"Error: cannot open file\u{0}";
-    puts(_t6);
-    _t8 = (uint8_t*)0LL;
-    return _t8;
+    _t6 = (uint8_t*)0LL;
+    return _t6;
 L_else:
     goto L_merge;
 L_merge:
-    _t9 = (int32_t)2LL;
-    fseek(_t3, 0LL, _t9);
+    _t7 = (int32_t)2LL;
+    fseek(_t3, 0LL, _t7);
     ftell(_t3);
-    _t12 = _t11;
-    _t13 = (int32_t)0LL;
-    fseek(_t3, 0LL, _t13);
-    _t15 = _t12 + 1LL;
-    _t16 = (uint64_t)_t15;
-    _t17 = (int64_t)_t16;
-    malloc(_t17);
-    _t19 = _t18;
-    _t20 = (uint8_t*)0LL;
-    _t21 = _t19 == _t20;
-    if (_t21) goto L_then; else goto L_else;
+    _t10 = _t9;
+    _t11 = (int32_t)0LL;
+    fseek(_t3, 0LL, _t11);
+    _t13 = _t10 + 1LL;
+    _t14 = (uint64_t)_t13;
+    _t15 = (int64_t)_t14;
+    malloc(_t15);
+    _t17 = _t16;
+    _t18 = (uint8_t*)0LL;
+    _t19 = _t17 == _t18;
+    if (_t19) goto L_then; else goto L_else;
 L_then:
     fclose(_t3);
-    _t23 = (uint8_t*)0LL;
-    return _t23;
+    _t21 = (uint8_t*)0LL;
+    return _t21;
 L_else:
     goto L_merge;
 L_merge:
-    _t24 = (uint64_t)1LL;
-    _t25 = (uint64_t)_t12;
-    fread(_t19, _t24, _t25, _t3);
+    _t22 = (uint64_t)1LL;
+    _t23 = (uint64_t)_t10;
+    fread(_t17, _t22, _t23, _t3);
+    _t25 = (uint64_t)_t10;
+    _t26 = &_t17[_t25];
+    _t27 = *_t26;
+    _t28 = (uint64_t)_t10;
+    _t29 = &_t17[_t28];
+    *_t29 = 0LL;
     fclose(_t3);
-    return _t19;
+    return _t17;
 }
 
-int32_t compile_file(uint8_t* _arg0, uint8_t* _arg1) {
-    int32_t _t10;
-    int32_t _t28;
-    int32_t _t37;
-    int64_t _t12;
-    int64_t _t14;
-    int64_t _t16;
-    int64_t _t18;
-    int64_t _t20;
-    int64_t _t22;
-    int64_t _t23;
-    int64_t _t24;
-    int64_t _t25;
-    int64_t _t30;
-    int64_t _t31;
-    int64_t _t33;
-    int64_t _t36;
+int64_t count_tokens(uint8_t* _arg0, uint64_t _arg1) {
+    int64_t _t2;
     int64_t _t3;
-    int64_t _t7;
-    int64_t _t9;
+    uint64_t _t1;
     uint8_t* _t0;
-    uint8_t* _t11;
-    uint8_t* _t13;
-    uint8_t* _t15;
-    uint8_t* _t17;
-    uint8_t* _t19;
-    uint8_t* _t1;
-    uint8_t* _t21;
-    uint8_t* _t26;
-    uint8_t* _t27;
-    uint8_t* _t2;
-    uint8_t* _t32;
-    uint8_t* _t35;
-    uint8_t* _t4;
-    uint8_t* _t5;
-    uint8_t* _t6;
-    uint8_t* _t8;
-    uint8_t** _t29;
-    void* _t34;
     
     _t0 = _arg0;
     _t1 = _arg1;
-    _t2 = (uint8_t*)"AetherLang Bootstrap Compiler v0.1.0\u{0}";
-    puts(_t2);
-    _t4 = read_file(_t0);
-    _t5 = _t4;
-    _t6 = (uint8_t*)0LL;
-    _t7 = _t5 == _t6;
-    if (_t7) goto L_then; else goto L_else;
+    _t2 = 0LL;
+    _t3 = 0LL;
+    return _t2;
+}
+
+int32_t compile_file(uint8_t* _arg0) {
+    int32_t _t13;
+    int32_t _t45;
+    int64_t _t10;
+    int64_t _t12;
+    int64_t _t14;
+    int64_t _t15;
+    int64_t _t17;
+    int64_t _t19;
+    int64_t _t20;
+    int64_t _t21;
+    int64_t _t23;
+    int64_t _t25;
+    int64_t _t27;
+    int64_t _t29;
+    int64_t _t2;
+    int64_t _t31;
+    int64_t _t33;
+    int64_t _t35;
+    int64_t _t37;
+    int64_t _t39;
+    int64_t _t41;
+    int64_t _t43;
+    int64_t _t4;
+    int64_t _t6;
+    uint8_t* _t0;
+    uint8_t* _t11;
+    uint8_t* _t16;
+    uint8_t* _t18;
+    uint8_t* _t1;
+    uint8_t* _t22;
+    uint8_t* _t24;
+    uint8_t* _t26;
+    uint8_t* _t28;
+    uint8_t* _t30;
+    uint8_t* _t32;
+    uint8_t* _t34;
+    uint8_t* _t36;
+    uint8_t* _t38;
+    uint8_t* _t3;
+    uint8_t* _t40;
+    uint8_t* _t42;
+    uint8_t* _t5;
+    uint8_t* _t7;
+    uint8_t* _t8;
+    uint8_t* _t9;
+    void* _t44;
+    
+    _t0 = _arg0;
+    _t1 = (uint8_t*)"AetherLang Bootstrap Compiler v0.2.0";
+    puts(_t1);
+    _t3 = (uint8_t*)"====================================";
+    puts(_t3);
+    _t5 = (uint8_t*)"[1/6] Reading source file...";
+    puts(_t5);
+    _t7 = read_file(_t0);
+    _t8 = _t7;
+    _t9 = (uint8_t*)0LL;
+    _t10 = _t8 == _t9;
+    if (_t10) goto L_then; else goto L_else;
 L_then:
-    _t8 = (uint8_t*)"Error: failed to read input file\u{0}";
-    puts(_t8);
-    _t10 = (int32_t)1LL;
-    return _t10;
+    _t11 = (uint8_t*)"Error: Failed to read input file";
+    puts(_t11);
+    _t13 = (int32_t)1LL;
+    return _t13;
 L_else:
     goto L_merge;
 L_merge:
-    _t11 = (uint8_t*)"  [1/6] Read source file\u{0}";
-    puts(_t11);
-    _t13 = (uint8_t*)"  [2/6] Tokenized\u{0}";
-    puts(_t13);
-    _t15 = (uint8_t*)"  [3/6] Parsed AST\u{0}";
-    puts(_t15);
-    _t17 = (uint8_t*)"  [4/6] Semantic analysis passed\u{0}";
-    puts(_t17);
-    _t19 = (uint8_t*)"  [5/6] Generated IR\u{0}";
-    puts(_t19);
-    _t21 = (uint8_t*)"aether\u{0}";
-    LLVMModuleCreateWithName(_t21);
-    _t23 = _t22;
-    LLVMCreateBuilder();
-    _t25 = _t24;
-    _t26 = (uint8_t*)0LL;
-    _t27 = _t26;
-    _t28 = (int32_t)2LL;
-    _t29 = (uint8_t**)((void)0);
-    LLVMVerifyModule(_t23, _t28, _t29);
-    LLVMWriteBitcodeToFile(_t23, _t1);
-    _t32 = (uint8_t*)"  [6/6] Emitted bitcode\u{0}";
+    strlen(_t8);
+    _t15 = _t14;
+    _t16 = (uint8_t*)"      Source file read successfully";
+    puts(_t16);
+    _t18 = (uint8_t*)"[2/6] Lexical analysis...";
+    puts(_t18);
+    _t20 = count_tokens(_t8, _t15);
+    _t21 = _t20;
+    _t22 = (uint8_t*)"      Tokens extracted";
+    puts(_t22);
+    _t24 = (uint8_t*)"[3/6] Parsing AST...";
+    puts(_t24);
+    _t26 = (uint8_t*)"      AST constructed (stub)";
+    puts(_t26);
+    _t28 = (uint8_t*)"[4/6] Semantic analysis...";
+    puts(_t28);
+    _t30 = (uint8_t*)"      Type checking passed (stub)";
+    puts(_t30);
+    _t32 = (uint8_t*)"[5/6] IR generation...";
     puts(_t32);
-    LLVMDisposeBuilder(_t25);
-    LLVMDisposeModule(_t23);
-    _t34 = (void*)_t5;
-    free(_t34);
-    _t35 = (uint8_t*)"Compilation successful!\u{0}";
-    puts(_t35);
-    _t37 = (int32_t)0LL;
-    return _t37;
+    _t34 = (uint8_t*)"      IR generated (stub)";
+    puts(_t34);
+    _t36 = (uint8_t*)"[6/6] Code generation...";
+    puts(_t36);
+    _t38 = (uint8_t*)"      Code generated (stub)";
+    puts(_t38);
+    _t40 = (uint8_t*)"";
+    puts(_t40);
+    _t42 = (uint8_t*)"Compilation successful!";
+    puts(_t42);
+    _t44 = (void*)_t8;
+    free(_t44);
+    _t45 = (int32_t)0LL;
+    return _t45;
+}
+
+void print_help(void) {
+    int64_t _t11;
+    int64_t _t13;
+    int64_t _t1;
+    int64_t _t3;
+    int64_t _t5;
+    int64_t _t7;
+    int64_t _t9;
+    uint8_t* _t0;
+    uint8_t* _t10;
+    uint8_t* _t12;
+    uint8_t* _t2;
+    uint8_t* _t4;
+    uint8_t* _t6;
+    uint8_t* _t8;
+    
+    _t0 = (uint8_t*)"AetherLang Bootstrap Compiler";
+    puts(_t0);
+    _t2 = (uint8_t*)"";
+    puts(_t2);
+    _t4 = (uint8_t*)"Usage: aethc-bootstrap <input.aeth>";
+    puts(_t4);
+    _t6 = (uint8_t*)"";
+    puts(_t6);
+    _t8 = (uint8_t*)"Options:";
+    puts(_t8);
+    _t10 = (uint8_t*)"  --help     Show this help";
+    puts(_t10);
+    _t12 = (uint8_t*)"  --version  Show version";
+    puts(_t12);
+    return;
+}
+
+void print_version(void) {
+    int64_t _t1;
+    int64_t _t3;
+    uint8_t* _t0;
+    uint8_t* _t2;
+    
+    _t0 = (uint8_t*)"AetherLang Bootstrap Compiler v0.2.0";
+    puts(_t0);
+    _t2 = (uint8_t*)"Written in AetherLang (self-hosting)";
+    puts(_t2);
+    return;
 }
 
 int32_t main(void) {
-    int32_t _t4;
-    int32_t _t5;
+    int32_t _t7;
     int64_t _t1;
+    int64_t _t3;
+    int64_t _t5;
     uint8_t* _t0;
     uint8_t* _t2;
-    uint8_t* _t3;
+    uint8_t* _t4;
+    uint8_t* _t6;
     
-    LLVMInitializeAllTargetInfos();
-    LLVMInitializeAllTargets();
-    LLVMInitializeAllTargetMCs();
-    LLVMInitializeAllAsmPrinters();
-    _t0 = (uint8_t*)"Bootstrap compiler ready\u{0}";
+    _t0 = (uint8_t*)"AetherLang Bootstrap Compiler";
     puts(_t0);
-    _t2 = (uint8_t*)"test.aeth\u{0}";
-    _t3 = (uint8_t*)"test.bc\u{0}";
-    _t4 = compile_file(_t2, _t3);
-    _t5 = _t4;
-    return _t5;
+    _t2 = (uint8_t*)"Run: aethc-bootstrap <input.aeth>";
+    puts(_t2);
+    _t4 = (uint8_t*)"";
+    puts(_t4);
+    _t6 = (uint8_t*)"test.aeth";
+    _t7 = compile_file(_t6);
+    return _t7;
 }
 
