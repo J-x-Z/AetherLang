@@ -1,0 +1,115 @@
+// JXZ Init Command Implementation
+// Creates new AetherLang project structure
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn mkdir(path: *u8, mode: u32) -> i32;
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(fp: *void) -> i32;
+    fn fputs(s: *u8, fp: *void) -> i32;
+    fn getcwd(buf: *u8, size: u64) -> *u8;
+    fn access(path: *u8, mode: i32) -> i32;
+}
+
+const F_OK: i32 = 0
+
+// Default Jxz.toml content
+fn write_jxz_toml(name: *u8) -> bool {
+    let fp = fopen("Jxz.toml\0" as *u8, "w\0" as *u8)
+    if fp == (0 as *void) {
+        puts("Error: Could not create Jxz.toml\0" as *u8)
+        return false
+    }
+    
+    fputs("[package]\n\0" as *u8, fp)
+    fputs("name = \"\0" as *u8, fp)
+    fputs(name, fp)
+    fputs("\"\n\0" as *u8, fp)
+    fputs("version = \"0.1.0\"\n\0" as *u8, fp)
+    fputs("edition = \"2026\"\n\0" as *u8, fp)
+    fputs("\n[dependencies]\n\0" as *u8, fp)
+    
+    fclose(fp)
+    return true
+}
+
+// Default main.aeth content
+fn write_main_aeth() -> bool {
+    let fp = fopen("src/main.aeth\0" as *u8, "w\0" as *u8)
+    if fp == (0 as *void) {
+        puts("Error: Could not create src/main.aeth\0" as *u8)
+        return false
+    }
+    
+    fputs("// AetherLang Project\n\0" as *u8, fp)
+    fputs("\n\0" as *u8, fp)
+    fputs("extern \"C\" {\n\0" as *u8, fp)
+    fputs("    fn puts(s: *u8) -> i32;\n\0" as *u8, fp)
+    fputs("}\n\0" as *u8, fp)
+    fputs("\n\0" as *u8, fp)
+    fputs("pub fn main() -> i32 {\n\0" as *u8, fp)
+    fputs("    puts(\"Hello, AetherLang!\\0\" as *u8)\n\0" as *u8, fp)
+    fputs("    return 0\n\0" as *u8, fp)
+    fputs("}\n\0" as *u8, fp)
+    
+    fclose(fp)
+    return true
+}
+
+// Write .gitignore
+fn write_gitignore() -> bool {
+    let fp = fopen(".gitignore\0" as *u8, "w\0" as *u8)
+    if fp == (0 as *void) {
+        return false
+    }
+    
+    fputs("/target\n\0" as *u8, fp)
+    fputs("*.o\n\0" as *u8, fp)
+    fputs("*.c\n\0" as *u8, fp)
+    fputs("Jxz.lock\n\0" as *u8, fp)
+    
+    fclose(fp)
+    return true
+}
+
+// Main init function
+pub fn init_project(name: *u8) -> i32 {
+    puts("Creating new AetherLang project...\0" as *u8)
+    puts("\0" as *u8)
+    
+    // Check if Jxz.toml already exists
+    if access("Jxz.toml\0" as *u8, F_OK) == 0 {
+        puts("Error: Jxz.toml already exists in this directory\0" as *u8)
+        puts("Use 'jxz init --force' to overwrite\0" as *u8)
+        return 1
+    }
+    
+    // Create directories
+    mkdir("src\0" as *u8, 493)  // 0755
+    mkdir("tests\0" as *u8, 493)
+    mkdir("target\0" as *u8, 493)
+    
+    // Create files
+    if !write_jxz_toml(name) {
+        return 1
+    }
+    puts("  Created Jxz.toml\0" as *u8)
+    
+    if !write_main_aeth() {
+        return 1
+    }
+    puts("  Created src/main.aeth\0" as *u8)
+    
+    write_gitignore()
+    puts("  Created .gitignore\0" as *u8)
+    
+    puts("\0" as *u8)
+    puts("Project initialized successfully!\0" as *u8)
+    puts("\0" as *u8)
+    puts("Next steps:\0" as *u8)
+    puts("  cd <project-name>\0" as *u8)
+    puts("  jxz build\0" as *u8)
+    puts("  jxz run\0" as *u8)
+    
+    return 0
+}

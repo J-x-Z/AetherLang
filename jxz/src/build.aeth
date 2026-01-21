@@ -1,0 +1,90 @@
+// JXZ Build Command Implementation
+// Compiles AetherLang project using aethc
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+    fn access(path: *u8, mode: i32) -> i32;
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(fp: *void) -> i32;
+    fn fgets(buf: *u8, size: i32, fp: *void) -> *u8;
+    fn mkdir(path: *u8, mode: u32) -> i32;
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+}
+
+const F_OK: i32 = 0
+
+// Check if Jxz.toml exists
+fn check_project() -> bool {
+    if access("Jxz.toml\0" as *u8, F_OK) != 0 {
+        puts("Error: No Jxz.toml found in current directory\0" as *u8)
+        puts("Run 'jxz init' to create a new project\0" as *u8)
+        return false
+    }
+    return true
+}
+
+// Compile main.aeth to executable
+pub fn build_project(release: bool) -> i32 {
+    if !check_project() {
+        return 1
+    }
+    
+    puts("   Compiling project...\0" as *u8)
+    
+    // Ensure target directory exists
+    mkdir("target\0" as *u8, 493)
+    
+    // Build command: aethc --emit-c src/main.aeth
+    // Then compile with C compiler
+    let result: i32 = 0
+    
+    // Step 1: Compile to C
+    puts("     Compiling src/main.aeth -> C\0" as *u8)
+    result = system("aethc --emit-c src/main.aeth\0" as *u8)
+    if result != 0 {
+        puts("Error: Compilation failed\0" as *u8)
+        return 1
+    }
+    
+    // Step 2: Compile C to executable
+    puts("     Compiling C -> executable\0" as *u8)
+    if release {
+        result = system("cc -O2 -o target/main src/main.c 2>/dev/null || gcc -O2 -o target/main src/main.c\0" as *u8)
+    } else {
+        result = system("cc -g -o target/main src/main.c 2>/dev/null || gcc -g -o target/main src/main.c\0" as *u8)
+    }
+    
+    if result != 0 {
+        puts("Error: C compilation failed\0" as *u8)
+        return 1
+    }
+    
+    puts("    Finished build\0" as *u8)
+    return 0
+}
+
+// Build and run
+pub fn run_project(args: *u8) -> i32 {
+    let result = build_project(false)
+    if result != 0 {
+        return result
+    }
+    
+    puts("     Running target/main\0" as *u8)
+    puts("\0" as *u8)
+    
+    result = system("./target/main\0" as *u8)
+    return result
+}
+
+// Clean build artifacts
+pub fn clean_project() -> i32 {
+    puts("Cleaning build artifacts...\0" as *u8)
+    system("rm -rf target\0" as *u8)
+    system("rm -f src/*.c\0" as *u8)
+    puts("  Cleaned\0" as *u8)
+    return 0
+}
