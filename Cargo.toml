@@ -8,8 +8,9 @@ license = "Apache-2.0"
 repository = "https://github.com/Z1529/AetherLang"
 
 [features]
-default = []
+default = ["llvm"]  # LLVM is the primary backend (like Rust)
 llvm = ["llvm-sys"]
+c-only = []  # C backend fallback for environments without LLVM
 
 [dependencies]
 # Error handling
