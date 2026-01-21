@@ -1,0 +1,244 @@
+// AetherLang Computation Graph Library
+// Lazy evaluation DAG for building and executing computation graphs
+
+// ==================== Node Types ====================
+
+// Operation types for computation graph
+const OP_CONST: i32 = 0
+const OP_VAR: i32 = 1
+const OP_ADD: i32 = 2
+const OP_SUB: i32 = 3
+const OP_MUL: i32 = 4
+const OP_DIV: i32 = 5
+const OP_NEG: i32 = 6
+const OP_EXP: i32 = 7
+const OP_LOG: i32 = 8
+const OP_SIN: i32 = 9
+const OP_COS: i32 = 10
+const OP_RELU: i32 = 11
+const OP_SIGMOID: i32 = 12
+const OP_MATMUL: i32 = 13
+
+// Computation graph node
+pub struct Node {
+    id: i32,
+    op: i32,           // Operation type
+    value: f32,        // Cached value (for constants and after evaluation)
+    input1: i32,       // First input node ID (-1 if none)
+    input2: i32,       // Second input node ID (-1 if none)
+    evaluated: bool,   // Whether value has been computed
+}
+
+// Computation graph
+pub struct Graph {
+    nodes: *Node,      // Array of nodes
+    count: i32,        // Number of nodes
+    capacity: i32,     // Allocated capacity
+}
+
+// ==================== Graph Creation ====================
+
+extern "C" fn malloc(size: u64) -> *void
+extern "C" fn realloc(ptr: *void, size: u64) -> *void
+
+pub fn graph_new() -> Graph {
+    let capacity = 64
+    let nodes: *Node = malloc(capacity * 32) as *Node  // sizeof(Node) ≈ 32
+    return Graph { nodes: nodes, count: 0, capacity: capacity }
+}
+
+fn graph_add_node(g: *Graph, op: i32, value: f32, in1: i32, in2: i32) -> i32 {
+    // Grow if needed
+    if g.count >= g.capacity {
+        g.capacity = g.capacity * 2
+        g.nodes = realloc(g.nodes as *void, g.capacity * 32) as *Node
+    }
+    
+    let id = g.count
+    g.nodes[id] = Node {
+        id: id,
+        op: op,
+        value: value,
+        input1: in1,
+        input2: in2,
+        evaluated: false,
+    }
+    g.count = g.count + 1
+    return id
+}
+
+// ==================== Node Creation ====================
+
+// Create constant node
+pub fn const_node(g: *Graph, value: f32) -> i32 {
+    let id = graph_add_node(g, OP_CONST, value, -1, -1)
+    g.nodes[id].evaluated = true
+    return id
+}
+
+// Create variable (placeholder) node
+pub fn var_node(g: *Graph) -> i32 {
+    return graph_add_node(g, OP_VAR, 0.0, -1, -1)
+}
+
+// Set variable value
+pub fn set_var(g: *Graph, node_id: i32, value: f32) {
+    g.nodes[node_id].value = value
+    g.nodes[node_id].evaluated = true
+}
+
+// ==================== Binary Operations ====================
+
+pub fn add_node(g: *Graph, a: i32, b: i32) -> i32 {
+    return graph_add_node(g, OP_ADD, 0.0, a, b)
+}
+
+pub fn sub_node(g: *Graph, a: i32, b: i32) -> i32 {
+    return graph_add_node(g, OP_SUB, 0.0, a, b)
+}
+
+pub fn mul_node(g: *Graph, a: i32, b: i32) -> i32 {
+    return graph_add_node(g, OP_MUL, 0.0, a, b)
+}
+
+pub fn div_node(g: *Graph, a: i32, b: i32) -> i32 {
+    return graph_add_node(g, OP_DIV, 0.0, a, b)
+}
+
+// ==================== Unary Operations ====================
+
+pub fn neg_node(g: *Graph, a: i32) -> i32 {
+    return graph_add_node(g, OP_NEG, 0.0, a, -1)
+}
+
+pub fn exp_node(g: *Graph, a: i32) -> i32 {
+    return graph_add_node(g, OP_EXP, 0.0, a, -1)
+}
+
+pub fn log_node(g: *Graph, a: i32) -> i32 {
+    return graph_add_node(g, OP_LOG, 0.0, a, -1)
+}
+
+pub fn sin_node(g: *Graph, a: i32) -> i32 {
+    return graph_add_node(g, OP_SIN, 0.0, a, -1)
+}
+
+pub fn cos_node(g: *Graph, a: i32) -> i32 {
+    return graph_add_node(g, OP_COS, 0.0, a, -1)
+}
+
+pub fn relu_node(g: *Graph, a: i32) -> i32 {
+    return graph_add_node(g, OP_RELU, 0.0, a, -1)
+}
+
+pub fn sigmoid_node(g: *Graph, a: i32) -> i32 {
+    return graph_add_node(g, OP_SIGMOID, 0.0, a, -1)
+}
+
+// ==================== Evaluation ====================
+
+extern "C" fn exp(x: f64) -> f64
+extern "C" fn log(x: f64) -> f64
+extern "C" fn sin(x: f64) -> f64
+extern "C" fn cos(x: f64) -> f64
+
+// Evaluate a single node (recursive)
+fn eval_node(g: *Graph, id: i32) -> f32 {
+    let node = &g.nodes[id]
+    
+    // Already evaluated?
+    if node.evaluated {
+        return node.value
+    }
+    
+    // Get input values
+    let v1: f32 = 0.0
+    let v2: f32 = 0.0
+    if node.input1 >= 0 {
+        v1 = eval_node(g, node.input1)
+    }
+    if node.input2 >= 0 {
+        v2 = eval_node(g, node.input2)
+    }
+    
+    // Compute based on operation
+    let result: f32 = 0.0
+    if node.op == OP_ADD {
+        result = v1 + v2
+    } else if node.op == OP_SUB {
+        result = v1 - v2
+    } else if node.op == OP_MUL {
+        result = v1 * v2
+    } else if node.op == OP_DIV {
+        result = v1 / v2
+    } else if node.op == OP_NEG {
+        result = -v1
+    } else if node.op == OP_EXP {
+        result = exp(v1 as f64) as f32
+    } else if node.op == OP_LOG {
+        result = log(v1 as f64) as f32
+    } else if node.op == OP_SIN {
+        result = sin(v1 as f64) as f32
+    } else if node.op == OP_COS {
+        result = cos(v1 as f64) as f32
+    } else if node.op == OP_RELU {
+        if v1 > 0.0 {
+            result = v1
+        } else {
+            result = 0.0
+        }
+    } else if node.op == OP_SIGMOID {
+        result = 1.0 / (1.0 + exp(-v1 as f64) as f32)
+    }
+    
+    // Cache result
+    g.nodes[id].value = result
+    g.nodes[id].evaluated = true
+    
+    return result
+}
+
+// Evaluate the graph starting from a node
+pub fn eval(g: *Graph, output_id: i32) -> f32 {
+    return eval_node(g, output_id)
+}
+
+// Reset all non-constant/non-variable nodes for re-evaluation
+pub fn graph_reset(g: *Graph) {
+    let i: i32 = 0
+    while i < g.count {
+        let node = &g.nodes[i]
+        if node.op != OP_CONST && node.op != OP_VAR {
+            g.nodes[i].evaluated = false
+        }
+        i = i + 1
+    }
+}
+
+// ==================== Example: f(x) = x^2 + 2x + 1 ====================
+
+pub fn example_graph() {
+    let g = graph_new()
+    
+    // Create variable x
+    let x = var_node(&g)
+    
+    // Constants
+    let two = const_node(&g, 2.0)
+    let one = const_node(&g, 1.0)
+    
+    // Build: x^2 + 2x + 1
+    let x2 = mul_node(&g, x, x)      // x^2
+    let twox = mul_node(&g, two, x)   // 2x
+    let sum1 = add_node(&g, x2, twox) // x^2 + 2x
+    let result = add_node(&g, sum1, one) // x^2 + 2x + 1
+    
+    // Evaluate at x = 3
+    set_var(&g, x, 3.0)
+    let value = eval(&g, result)   // Should be 16.0
+    
+    // Evaluate at x = 5
+    graph_reset(&g)
+    set_var(&g, x, 5.0)
+    let value2 = eval(&g, result)  // Should be 36.0
+}
