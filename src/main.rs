@@ -63,6 +63,10 @@ struct Cli {
     /// Target triple (native, x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, etc.)
     #[arg(long, default_value = "native")]
     target: String,
+    
+    /// Custom linker script for kernel/bare-metal development
+    #[arg(long, value_name = "FILE")]
+    linker_script: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -345,16 +349,26 @@ fn compile_file(input: &PathBuf, output: Option<PathBuf>, cli: &Cli) {
                 let mut compiled = false;
                 
                 for compiler in &compilers {
-                    let result = std::process::Command::new(compiler)
-                        .args(&["-o"])
+                    let mut cmd = std::process::Command::new(compiler);
+                    cmd.args(&["-o"])
                         .arg(&exe_path)
-                        .arg(&c_path)
-                        .output();
+                        .arg(&c_path);
+                    
+                    // Add linker script if provided
+                    if let Some(ref ld_script) = cli.linker_script {
+                        cmd.arg("-T").arg(ld_script);
+                        cmd.arg("-nostdlib"); // Usually needed with custom linker scripts
+                    }
+                    
+                    let result = cmd.output();
                     
                     if let Ok(output) = result {
                         if output.status.success() {
                             compiled = true;
                             println!("  [✓] Compiled with {}", compiler);
+                            if cli.linker_script.is_some() {
+                                println!("  [✓] Using custom linker script");
+                            }
                             break;
                         }
                     }
