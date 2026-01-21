@@ -19,7 +19,7 @@ thiserror = "1.0"
 
 # LLVM bindings - requires LLVM 18 (standard availability)
 # Enabled by default for LLVM backend
-llvm-sys = { version = "180", optional = true }
+llvm-sys = { version = "201", optional = true }
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }

@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <immintrin.h>  /* SSE/AVX */
+// #include <immintrin.h>  /* SSE/AVX */
 
 /* AetherLang Runtime */
 static void aether_print(const char* s) { printf("%s", s); }
