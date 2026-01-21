@@ -38,6 +38,14 @@ impl Transpiler {
             self.output.push_str(&format!("// Source: {}\n", src));
         }
         self.emit_line("");
+        
+        // Emit extern declarations for common C functions
+        self.emit_line("extern \"C\" {");
+        self.emit_line("    fn puts(s: *u8) -> i32;");
+        self.emit_line("    fn malloc(size: u64) -> *void;");
+        self.emit_line("    fn free(ptr: *void);");
+        self.emit_line("}");
+        self.emit_line("");
 
         for stmt in &module.stmts {
             self.transpile_stmt(stmt);
@@ -175,8 +183,8 @@ impl Transpiler {
 
     fn transpile_assign(&mut self, a: &AssignStmt) {
         self.emit_indent();
-        // Default mutable per Spec 2.2
-        self.emit("let mut ");
+        // No 'mut' keyword in .aeth
+        self.emit("let ");
         self.emit(&self.transpile_expr(&a.target));
         self.emit(" = ");
         self.emit(&self.transpile_expr(&a.value));
@@ -189,8 +197,8 @@ impl Transpiler {
             Expr::Integer { value, .. } => format!("{}", value),
             Expr::Float { value, .. } => format!("{}", value),
             Expr::String { value, .. } => {
-                // MVP: Use raw string literal - Core handles String type internally
-                format!("\"{}\"", value)
+                // Generate null-terminated C string literal
+                format!("\"{}\\0\" as *u8", value)
             }
             Expr::Binary { left, op, right, .. } => {
                 let l = self.transpile_expr(left);
@@ -234,32 +242,29 @@ impl Transpiler {
         }
     }
 
-    /// Map Script type hints to Core types (per Spec 2.1)
+    /// Map Script type hints to Core types (compatible with .aeth)
     fn map_type(&self, hint: &TypeHint) -> String {
         let base = match hint.name.as_str() {
             "int" => "i64".to_string(),
             "float" => "f64".to_string(),
             "bool" => "bool".to_string(),
-            "str" => "String".to_string(),
-            "None" => "()".to_string(),
+            "str" => "*u8".to_string(),  // Use raw C string pointer
+            "None" => "void".to_string(),
             "List" => {
+                // Use pointer array for lists
                 if let Some(inner) = hint.generics.first() {
-                    format!("Vec<{}>", self.map_type(inner))
+                    format!("*{}", self.map_type(inner))
                 } else {
-                    "Vec<_>".to_string()
+                    "*void".to_string()
                 }
             }
-            "Result" => {
-                if hint.generics.len() >= 2 {
-                    format!(
-                        "Result<{}, {}>",
-                        self.map_type(&hint.generics[0]),
-                        self.map_type(&hint.generics[1])
-                    )
-                } else {
-                    "Result<_, _>".to_string()
-                }
-            }
+            "i32" => "i32".to_string(),
+            "i64" => "i64".to_string(),
+            "f32" => "f32".to_string(),
+            "f64" => "f64".to_string(),
+            "u8" => "u8".to_string(),
+            "u32" => "u32".to_string(),
+            "u64" => "u64".to_string(),
             other => other.to_string(), // Pass through custom types
         };
         base
@@ -303,7 +308,9 @@ def greet(name: str) -> str:
         
         assert!(output.contains("fn greet"));
         assert!(!output.contains("ctx")); // MVP: no ctx injection
-        assert!(output.contains("name: String"));
-        assert!(output.contains("-> String"));
+        assert!(output.contains("name: *u8"));  // str maps to *u8
+        assert!(output.contains("-> *u8"));     // return type
+        assert!(output.contains("extern \"C\"")); // has extern block
+        assert!(output.contains("fn puts"));     // has puts declaration
     }
 }
