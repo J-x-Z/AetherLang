@@ -1,0 +1,78 @@
+// JXZ Test Command Implementation
+// Discovers and runs test files
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+    fn access(path: *u8, mode: i32) -> i32;
+    fn opendir(name: *u8) -> *void;
+    fn closedir(dirp: *void) -> i32;
+    fn mkdir(path: *u8, mode: u32) -> i32;
+}
+
+const F_OK: i32 = 0
+
+// ==================== Test Runner ====================
+
+pub struct TestResult {
+    total: i32,
+    passed: i32,
+    failed: i32,
+}
+
+pub fn run_tests() -> i32 {
+    puts("   Discovering tests...\0" as *u8)
+    
+    // Check if tests directory exists
+    let tests_dir = opendir("tests\0" as *u8)
+    if tests_dir == (0 as *void) {
+        puts("   No tests directory found\0" as *u8)
+        puts("   Create tests/ directory with test_*.aeth files\0" as *u8)
+        return 0
+    }
+    closedir(tests_dir)
+    
+    puts("   Compiling tests...\0" as *u8)
+    
+    // Ensure target/tests directory exists
+    mkdir("target\0" as *u8, 493)
+    mkdir("target/tests\0" as *u8, 493)
+    
+    // Compile all test files
+    let result = system("for f in tests/test_*.aeth; do [ -f \"$f\" ] && aethc --emit-c \"$f\" 2>/dev/null; done\0" as *u8)
+    
+    // Compile C files
+    result = system("for f in tests/test_*.c; do [ -f \"$f\" ] && cc -o \"target/tests/$(basename $f .c)\" \"$f\" 2>/dev/null; done\0" as *u8)
+    
+    puts("   Running tests...\0" as *u8)
+    puts("\0" as *u8)
+    
+    // Run all test executables
+    result = system("for f in target/tests/test_*; do [ -x \"$f\" ] && echo \"Running $f\" && \"$f\"; done\0" as *u8)
+    
+    puts("\0" as *u8)
+    puts("   Tests completed\0" as *u8)
+    
+    return 0
+}
+
+// Run a single test file
+pub fn run_single_test(test_file: *u8) -> i32 {
+    puts("   Running single test:\0" as *u8)
+    puts(test_file)
+    
+    // Compile test
+    let result = system("aethc --emit-c\0" as *u8)
+    
+    return result
+}
+
+// Watch mode - rerun tests on file changes
+pub fn watch_tests() -> i32 {
+    puts("   Watching for changes...\0" as *u8)
+    puts("   Press Ctrl+C to stop\0" as *u8)
+    
+    // TODO: Implement file watching
+    // For now, just run tests once
+    return run_tests()
+}

@@ -1,0 +1,121 @@
+// JXZ Configuration Module
+// Parses Jxz.toml project configuration
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(fp: *void) -> i32;
+    fn fread(buf: *void, size: u64, count: u64, fp: *void) -> u64;
+    fn fseek(fp: *void, offset: i64, whence: i32) -> i32;
+    fn ftell(fp: *void) -> i64;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strcmp(s1: *u8, s2: *u8) -> i32;
+    fn access(path: *u8, mode: i32) -> i32;
+}
+
+const SEEK_SET: i32 = 0
+const SEEK_END: i32 = 2
+const F_OK: i32 = 0
+
+// ==================== Config Structure ====================
+
+pub struct Config {
+    // Package info
+    name: *u8,
+    version: *u8,
+    edition: *u8,
+    description: *u8,
+    authors: *u8,
+    license: *u8,
+    repository: *u8,
+    
+    // Build settings
+    src_dir: *u8,
+    target_dir: *u8,
+    main_file: *u8,
+    
+    // Flags
+    release: bool,
+    verbose: bool,
+}
+
+// ==================== Config Loading ====================
+
+pub fn config_default() -> Config {
+    return Config {
+        name: "project\0" as *u8,
+        version: "0.1.0\0" as *u8,
+        edition: "2026\0" as *u8,
+        description: 0 as *u8,
+        authors: 0 as *u8,
+        license: 0 as *u8,
+        repository: 0 as *u8,
+        src_dir: "src\0" as *u8,
+        target_dir: "target\0" as *u8,
+        main_file: "src/main.aeth\0" as *u8,
+        release: false,
+        verbose: false,
+    }
+}
+
+pub fn config_load() -> Config {
+    let cfg = config_default()
+    
+    // Check if Jxz.toml exists
+    if access("Jxz.toml\0" as *u8, F_OK) != 0 {
+        return cfg
+    }
+    
+    // Read file
+    let fp = fopen("Jxz.toml\0" as *u8, "r\0" as *u8)
+    if fp == (0 as *void) {
+        return cfg
+    }
+    
+    // Get file size
+    fseek(fp, 0, SEEK_END)
+    let size = ftell(fp)
+    fseek(fp, 0, SEEK_SET)
+    
+    // Read content
+    let buf: *u8 = malloc(size as u64 + 1) as *u8
+    fread(buf as *void, 1, size as u64, fp)
+    let idx = size as i32
+    buf[idx] = 0
+    fclose(fp)
+    
+    // TODO: Parse TOML content using toml.aeth
+    // For now, just return defaults
+    
+    free(buf as *void)
+    return cfg
+}
+
+// ==================== Config Validation ====================
+
+pub fn config_validate(cfg: *Config) -> bool {
+    if cfg.name == (0 as *u8) {
+        puts("Error: package.name is required\0" as *u8)
+        return false
+    }
+    
+    if cfg.version == (0 as *u8) {
+        puts("Error: package.version is required\0" as *u8)
+        return false
+    }
+    
+    return true
+}
+
+// ==================== Config Display ====================
+
+pub fn config_print(cfg: *Config) {
+    puts("Project Configuration:\0" as *u8)
+    puts("  name: \0" as *u8)
+    puts(cfg.name)
+    puts("  version: \0" as *u8)
+    puts(cfg.version)
+    puts("  edition: \0" as *u8)
+    puts(cfg.edition)
+}
