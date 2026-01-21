@@ -1,0 +1,107 @@
+// AetherLang Metal FFI Bindings (macOS/iOS)
+// Foreign Function Interface to Metal for GPU computing
+
+// ==================== Metal Types ====================
+
+// Metal device (opaque)
+type MTLDevice = *void
+
+// Metal command queue
+type MTLCommandQueue = *void
+
+// Metal command buffer
+type MTLCommandBuffer = *void
+
+// Metal compute command encoder
+type MTLComputeCommandEncoder = *void
+
+// Metal buffer
+type MTLBuffer = *void
+
+// Metal compute pipeline state
+type MTLComputePipelineState = *void
+
+// Metal library
+type MTLLibrary = *void
+
+// Metal function
+type MTLFunction = *void
+
+// ==================== Device Management ====================
+
+// Get default Metal device
+extern "C" fn MTLCreateSystemDefaultDevice() -> MTLDevice
+
+// ==================== Command Queue ====================
+
+// Create command queue from device
+extern "C" fn aether_mtl_create_command_queue(device: MTLDevice) -> MTLCommandQueue
+
+// Create command buffer from queue
+extern "C" fn aether_mtl_create_command_buffer(queue: MTLCommandQueue) -> MTLCommandBuffer
+
+// ==================== Buffer Management ====================
+
+// Create buffer with length
+extern "C" fn aether_mtl_create_buffer(device: MTLDevice, length: u64) -> MTLBuffer
+
+// Get buffer contents pointer
+extern "C" fn aether_mtl_buffer_contents(buffer: MTLBuffer) -> *void
+
+// ==================== Compute Pipeline ====================
+
+// Create library from source
+extern "C" fn aether_mtl_create_library(device: MTLDevice, source: *u8) -> MTLLibrary
+
+// Get function from library
+extern "C" fn aether_mtl_get_function(library: MTLLibrary, name: *u8) -> MTLFunction
+
+// Create compute pipeline state
+extern "C" fn aether_mtl_create_pipeline(device: MTLDevice, func: MTLFunction) -> MTLComputePipelineState
+
+// ==================== Command Encoding ====================
+
+// Create compute command encoder
+extern "C" fn aether_mtl_create_compute_encoder(buffer: MTLCommandBuffer) -> MTLComputeCommandEncoder
+
+// Set compute pipeline state
+extern "C" fn aether_mtl_set_pipeline(encoder: MTLComputeCommandEncoder, pipeline: MTLComputePipelineState)
+
+// Set buffer at index
+extern "C" fn aether_mtl_set_buffer(encoder: MTLComputeCommandEncoder, buffer: MTLBuffer, index: u32)
+
+// Dispatch threads
+extern "C" fn aether_mtl_dispatch_threads(encoder: MTLComputeCommandEncoder, width: u32, height: u32, depth: u32)
+
+// End encoding
+extern "C" fn aether_mtl_end_encoding(encoder: MTLComputeCommandEncoder)
+
+// ==================== Execution ====================
+
+// Commit command buffer
+extern "C" fn aether_mtl_commit(buffer: MTLCommandBuffer)
+
+// Wait until completed
+extern "C" fn aether_mtl_wait_until_completed(buffer: MTLCommandBuffer)
+
+// ==================== High-Level Wrappers ====================
+
+pub struct MetalContext {
+    device: MTLDevice,
+    queue: MTLCommandQueue,
+}
+
+pub fn metal_init() -> MetalContext {
+    let device = MTLCreateSystemDefaultDevice()
+    let queue = aether_mtl_create_command_queue(device)
+    return MetalContext { device: device, queue: queue }
+}
+
+pub fn metal_create_buffer(ctx: *MetalContext, size: u64) -> MTLBuffer {
+    return aether_mtl_create_buffer(ctx.device, size)
+}
+
+pub fn metal_sync(buffer: MTLCommandBuffer) {
+    aether_mtl_commit(buffer)
+    aether_mtl_wait_until_completed(buffer)
+}

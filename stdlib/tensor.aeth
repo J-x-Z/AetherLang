@@ -1,0 +1,215 @@
+// AetherLang Tensor Library
+// Multi-dimensional array types for machine learning
+
+// ==================== Tensor Types ====================
+
+// 1D Tensor (Vector)
+pub struct Tensor1D {
+    data: *f32,
+    size: i32,
+}
+
+// 2D Tensor (Matrix)
+pub struct Tensor2D {
+    data: *f32,
+    rows: i32,
+    cols: i32,
+}
+
+// 3D Tensor (e.g., for CNN feature maps)
+pub struct Tensor3D {
+    data: *f32,
+    depth: i32,
+    rows: i32,
+    cols: i32,
+}
+
+// 4D Tensor (batch x channels x height x width)
+pub struct Tensor4D {
+    data: *f32,
+    batch: i32,
+    channels: i32,
+    height: i32,
+    width: i32,
+}
+
+// ==================== Tensor Creation ====================
+
+extern "C" fn malloc(size: u64) -> *void
+
+pub fn tensor1d_new(size: i32) -> Tensor1D {
+    let bytes = size * 4  // f32 = 4 bytes
+    let data: *f32 = malloc(bytes) as *f32
+    return Tensor1D { data: data, size: size }
+}
+
+pub fn tensor2d_new(rows: i32, cols: i32) -> Tensor2D {
+    let bytes = rows * cols * 4
+    let data: *f32 = malloc(bytes) as *f32
+    return Tensor2D { data: data, rows: rows, cols: cols }
+}
+
+pub fn tensor3d_new(depth: i32, rows: i32, cols: i32) -> Tensor3D {
+    let bytes = depth * rows * cols * 4
+    let data: *f32 = malloc(bytes) as *f32
+    return Tensor3D { data: data, depth: depth, rows: rows, cols: cols }
+}
+
+// ==================== Tensor Access ====================
+
+pub fn tensor1d_get(t: *Tensor1D, i: i32) -> f32 {
+    return t.data[i]
+}
+
+pub fn tensor1d_set(t: *Tensor1D, i: i32, val: f32) {
+    t.data[i] = val
+}
+
+pub fn tensor2d_get(t: *Tensor2D, row: i32, col: i32) -> f32 {
+    let idx = row * t.cols + col
+    return t.data[idx]
+}
+
+pub fn tensor2d_set(t: *Tensor2D, row: i32, col: i32, val: f32) {
+    let idx = row * t.cols + col
+    t.data[idx] = val
+}
+
+// ==================== Tensor Operations ====================
+
+// Element-wise addition
+pub fn tensor1d_add(a: *Tensor1D, b: *Tensor1D, out: *Tensor1D) {
+    let i: i32 = 0
+    while i < a.size {
+        out.data[i] = a.data[i] + b.data[i]
+        i = i + 1
+    }
+}
+
+// Element-wise multiplication
+pub fn tensor1d_mul(a: *Tensor1D, b: *Tensor1D, out: *Tensor1D) {
+    let i: i32 = 0
+    while i < a.size {
+        out.data[i] = a.data[i] * b.data[i]
+        i = i + 1
+    }
+}
+
+// Dot product
+pub fn tensor1d_dot(a: *Tensor1D, b: *Tensor1D) -> f32 {
+    let sum: f32 = 0.0
+    let i: i32 = 0
+    while i < a.size {
+        sum = sum + a.data[i] * b.data[i]
+        i = i + 1
+    }
+    return sum
+}
+
+// Scale tensor
+pub fn tensor1d_scale(t: *Tensor1D, s: f32, out: *Tensor1D) {
+    let i: i32 = 0
+    while i < t.size {
+        out.data[i] = t.data[i] * s
+        i = i + 1
+    }
+}
+
+// Matrix-vector multiplication
+pub fn tensor2d_matvec(m: *Tensor2D, v: *Tensor1D, out: *Tensor1D) {
+    let i: i32 = 0
+    while i < m.rows {
+        let sum: f32 = 0.0
+        let j: i32 = 0
+        while j < m.cols {
+            sum = sum + tensor2d_get(m, i, j) * v.data[j]
+            j = j + 1
+        }
+        out.data[i] = sum
+        i = i + 1
+    }
+}
+
+// Matrix-matrix multiplication
+pub fn tensor2d_matmul(a: *Tensor2D, b: *Tensor2D, c: *Tensor2D) {
+    let i: i32 = 0
+    while i < a.rows {
+        let j: i32 = 0
+        while j < b.cols {
+            let sum: f32 = 0.0
+            let k: i32 = 0
+            while k < a.cols {
+                sum = sum + tensor2d_get(a, i, k) * tensor2d_get(b, k, j)
+                k = k + 1
+            }
+            tensor2d_set(c, i, j, sum)
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+// ==================== Activation Functions ====================
+
+pub fn relu(x: f32) -> f32 {
+    if x > 0.0 {
+        return x
+    }
+    return 0.0
+}
+
+pub fn sigmoid(x: f32) -> f32 {
+    return 1.0 / (1.0 + exp(-x))
+}
+
+pub fn tanh_act(x: f32) -> f32 {
+    let e2x = exp(2.0 * x)
+    return (e2x - 1.0) / (e2x + 1.0)
+}
+
+// Apply activation to tensor
+pub fn tensor1d_relu(t: *Tensor1D, out: *Tensor1D) {
+    let i: i32 = 0
+    while i < t.size {
+        out.data[i] = relu(t.data[i])
+        i = i + 1
+    }
+}
+
+pub fn tensor1d_sigmoid(t: *Tensor1D, out: *Tensor1D) {
+    let i: i32 = 0
+    while i < t.size {
+        out.data[i] = sigmoid(t.data[i])
+        i = i + 1
+    }
+}
+
+// ==================== Utility ====================
+
+pub fn tensor1d_fill(t: *Tensor1D, val: f32) {
+    let i: i32 = 0
+    while i < t.size {
+        t.data[i] = val
+        i = i + 1
+    }
+}
+
+pub fn tensor2d_fill(t: *Tensor2D, val: f32) {
+    let total = t.rows * t.cols
+    let i: i32 = 0
+    while i < total {
+        t.data[i] = val
+        i = i + 1
+    }
+}
+
+// Sum all elements
+pub fn tensor1d_sum(t: *Tensor1D) -> f32 {
+    let sum: f32 = 0.0
+    let i: i32 = 0
+    while i < t.size {
+        sum = sum + t.data[i]
+        i = i + 1
+    }
+    return sum
+}

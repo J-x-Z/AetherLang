@@ -1,0 +1,185 @@
+// AetherLang Autograd Library
+// Automatic differentiation for machine learning
+
+// ==================== Dual Numbers (Forward Mode AD) ====================
+
+// Dual number for forward-mode automatic differentiation
+// value + epsilon * derivative
+pub struct Dual {
+    val: f32,     // Function value
+    deriv: f32,   // Derivative value
+}
+
+// Create a dual number (variable)
+pub fn dual_var(x: f32) -> Dual {
+    return Dual { val: x, deriv: 1.0 }
+}
+
+// Create a dual number (constant)
+pub fn dual_const(x: f32) -> Dual {
+    return Dual { val: x, deriv: 0.0 }
+}
+
+// ==================== Basic Operations ====================
+
+// Addition: d(a + b) = da + db
+pub fn dual_add(a: Dual, b: Dual) -> Dual {
+    return Dual {
+        val: a.val + b.val,
+        deriv: a.deriv + b.deriv,
+    }
+}
+
+// Subtraction: d(a - b) = da - db
+pub fn dual_sub(a: Dual, b: Dual) -> Dual {
+    return Dual {
+        val: a.val - b.val,
+        deriv: a.deriv - b.deriv,
+    }
+}
+
+// Multiplication: d(a * b) = a * db + b * da (product rule)
+pub fn dual_mul(a: Dual, b: Dual) -> Dual {
+    return Dual {
+        val: a.val * b.val,
+        deriv: a.val * b.deriv + a.deriv * b.val,
+    }
+}
+
+// Division: d(a / b) = (da * b - a * db) / b^2 (quotient rule)
+pub fn dual_div(a: Dual, b: Dual) -> Dual {
+    let b2 = b.val * b.val
+    return Dual {
+        val: a.val / b.val,
+        deriv: (a.deriv * b.val - a.val * b.deriv) / b2,
+    }
+}
+
+// Negation: d(-a) = -da
+pub fn dual_neg(a: Dual) -> Dual {
+    return Dual {
+        val: -a.val,
+        deriv: -a.deriv,
+    }
+}
+
+// ==================== Math Functions ====================
+
+extern "C" fn exp(x: f64) -> f64
+extern "C" fn log(x: f64) -> f64
+extern "C" fn sin(x: f64) -> f64
+extern "C" fn cos(x: f64) -> f64
+extern "C" fn sqrt(x: f64) -> f64
+
+// Exponential: d(e^x) = e^x * dx
+pub fn dual_exp(a: Dual) -> Dual {
+    let e = exp(a.val as f64) as f32
+    return Dual {
+        val: e,
+        deriv: e * a.deriv,
+    }
+}
+
+// Natural log: d(ln(x)) = dx / x
+pub fn dual_log(a: Dual) -> Dual {
+    return Dual {
+        val: log(a.val as f64) as f32,
+        deriv: a.deriv / a.val,
+    }
+}
+
+// Sine: d(sin(x)) = cos(x) * dx
+pub fn dual_sin(a: Dual) -> Dual {
+    return Dual {
+        val: sin(a.val as f64) as f32,
+        deriv: cos(a.val as f64) as f32 * a.deriv,
+    }
+}
+
+// Cosine: d(cos(x)) = -sin(x) * dx
+pub fn dual_cos(a: Dual) -> Dual {
+    return Dual {
+        val: cos(a.val as f64) as f32,
+        deriv: -sin(a.val as f64) as f32 * a.deriv,
+    }
+}
+
+// Square root: d(sqrt(x)) = dx / (2 * sqrt(x))
+pub fn dual_sqrt(a: Dual) -> Dual {
+    let s = sqrt(a.val as f64) as f32
+    return Dual {
+        val: s,
+        deriv: a.deriv / (2.0 * s),
+    }
+}
+
+// Power: d(x^n) = n * x^(n-1) * dx
+pub fn dual_pow(a: Dual, n: f32) -> Dual {
+    let p = pow(a.val, n)
+    return Dual {
+        val: p,
+        deriv: n * pow(a.val, n - 1.0) * a.deriv,
+    }
+}
+
+// ==================== Activation Functions ====================
+
+// ReLU: d(max(0, x)) = 1 if x > 0 else 0
+pub fn dual_relu(a: Dual) -> Dual {
+    if a.val > 0.0 {
+        return a
+    }
+    return Dual { val: 0.0, deriv: 0.0 }
+}
+
+// Sigmoid: d(σ(x)) = σ(x) * (1 - σ(x)) * dx
+pub fn dual_sigmoid(a: Dual) -> Dual {
+    let s = 1.0 / (1.0 + exp(-a.val as f64) as f32)
+    return Dual {
+        val: s,
+        deriv: s * (1.0 - s) * a.deriv,
+    }
+}
+
+// Tanh: d(tanh(x)) = (1 - tanh(x)^2) * dx
+pub fn dual_tanh(a: Dual) -> Dual {
+    let e2x = exp(2.0 * a.val as f64) as f32
+    let t = (e2x - 1.0) / (e2x + 1.0)
+    return Dual {
+        val: t,
+        deriv: (1.0 - t * t) * a.deriv,
+    }
+}
+
+// ==================== Loss Functions ====================
+
+// Mean Squared Error derivative: d(0.5 * (pred - target)^2) = (pred - target)
+pub fn mse_grad(pred: f32, target: f32) -> f32 {
+    return pred - target
+}
+
+// Cross-entropy derivative (for softmax output)
+pub fn cross_entropy_grad(pred: f32, target: f32) -> f32 {
+    return pred - target
+}
+
+// ==================== Example Usage ====================
+
+// Compute f(x) = x^2 + 2x + 1 and its derivative
+pub fn example_derivative(x: f32) -> Dual {
+    let dx = dual_var(x)
+    let two = dual_const(2.0)
+    let one = dual_const(1.0)
+    
+    // x^2
+    let x2 = dual_mul(dx, dx)
+    // 2x
+    let twox = dual_mul(two, dx)
+    // x^2 + 2x
+    let sum1 = dual_add(x2, twox)
+    // x^2 + 2x + 1
+    let result = dual_add(sum1, one)
+    
+    return result
+    // result.val = f(x), result.deriv = f'(x) = 2x + 2
+}

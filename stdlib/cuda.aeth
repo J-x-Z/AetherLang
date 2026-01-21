@@ -1,0 +1,120 @@
+// AetherLang CUDA FFI Bindings
+// Foreign Function Interface to CUDA for GPU computing
+
+// ==================== CUDA Runtime Types ====================
+
+// CUDA device pointer (opaque)
+type CudaDevicePtr = *u8
+
+// CUDA stream
+type CudaStream = *void
+
+// CUDA event
+type CudaEvent = *void
+
+// CUDA error codes
+const CUDA_SUCCESS: i32 = 0
+const CUDA_ERROR_INVALID_VALUE: i32 = 1
+const CUDA_ERROR_OUT_OF_MEMORY: i32 = 2
+
+// ==================== Device Management ====================
+
+// Get number of CUDA devices
+extern "C" fn cudaGetDeviceCount(count: *i32) -> i32
+
+// Set current CUDA device
+extern "C" fn cudaSetDevice(device: i32) -> i32
+
+// Get current device
+extern "C" fn cudaGetDevice(device: *i32) -> i32
+
+// Synchronize device
+extern "C" fn cudaDeviceSynchronize() -> i32
+
+// Reset device
+extern "C" fn cudaDeviceReset() -> i32
+
+// ==================== Memory Management ====================
+
+// Allocate device memory
+extern "C" fn cudaMalloc(devPtr: *CudaDevicePtr, size: u64) -> i32
+
+// Free device memory
+extern "C" fn cudaFree(devPtr: CudaDevicePtr) -> i32
+
+// Copy memory: host to device
+extern "C" fn cudaMemcpyHtoD(dst: CudaDevicePtr, src: *void, count: u64) -> i32
+
+// Copy memory: device to host
+extern "C" fn cudaMemcpyDtoH(dst: *void, src: CudaDevicePtr, count: u64) -> i32
+
+// Copy memory: device to device
+extern "C" fn cudaMemcpyDtoD(dst: CudaDevicePtr, src: CudaDevicePtr, count: u64) -> i32
+
+// Memset device memory
+extern "C" fn cudaMemset(devPtr: CudaDevicePtr, value: i32, count: u64) -> i32
+
+// ==================== Stream Management ====================
+
+// Create stream
+extern "C" fn cudaStreamCreate(stream: *CudaStream) -> i32
+
+// Destroy stream
+extern "C" fn cudaStreamDestroy(stream: CudaStream) -> i32
+
+// Synchronize stream
+extern "C" fn cudaStreamSynchronize(stream: CudaStream) -> i32
+
+// ==================== Event Management ====================
+
+// Create event
+extern "C" fn cudaEventCreate(event: *CudaEvent) -> i32
+
+// Destroy event
+extern "C" fn cudaEventDestroy(event: CudaEvent) -> i32
+
+// Record event
+extern "C" fn cudaEventRecord(event: CudaEvent, stream: CudaStream) -> i32
+
+// Synchronize event
+extern "C" fn cudaEventSynchronize(event: CudaEvent) -> i32
+
+// Elapsed time between events (milliseconds)
+extern "C" fn cudaEventElapsedTime(ms: *f32, start: CudaEvent, end: CudaEvent) -> i32
+
+// ==================== High-Level Wrappers ====================
+
+// Check CUDA error and panic on failure
+pub fn cuda_check(err: i32) {
+    if err != CUDA_SUCCESS {
+        // TODO: proper error handling
+        println("CUDA Error!")
+    }
+}
+
+// Allocate device buffer
+pub fn cuda_alloc(size: u64) -> CudaDevicePtr {
+    let ptr: CudaDevicePtr = null
+    cuda_check(cudaMalloc(&ptr, size))
+    return ptr
+}
+
+// Free device buffer
+pub fn cuda_free(ptr: CudaDevicePtr) {
+    cuda_check(cudaFree(ptr))
+}
+
+// Copy array to device
+pub fn cuda_copy_to_device(device: CudaDevicePtr, host: *void, size: u64) {
+    cuda_check(cudaMemcpyHtoD(device, host, size))
+}
+
+// Copy array from device
+pub fn cuda_copy_from_device(host: *void, device: CudaDevicePtr, size: u64) {
+    cuda_check(cudaMemcpyDtoH(host, device, size))
+}
+
+// Synchronize GPU
+pub fn cuda_sync() {
+    cuda_check(cudaDeviceSynchronize())
+}
