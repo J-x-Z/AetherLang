@@ -1,0 +1,224 @@
+// AetherLang File System Library
+// Core file system operations for package manager and general use
+
+extern "C" {
+    // POSIX file operations
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(fp: *void) -> i32;
+    fn fread(buf: *void, size: u64, count: u64, fp: *void) -> u64;
+    fn fwrite(buf: *void, size: u64, count: u64, fp: *void) -> u64;
+    fn fgets(buf: *u8, size: i32, fp: *void) -> *u8;
+    fn fputs(s: *u8, fp: *void) -> i32;
+    fn fseek(fp: *void, offset: i64, whence: i32) -> i32;
+    fn ftell(fp: *void) -> i64;
+    fn rewind(fp: *void);
+    fn feof(fp: *void) -> i32;
+    fn ferror(fp: *void) -> i32;
+    
+    // Directory operations
+    fn opendir(name: *u8) -> *void;
+    fn readdir(dirp: *void) -> *void;
+    fn closedir(dirp: *void) -> i32;
+    fn mkdir(path: *u8, mode: u32) -> i32;
+    fn rmdir(path: *u8) -> i32;
+    fn chdir(path: *u8) -> i32;
+    fn getcwd(buf: *u8, size: u64) -> *u8;
+    
+    // File operations
+    fn remove(path: *u8) -> i32;
+    fn rename(old: *u8, new: *u8) -> i32;
+    fn stat(path: *u8, buf: *void) -> i32;
+    fn access(path: *u8, mode: i32) -> i32;
+    
+    // Memory
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+}
+
+// Seek constants
+const SEEK_SET: i32 = 0
+const SEEK_CUR: i32 = 1
+const SEEK_END: i32 = 2
+
+// Access mode constants
+const F_OK: i32 = 0  // File exists
+const R_OK: i32 = 4  // Read permission
+const W_OK: i32 = 2  // Write permission
+const X_OK: i32 = 1  // Execute permission
+
+// ==================== File Handle ====================
+
+pub struct File {
+    handle: *void,
+    path: *u8,
+    is_open: bool,
+}
+
+// Open a file for reading
+pub fn file_open_read(path: *u8) -> File {
+    let mode: *u8 = "r\0" as *u8
+    let handle = fopen(path, mode)
+    return File {
+        handle: handle,
+        path: path,
+        is_open: handle != (0 as *void),
+    }
+}
+
+// Open a file for writing
+pub fn file_open_write(path: *u8) -> File {
+    let mode: *u8 = "w\0" as *u8
+    let handle = fopen(path, mode)
+    return File {
+        handle: handle,
+        path: path,
+        is_open: handle != (0 as *void),
+    }
+}
+
+// Open a file for appending
+pub fn file_open_append(path: *u8) -> File {
+    let mode: *u8 = "a\0" as *u8
+    let handle = fopen(path, mode)
+    return File {
+        handle: handle,
+        path: path,
+        is_open: handle != (0 as *void),
+    }
+}
+
+// Close a file
+pub fn file_close(f: *File) -> bool {
+    if f.is_open {
+        let result = fclose(f.handle)
+        f.is_open = false
+        return result == 0
+    }
+    return true
+}
+
+// Check if file is open
+pub fn file_is_open(f: *File) -> bool {
+    return f.is_open
+}
+
+// Read entire file into a buffer (returns bytes read)
+pub fn file_read_all(f: *File, buf: *u8, max_size: u64) -> u64 {
+    if !f.is_open {
+        return 0
+    }
+    return fread(buf as *void, 1, max_size, f.handle)
+}
+
+// Write buffer to file
+pub fn file_write(f: *File, buf: *u8, size: u64) -> u64 {
+    if !f.is_open {
+        return 0
+    }
+    return fwrite(buf as *void, 1, size, f.handle)
+}
+
+// Write a line to file
+pub fn file_write_line(f: *File, line: *u8) -> bool {
+    if !f.is_open {
+        return false
+    }
+    let result = fputs(line, f.handle)
+    if result >= 0 {
+        let newline: *u8 = "\n\0" as *u8
+        fputs(newline, f.handle)
+    }
+    return result >= 0
+}
+
+// ==================== Utility Functions ====================
+
+// Check if file exists
+pub fn file_exists(path: *u8) -> bool {
+    return access(path, F_OK) == 0
+}
+
+// Check if path is readable
+pub fn file_readable(path: *u8) -> bool {
+    return access(path, R_OK) == 0
+}
+
+// Check if path is writable
+pub fn file_writable(path: *u8) -> bool {
+    return access(path, W_OK) == 0
+}
+
+// Delete a file
+pub fn file_delete(path: *u8) -> bool {
+    return remove(path) == 0
+}
+
+// Rename/move a file
+pub fn file_rename(old_path: *u8, new_path: *u8) -> bool {
+    return rename(old_path, new_path) == 0
+}
+
+// ==================== Directory Operations ====================
+
+// Create a directory
+pub fn dir_create(path: *u8) -> bool {
+    return mkdir(path, 493) == 0  // 0755 in decimal
+}
+
+// Remove an empty directory
+pub fn dir_remove(path: *u8) -> bool {
+    return rmdir(path) == 0
+}
+
+// Change current directory
+pub fn dir_change(path: *u8) -> bool {
+    return chdir(path) == 0
+}
+
+// Get current working directory
+pub fn dir_current(buf: *u8, size: u64) -> bool {
+    let result = getcwd(buf, size)
+    return result != (0 as *u8)
+}
+
+// ==================== Simple File Helpers ====================
+
+// Read entire file as string (allocates memory)
+pub fn read_file(path: *u8) -> *u8 {
+    let f = file_open_read(path)
+    if !f.is_open {
+        return 0 as *u8
+    }
+    
+    // Get file size
+    fseek(f.handle, 0, SEEK_END)
+    let size = ftell(f.handle)
+    rewind(f.handle)
+    
+    // Allocate buffer (+1 for null terminator)
+    let buf: *u8 = malloc(size as u64 + 1) as *u8
+    if buf == (0 as *u8) {
+        file_close(&f)
+        return 0 as *u8
+    }
+    
+    // Read content
+    let read_count = fread(buf as *void, 1, size as u64, f.handle)
+    let idx = read_count as i32
+    buf[idx] = 0  // Null terminate
+    
+    file_close(&f)
+    return buf
+}
+
+// Write string to file
+pub fn write_file(path: *u8, content: *u8, size: u64) -> bool {
+    let f = file_open_write(path)
+    if !f.is_open {
+        return false
+    }
+    
+    let written = fwrite(content as *void, 1, size, f.handle)
+    file_close(&f)
+    return written == size
+}

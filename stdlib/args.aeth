@@ -1,0 +1,142 @@
+// AetherLang Command-Line Arguments Library
+// CLI argument parsing for jxz package manager
+
+extern "C" {
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcmp(s1: *u8, s2: *u8) -> i32;
+    fn strncmp(s1: *u8, s2: *u8, n: u64) -> i32;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+}
+
+// ==================== Argument Storage ====================
+
+// Maximum arguments supported
+const MAX_ARGS: i32 = 64
+
+pub struct Args {
+    argc: i32,
+    argv: **u8,
+}
+
+// Initialize from main() arguments
+pub fn args_init(argc: i32, argv: **u8) -> Args {
+    return Args {
+        argc: argc,
+        argv: argv,
+    }
+}
+
+// Get argument count
+pub fn args_count(args: *Args) -> i32 {
+    return args.argc
+}
+
+// Get argument at index
+pub fn args_get(args: *Args, index: i32) -> *u8 {
+    if index < 0 || index >= args.argc {
+        return 0 as *u8
+    }
+    return args.argv[index]
+}
+
+// Get program name (argv[0])
+pub fn args_program(args: *Args) -> *u8 {
+    return args_get(args, 0)
+}
+
+// ==================== Argument Matching ====================
+
+// Check if argument exists
+pub fn args_has(args: *Args, name: *u8) -> bool {
+    let i: i32 = 1
+    while i < args.argc {
+        if strcmp(args.argv[i], name) == 0 {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Check for flag (--flag or -f style)
+pub fn args_has_flag(args: *Args, short: *u8, long: *u8) -> bool {
+    let i: i32 = 1
+    while i < args.argc {
+        let arg = args.argv[i]
+        if strcmp(arg, short) == 0 || strcmp(arg, long) == 0 {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Get value after a flag (--flag value or -f value)
+pub fn args_get_value(args: *Args, short: *u8, long: *u8) -> *u8 {
+    let i: i32 = 1
+    while i < args.argc - 1 {
+        let arg = args.argv[i]
+        if strcmp(arg, short) == 0 || strcmp(arg, long) == 0 {
+            return args.argv[i + 1]
+        }
+        i = i + 1
+    }
+    return 0 as *u8
+}
+
+// Get first positional argument (not starting with -)
+pub fn args_positional(args: *Args, index: i32) -> *u8 {
+    let count: i32 = 0
+    let i: i32 = 1
+    while i < args.argc {
+        let arg = args.argv[i]
+        if arg[0] != 45 {  // '-' = 45
+            if count == index {
+                return arg
+            }
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return 0 as *u8
+}
+
+// ==================== Subcommand Support ====================
+
+// Get subcommand (first positional argument)
+pub fn args_subcommand(args: *Args) -> *u8 {
+    return args_positional(args, 0)
+}
+
+// Check if subcommand matches
+pub fn args_is_subcommand(args: *Args, cmd: *u8) -> bool {
+    let sub = args_subcommand(args)
+    if sub == (0 as *u8) {
+        return false
+    }
+    return strcmp(sub, cmd) == 0
+}
+
+// ==================== Common Flags ====================
+
+// Check for --help or -h
+pub fn args_help(args: *Args) -> bool {
+    return args_has_flag(args, "-h\0" as *u8, "--help\0" as *u8)
+}
+
+// Check for --version or -V
+pub fn args_version(args: *Args) -> bool {
+    return args_has_flag(args, "-V\0" as *u8, "--version\0" as *u8)
+}
+
+// Check for --verbose or -v
+pub fn args_verbose(args: *Args) -> bool {
+    return args_has_flag(args, "-v\0" as *u8, "--verbose\0" as *u8)
+}
+
+// Check for --quiet or -q
+pub fn args_quiet(args: *Args) -> bool {
+    return args_has_flag(args, "-q\0" as *u8, "--quiet\0" as *u8)
+}

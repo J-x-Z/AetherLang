@@ -1,0 +1,13 @@
+[package]
+name = "jxz"
+version = "0.1.0"
+edition = "2026"
+description = "AetherLang Package Manager"
+authors = ["J-x-Z"]
+
+[dependencies]
+# stdlib modules
+fs = { path = "../stdlib/fs.aeth" }
+string = { path = "../stdlib/string.aeth" }
+args = { path = "../stdlib/args.aeth" }
+toml = { path = "../stdlib/toml.aeth" }

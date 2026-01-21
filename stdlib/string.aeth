@@ -1,122 +1,199 @@
-// AetherLang Standard Library: String Module
-// Provides a heap-allocated, growable string type
+// AetherLang String Library
+// String manipulation utilities for package manager and general use
 
-use core::{malloc, free, realloc, memcpy, strlen, printf}
-
-/// A heap-allocated, growable UTF-8 string
-pub struct String {
-    /// Pointer to the string data (null-terminated for C compat)
-    data: *u8,
-    /// Length of the string (excluding null terminator)
-    len: u64,
-    /// Allocated capacity
-    capacity: u64,
+extern "C" {
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strncpy(dest: *u8, src: *u8, n: u64) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+    fn strcmp(s1: *u8, s2: *u8) -> i32;
+    fn strncmp(s1: *u8, s2: *u8, n: u64) -> i32;
+    fn strchr(s: *u8, c: i32) -> *u8;
+    fn strstr(haystack: *u8, needle: *u8) -> *u8;
+    fn memcpy(dest: *void, src: *void, n: u64) -> *void;
+    fn memset(s: *void, c: i32, n: u64) -> *void;
+    fn atoi(s: *u8) -> i32;
+    fn atol(s: *u8) -> i64;
 }
 
-impl String {
-    /// Create a new empty string
-    pub fn new() -> String {
-        let initial_cap: u64 = 16;
-        let data: *u8 = malloc(initial_cap);
-        // Null terminate
-        *(data as *u8) = 0;
-        
-        String {
-            data: data,
-            len: 0,
-            capacity: initial_cap,
-        }
-    }
-    
-    /// Create a string from a C string literal
-    pub fn from_cstr(s: *u8) -> String {
-        let src_len: u64 = strlen(s);
-        let cap: u64 = src_len + 1;
-        let data: *u8 = malloc(cap);
-        memcpy(data, s, cap);
-        
-        String {
-            data: data,
-            len: src_len,
-            capacity: cap,
-        }
-    }
-    
-    /// Get the length of the string
-    pub fn len(self: &String) -> u64 {
-        self.len
-    }
-    
-    /// Check if the string is empty
-    pub fn is_empty(self: &String) -> bool {
-        self.len == 0
-    }
-    
-    /// Get a pointer to the underlying C string
-    pub fn as_ptr(self: &String) -> *u8 {
-        self.data
-    }
-    
-    /// Ensure the string has enough capacity for n more bytes
-    fn ensure_capacity(self: &mut String, additional: u64) {
-        let required: u64 = self.len + additional + 1;  // +1 for null
-        if required > self.capacity {
-            let new_cap: u64 = required * 2;
-            self.data = realloc(self.data, new_cap);
-            self.capacity = new_cap;
-        }
-    }
-    
-    /// Append a single byte/char to the string
-    pub fn push(self: &mut String, c: u8) {
-        self.ensure_capacity(1);
-        // Set the character
-        let ptr: *u8 = self.data + self.len;
-        *ptr = c;
-        self.len = self.len + 1;
-        // Null terminate
-        let end: *u8 = self.data + self.len;
-        *end = 0;
-    }
-    
-    /// Append another string
-    pub fn push_str(self: &mut String, other: &String) {
-        self.ensure_capacity(other.len);
-        memcpy(self.data + self.len, other.data, other.len);
-        self.len = self.len + other.len;
-        // Null terminate
-        let end: *u8 = self.data + self.len;
-        *end = 0;
-    }
-    
-    /// Clear the string
-    pub fn clear(self: &mut String) {
-        self.len = 0;
-        *(self.data) = 0;
-    }
-    
-    /// Get character at index (no bounds checking)
-    pub fn char_at(self: &String, idx: u64) -> u8 {
-        let ptr: *u8 = self.data + idx;
-        *ptr
+// ==================== String Length & Comparison ====================
 
+// Get string length
+pub fn str_len(s: *u8) -> u64 {
+    return strlen(s)
+}
+
+// Compare two strings (0 = equal)
+pub fn str_eq(a: *u8, b: *u8) -> bool {
+    return strcmp(a, b) == 0
+}
+
+// Compare first n characters
+pub fn str_eq_n(a: *u8, b: *u8, n: u64) -> bool {
+    return strncmp(a, b, n) == 0
+}
+
+// Check if string starts with prefix
+pub fn str_starts_with(s: *u8, prefix: *u8) -> bool {
+    let prefix_len = strlen(prefix)
+    return strncmp(s, prefix, prefix_len) == 0
+}
+
+// Check if string ends with suffix
+pub fn str_ends_with(s: *u8, suffix: *u8) -> bool {
+    let s_len = strlen(s)
+    let suffix_len = strlen(suffix)
+    if suffix_len > s_len {
+        return false
     }
-    
-    /// Print the string to stdout
-    pub fn print(self: &String) {
-        printf(self.data);
+    let offset = s_len - suffix_len
+    let s_end: *u8 = (s as u64 + offset) as *u8
+    return strcmp(s_end, suffix) == 0
+}
+
+// ==================== String Creation ====================
+
+// Allocate a new string with given capacity
+pub fn str_new(capacity: u64) -> *u8 {
+    let buf: *u8 = malloc(capacity + 1) as *u8
+    if buf != (0 as *u8) {
+        buf[0] = 0  // Empty string
     }
-    /// Clone the string
-    pub fn clone(self: &String) -> String {
-        let mut s: String = String::new();
-        s.push_str(self);
-        s
+    return buf
+}
+
+// Clone a string
+pub fn str_clone(s: *u8) -> *u8 {
+    let len = strlen(s)
+    let buf: *u8 = malloc(len + 1) as *u8
+    if buf != (0 as *u8) {
+        strcpy(buf, s)
+    }
+    return buf
+}
+
+// Free a string
+pub fn str_free(s: *u8) {
+    if s != (0 as *u8) {
+        free(s as *void)
     }
 }
 
-/// Drop implementation - free the allocated memory
-impl Drop for String {
-    fn drop(self: &mut String) {
-        free(self.data);
+// ==================== String Manipulation ====================
+
+// Concatenate two strings (returns new string)
+pub fn str_concat(a: *u8, b: *u8) -> *u8 {
+    let a_len = strlen(a)
+    let b_len = strlen(b)
+    let buf: *u8 = malloc(a_len + b_len + 1) as *u8
+    if buf != (0 as *u8) {
+        strcpy(buf, a)
+        strcat(buf, b)
     }
+    return buf
+}
+
+// Get substring (start inclusive, end exclusive)
+pub fn str_substr(s: *u8, start: u64, end: u64) -> *u8 {
+    let len = end - start
+    let buf: *u8 = malloc(len + 1) as *u8
+    if buf != (0 as *u8) {
+        let src: *u8 = (s as u64 + start) as *u8
+        strncpy(buf, src, len)
+        let idx = len as i32
+        buf[idx] = 0
+    }
+    return buf
+}
+
+// Find character in string (returns index, -1 if not found)
+pub fn str_find_char(s: *u8, c: u8) -> i64 {
+    let result = strchr(s, c as i32)
+    if result == (0 as *u8) {
+        return -1
+    }
+    return (result as u64 - s as u64) as i64
+}
+
+// Find substring (returns index, -1 if not found)
+pub fn str_find(s: *u8, needle: *u8) -> i64 {
+    let result = strstr(s, needle)
+    if result == (0 as *u8) {
+        return -1
+    }
+    return (result as u64 - s as u64) as i64
+}
+
+// ==================== String Conversion ====================
+
+// Parse string to integer
+pub fn str_to_i32(s: *u8) -> i32 {
+    return atoi(s)
+}
+
+// Parse string to long
+pub fn str_to_i64(s: *u8) -> i64 {
+    return atol(s)
+}
+
+// ==================== Character Utilities ====================
+
+// Check if character is whitespace
+pub fn char_is_whitespace(c: u8) -> bool {
+    return c == 32 || c == 9 || c == 10 || c == 13  // space, tab, newline, carriage return
+}
+
+// Check if character is digit
+pub fn char_is_digit(c: u8) -> bool {
+    return c >= 48 && c <= 57  // '0' - '9'
+}
+
+// Check if character is letter
+pub fn char_is_alpha(c: u8) -> bool {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122)  // A-Z, a-z
+}
+
+// Check if character is alphanumeric
+pub fn char_is_alnum(c: u8) -> bool {
+    return char_is_alpha(c) || char_is_digit(c)
+}
+
+// ==================== Trim Functions ====================
+
+// Trim leading whitespace (modifies in place, returns new start)
+pub fn str_trim_left(s: *u8) -> *u8 {
+    let ptr = s
+    while ptr[0] != 0 && char_is_whitespace(ptr[0]) {
+        ptr = (ptr as u64 + 1) as *u8
+    }
+    return ptr
+}
+
+// Get index of first non-whitespace from end
+fn str_trim_right_len(s: *u8) -> u64 {
+    let len = strlen(s)
+    let i: i32 = len as i32
+    while i > 0 {
+        let c = s[i - 1]
+        if !char_is_whitespace(c) {
+            return i as u64
+        }
+        i = i - 1
+    }
+    return 0
+}
+
+// Trim trailing whitespace (returns new string)
+pub fn str_trim_right(s: *u8) -> *u8 {
+    let end = str_trim_right_len(s)
+    return str_substr(s, 0, end)
+}
+
+// Trim both sides
+pub fn str_trim(s: *u8) -> *u8 {
+    let left = str_trim_left(s)
+    let end = str_trim_right_len(left)
+    return str_substr(left, 0, end)
 }

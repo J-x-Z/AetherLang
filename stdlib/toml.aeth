@@ -1,0 +1,262 @@
+// AetherLang TOML Parser (Simplified)
+// Simple TOML parsing for jxz package manager (Jxz.toml)
+
+extern "C" {
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcmp(s1: *u8, s2: *u8) -> i32;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+}
+
+// ==================== TOML Value Types ====================
+
+const TOML_STRING: i32 = 1
+const TOML_INT: i32 = 2
+const TOML_BOOL: i32 = 3
+
+pub struct TomlEntry {
+    key: *u8,
+    kind: i32,
+    str_val: *u8,
+    int_val: i64,
+    bool_val: bool,
+}
+
+const MAX_ENTRIES: i32 = 128
+
+pub struct TomlDoc {
+    entries: *TomlEntry,
+    count: i32,
+}
+
+// ==================== Document Creation ====================
+
+pub fn toml_new() -> TomlDoc {
+    let entries: *TomlEntry = malloc(MAX_ENTRIES as u64 * 48) as *TomlEntry
+    return TomlDoc {
+        entries: entries,
+        count: 0,
+    }
+}
+
+pub fn toml_free(doc: *TomlDoc) {
+    if doc.entries != (0 as *TomlEntry) {
+        free(doc.entries as *void)
+    }
+}
+
+// ==================== Helpers ====================
+
+fn is_whitespace(c: u8) -> bool {
+    return c == 32 || c == 9
+}
+
+fn is_newline(c: u8) -> bool {
+    return c == 10 || c == 13
+}
+
+fn is_alpha(c: u8) -> bool {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+}
+
+fn is_alnum(c: u8) -> bool {
+    return is_alpha(c) || (c >= 48 && c <= 57) || c == 95 || c == 45
+}
+
+// ==================== Parser ====================
+
+pub fn toml_parse(doc: *TomlDoc, content: *u8) -> bool {
+    let pos: i32 = 0
+    let section: *u8 = 0 as *u8
+    let len = strlen(content) as i32
+    
+    while pos < len {
+        // Skip whitespace
+        while pos < len && is_whitespace(content[pos]) {
+            pos = pos + 1
+        }
+        
+        // Skip newlines
+        if pos < len && is_newline(content[pos]) {
+            pos = pos + 1
+            continue
+        }
+        
+        // Skip comments
+        if pos < len && content[pos] == 35 {  // '#'
+            while pos < len && !is_newline(content[pos]) {
+                pos = pos + 1
+            }
+            continue
+        }
+        
+        // Section header [section]
+        if pos < len && content[pos] == 91 {  // '['
+            pos = pos + 1
+            let sec_start = pos
+            while pos < len && content[pos] != 93 {  // ']'
+                pos = pos + 1
+            }
+            let sec_len = pos - sec_start
+            section = malloc(sec_len as u64 + 1) as *u8
+            let i: i32 = 0
+            while i < sec_len {
+                section[i] = content[sec_start + i]
+                i = i + 1
+            }
+            section[sec_len] = 0
+            pos = pos + 1
+            continue
+        }
+        
+        // Key = value
+        if pos < len && is_alpha(content[pos]) {
+            // Parse key
+            let key_start = pos
+            while pos < len && is_alnum(content[pos]) {
+                pos = pos + 1
+            }
+            let key_len = pos - key_start
+            
+            // Skip whitespace and =
+            while pos < len && is_whitespace(content[pos]) {
+                pos = pos + 1
+            }
+            if pos < len && content[pos] == 61 {  // '='
+                pos = pos + 1
+            }
+            while pos < len && is_whitespace(content[pos]) {
+                pos = pos + 1
+            }
+            
+            // Create entry
+            let entry_idx = doc.count
+            let entry = &doc.entries[entry_idx]
+            
+            // Build key (with section prefix if any)
+            if section != (0 as *u8) {
+                let sec_len2 = strlen(section) as i32
+                let full_key: *u8 = malloc(sec_len2 as u64 + key_len as u64 + 2) as *u8
+                let j: i32 = 0
+                while j < sec_len2 {
+                    full_key[j] = section[j]
+                    j = j + 1
+                }
+                full_key[sec_len2] = 46  // '.'
+                j = 0
+                while j < key_len {
+                    full_key[sec_len2 + 1 + j] = content[key_start + j]
+                    j = j + 1
+                }
+                full_key[sec_len2 + 1 + key_len] = 0
+                entry.key = full_key
+            } else {
+                let simple_key: *u8 = malloc(key_len as u64 + 1) as *u8
+                let j: i32 = 0
+                while j < key_len {
+                    simple_key[j] = content[key_start + j]
+                    j = j + 1
+                }
+                simple_key[key_len] = 0
+                entry.key = simple_key
+            }
+            
+            // Parse value
+            if pos < len && content[pos] == 34 {  // '"' string
+                pos = pos + 1
+                let val_start = pos
+                while pos < len && content[pos] != 34 {
+                    pos = pos + 1
+                }
+                let val_len = pos - val_start
+                let val: *u8 = malloc(val_len as u64 + 1) as *u8
+                let k: i32 = 0
+                while k < val_len {
+                    val[k] = content[val_start + k]
+                    k = k + 1
+                }
+                val[val_len] = 0
+                pos = pos + 1
+                entry.kind = TOML_STRING
+                entry.str_val = val
+            } else if pos < len && (content[pos] >= 48 && content[pos] <= 57 || content[pos] == 45) {
+                // Integer
+                let neg = content[pos] == 45
+                if neg {
+                    pos = pos + 1
+                }
+                let num: i64 = 0
+                while pos < len && content[pos] >= 48 && content[pos] <= 57 {
+                    num = num * 10 + (content[pos] - 48) as i64
+                    pos = pos + 1
+                }
+                entry.kind = TOML_INT
+                entry.int_val = if neg { -num } else { num }
+            } else if pos < len && content[pos] == 116 {  // 't' true
+                entry.kind = TOML_BOOL
+                entry.bool_val = true
+                pos = pos + 4
+            } else if pos < len && content[pos] == 102 {  // 'f' false
+                entry.kind = TOML_BOOL
+                entry.bool_val = false
+                pos = pos + 5
+            }
+            
+            doc.count = doc.count + 1
+        }
+        
+        // Skip to end of line
+        while pos < len && !is_newline(content[pos]) {
+            pos = pos + 1
+        }
+    }
+    
+    return true
+}
+
+// ==================== Value Access ====================
+
+pub fn toml_get_string(doc: *TomlDoc, key: *u8) -> *u8 {
+    let i: i32 = 0
+    while i < doc.count {
+        if strcmp(doc.entries[i].key, key) == 0 && doc.entries[i].kind == TOML_STRING {
+            return doc.entries[i].str_val
+        }
+        i = i + 1
+    }
+    return 0 as *u8
+}
+
+pub fn toml_get_int(doc: *TomlDoc, key: *u8) -> i64 {
+    let i: i32 = 0
+    while i < doc.count {
+        if strcmp(doc.entries[i].key, key) == 0 && doc.entries[i].kind == TOML_INT {
+            return doc.entries[i].int_val
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+pub fn toml_get_bool(doc: *TomlDoc, key: *u8, default: bool) -> bool {
+    let i: i32 = 0
+    while i < doc.count {
+        if strcmp(doc.entries[i].key, key) == 0 && doc.entries[i].kind == TOML_BOOL {
+            return doc.entries[i].bool_val
+        }
+        i = i + 1
+    }
+    return default
+}
+
+pub fn toml_has_key(doc: *TomlDoc, key: *u8) -> bool {
+    let i: i32 = 0
+    while i < doc.count {
+        if strcmp(doc.entries[i].key, key) == 0 {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}

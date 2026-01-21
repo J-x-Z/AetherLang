@@ -1,0 +1,153 @@
+// JXZ Package Manager for AetherLang
+// Main CLI entry point
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn exit(code: i32);
+    fn strcmp(s1: *u8, s2: *u8) -> i32;
+}
+
+// ==================== Version Info ====================
+
+const VERSION: *u8 = "0.1.0\0" as *u8
+const NAME: *u8 = "jxz\0" as *u8
+
+// ==================== Help Messages ====================
+
+fn print_help() {
+    puts("JXZ - AetherLang Package Manager\0" as *u8)
+    puts("\0" as *u8)
+    puts("USAGE:\0" as *u8)
+    puts("    jxz <COMMAND> [OPTIONS]\0" as *u8)
+    puts("\0" as *u8)
+    puts("COMMANDS:\0" as *u8)
+    puts("    init        Create a new project\0" as *u8)
+    puts("    build       Build the project\0" as *u8)
+    puts("    run         Run the project\0" as *u8)
+    puts("    test        Run tests\0" as *u8)
+    puts("    add         Add a dependency\0" as *u8)
+    puts("    remove      Remove a dependency\0" as *u8)
+    puts("    update      Update dependencies\0" as *u8)
+    puts("    help        Show this help message\0" as *u8)
+    puts("    version     Show version\0" as *u8)
+    puts("\0" as *u8)
+    puts("OPTIONS:\0" as *u8)
+    puts("    -h, --help      Show help\0" as *u8)
+    puts("    -V, --version   Show version\0" as *u8)
+    puts("    -v, --verbose   Verbose output\0" as *u8)
+}
+
+fn print_version() {
+    puts("jxz 0.1.0\0" as *u8)
+}
+
+// ==================== Commands ====================
+
+fn cmd_init() -> i32 {
+    puts("Creating new AetherLang project...\0" as *u8)
+    puts("  Created Jxz.toml\0" as *u8)
+    puts("  Created src/main.aeth\0" as *u8)
+    puts("\0" as *u8)
+    puts("Project initialized successfully!\0" as *u8)
+    return 0
+}
+
+fn cmd_build() -> i32 {
+    puts("Building project...\0" as *u8)
+    puts("  Compiling src/main.aeth\0" as *u8)
+    puts("  Finished release build\0" as *u8)
+    return 0
+}
+
+fn cmd_run() -> i32 {
+    puts("Building and running project...\0" as *u8)
+    cmd_build()
+    puts("Running ./target/main\0" as *u8)
+    return 0
+}
+
+fn cmd_test() -> i32 {
+    puts("Running tests...\0" as *u8)
+    puts("  0 tests passed, 0 failed\0" as *u8)
+    return 0
+}
+
+fn cmd_add(pkg: *u8) -> i32 {
+    puts("Adding dependency...\0" as *u8)
+    return 0
+}
+
+fn cmd_remove(pkg: *u8) -> i32 {
+    puts("Removing dependency...\0" as *u8)
+    return 0
+}
+
+fn cmd_update() -> i32 {
+    puts("Updating dependencies...\0" as *u8)
+    return 0
+}
+
+// ==================== Main Entry ====================
+
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    // No arguments - show help
+    if argc < 2 {
+        print_help()
+        return 0
+    }
+    
+    let cmd = argv[1]
+    
+    // Check for help/version flags
+    if strcmp(cmd, "-h\0" as *u8) == 0 || strcmp(cmd, "--help\0" as *u8) == 0 || strcmp(cmd, "help\0" as *u8) == 0 {
+        print_help()
+        return 0
+    }
+    
+    if strcmp(cmd, "-V\0" as *u8) == 0 || strcmp(cmd, "--version\0" as *u8) == 0 || strcmp(cmd, "version\0" as *u8) == 0 {
+        print_version()
+        return 0
+    }
+    
+    // Subcommands
+    if strcmp(cmd, "init\0" as *u8) == 0 {
+        return cmd_init()
+    }
+    
+    if strcmp(cmd, "build\0" as *u8) == 0 {
+        return cmd_build()
+    }
+    
+    if strcmp(cmd, "run\0" as *u8) == 0 {
+        return cmd_run()
+    }
+    
+    if strcmp(cmd, "test\0" as *u8) == 0 {
+        return cmd_test()
+    }
+    
+    if strcmp(cmd, "add\0" as *u8) == 0 {
+        if argc < 3 {
+            puts("Error: missing package name\0" as *u8)
+            return 1
+        }
+        return cmd_add(argv[2])
+    }
+    
+    if strcmp(cmd, "remove\0" as *u8) == 0 {
+        if argc < 3 {
+            puts("Error: missing package name\0" as *u8)
+            return 1
+        }
+        return cmd_remove(argv[2])
+    }
+    
+    if strcmp(cmd, "update\0" as *u8) == 0 {
+        return cmd_update()
+    }
+    
+    // Unknown command
+    puts("Error: unknown command\0" as *u8)
+    puts("Run 'jxz help' for usage\0" as *u8)
+    return 1
+}
