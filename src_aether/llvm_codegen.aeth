@@ -1,0 +1,386 @@
+// AetherLang LLVM Code Generator
+// Generates native code from IR using LLVM
+
+// Import LLVM FFI (linked via module system or direct includes)
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcmp(a: *u8, b: *u8) -> i32;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+}
+
+// LLVM FFI (subset for code generator)
+extern "C" {
+    // Context
+    fn LLVMContextCreate() -> *void;
+    fn LLVMContextDispose(ctx: *void);
+    
+    // Module
+    fn LLVMModuleCreateWithNameInContext(name: *u8, ctx: *void) -> *void;
+    fn LLVMDisposeModule(m: *void);
+    fn LLVMSetTarget(m: *void, triple: *u8);
+    fn LLVMPrintModuleToString(m: *void) -> *u8;
+    fn LLVMDisposeMessage(msg: *u8);
+    
+    // Types
+    fn LLVMVoidTypeInContext(ctx: *void) -> *void;
+    fn LLVMInt1TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt8TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt32TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt64TypeInContext(ctx: *void) -> *void;
+    fn LLVMFloatTypeInContext(ctx: *void) -> *void;
+    fn LLVMDoubleTypeInContext(ctx: *void) -> *void;
+    fn LLVMPointerType(elem: *void, addr_space: u32) -> *void;
+    fn LLVMFunctionType(ret: *void, params: **void, param_count: u32, is_vararg: i32) -> *void;
+    
+    // Builder
+    fn LLVMCreateBuilderInContext(ctx: *void) -> *void;
+    fn LLVMDisposeBuilder(b: *void);
+    fn LLVMPositionBuilderAtEnd(b: *void, block: *void);
+    
+    // Values
+    fn LLVMAddFunction(m: *void, name: *u8, ty: *void) -> *void;
+    fn LLVMGetParam(func: *void, idx: u32) -> *void;
+    fn LLVMConstInt(ty: *void, n: u64, sign_extend: i32) -> *void;
+    fn LLVMConstReal(ty: *void, n: f64) -> *void;
+    fn LLVMConstNull(ty: *void) -> *void;
+    
+    // Basic Blocks
+    fn LLVMAppendBasicBlockInContext(ctx: *void, func: *void, name: *u8) -> *void;
+    fn LLVMGetFirstBasicBlock(func: *void) -> *void;
+    
+    // Instructions - Arithmetic
+    fn LLVMBuildAdd(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildSub(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildMul(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildSDiv(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFAdd(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFSub(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFMul(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFDiv(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    
+    // Instructions - Comparison
+    fn LLVMBuildICmp(b: *void, op: i32, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFCmp(b: *void, op: i32, lhs: *void, rhs: *void, name: *u8) -> *void;
+    
+    // Instructions - Memory
+    fn LLVMBuildAlloca(b: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildLoad2(b: *void, ty: *void, ptr: *void, name: *u8) -> *void;
+    fn LLVMBuildStore(b: *void, val: *void, ptr: *void) -> *void;
+    fn LLVMBuildGEP2(b: *void, ty: *void, ptr: *void, indices: **void, num: u32, name: *u8) -> *void;
+    
+    // Instructions - Control Flow
+    fn LLVMBuildBr(b: *void, dest: *void) -> *void;
+    fn LLVMBuildCondBr(b: *void, cond: *void, then_bb: *void, else_bb: *void) -> *void;
+    fn LLVMBuildRet(b: *void, val: *void) -> *void;
+    fn LLVMBuildRetVoid(b: *void) -> *void;
+    fn LLVMBuildCall2(b: *void, ty: *void, func: *void, args: **void, num: u32, name: *u8) -> *void;
+    
+    // Instructions - Conversion
+    fn LLVMBuildZExt(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildSExt(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildTrunc(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildBitCast(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildGlobalStringPtr(b: *void, str: *u8, name: *u8) -> *void;
+    
+    // Target
+    fn LLVMInitializeAllTargetInfos();
+    fn LLVMInitializeAllTargets();
+    fn LLVMInitializeAllTargetMCs();
+    fn LLVMInitializeAllAsmPrinters();
+    fn LLVMGetDefaultTargetTriple() -> *u8;
+    fn LLVMGetTargetFromTriple(triple: *u8, target: **void, error: **u8) -> i32;
+    fn LLVMCreateTargetMachine(
+        target: *void, triple: *u8, cpu: *u8, features: *u8,
+        level: i32, reloc: i32, code_model: i32
+    ) -> *void;
+    fn LLVMTargetMachineEmitToFile(
+        tm: *void, m: *void, filename: *u8, codegen: i32, error: **u8
+    ) -> i32;
+    fn LLVMDisposeTargetMachine(tm: *void);
+}
+
+// ==================== LLVMCodeGen ====================
+
+pub struct LLVMCodeGen {
+    context: *void,
+    module: *void,
+    builder: *void,
+    current_func: *void,
+    target_triple: *u8,
+}
+
+impl LLVMCodeGen {
+    pub fn new(module_name: *u8, target: *u8) -> LLVMCodeGen {
+        // Initialize LLVM targets
+        LLVMInitializeAllTargetInfos();
+        LLVMInitializeAllTargets();
+        LLVMInitializeAllTargetMCs();
+        LLVMInitializeAllAsmPrinters();
+        
+        let ctx = LLVMContextCreate();
+        let m = LLVMModuleCreateWithNameInContext(module_name, ctx);
+        let b = LLVMCreateBuilderInContext(ctx);
+        
+        // Set target triple
+        LLVMSetTarget(m, target);
+        
+        return LLVMCodeGen {
+            context: ctx,
+            module: m,
+            builder: b,
+            current_func: 0 as *void,
+            target_triple: target,
+        };
+    }
+    
+    pub fn dispose(self: *LLVMCodeGen) {
+        if (*self).builder != (0 as *void) {
+            LLVMDisposeBuilder((*self).builder);
+        }
+        if (*self).module != (0 as *void) {
+            LLVMDisposeModule((*self).module);
+        }
+        if (*self).context != (0 as *void) {
+            LLVMContextDispose((*self).context);
+        }
+    }
+    
+    // ==================== Type Helpers ====================
+    
+    pub fn void_type(self: *LLVMCodeGen) -> *void {
+        return LLVMVoidTypeInContext((*self).context);
+    }
+    
+    pub fn i1_type(self: *LLVMCodeGen) -> *void {
+        return LLVMInt1TypeInContext((*self).context);
+    }
+    
+    pub fn i8_type(self: *LLVMCodeGen) -> *void {
+        return LLVMInt8TypeInContext((*self).context);
+    }
+    
+    pub fn i32_type(self: *LLVMCodeGen) -> *void {
+        return LLVMInt32TypeInContext((*self).context);
+    }
+    
+    pub fn i64_type(self: *LLVMCodeGen) -> *void {
+        return LLVMInt64TypeInContext((*self).context);
+    }
+    
+    pub fn f32_type(self: *LLVMCodeGen) -> *void {
+        return LLVMFloatTypeInContext((*self).context);
+    }
+    
+    pub fn f64_type(self: *LLVMCodeGen) -> *void {
+        return LLVMDoubleTypeInContext((*self).context);
+    }
+    
+    pub fn ptr_type(self: *LLVMCodeGen, elem: *void) -> *void {
+        return LLVMPointerType(elem, 0);
+    }
+    
+    pub fn func_type(self: *LLVMCodeGen, ret: *void, params: **void, count: u32) -> *void {
+        return LLVMFunctionType(ret, params, count, 0);
+    }
+    
+    // ==================== Function Generation ====================
+    
+    pub fn add_function(self: *LLVMCodeGen, name: *u8, ty: *void) -> *void {
+        let func = LLVMAddFunction((*self).module, name, ty);
+        return func;
+    }
+    
+    pub fn create_block(self: *LLVMCodeGen, func: *void, name: *u8) -> *void {
+        return LLVMAppendBasicBlockInContext((*self).context, func, name);
+    }
+    
+    pub fn position_at_end(self: *LLVMCodeGen, block: *void) {
+        LLVMPositionBuilderAtEnd((*self).builder, block);
+    }
+    
+    pub fn get_param(self: *LLVMCodeGen, func: *void, idx: u32) -> *void {
+        return LLVMGetParam(func, idx);
+    }
+    
+    // ==================== Instruction Builders ====================
+    
+    pub fn build_add(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildAdd((*self).builder, lhs, rhs, name);
+    }
+    
+    pub fn build_sub(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildSub((*self).builder, lhs, rhs, name);
+    }
+    
+    pub fn build_mul(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildMul((*self).builder, lhs, rhs, name);
+    }
+    
+    pub fn build_div(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildSDiv((*self).builder, lhs, rhs, name);
+    }
+    
+    pub fn build_fadd(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildFAdd((*self).builder, lhs, rhs, name);
+    }
+    
+    pub fn build_fsub(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildFSub((*self).builder, lhs, rhs, name);
+    }
+    
+    pub fn build_fmul(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildFMul((*self).builder, lhs, rhs, name);
+    }
+    
+    pub fn build_fdiv(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildFDiv((*self).builder, lhs, rhs, name);
+    }
+    
+    pub fn build_icmp_eq(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildICmp((*self).builder, 32, lhs, rhs, name);
+    }
+    
+    pub fn build_icmp_ne(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildICmp((*self).builder, 33, lhs, rhs, name);
+    }
+    
+    pub fn build_icmp_slt(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildICmp((*self).builder, 40, lhs, rhs, name);
+    }
+    
+    pub fn build_icmp_sgt(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildICmp((*self).builder, 38, lhs, rhs, name);
+    }
+    
+    pub fn build_icmp_sle(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildICmp((*self).builder, 41, lhs, rhs, name);
+    }
+    
+    pub fn build_icmp_sge(self: *LLVMCodeGen, lhs: *void, rhs: *void, name: *u8) -> *void {
+        return LLVMBuildICmp((*self).builder, 39, lhs, rhs, name);
+    }
+    
+    pub fn build_alloca(self: *LLVMCodeGen, ty: *void, name: *u8) -> *void {
+        return LLVMBuildAlloca((*self).builder, ty, name);
+    }
+    
+    pub fn build_load(self: *LLVMCodeGen, ty: *void, ptr: *void, name: *u8) -> *void {
+        return LLVMBuildLoad2((*self).builder, ty, ptr, name);
+    }
+    
+    pub fn build_store(self: *LLVMCodeGen, val: *void, ptr: *void) -> *void {
+        return LLVMBuildStore((*self).builder, val, ptr);
+    }
+    
+    pub fn build_br(self: *LLVMCodeGen, dest: *void) -> *void {
+        return LLVMBuildBr((*self).builder, dest);
+    }
+    
+    pub fn build_cond_br(self: *LLVMCodeGen, cond: *void, then_bb: *void, else_bb: *void) -> *void {
+        return LLVMBuildCondBr((*self).builder, cond, then_bb, else_bb);
+    }
+    
+    pub fn build_ret(self: *LLVMCodeGen, val: *void) -> *void {
+        return LLVMBuildRet((*self).builder, val);
+    }
+    
+    pub fn build_ret_void(self: *LLVMCodeGen) -> *void {
+        return LLVMBuildRetVoid((*self).builder);
+    }
+    
+    pub fn build_call(self: *LLVMCodeGen, ty: *void, func: *void, args: **void, num: u32, name: *u8) -> *void {
+        return LLVMBuildCall2((*self).builder, ty, func, args, num, name);
+    }
+    
+    pub fn build_zext(self: *LLVMCodeGen, val: *void, ty: *void, name: *u8) -> *void {
+        return LLVMBuildZExt((*self).builder, val, ty, name);
+    }
+    
+    pub fn build_sext(self: *LLVMCodeGen, val: *void, ty: *void, name: *u8) -> *void {
+        return LLVMBuildSExt((*self).builder, val, ty, name);
+    }
+    
+    pub fn build_trunc(self: *LLVMCodeGen, val: *void, ty: *void, name: *u8) -> *void {
+        return LLVMBuildTrunc((*self).builder, val, ty, name);
+    }
+    
+    pub fn build_bitcast(self: *LLVMCodeGen, val: *void, ty: *void, name: *u8) -> *void {
+        return LLVMBuildBitCast((*self).builder, val, ty, name);
+    }
+    
+    pub fn build_global_string(self: *LLVMCodeGen, str: *u8, name: *u8) -> *void {
+        return LLVMBuildGlobalStringPtr((*self).builder, str, name);
+    }
+    
+    // ==================== Constants ====================
+    
+    pub fn const_int(self: *LLVMCodeGen, ty: *void, n: i64) -> *void {
+        return LLVMConstInt(ty, n as u64, 1);
+    }
+    
+    pub fn const_uint(self: *LLVMCodeGen, ty: *void, n: u64) -> *void {
+        return LLVMConstInt(ty, n, 0);
+    }
+    
+    pub fn const_real(self: *LLVMCodeGen, ty: *void, n: f64) -> *void {
+        return LLVMConstReal(ty, n);
+    }
+    
+    pub fn const_null(self: *LLVMCodeGen, ty: *void) -> *void {
+        return LLVMConstNull(ty);
+    }
+    
+    // ==================== Output ====================
+    
+    pub fn print_ir(self: *LLVMCodeGen) {
+        let ir = LLVMPrintModuleToString((*self).module);
+        puts(ir);
+        LLVMDisposeMessage(ir);
+    }
+    
+    pub fn emit_object(self: *LLVMCodeGen, filename: *u8) -> bool {
+        // TODO: Implement when AetherLang supports output pointers
+        // For now, just print IR
+        puts("emit_object: Printing IR instead of emitting object file\0" as *u8);
+        (*self).print_ir();
+        return true;
+    }
+}
+
+// ==================== Example Usage ====================
+
+fn main() -> i32 {
+    puts("LLVM Code Generator for AetherLang\0" as *u8);
+    
+    // Create a simple test module
+    let codegen = LLVMCodeGen::new("test_module\0" as *u8, "arm64-apple-macosx\0" as *u8);
+    
+    // Define main function type: i32 ()
+    let i32_ty = codegen.i32_type();
+    let main_ty = codegen.func_type(i32_ty, 0 as **void, 0);
+    
+    // Add function
+    let main_func = codegen.add_function("main\0" as *u8, main_ty);
+    
+    // Create entry block
+    let entry = codegen.create_block(main_func, "entry\0" as *u8);
+    codegen.position_at_end(entry);
+    
+    // Build: return 42
+    let ret_val = codegen.const_int(i32_ty, 42);
+    codegen.build_ret(ret_val);
+    
+    // Print IR
+    puts("\n--- Generated LLVM IR ---\0" as *u8);
+    codegen.print_ir();
+    
+    // Cleanup
+    codegen.dispose();
+    
+    puts("\n--- Done ---\0" as *u8);
+    return 0;
+}

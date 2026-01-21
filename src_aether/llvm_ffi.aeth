@@ -1,0 +1,435 @@
+// AetherLang LLVM FFI Bindings
+// Provides access to LLVM C API for native code generation
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+}
+
+// ==================== LLVM Context ====================
+
+extern "C" {
+    fn LLVMContextCreate() -> *void;
+    fn LLVMContextDispose(ctx: *void);
+    fn LLVMGetGlobalContext() -> *void;
+}
+
+pub struct LLVMContext {
+    ptr: *void,
+}
+
+impl LLVMContext {
+    pub fn create() -> LLVMContext {
+        let ctx = LLVMContextCreate();
+        return LLVMContext { ptr: ctx };
+    }
+    
+    pub fn global() -> LLVMContext {
+        let ctx = LLVMGetGlobalContext();
+        return LLVMContext { ptr: ctx };
+    }
+    
+    pub fn dispose(self: *LLVMContext) {
+        if (*self).ptr != (0 as *void) {
+            LLVMContextDispose((*self).ptr);
+        }
+    }
+    
+    pub fn raw(self: *LLVMContext) -> *void {
+        return (*self).ptr;
+    }
+}
+
+// ==================== LLVM Module ====================
+
+extern "C" {
+    fn LLVMModuleCreateWithNameInContext(name: *u8, ctx: *void) -> *void;
+    fn LLVMDisposeModule(m: *void);
+    fn LLVMSetTarget(m: *void, triple: *u8);
+    fn LLVMSetDataLayout(m: *void, layout: *u8);
+    fn LLVMPrintModuleToString(m: *void) -> *u8;
+    fn LLVMDisposeMessage(msg: *u8);
+    fn LLVMWriteBitcodeToFile(m: *void, path: *u8) -> i32;
+}
+
+pub struct LLVMModule {
+    ptr: *void,
+}
+
+impl LLVMModule {
+    pub fn create(name: *u8, ctx: *LLVMContext) -> LLVMModule {
+        let m = LLVMModuleCreateWithNameInContext(name, (*ctx).ptr);
+        return LLVMModule { ptr: m };
+    }
+    
+    pub fn dispose(self: *LLVMModule) {
+        if (*self).ptr != (0 as *void) {
+            LLVMDisposeModule((*self).ptr);
+        }
+    }
+    
+    pub fn set_target(self: *LLVMModule, triple: *u8) {
+        LLVMSetTarget((*self).ptr, triple);
+    }
+    
+    pub fn set_data_layout(self: *LLVMModule, layout: *u8) {
+        LLVMSetDataLayout((*self).ptr, layout);
+    }
+    
+    pub fn print_to_string(self: *LLVMModule) -> *u8 {
+        return LLVMPrintModuleToString((*self).ptr);
+    }
+    
+    pub fn write_bitcode(self: *LLVMModule, path: *u8) -> bool {
+        let result = LLVMWriteBitcodeToFile((*self).ptr, path);
+        return result == 0;
+    }
+    
+    pub fn raw(self: *LLVMModule) -> *void {
+        return (*self).ptr;
+    }
+}
+
+// ==================== LLVM Types ====================
+
+extern "C" {
+    fn LLVMVoidTypeInContext(ctx: *void) -> *void;
+    fn LLVMInt1TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt8TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt16TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt32TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt64TypeInContext(ctx: *void) -> *void;
+    fn LLVMFloatTypeInContext(ctx: *void) -> *void;
+    fn LLVMDoubleTypeInContext(ctx: *void) -> *void;
+    fn LLVMPointerType(elem: *void, addr_space: u32) -> *void;
+    fn LLVMFunctionType(ret: *void, params: **void, param_count: u32, is_vararg: i32) -> *void;
+    fn LLVMStructTypeInContext(ctx: *void, elems: **void, elem_count: u32, packed: i32) -> *void;
+    fn LLVMArrayType(elem: *void, count: u32) -> *void;
+    fn LLVMVectorType(elem: *void, count: u32) -> *void;
+}
+
+pub struct LLVMType {
+    ptr: *void,
+}
+
+impl LLVMType {
+    pub fn void_type(ctx: *LLVMContext) -> LLVMType {
+        return LLVMType { ptr: LLVMVoidTypeInContext((*ctx).ptr) };
+    }
+    
+    pub fn i1(ctx: *LLVMContext) -> LLVMType {
+        return LLVMType { ptr: LLVMInt1TypeInContext((*ctx).ptr) };
+    }
+    
+    pub fn i8(ctx: *LLVMContext) -> LLVMType {
+        return LLVMType { ptr: LLVMInt8TypeInContext((*ctx).ptr) };
+    }
+    
+    pub fn i16(ctx: *LLVMContext) -> LLVMType {
+        return LLVMType { ptr: LLVMInt16TypeInContext((*ctx).ptr) };
+    }
+    
+    pub fn i32(ctx: *LLVMContext) -> LLVMType {
+        return LLVMType { ptr: LLVMInt32TypeInContext((*ctx).ptr) };
+    }
+    
+    pub fn i64(ctx: *LLVMContext) -> LLVMType {
+        return LLVMType { ptr: LLVMInt64TypeInContext((*ctx).ptr) };
+    }
+    
+    pub fn f32(ctx: *LLVMContext) -> LLVMType {
+        return LLVMType { ptr: LLVMFloatTypeInContext((*ctx).ptr) };
+    }
+    
+    pub fn f64(ctx: *LLVMContext) -> LLVMType {
+        return LLVMType { ptr: LLVMDoubleTypeInContext((*ctx).ptr) };
+    }
+    
+    pub fn ptr(elem: *LLVMType) -> LLVMType {
+        return LLVMType { ptr: LLVMPointerType((*elem).ptr, 0) };
+    }
+    
+    pub fn func(ret: *LLVMType, params: **void, count: u32, vararg: bool) -> LLVMType {
+        let is_vararg: i32 = if vararg { 1 } else { 0 };
+        return LLVMType { ptr: LLVMFunctionType((*ret).ptr, params, count, is_vararg) };
+    }
+    
+    pub fn array(elem: *LLVMType, count: u32) -> LLVMType {
+        return LLVMType { ptr: LLVMArrayType((*elem).ptr, count) };
+    }
+    
+    pub fn raw(self: *LLVMType) -> *void {
+        return (*self).ptr;
+    }
+}
+
+// ==================== LLVM Builder ====================
+
+extern "C" {
+    fn LLVMCreateBuilderInContext(ctx: *void) -> *void;
+    fn LLVMDisposeBuilder(b: *void);
+    fn LLVMPositionBuilderAtEnd(b: *void, block: *void);
+    fn LLVMPositionBuilderBefore(b: *void, inst: *void);
+    fn LLVMGetInsertBlock(b: *void) -> *void;
+}
+
+pub struct LLVMBuilder {
+    ptr: *void,
+}
+
+impl LLVMBuilder {
+    pub fn create(ctx: *LLVMContext) -> LLVMBuilder {
+        let b = LLVMCreateBuilderInContext((*ctx).ptr);
+        return LLVMBuilder { ptr: b };
+    }
+    
+    pub fn dispose(self: *LLVMBuilder) {
+        if (*self).ptr != (0 as *void) {
+            LLVMDisposeBuilder((*self).ptr);
+        }
+    }
+    
+    pub fn position_at_end(self: *LLVMBuilder, block: *void) {
+        LLVMPositionBuilderAtEnd((*self).ptr, block);
+    }
+    
+    pub fn raw(self: *LLVMBuilder) -> *void {
+        return (*self).ptr;
+    }
+}
+
+// ==================== LLVM Values ====================
+
+extern "C" {
+    fn LLVMAddFunction(m: *void, name: *u8, ty: *void) -> *void;
+    fn LLVMGetParam(func: *void, idx: u32) -> *void;
+    fn LLVMSetValueName2(val: *void, name: *u8, len: u64);
+    fn LLVMGetValueName2(val: *void, len: *u64) -> *u8;
+    fn LLVMTypeOf(val: *void) -> *void;
+    fn LLVMConstInt(ty: *void, n: u64, sign_extend: i32) -> *void;
+    fn LLVMConstReal(ty: *void, n: f64) -> *void;
+    fn LLVMConstNull(ty: *void) -> *void;
+    fn LLVMConstPointerNull(ty: *void) -> *void;
+}
+
+pub struct LLVMValue {
+    ptr: *void,
+}
+
+impl LLVMValue {
+    pub fn from_ptr(p: *void) -> LLVMValue {
+        return LLVMValue { ptr: p };
+    }
+    
+    pub fn const_int(ty: *LLVMType, n: i64) -> LLVMValue {
+        return LLVMValue { ptr: LLVMConstInt((*ty).ptr, n as u64, 1) };
+    }
+    
+    pub fn const_uint(ty: *LLVMType, n: u64) -> LLVMValue {
+        return LLVMValue { ptr: LLVMConstInt((*ty).ptr, n, 0) };
+    }
+    
+    pub fn const_real(ty: *LLVMType, n: f64) -> LLVMValue {
+        return LLVMValue { ptr: LLVMConstReal((*ty).ptr, n) };
+    }
+    
+    pub fn const_null(ty: *LLVMType) -> LLVMValue {
+        return LLVMValue { ptr: LLVMConstNull((*ty).ptr) };
+    }
+    
+    pub fn is_null(self: *LLVMValue) -> bool {
+        return (*self).ptr == (0 as *void);
+    }
+    
+    pub fn raw(self: *LLVMValue) -> *void {
+        return (*self).ptr;
+    }
+}
+
+// ==================== LLVM Basic Blocks ====================
+
+extern "C" {
+    fn LLVMAppendBasicBlockInContext(ctx: *void, func: *void, name: *u8) -> *void;
+    fn LLVMGetFirstBasicBlock(func: *void) -> *void;
+    fn LLVMGetNextBasicBlock(block: *void) -> *void;
+    fn LLVMGetFirstInstruction(block: *void) -> *void;
+}
+
+pub struct LLVMBasicBlock {
+    ptr: *void,
+}
+
+impl LLVMBasicBlock {
+    pub fn append(ctx: *LLVMContext, func: *void, name: *u8) -> LLVMBasicBlock {
+        let bb = LLVMAppendBasicBlockInContext((*ctx).ptr, func, name);
+        return LLVMBasicBlock { ptr: bb };
+    }
+    
+    pub fn raw(self: *LLVMBasicBlock) -> *void {
+        return (*self).ptr;
+    }
+}
+
+// ==================== LLVM Instructions ====================
+
+extern "C" {
+    // Arithmetic
+    fn LLVMBuildAdd(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildSub(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildMul(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildSDiv(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildUDiv(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFAdd(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFSub(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFMul(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFDiv(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    
+    // Bitwise
+    fn LLVMBuildAnd(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildOr(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildXor(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildShl(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildAShr(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildLShr(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    
+    // Comparison
+    fn LLVMBuildICmp(b: *void, op: i32, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildFCmp(b: *void, op: i32, lhs: *void, rhs: *void, name: *u8) -> *void;
+    
+    // Memory
+    fn LLVMBuildAlloca(b: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildLoad2(b: *void, ty: *void, ptr: *void, name: *u8) -> *void;
+    fn LLVMBuildStore(b: *void, val: *void, ptr: *void) -> *void;
+    fn LLVMBuildGEP2(b: *void, ty: *void, ptr: *void, indices: **void, num_indices: u32, name: *u8) -> *void;
+    
+    // Control flow
+    fn LLVMBuildBr(b: *void, dest: *void) -> *void;
+    fn LLVMBuildCondBr(b: *void, cond: *void, then_bb: *void, else_bb: *void) -> *void;
+    fn LLVMBuildRet(b: *void, val: *void) -> *void;
+    fn LLVMBuildRetVoid(b: *void) -> *void;
+    fn LLVMBuildUnreachable(b: *void) -> *void;
+    
+    // Function calls
+    fn LLVMBuildCall2(b: *void, ty: *void, func: *void, args: **void, num_args: u32, name: *u8) -> *void;
+    
+    // Type conversions
+    fn LLVMBuildTrunc(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildZExt(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildSExt(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildFPToSI(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildFPToUI(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildSIToFP(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildUIToFP(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildBitCast(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildPtrToInt(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildIntToPtr(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    
+    // Misc
+    fn LLVMBuildPhi(b: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMAddIncoming(phi: *void, incoming_values: **void, incoming_blocks: **void, count: u32);
+    fn LLVMBuildGlobalStringPtr(b: *void, str: *u8, name: *u8) -> *void;
+}
+
+// ICmp predicates
+fn icmp_eq() -> i32 { return 32; }
+fn icmp_ne() -> i32 { return 33; }
+fn icmp_ugt() -> i32 { return 34; }
+fn icmp_uge() -> i32 { return 35; }
+fn icmp_ult() -> i32 { return 36; }
+fn icmp_ule() -> i32 { return 37; }
+fn icmp_sgt() -> i32 { return 38; }
+fn icmp_sge() -> i32 { return 39; }
+fn icmp_slt() -> i32 { return 40; }
+fn icmp_sle() -> i32 { return 41; }
+
+// FCmp predicates
+fn fcmp_oeq() -> i32 { return 1; }
+fn fcmp_ogt() -> i32 { return 2; }
+fn fcmp_oge() -> i32 { return 3; }
+fn fcmp_olt() -> i32 { return 4; }
+fn fcmp_ole() -> i32 { return 5; }
+fn fcmp_one() -> i32 { return 6; }
+
+// ==================== LLVM Verification ====================
+
+extern "C" {
+    fn LLVMVerifyModule(m: *void, action: i32, msg: **u8) -> i32;
+    fn LLVMVerifyFunction(func: *void, action: i32) -> i32;
+}
+
+fn verify_action_abort() -> i32 { return 0; }
+fn verify_action_print() -> i32 { return 1; }
+fn verify_action_return() -> i32 { return 2; }
+
+// ==================== LLVM Target ====================
+
+extern "C" {
+    fn LLVMInitializeAllTargetInfos();
+    fn LLVMInitializeAllTargets();
+    fn LLVMInitializeAllTargetMCs();
+    fn LLVMInitializeAllAsmPrinters();
+    fn LLVMInitializeAllAsmParsers();
+    fn LLVMGetDefaultTargetTriple() -> *u8;
+    fn LLVMGetHostCPUName() -> *u8;
+    fn LLVMGetHostCPUFeatures() -> *u8;
+}
+
+pub fn llvm_init_all_targets() {
+    LLVMInitializeAllTargetInfos();
+    LLVMInitializeAllTargets();
+    LLVMInitializeAllTargetMCs();
+    LLVMInitializeAllAsmPrinters();
+    LLVMInitializeAllAsmParsers();
+}
+
+pub fn llvm_default_triple() -> *u8 {
+    return LLVMGetDefaultTargetTriple();
+}
+
+// ==================== LLVM Target Machine ====================
+
+extern "C" {
+    fn LLVMGetTargetFromTriple(triple: *u8, target: **void, error: **u8) -> i32;
+    fn LLVMCreateTargetMachine(
+        target: *void, triple: *u8, cpu: *u8, features: *u8,
+        level: i32, reloc: i32, code_model: i32
+    ) -> *void;
+    fn LLVMDisposeTargetMachine(tm: *void);
+    fn LLVMTargetMachineEmitToFile(
+        tm: *void, m: *void, filename: *u8, codegen: i32, error: **u8
+    ) -> i32;
+}
+
+// Optimization levels
+fn opt_none() -> i32 { return 0; }
+fn opt_less() -> i32 { return 1; }
+fn opt_default() -> i32 { return 2; }
+fn opt_aggressive() -> i32 { return 3; }
+
+// Relocation models
+fn reloc_default() -> i32 { return 0; }
+fn reloc_static() -> i32 { return 1; }
+fn reloc_pic() -> i32 { return 2; }
+fn reloc_dynamic_no_pic() -> i32 { return 3; }
+
+// Code models
+fn code_model_default() -> i32 { return 0; }
+fn code_model_jit() -> i32 { return 1; }
+fn code_model_small() -> i32 { return 2; }
+fn code_model_kernel() -> i32 { return 3; }
+fn code_model_medium() -> i32 { return 4; }
+fn code_model_large() -> i32 { return 5; }
+
+// Codegen file types
+fn codegen_asm() -> i32 { return 0; }
+fn codegen_obj() -> i32 { return 1; }
+
+// ==================== Test ====================
+
+fn main() -> i32 {
+    puts("LLVM FFI Module for AetherLang\0" as *u8);
+    puts("Provides bindings to LLVM C API\0" as *u8);
+    puts("Functions: Context, Module, Builder, Types, Values\0" as *u8);
+    return 0;
+}
