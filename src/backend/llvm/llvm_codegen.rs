@@ -719,7 +719,9 @@ impl LLVMCodeGen {
                         }
                         Constant::String(s) => {
                             // Create global string pointer (returns i8*)
-                            let s_c = CString::new(s.as_str()).unwrap();
+                            // Filter out any embedded NUL characters before creating CString
+                            let s_clean: String = s.chars().filter(|&c| c != '\0').collect();
+                            let s_c = CString::new(s_clean).unwrap();
                             let name_c = CString::new("str").unwrap();
                             Ok(LLVMBuildGlobalStringPtr(self.builder, s_c.as_ptr(), name_c.as_ptr()))
                         }
