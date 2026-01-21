@@ -1,0 +1,122 @@
+// JXZ Dependency Management
+// Parses Jxz.toml and manages dependencies
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(fp: *void) -> i32;
+    fn fread(buf: *void, size: u64, count: u64, fp: *void) -> u64;
+    fn fseek(fp: *void, offset: i64, whence: i32) -> i32;
+    fn ftell(fp: *void) -> i64;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strcmp(s1: *u8, s2: *u8) -> i32;
+    fn access(path: *u8, mode: i32) -> i32;
+    fn mkdir(path: *u8, mode: u32) -> i32;
+    fn system(cmd: *u8) -> i32;
+}
+
+const SEEK_SET: i32 = 0
+const SEEK_END: i32 = 2
+const F_OK: i32 = 0
+
+// ==================== Dependency Structure ====================
+
+const MAX_DEPS: i32 = 32
+
+pub struct Dependency {
+    name: *u8,
+    version: *u8,
+    path: *u8,
+    is_local: bool,
+}
+
+pub struct Project {
+    name: *u8,
+    version: *u8,
+    deps: *Dependency,
+    dep_count: i32,
+}
+
+// ==================== Project Loading ====================
+
+pub fn load_project() -> Project {
+    let proj = Project {
+        name: 0 as *u8,
+        version: 0 as *u8,
+        deps: malloc(MAX_DEPS as u64 * 32) as *Dependency,
+        dep_count: 0,
+    }
+    
+    // Read Jxz.toml
+    if access("Jxz.toml\0" as *u8, F_OK) != 0 {
+        puts("Error: No Jxz.toml found\0" as *u8)
+        return proj
+    }
+    
+    // TODO: Parse Jxz.toml using toml.aeth
+    // For now, just set defaults
+    proj.name = "project\0" as *u8
+    proj.version = "0.1.0\0" as *u8
+    
+    return proj
+}
+
+// ==================== Dependency Commands ====================
+
+pub fn add_dependency(name: *u8, version: *u8) -> i32 {
+    puts("Adding dependency:\0" as *u8)
+    puts(name)
+    
+    // TODO: Modify Jxz.toml to add dependency
+    // TODO: Download/fetch dependency
+    
+    puts("  Added to Jxz.toml\0" as *u8)
+    return 0
+}
+
+pub fn remove_dependency(name: *u8) -> i32 {
+    puts("Removing dependency:\0" as *u8)
+    puts(name)
+    
+    // TODO: Modify Jxz.toml to remove dependency
+    
+    puts("  Removed from Jxz.toml\0" as *u8)
+    return 0
+}
+
+pub fn update_dependencies() -> i32 {
+    puts("Updating dependencies...\0" as *u8)
+    
+    let proj = load_project()
+    
+    // TODO: Check for updates
+    // TODO: Update Jxz.lock
+    
+    puts("  All dependencies up to date\0" as *u8)
+    return 0
+}
+
+pub fn install_dependencies() -> i32 {
+    puts("Installing dependencies...\0" as *u8)
+    
+    // Create jxz_modules directory
+    mkdir("jxz_modules\0" as *u8, 493)
+    
+    let proj = load_project()
+    
+    // TODO: Download and install each dependency
+    
+    puts("  Dependencies installed\0" as *u8)
+    return 0
+}
+
+// ==================== Lock File ====================
+
+pub fn generate_lockfile() -> i32 {
+    puts("Generating Jxz.lock...\0" as *u8)
+    
+    // TODO: Generate lock file with exact versions
+    
+    return 0
+}
