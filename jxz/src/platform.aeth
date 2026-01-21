@@ -1,0 +1,156 @@
+// JXZ Platform Detection and Paths
+// Cross-platform support like Homebrew
+
+extern "C" {
+    fn getenv(name: *u8) -> *u8;
+    fn access(path: *u8, mode: i32) -> i32;
+    fn mkdir(path: *u8, mode: u32) -> i32;
+    fn puts(s: *u8) -> i32;
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+}
+
+const F_OK: i32 = 0
+
+// ==================== Platform Detection ====================
+
+const PLATFORM_LINUX: i32 = 1
+const PLATFORM_MACOS: i32 = 2
+const PLATFORM_WINDOWS: i32 = 3
+
+// Detect current platform
+pub fn detect_platform() -> i32 {
+    // Check for macOS
+    if access("/usr/bin/sw_vers\0" as *u8, F_OK) == 0 {
+        return PLATFORM_MACOS
+    }
+    
+    // Check for Windows (via WSL or native)
+    let win_env = getenv("WINDIR\0" as *u8)
+    if win_env != (0 as *u8) {
+        return PLATFORM_WINDOWS
+    }
+    
+    // Default to Linux
+    return PLATFORM_LINUX
+}
+
+// Get platform name string
+pub fn platform_name(platform: i32) -> *u8 {
+    if platform == PLATFORM_MACOS {
+        return "macos\0" as *u8
+    } else if platform == PLATFORM_WINDOWS {
+        return "windows\0" as *u8
+    }
+    return "linux\0" as *u8
+}
+
+// ==================== JXZ Paths (Homebrew-style) ====================
+
+// Get JXZ prefix (like Homebrew's prefix)
+// Default: ~/.jxz on all platforms
+pub fn jxz_prefix() -> *u8 {
+    let home = getenv("HOME\0" as *u8)
+    if home == (0 as *u8) {
+        // Fallback for Windows
+        home = getenv("USERPROFILE\0" as *u8)
+    }
+    
+    if home == (0 as *u8) {
+        return "/tmp/jxz\0" as *u8
+    }
+    
+    let home_len = strlen(home) as i32
+    let prefix: *u8 = malloc(home_len as u64 + 10) as *u8
+    strcpy(prefix, home)
+    strcat(prefix, "/.jxz\0" as *u8)
+    
+    return prefix
+}
+
+// Get bin directory
+pub fn jxz_bin() -> *u8 {
+    let prefix = jxz_prefix()
+    let prefix_len = strlen(prefix) as i32
+    let bin: *u8 = malloc(prefix_len as u64 + 10) as *u8
+    strcpy(bin, prefix)
+    strcat(bin, "/bin\0" as *u8)
+    return bin
+}
+
+// Get lib directory
+pub fn jxz_lib() -> *u8 {
+    let prefix = jxz_prefix()
+    let prefix_len = strlen(prefix) as i32
+    let lib: *u8 = malloc(prefix_len as u64 + 10) as *u8
+    strcpy(lib, prefix)
+    strcat(lib, "/lib\0" as *u8)
+    return lib
+}
+
+// Get cellar (package storage, like Homebrew)
+pub fn jxz_cellar() -> *u8 {
+    let prefix = jxz_prefix()
+    let prefix_len = strlen(prefix) as i32
+    let cellar: *u8 = malloc(prefix_len as u64 + 15) as *u8
+    strcpy(cellar, prefix)
+    strcat(cellar, "/Cellar\0" as *u8)
+    return cellar
+}
+
+// Get cache directory
+pub fn jxz_cache() -> *u8 {
+    let prefix = jxz_prefix()
+    let prefix_len = strlen(prefix) as i32
+    let cache: *u8 = malloc(prefix_len as u64 + 15) as *u8
+    strcpy(cache, prefix)
+    strcat(cache, "/cache\0" as *u8)
+    return cache
+}
+
+// Get database directory
+pub fn jxz_db() -> *u8 {
+    let prefix = jxz_prefix()
+    let prefix_len = strlen(prefix) as i32
+    let db: *u8 = malloc(prefix_len as u64 + 10) as *u8
+    strcpy(db, prefix)
+    strcat(db, "/db\0" as *u8)
+    return db
+}
+
+// ==================== Directory Setup ====================
+
+// Create all JXZ directories
+pub fn jxz_setup_dirs() -> bool {
+    puts("Setting up JXZ directories...\0" as *u8)
+    
+    let prefix = jxz_prefix()
+    mkdir(prefix, 493)
+    
+    mkdir(jxz_bin(), 493)
+    mkdir(jxz_lib(), 493)
+    mkdir(jxz_cellar(), 493)
+    mkdir(jxz_cache(), 493)
+    mkdir(jxz_db(), 493)
+    
+    puts("  JXZ directories ready\0" as *u8)
+    return true
+}
+
+// Print JXZ configuration
+pub fn jxz_print_config() {
+    puts("JXZ Configuration:\0" as *u8)
+    puts("  Platform: \0" as *u8)
+    puts(platform_name(detect_platform()))
+    puts("  Prefix:   \0" as *u8)
+    puts(jxz_prefix())
+    puts("  Bin:      \0" as *u8)
+    puts(jxz_bin())
+    puts("  Cellar:   \0" as *u8)
+    puts(jxz_cellar())
+    puts("  Cache:    \0" as *u8)
+    puts(jxz_cache())
+}

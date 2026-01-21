@@ -1,0 +1,107 @@
+// JXZ Package Database (Simplified)
+// Manages installed packages
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(fp: *void) -> i32;
+    fn fputs(s: *u8, fp: *void) -> i32;
+    fn fgets(buf: *u8, size: i32, fp: *void) -> *u8;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strcmp(s1: *u8, s2: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+}
+
+// ==================== Simple Database using flat files ====================
+
+// Check if package is installed
+pub fn db_is_installed(name: *u8) -> bool {
+    // Check if Cellar directory exists for package
+    let result = system("test -d ~/.jxz/Cellar/$1 2>/dev/null\0" as *u8)
+    return result == 0
+}
+
+// List all installed packages
+pub fn db_list_installed() {
+    puts("Installed packages:\0" as *u8)
+    system("ls ~/.jxz/Cellar 2>/dev/null | while read pkg; do echo \"  $pkg\"; done\0" as *u8)
+}
+
+// Count installed packages
+pub fn db_count_installed() -> i32 {
+    // Use ls | wc and parse result
+    system("echo \"$(ls ~/.jxz/Cellar 2>/dev/null | wc -l) packages installed\"\0" as *u8)
+    return 0  // Placeholder
+}
+
+// Add package to installed list
+pub fn db_add_installed(name: *u8, version: *u8) {
+    // Append to installed.db
+    system("mkdir -p ~/.jxz/db\0" as *u8)
+    
+    // Use echo >> to append
+    let append_cmd = "echo 'PLACEHOLDER' >> ~/.jxz/db/installed.db\0" as *u8
+    system(append_cmd)
+}
+
+// Remove package from installed list
+pub fn db_remove_installed(name: *u8) {
+    // Use grep -v to filter out
+    system("grep -v 'PLACEHOLDER' ~/.jxz/db/installed.db > /tmp/jxz_tmp && mv /tmp/jxz_tmp ~/.jxz/db/installed.db\0" as *u8)
+}
+
+// ==================== Package Info ====================
+
+pub struct PackageInfo {
+    name: *u8,
+    version: *u8,
+    description: *u8,
+}
+
+// Get package info
+pub fn db_get_info(name: *u8) -> PackageInfo {
+    return PackageInfo {
+        name: name,
+        version: "unknown\0" as *u8,
+        description: "No description\0" as *u8,
+    }
+}
+
+// Print package info
+pub fn db_print_info(name: *u8) {
+    puts("Package: \0" as *u8)
+    puts(name)
+    puts("  Version: (checking...)\0" as *u8)
+    
+    // List versions in Cellar
+    system("ls ~/.jxz/Cellar/$1 2>/dev/null | head -1\0" as *u8)
+}
+
+// ==================== Index Sync ====================
+
+// Sync package index from registry
+pub fn db_sync_index() -> i32 {
+    puts("==> Syncing package index...\0" as *u8)
+    
+    // Download package index
+    let result = system("curl -sL -o ~/.jxz/db/packages.idx https://registry.aetherlang.org/index.json 2>/dev/null\0" as *u8)
+    
+    if result == 0 {
+        puts("==> Index synced\0" as *u8)
+    } else {
+        puts("==> Failed to sync index\0" as *u8)
+    }
+    
+    return result
+}
+
+// Search packages by name
+pub fn db_search(query: *u8) {
+    puts("Searching for: \0" as *u8)
+    puts(query)
+    puts("\0" as *u8)
+    
+    // Search in index file
+    system("grep -i '$1' ~/.jxz/db/packages.idx 2>/dev/null || echo 'No packages found'\0" as *u8)
+}

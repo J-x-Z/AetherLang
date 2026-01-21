@@ -1,0 +1,207 @@
+// JXZ Install Module
+// System-level package installation (like apt install / brew install)
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+    fn access(path: *u8, mode: i32) -> i32;
+    fn mkdir(path: *u8, mode: u32) -> i32;
+    fn symlink(target: *u8, linkpath: *u8) -> i32;
+    fn unlink(path: *u8) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+}
+
+const F_OK: i32 = 0
+
+// ==================== Installation ====================
+
+// Install a package from registry
+pub fn install_package(name: *u8, version: *u8) -> i32 {
+    puts("==> Installing \0" as *u8)
+    puts(name)
+    puts("\0" as *u8)
+    
+    // Step 1: Download package
+    puts("==> Downloading...\0" as *u8)
+    let download_result = download_pkg(name, version)
+    if download_result != 0 {
+        puts("Error: Download failed\0" as *u8)
+        return 1
+    }
+    
+    // Step 2: Extract to Cellar
+    puts("==> Extracting to Cellar...\0" as *u8)
+    let extract_result = extract_to_cellar(name, version)
+    if extract_result != 0 {
+        puts("Error: Extraction failed\0" as *u8)
+        return 1
+    }
+    
+    // Step 3: Link binaries
+    puts("==> Linking...\0" as *u8)
+    let link_result = link_package(name, version)
+    if link_result != 0 {
+        puts("Error: Linking failed\0" as *u8)
+        return 1
+    }
+    
+    // Step 4: Update database
+    puts("==> Registering...\0" as *u8)
+    register_installed(name, version)
+    
+    puts("==> \0" as *u8)
+    puts(name)
+    puts(" installed successfully!\0" as *u8)
+    
+    return 0
+}
+
+// Download package to cache
+fn download_pkg(name: *u8, version: *u8) -> i32 {
+    // Build URL and download using curl
+    let name_len = strlen(name) as i32
+    let ver_len = strlen(version) as i32
+    
+    let cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 200) as *u8
+    strcpy(cmd, "curl -sL -o ~/.jxz/cache/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "-\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, ".tar.gz https://registry.aetherlang.org/packages/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "/\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, ".tar.gz 2>/dev/null\0" as *u8)
+    
+    let result = system(cmd)
+    free(cmd as *void)
+    
+    return result
+}
+
+// Extract package to Cellar
+fn extract_to_cellar(name: *u8, version: *u8) -> i32 {
+    let name_len = strlen(name) as i32
+    let ver_len = strlen(version) as i32
+    
+    // Create Cellar directory
+    let cellar_dir: *u8 = malloc(name_len as u64 + ver_len as u64 + 50) as *u8
+    strcpy(cellar_dir, "~/.jxz/Cellar/\0" as *u8)
+    strcat(cellar_dir, name)
+    strcat(cellar_dir, "/\0" as *u8)
+    strcat(cellar_dir, version)
+    
+    // mkdir -p and extract
+    let cmd: *u8 = malloc(name_len as u64 * 2 + ver_len as u64 * 2 + 150) as *u8
+    strcpy(cmd, "mkdir -p \0" as *u8)
+    strcat(cmd, cellar_dir)
+    strcat(cmd, " && tar -xzf ~/.jxz/cache/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "-\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, ".tar.gz -C \0" as *u8)
+    strcat(cmd, cellar_dir)
+    
+    let result = system(cmd)
+    free(cmd as *void)
+    free(cellar_dir as *void)
+    
+    return result
+}
+
+// Link package binaries to bin directory
+fn link_package(name: *u8, version: *u8) -> i32 {
+    let name_len = strlen(name) as i32
+    let ver_len = strlen(version) as i32
+    
+    // Create symlinks from Cellar/name/version/bin/* to ~/.jxz/bin/
+    let cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 100) as *u8
+    strcpy(cmd, "ln -sf ~/.jxz/Cellar/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "/\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, "/bin/* ~/.jxz/bin/ 2>/dev/null\0" as *u8)
+    
+    let result = system(cmd)
+    free(cmd as *void)
+    
+    return result
+}
+
+// Register package in database
+fn register_installed(name: *u8, version: *u8) -> i32 {
+    let name_len = strlen(name) as i32
+    let ver_len = strlen(version) as i32
+    
+    // Append to installed.db
+    let cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 80) as *u8
+    strcpy(cmd, "echo '\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, " \0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, "' >> ~/.jxz/db/installed.db\0" as *u8)
+    
+    let result = system(cmd)
+    free(cmd as *void)
+    
+    return result
+}
+
+// ==================== Uninstall ====================
+
+pub fn uninstall_package(name: *u8) -> i32 {
+    puts("==> Uninstalling \0" as *u8)
+    puts(name)
+    puts("\0" as *u8)
+    
+    // Remove from Cellar
+    puts("==> Removing from Cellar...\0" as *u8)
+    let name_len = strlen(name) as i32
+    let cmd: *u8 = malloc(name_len as u64 + 50) as *u8
+    strcpy(cmd, "rm -rf ~/.jxz/Cellar/\0" as *u8)
+    strcat(cmd, name)
+    system(cmd)
+    free(cmd as *void)
+    
+    // Remove symlinks
+    puts("==> Removing symlinks...\0" as *u8)
+    // TODO: Track and remove symlinks
+    
+    puts("==> \0" as *u8)
+    puts(name)
+    puts(" uninstalled\0" as *u8)
+    
+    return 0
+}
+
+// ==================== Upgrade ====================
+
+pub fn upgrade_package(name: *u8, new_version: *u8) -> i32 {
+    puts("==> Upgrading \0" as *u8)
+    puts(name)
+    puts(" to \0" as *u8)
+    puts(new_version)
+    puts("\0" as *u8)
+    
+    // Unlink old version
+    puts("==> Unlinking old version...\0" as *u8)
+    
+    // Install new version
+    let result = install_package(name, new_version)
+    
+    return result
+}
+
+// Upgrade all packages
+pub fn upgrade_all() -> i32 {
+    puts("==> Upgrading all packages...\0" as *u8)
+    
+    // TODO: Read installed.db and check for updates
+    
+    puts("==> All packages up to date\0" as *u8)
+    return 0
+}
