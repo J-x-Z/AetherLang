@@ -1,0 +1,132 @@
+// JXZ HTTP Module
+// Simple HTTP client for downloading packages
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+    fn access(path: *u8, mode: i32) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+}
+
+const F_OK: i32 = 0
+
+// ==================== HTTP Functions ====================
+
+// Download a file using curl/wget
+pub fn http_download(url: *u8, dest: *u8) -> i32 {
+    puts("   Downloading...\0" as *u8)
+    
+    // Try curl first, then wget as fallback
+    // Build command: curl -L -o dest url
+    let url_len = strlen(url) as i32
+    let dest_len = strlen(dest) as i32
+    let cmd_len = 20 + url_len + dest_len
+    
+    let cmd: *u8 = malloc(cmd_len as u64 + 50) as *u8
+    strcpy(cmd, "curl -sL -o \0" as *u8)
+    strcat(cmd, dest)
+    strcat(cmd, " \0" as *u8)
+    strcat(cmd, url)
+    strcat(cmd, " 2>/dev/null\0" as *u8)
+    
+    let result = system(cmd)
+    free(cmd as *void)
+    
+    if result != 0 {
+        // Try wget as fallback
+        let cmd2: *u8 = malloc(cmd_len as u64 + 50) as *u8
+        strcpy(cmd2, "wget -q -O \0" as *u8)
+        strcat(cmd2, dest)
+        strcat(cmd2, " \0" as *u8)
+        strcat(cmd2, url)
+        strcat(cmd2, " 2>/dev/null\0" as *u8)
+        
+        result = system(cmd2)
+        free(cmd2 as *void)
+    }
+    
+    if result == 0 {
+        puts("   Downloaded successfully\0" as *u8)
+    } else {
+        puts("   Download failed\0" as *u8)
+    }
+    
+    return result
+}
+
+// Check if URL is reachable
+pub fn http_check(url: *u8) -> bool {
+    let url_len = strlen(url) as i32
+    let cmd: *u8 = malloc(url_len as u64 + 50) as *u8
+    strcpy(cmd, "curl -sI \0" as *u8)
+    strcat(cmd, url)
+    strcat(cmd, " >/dev/null 2>&1\0" as *u8)
+    
+    let result = system(cmd)
+    free(cmd as *void)
+    
+    return result == 0
+}
+
+// ==================== Package Download ====================
+
+// Default registry URL
+const REGISTRY_URL: *u8 = "https://registry.aetherlang.org/\0" as *u8
+
+// Download a package from registry
+pub fn download_package(name: *u8, version: *u8, dest_dir: *u8) -> i32 {
+    puts("   Fetching package:\0" as *u8)
+    puts(name)
+    
+    // Build URL: registry/packages/{name}/{version}.tar.gz
+    let name_len = strlen(name) as i32
+    let ver_len = strlen(version) as i32
+    let reg_len = strlen(REGISTRY_URL) as i32
+    
+    let url: *u8 = malloc(name_len as u64 + ver_len as u64 + reg_len as u64 + 30) as *u8
+    strcpy(url, REGISTRY_URL)
+    strcat(url, "packages/\0" as *u8)
+    strcat(url, name)
+    strcat(url, "/\0" as *u8)
+    strcat(url, version)
+    strcat(url, ".tar.gz\0" as *u8)
+    
+    // Build destination path
+    let dest: *u8 = malloc(name_len as u64 + ver_len as u64 + 50) as *u8
+    strcpy(dest, dest_dir)
+    strcat(dest, "/\0" as *u8)
+    strcat(dest, name)
+    strcat(dest, "-\0" as *u8)
+    strcat(dest, version)
+    strcat(dest, ".tar.gz\0" as *u8)
+    
+    let result = http_download(url, dest)
+    
+    free(url as *void)
+    free(dest as *void)
+    
+    return result
+}
+
+// Extract downloaded package
+pub fn extract_package(archive: *u8, dest_dir: *u8) -> i32 {
+    puts("   Extracting...\0" as *u8)
+    
+    let arc_len = strlen(archive) as i32
+    let dest_len = strlen(dest_dir) as i32
+    
+    let cmd: *u8 = malloc(arc_len as u64 + dest_len as u64 + 30) as *u8
+    strcpy(cmd, "tar -xzf \0" as *u8)
+    strcat(cmd, archive)
+    strcat(cmd, " -C \0" as *u8)
+    strcat(cmd, dest_dir)
+    
+    let result = system(cmd)
+    free(cmd as *void)
+    
+    return result
+}

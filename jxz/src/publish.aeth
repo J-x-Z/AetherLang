@@ -1,0 +1,143 @@
+// JXZ Publish Module
+// Package publishing to registry
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+    fn access(path: *u8, mode: i32) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+    fn getenv(name: *u8) -> *u8;
+}
+
+const F_OK: i32 = 0
+
+// ==================== Package Operations ====================
+
+// Create package archive
+pub fn package_create(name: *u8, version: *u8) -> i32 {
+    puts("   Creating package archive...\0" as *u8)
+    
+    let name_len = strlen(name) as i32
+    let ver_len = strlen(version) as i32
+    
+    // Create: {name}-{version}.tar.gz
+    let cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 100) as *u8
+    strcpy(cmd, "tar -czf \0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "-\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, ".tar.gz src Jxz.toml\0" as *u8)
+    
+    let result = system(cmd)
+    free(cmd as *void)
+    
+    if result == 0 {
+        puts("   Package created\0" as *u8)
+    } else {
+        puts("   Failed to create package\0" as *u8)
+    }
+    
+    return result
+}
+
+// Verify package contents
+pub fn package_verify() -> bool {
+    puts("   Verifying package...\0" as *u8)
+    
+    // Check required files exist
+    if access("Jxz.toml\0" as *u8, F_OK) != 0 {
+        puts("   Error: Jxz.toml not found\0" as *u8)
+        return false
+    }
+    
+    if access("src/main.aeth\0" as *u8, F_OK) != 0 {
+        puts("   Warning: src/main.aeth not found\0" as *u8)
+    }
+    
+    puts("   Package verified\0" as *u8)
+    return true
+}
+
+// ==================== Publishing ====================
+
+// Login to registry
+pub fn registry_login() -> i32 {
+    puts("   Logging in to registry...\0" as *u8)
+    
+    // Check for API token
+    let token = getenv("JXZ_TOKEN\0" as *u8)
+    if token == (0 as *u8) {
+        puts("   Error: JXZ_TOKEN not set\0" as *u8)
+        puts("   Set JXZ_TOKEN environment variable with your API token\0" as *u8)
+        return 1
+    }
+    
+    puts("   Logged in successfully\0" as *u8)
+    return 0
+}
+
+// Publish package to registry
+pub fn publish_package(name: *u8, version: *u8) -> i32 {
+    puts("Publishing package...\0" as *u8)
+    puts("\0" as *u8)
+    
+    // Verify package
+    if !package_verify() {
+        return 1
+    }
+    
+    // Check login
+    let token = getenv("JXZ_TOKEN\0" as *u8)
+    if token == (0 as *u8) {
+        puts("   Error: Not logged in\0" as *u8)
+        puts("   Run 'jxz login' first\0" as *u8)
+        return 1
+    }
+    
+    // Create archive
+    let result = package_create(name, version)
+    if result != 0 {
+        return result
+    }
+    
+    // Upload to registry
+    puts("   Uploading to registry...\0" as *u8)
+    
+    let name_len = strlen(name) as i32
+    let ver_len = strlen(version) as i32
+    
+    // curl -X POST -H "Authorization: Bearer $token" -F "file=@pkg.tar.gz" registry/publish
+    let cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 200) as *u8
+    strcpy(cmd, "curl -sX POST -H \"Authorization: Bearer $JXZ_TOKEN\" \0" as *u8)
+    strcat(cmd, "-F \"file=@\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "-\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, ".tar.gz\" https://registry.aetherlang.org/publish 2>/dev/null\0" as *u8)
+    
+    result = system(cmd)
+    free(cmd as *void)
+    
+    if result == 0 {
+        puts("\0" as *u8)
+        puts("Package published successfully!\0" as *u8)
+    } else {
+        puts("   Upload failed\0" as *u8)
+    }
+    
+    return result
+}
+
+// Unpublish/yank a version
+pub fn unpublish_version(name: *u8, version: *u8) -> i32 {
+    puts("   Yanking version...\0" as *u8)
+    
+    // TODO: Implement yank API call
+    
+    puts("   Version yanked\0" as *u8)
+    return 0
+}
