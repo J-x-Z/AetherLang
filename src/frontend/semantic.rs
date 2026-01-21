@@ -357,17 +357,46 @@ impl SemanticAnalyzer {
         self.define_builtin("f32x4_div", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
         self.define_builtin("f32x4_sum", vec![f32x4.clone()], ResolvedType::Primitive(PrimitiveType::F32));
         
+        // __simd_* prefixed versions for simd.aeth
+        let f32_ty = ResolvedType::Primitive(PrimitiveType::F32);
+        let f64_ty = ResolvedType::Primitive(PrimitiveType::F64);
+        let i32_ty = ResolvedType::Primitive(PrimitiveType::I32);
+        let f32_ptr = ResolvedType::Pointer(Box::new(f32_ty.clone()));
+        
+        // f32x4 intrinsics
+        self.define_builtin("__simd_f32x4_new", vec![f32_ty.clone(), f32_ty.clone(), f32_ty.clone(), f32_ty.clone()], f32x4.clone());
+        self.define_builtin("__simd_f32x4_splat", vec![f32_ty.clone()], f32x4.clone());
+        self.define_builtin("__simd_f32x4_add", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
+        self.define_builtin("__simd_f32x4_sub", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
+        self.define_builtin("__simd_f32x4_mul", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
+        self.define_builtin("__simd_f32x4_div", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
+        self.define_builtin("__simd_f32x4_sum", vec![f32x4.clone()], f32_ty.clone());
+        self.define_builtin("__simd_f32x4_load", vec![f32_ptr.clone()], f32x4.clone());
+        self.define_builtin("__simd_f32x4_store", vec![f32_ptr.clone(), f32x4.clone()], ResolvedType::unit());
+        
         // SIMD intrinsics for f64x2
         let f64x2 = ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 2);
         self.define_builtin("f64x2_splat", vec![ResolvedType::Primitive(PrimitiveType::F64)], f64x2.clone());
         self.define_builtin("f64x2_add", vec![f64x2.clone(), f64x2.clone()], f64x2.clone());
         self.define_builtin("f64x2_mul", vec![f64x2.clone(), f64x2.clone()], f64x2.clone());
         
+        // __simd_* prefixed versions for f64x2
+        self.define_builtin("__simd_f64x2_new", vec![f64_ty.clone(), f64_ty.clone()], f64x2.clone());
+        self.define_builtin("__simd_f64x2_splat", vec![f64_ty.clone()], f64x2.clone());
+        self.define_builtin("__simd_f64x2_add", vec![f64x2.clone(), f64x2.clone()], f64x2.clone());
+        self.define_builtin("__simd_f64x2_mul", vec![f64x2.clone(), f64x2.clone()], f64x2.clone());
+        
         // SIMD intrinsics for i32x4
         let i32x4 = ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 4);
         self.define_builtin("i32x4_splat", vec![ResolvedType::Primitive(PrimitiveType::I32)], i32x4.clone());
         self.define_builtin("i32x4_add", vec![i32x4.clone(), i32x4.clone()], i32x4.clone());
         self.define_builtin("i32x4_mul", vec![i32x4.clone(), i32x4.clone()], i32x4.clone());
+        
+        // __simd_* prefixed versions for i32x4
+        self.define_builtin("__simd_i32x4_new", vec![i32_ty.clone(), i32_ty.clone(), i32_ty.clone(), i32_ty.clone()], i32x4.clone());
+        self.define_builtin("__simd_i32x4_splat", vec![i32_ty.clone()], i32x4.clone());
+        self.define_builtin("__simd_i32x4_add", vec![i32x4.clone(), i32x4.clone()], i32x4.clone());
+        self.define_builtin("__simd_i32x4_mul", vec![i32x4.clone(), i32x4.clone()], i32x4.clone());
     }
     
     /// Define a built-in function

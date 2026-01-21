@@ -470,6 +470,23 @@ impl CCodeGen {
                     "i32x4_splat" => ("_mm_set1_epi32", false),
                     "i32x4_add" => ("_mm_add_epi32", false),
                     "i32x4_mul" => ("_mm_mullo_epi32", false),
+                    // __simd_* prefixed versions for simd.aeth
+                    "__simd_f32x4_new" => ("_mm_set_ps", false), // Note: reversed arg order
+                    "__simd_f32x4_splat" => ("_mm_set1_ps", false),
+                    "__simd_f32x4_add" => ("_mm_add_ps", false),
+                    "__simd_f32x4_sub" => ("_mm_sub_ps", false),
+                    "__simd_f32x4_mul" => ("_mm_mul_ps", false),
+                    "__simd_f32x4_div" => ("_mm_div_ps", false),
+                    "__simd_f32x4_load" => ("_mm_loadu_ps", false),
+                    "__simd_f32x4_store" => ("_mm_storeu_ps", true), // void return
+                    "__simd_f64x2_new" => ("_mm_set_pd", false),
+                    "__simd_f64x2_splat" => ("_mm_set1_pd", false),
+                    "__simd_f64x2_add" => ("_mm_add_pd", false),
+                    "__simd_f64x2_mul" => ("_mm_mul_pd", false),
+                    "__simd_i32x4_new" => ("_mm_set_epi32", false),
+                    "__simd_i32x4_splat" => ("_mm_set1_epi32", false),
+                    "__simd_i32x4_add" => ("_mm_add_epi32", false),
+                    "__simd_i32x4_mul" => ("_mm_mullo_epi32", false),
                     _ => (func.as_str(), false),
                 };
                 
