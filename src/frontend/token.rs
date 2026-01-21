@@ -181,6 +181,8 @@ pub enum TokenKind {
     Dot,
     /// ..
     DotDot,
+    /// ...
+    DotDotDot,
     /// ::
     ColonColon,
     /// ?

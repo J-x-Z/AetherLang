@@ -355,6 +355,8 @@ pub enum ForeignItem {
         ret_type: Option<Type>,
         /// Annotations for AI understanding (@pure, @reads, @allocs, etc.)
         annotations: Vec<Annotation>,
+        /// Whether this function is variadic (has ... at end of params)
+        variadic: bool,
         span: Span,
     },
     /// Foreign static variable
