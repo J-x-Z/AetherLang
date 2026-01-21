@@ -1459,6 +1459,15 @@ impl IRGenerator {
                     "f32" => IRType::F32,
                     "f64" | "float" => IRType::F64,
                     "bool" => IRType::Bool,
+                    // SIMD vector types
+                    "f32x4" => IRType::Vector(Box::new(IRType::F32), 4),
+                    "f32x8" => IRType::Vector(Box::new(IRType::F32), 8),
+                    "f64x2" => IRType::Vector(Box::new(IRType::F64), 2),
+                    "f64x4" => IRType::Vector(Box::new(IRType::F64), 4),
+                    "i32x4" => IRType::Vector(Box::new(IRType::I32), 4),
+                    "i32x8" => IRType::Vector(Box::new(IRType::I32), 8),
+                    "i64x2" => IRType::Vector(Box::new(IRType::I64), 2),
+                    "i64x4" => IRType::Vector(Box::new(IRType::I64), 4),
                     "void" | "()" => IRType::Void,
                     // Structs are passed by pointer in our IR
                     // But single uppercase letters are generic type params - use i64 (type erasure)

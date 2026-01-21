@@ -331,6 +331,9 @@ pub enum IRType {
     Array(Box<IRType>, usize),
     Struct(String),
     Function { params: Vec<IRType>, ret: Box<IRType> },
+    /// SIMD vector type: Vector(element_type, lane_count)
+    /// e.g., Vector(F32, 4) = f32x4, Vector(F64, 2) = f64x2
+    Vector(Box<IRType>, usize),
 }
 
 impl IRType {
@@ -344,6 +347,7 @@ impl IRType {
             IRType::Array(elem, count) => elem.size_bytes() * count,
             IRType::Struct(_) => 8, // Placeholder
             IRType::Function { .. } => 8,
+            IRType::Vector(elem, lanes) => elem.size_bytes() * lanes,
         }
     }
 }

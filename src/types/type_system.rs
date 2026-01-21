@@ -67,6 +67,9 @@ pub enum ResolvedType {
     GenericParam(String),
     /// String type (pointer to char array)
     String,
+    /// SIMD vector type (element type, lane count)
+    /// e.g., Vector(F32, 4) = f32x4
+    Vector(Box<ResolvedType>, usize),
     Unknown,
 }
 

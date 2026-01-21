@@ -1499,6 +1499,15 @@ impl SemanticAnalyzer {
                     "f64" => Ok(ResolvedType::Primitive(PrimitiveType::F64)),
                     "bool" => Ok(ResolvedType::Primitive(PrimitiveType::Bool)),
                     "char" => Ok(ResolvedType::Primitive(PrimitiveType::Char)),
+                    // SIMD vector types
+                    "f32x4" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 4)),
+                    "f32x8" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 8)),
+                    "f64x2" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 2)),
+                    "f64x4" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 4)),
+                    "i32x4" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 4)),
+                    "i32x8" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 8)),
+                    "i64x2" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I64)), 2)),
+                    "i64x4" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I64)), 4)),
                     _ => {
                         // Look up in symbol table
                         if let Some(sym) = self.symbols.lookup(name) {

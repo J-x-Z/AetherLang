@@ -1,0 +1,10 @@
+// Simple SIMD type test
+// Just test that f32x4 type is recognized
+
+fn use_vector(v: f32x4) -> f32x4 {
+    return v
+}
+
+fn main() {
+    println("SIMD type f32x4 parsed successfully!")
+}

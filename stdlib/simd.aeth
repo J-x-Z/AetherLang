@@ -1,0 +1,93 @@
+// AetherLang SIMD Standard Library
+// Platform-independent SIMD vector operations
+// Uses NEON on ARM, SSE/AVX on x86
+
+// ==================== f32x4 Operations ====================
+
+// Construct a f32x4 from 4 floats
+pub fn f32x4_new(a: f32, b: f32, c: f32, d: f32) -> f32x4 {
+    // Compiler intrinsic - generates platform-specific code
+    return __simd_f32x4_new(a, b, c, d)
+}
+
+// Create a f32x4 with all lanes set to same value
+pub fn f32x4_splat(v: f32) -> f32x4 {
+    return __simd_f32x4_splat(v)
+}
+
+// Element-wise addition
+pub fn f32x4_add(a: f32x4, b: f32x4) -> f32x4 {
+    return __simd_f32x4_add(a, b)
+}
+
+// Element-wise subtraction
+pub fn f32x4_sub(a: f32x4, b: f32x4) -> f32x4 {
+    return __simd_f32x4_sub(a, b)
+}
+
+// Element-wise multiplication
+pub fn f32x4_mul(a: f32x4, b: f32x4) -> f32x4 {
+    return __simd_f32x4_mul(a, b)
+}
+
+// Element-wise division
+pub fn f32x4_div(a: f32x4, b: f32x4) -> f32x4 {
+    return __simd_f32x4_div(a, b)
+}
+
+// Dot product: sum of element-wise products
+pub fn f32x4_dot(a: f32x4, b: f32x4) -> f32 {
+    let prod = f32x4_mul(a, b)
+    return __simd_f32x4_sum(prod)
+}
+
+// Horizontal sum of all lanes
+pub fn f32x4_sum(v: f32x4) -> f32 {
+    return __simd_f32x4_sum(v)
+}
+
+// Load 4 floats from memory (must be 16-byte aligned)
+pub fn f32x4_load(ptr: *f32) -> f32x4 {
+    return __simd_f32x4_load(ptr)
+}
+
+// Store 4 floats to memory (must be 16-byte aligned)
+pub fn f32x4_store(ptr: *f32, v: f32x4) {
+    __simd_f32x4_store(ptr, v)
+}
+
+// ==================== f64x2 Operations ====================
+
+pub fn f64x2_new(a: f64, b: f64) -> f64x2 {
+    return __simd_f64x2_new(a, b)
+}
+
+pub fn f64x2_splat(v: f64) -> f64x2 {
+    return __simd_f64x2_splat(v)
+}
+
+pub fn f64x2_add(a: f64x2, b: f64x2) -> f64x2 {
+    return __simd_f64x2_add(a, b)
+}
+
+pub fn f64x2_mul(a: f64x2, b: f64x2) -> f64x2 {
+    return __simd_f64x2_mul(a, b)
+}
+
+// ==================== i32x4 Operations ====================
+
+pub fn i32x4_new(a: i32, b: i32, c: i32, d: i32) -> i32x4 {
+    return __simd_i32x4_new(a, b, c, d)
+}
+
+pub fn i32x4_splat(v: i32) -> i32x4 {
+    return __simd_i32x4_splat(v)
+}
+
+pub fn i32x4_add(a: i32x4, b: i32x4) -> i32x4 {
+    return __simd_i32x4_add(a, b)
+}
+
+pub fn i32x4_mul(a: i32x4, b: i32x4) -> i32x4 {
+    return __simd_i32x4_mul(a, b)
+}

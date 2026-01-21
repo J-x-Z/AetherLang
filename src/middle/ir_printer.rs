@@ -236,6 +236,9 @@ impl IRPrinter {
                 let params_str: Vec<_> = params.iter().map(|t| self.type_str(t)).collect();
                 format!("fn({}) -> {}", params_str.join(", "), self.type_str(ret))
             }
+            IRType::Vector(elem, lanes) => {
+                format!("{}x{}", self.type_str(elem), lanes)
+            }
         }
     }
 }

@@ -104,6 +104,33 @@ impl CCodeGen {
                 let params_str: Vec<_> = params.iter().map(|p| self.ir_type_to_c(p)).collect();
                 format!("{}(*)({})", self.ir_type_to_c(ret), params_str.join(", "))
             }
+            // SIMD vector types - use platform-specific intrinsics
+            IRType::Vector(elem, lanes) => {
+                match (elem.as_ref(), lanes) {
+                    // ARM NEON types
+                    (IRType::F32, 4) if self.target_triple.contains("aarch64") || self.target_triple.contains("arm") => 
+                        "float32x4_t".to_string(),
+                    (IRType::F64, 2) if self.target_triple.contains("aarch64") => 
+                        "float64x2_t".to_string(),
+                    (IRType::I32, 4) if self.target_triple.contains("aarch64") || self.target_triple.contains("arm") => 
+                        "int32x4_t".to_string(),
+                    (IRType::I64, 2) if self.target_triple.contains("aarch64") => 
+                        "int64x2_t".to_string(),
+                    // x86 SSE/AVX types  
+                    (IRType::F32, 4) => "__m128".to_string(),
+                    (IRType::F32, 8) => "__m256".to_string(),
+                    (IRType::F64, 2) => "__m128d".to_string(),
+                    (IRType::F64, 4) => "__m256d".to_string(),
+                    (IRType::I32, 4) => "__m128i".to_string(),
+                    (IRType::I32, 8) => "__m256i".to_string(),
+                    (IRType::I64, 2) => "__m128i".to_string(),
+                    (IRType::I64, 4) => "__m256i".to_string(),
+                    // Fallback: use GCC vector extension
+                    _ => format!("{} __attribute__((vector_size({})))", 
+                        self.ir_type_to_c(elem), 
+                        elem.size_bytes() * lanes)
+                }
+            }
         }
     }
 
