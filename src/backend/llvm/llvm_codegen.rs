@@ -163,6 +163,10 @@ impl LLVMCodeGen {
                         .collect();
                     LLVMFunctionType(ret_ty, param_types.as_mut_ptr(), param_types.len() as u32, 0)
                 }
+                IRType::Vector(elem, lanes) => {
+                    let elem_ty = self.ir_type_to_llvm(elem);
+                    LLVMVectorType(elem_ty, *lanes as u32)
+                }
             }
         }
     }
