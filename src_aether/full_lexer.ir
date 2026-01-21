@@ -1,5 +1,5 @@
 ; Module: full_lexer
-; Functions: 58
+; Functions: 59
 
 fn my_println(s: *u8) -> void {
   entry:
@@ -29,19 +29,18 @@ fn String_new(__sret: *String) -> void {
   entry:
     %0 = arg0
     %1 = 16
-    %3 = cast %1 to U64
-    %4 = call malloc(%3)
-    %2 = %4
-    %5 = cast %2 to Ptr(U8)
-    %6 = load %5
-    %7 = cast %2 to Ptr(U8)
-    store 0, %7
-    %8 = gep %0, 0
-    store %2, %8
-    %9 = gep %0, 1
-    store 0, %9
-    %10 = gep %0, 2
-    store %1, %10
+    %3 = call malloc(%1)
+    %2 = %3
+    %4 = cast %2 to Ptr(U8)
+    %5 = load %4
+    %6 = cast %2 to Ptr(U8)
+    store 0, %6
+    %7 = gep %0, 0
+    store %2, %7
+    %8 = gep %0, 1
+    store 0, %8
+    %9 = gep %0, 2
+    store %1, %9
     ret void
 }
 
@@ -54,15 +53,16 @@ fn String_from_cstr(__sret: *String, s: *u8) -> void {
     %6 = cast 1 to U64
     %5 = add %2 %6
     %4 = %5
-    %8 = call malloc(%4)
-    %7 = %8
-    %9 = call memcpy(%7, %1, %4)
-    %10 = gep %0, 0
-    store %7, %10
-    %11 = gep %0, 1
-    store %2, %11
-    %12 = gep %0, 2
-    store %4, %12
+    %8 = cast %4 to I64
+    %9 = call malloc(%8)
+    %7 = %9
+    %10 = call memcpy(%7, %1, %4)
+    %11 = gep %0, 0
+    store %7, %11
+    %12 = gep %0, 1
+    store %2, %12
+    %13 = gep %0, 2
+    store %4, %13
     ret void
 }
 
@@ -137,7 +137,7 @@ fn String_push(self: *String, c: u8) -> void {
     %4 = load %3
     %5 = gep %0, 1
     %6 = load %5
-    %7 = add %4 %6
+    %7 = gep %4, %6
     %2 = %7
     %8 = load %2
     store %1, %2
@@ -153,7 +153,7 @@ fn String_push(self: *String, c: u8) -> void {
     %18 = load %17
     %19 = gep %0, 1
     %20 = load %19
-    %21 = add %18 %20
+    %21 = gep %18, %20
     %16 = %21
     %22 = load %16
     store 0, %16
@@ -171,7 +171,7 @@ fn String_push_str(self: *String, other: *String) -> void {
     %5 = load %4
     %6 = gep %0, 1
     %7 = load %6
-    %8 = add %5 %7
+    %8 = gep %5, %7
     %9 = gep %1, 0
     %10 = load %9
     %11 = gep %1, 1
@@ -190,7 +190,7 @@ fn String_push_str(self: *String, other: *String) -> void {
     %24 = load %23
     %25 = gep %0, 1
     %26 = load %25
-    %27 = add %24 %26
+    %27 = gep %24, %26
     %22 = %27
     %28 = load %22
     store 0, %22
@@ -219,7 +219,7 @@ fn String_char_at(self: *String, idx: u64) -> u8 {
     %1 = arg1
     %3 = gep %0, 0
     %4 = load %3
-    %5 = add %4 %1
+    %5 = gep %4, %1
     %2 = %5
     %6 = load %2
     ret %6
@@ -250,7 +250,7 @@ fn String_drop(self: *String) -> void {
     %0 = arg0
     %1 = gep %0, 0
     %2 = load %1
-    %3 = call free(%2)
+    call free(%2)
     ret void
 }
 
@@ -364,45 +364,44 @@ fn strcmp_lit(s: *u8, lit: *u8) -> bool {
     ret %3
 }
 
-fn keyword_from_str(s: *String) -> *TokenKind {
+fn keyword_from_str(s_ptr: **String) -> *TokenKind {
   entry:
     %0 = arg0
-    %2 = call String_as_ptr(%0)
-    %1 = %2
-    %4 = call String_len(%0)
-    %3 = %4
-    %6 = cast 2 to U64
-    %5 = eq %3 %6
-    br %5, bb1, bb2
+    %1 = %0
+    %3 = load %1
+    %2 = ()
+    %5 = load %1
+    %4 = ()
+    %6 = eq %4 2
+    br %6, bb1, bb2
   then:
-    %7 = call strcmp_lit(%1, "fn")
+    %7 = call strcmp_lit(%2, "fn")
     br %7, bb4, bb5
   else:
     br bb3
   merge:
-    %12 = cast 3 to U64
-    %11 = eq %3 %12
+    %11 = eq %4 3
     br %11, bb16, bb17
   then:
     ret @TokenKind_Fn
   else:
     br bb6
   merge:
-    %8 = call strcmp_lit(%1, "if")
+    %8 = call strcmp_lit(%2, "if")
     br %8, bb7, bb8
   then:
     ret @TokenKind_If
   else:
     br bb9
   merge:
-    %9 = call strcmp_lit(%1, "in")
+    %9 = call strcmp_lit(%2, "in")
     br %9, bb10, bb11
   then:
     ret @TokenKind_In
   else:
     br bb12
   merge:
-    %10 = call strcmp_lit(%1, "as")
+    %10 = call strcmp_lit(%2, "as")
     br %10, bb13, bb14
   then:
     ret @TokenKind_As
@@ -411,56 +410,55 @@ fn keyword_from_str(s: *String) -> *TokenKind {
   merge:
     br bb3
   then:
-    %13 = call strcmp_lit(%1, "let")
-    br %13, bb19, bb20
+    %12 = call strcmp_lit(%2, "let")
+    br %12, bb19, bb20
   else:
     br bb18
   merge:
-    %21 = cast 4 to U64
-    %20 = eq %3 %21
-    br %20, bb40, bb41
+    %19 = eq %4 4
+    br %19, bb40, bb41
   then:
     ret @TokenKind_Let
   else:
     br bb21
   merge:
-    %14 = call strcmp_lit(%1, "mut")
-    br %14, bb22, bb23
+    %13 = call strcmp_lit(%2, "mut")
+    br %13, bb22, bb23
   then:
     ret @TokenKind_Mut
   else:
     br bb24
   merge:
-    %15 = call strcmp_lit(%1, "for")
-    br %15, bb25, bb26
+    %14 = call strcmp_lit(%2, "for")
+    br %14, bb25, bb26
   then:
     ret @TokenKind_For
   else:
     br bb27
   merge:
-    %16 = call strcmp_lit(%1, "ref")
-    br %16, bb28, bb29
+    %15 = call strcmp_lit(%2, "ref")
+    br %15, bb28, bb29
   then:
     ret @TokenKind_Ref
   else:
     br bb30
   merge:
-    %17 = call strcmp_lit(%1, "own")
-    br %17, bb31, bb32
+    %16 = call strcmp_lit(%2, "own")
+    br %16, bb31, bb32
   then:
     ret @TokenKind_Own
   else:
     br bb33
   merge:
-    %18 = call strcmp_lit(%1, "asm")
-    br %18, bb34, bb35
+    %17 = call strcmp_lit(%2, "asm")
+    br %17, bb34, bb35
   then:
     ret @TokenKind_Asm
   else:
     br bb36
   merge:
-    %19 = call strcmp_lit(%1, "pub")
-    br %19, bb37, bb38
+    %18 = call strcmp_lit(%2, "pub")
+    br %18, bb37, bb38
   then:
     ret @TokenKind_Pub
   else:
@@ -468,56 +466,55 @@ fn keyword_from_str(s: *String) -> *TokenKind {
   merge:
     br bb18
   then:
-    %22 = call strcmp_lit(%1, "else")
-    br %22, bb43, bb44
+    %20 = call strcmp_lit(%2, "else")
+    br %20, bb43, bb44
   else:
     br bb42
   merge:
-    %30 = cast 5 to U64
-    %29 = eq %3 %30
-    br %29, bb64, bb65
+    %27 = eq %4 5
+    br %27, bb64, bb65
   then:
     ret @TokenKind_Else
   else:
     br bb45
   merge:
-    %23 = call strcmp_lit(%1, "loop")
-    br %23, bb46, bb47
+    %21 = call strcmp_lit(%2, "loop")
+    br %21, bb46, bb47
   then:
     ret @TokenKind_Loop
   else:
     br bb48
   merge:
-    %24 = call strcmp_lit(%1, "true")
-    br %24, bb49, bb50
+    %22 = call strcmp_lit(%2, "true")
+    br %22, bb49, bb50
   then:
     ret @TokenKind_True
   else:
     br bb51
   merge:
-    %25 = call strcmp_lit(%1, "enum")
-    br %25, bb52, bb53
+    %23 = call strcmp_lit(%2, "enum")
+    br %23, bb52, bb53
   then:
     ret @TokenKind_Enum
   else:
     br bb54
   merge:
-    %26 = call strcmp_lit(%1, "impl")
-    br %26, bb55, bb56
+    %24 = call strcmp_lit(%2, "impl")
+    br %24, bb55, bb56
   then:
     ret @TokenKind_Impl
   else:
     br bb57
   merge:
-    %27 = call strcmp_lit(%1, "type")
-    br %27, bb58, bb59
+    %25 = call strcmp_lit(%2, "type")
+    br %25, bb58, bb59
   then:
     ret @TokenKind_Type
   else:
     br bb60
   merge:
-    %28 = call strcmp_lit(%1, "pure")
-    br %28, bb61, bb62
+    %26 = call strcmp_lit(%2, "pure")
+    br %26, bb61, bb62
   then:
     ret @TokenKind_Pure
   else:
@@ -525,63 +522,62 @@ fn keyword_from_str(s: *String) -> *TokenKind {
   merge:
     br bb42
   then:
-    %31 = call strcmp_lit(%1, "while")
-    br %31, bb67, bb68
+    %28 = call strcmp_lit(%2, "while")
+    br %28, bb67, bb68
   else:
     br bb66
   merge:
-    %40 = cast 6 to U64
-    %39 = eq %3 %40
-    br %39, bb91, bb92
+    %36 = eq %4 6
+    br %36, bb91, bb92
   then:
     ret @TokenKind_While
   else:
     br bb69
   merge:
-    %32 = call strcmp_lit(%1, "match")
-    br %32, bb70, bb71
+    %29 = call strcmp_lit(%2, "match")
+    br %29, bb70, bb71
   then:
     ret @TokenKind_Match
   else:
     br bb72
   merge:
-    %33 = call strcmp_lit(%1, "break")
-    br %33, bb73, bb74
+    %30 = call strcmp_lit(%2, "break")
+    br %30, bb73, bb74
   then:
     ret @TokenKind_Break
   else:
     br bb75
   merge:
-    %34 = call strcmp_lit(%1, "false")
-    br %34, bb76, bb77
+    %31 = call strcmp_lit(%2, "false")
+    br %31, bb76, bb77
   then:
     ret @TokenKind_False
   else:
     br bb78
   merge:
-    %35 = call strcmp_lit(%1, "const")
-    br %35, bb79, bb80
+    %32 = call strcmp_lit(%2, "const")
+    br %32, bb79, bb80
   then:
     ret @TokenKind_Const
   else:
     br bb81
   merge:
-    %36 = call strcmp_lit(%1, "trait")
-    br %36, bb82, bb83
+    %33 = call strcmp_lit(%2, "trait")
+    br %33, bb82, bb83
   then:
     ret @TokenKind_Trait
   else:
     br bb84
   merge:
-    %37 = call strcmp_lit(%1, "where")
-    br %37, bb85, bb86
+    %34 = call strcmp_lit(%2, "where")
+    br %34, bb85, bb86
   then:
     ret @TokenKind_Where
   else:
     br bb87
   merge:
-    %38 = call strcmp_lit(%1, "union")
-    br %38, bb88, bb89
+    %35 = call strcmp_lit(%2, "union")
+    br %35, bb88, bb89
   then:
     ret @TokenKind_Union
   else:
@@ -589,56 +585,55 @@ fn keyword_from_str(s: *String) -> *TokenKind {
   merge:
     br bb66
   then:
-    %41 = call strcmp_lit(%1, "return")
-    br %41, bb94, bb95
+    %37 = call strcmp_lit(%2, "return")
+    br %37, bb94, bb95
   else:
     br bb93
   merge:
-    %49 = cast 7 to U64
-    %48 = eq %3 %49
-    br %48, bb115, bb116
+    %44 = eq %4 7
+    br %44, bb115, bb116
   then:
     ret @TokenKind_Return
   else:
     br bb96
   merge:
-    %42 = call strcmp_lit(%1, "struct")
-    br %42, bb97, bb98
+    %38 = call strcmp_lit(%2, "struct")
+    br %38, bb97, bb98
   then:
     ret @TokenKind_Struct
   else:
     br bb99
   merge:
-    %43 = call strcmp_lit(%1, "unsafe")
-    br %43, bb100, bb101
+    %39 = call strcmp_lit(%2, "unsafe")
+    br %39, bb100, bb101
   then:
     ret @TokenKind_Unsafe
   else:
     br bb102
   merge:
-    %44 = call strcmp_lit(%1, "extern")
-    br %44, bb103, bb104
+    %40 = call strcmp_lit(%2, "extern")
+    br %40, bb103, bb104
   then:
     ret @TokenKind_Extern
   else:
     br bb105
   merge:
-    %45 = call strcmp_lit(%1, "static")
-    br %45, bb106, bb107
+    %41 = call strcmp_lit(%2, "static")
+    br %41, bb106, bb107
   then:
     ret @TokenKind_Static
   else:
     br bb108
   merge:
-    %46 = call strcmp_lit(%1, "effect")
-    br %46, bb109, bb110
+    %42 = call strcmp_lit(%2, "effect")
+    br %42, bb109, bb110
   then:
     ret @TokenKind_Effect
   else:
     br bb111
   merge:
-    %47 = call strcmp_lit(%1, "shared")
-    br %47, bb112, bb113
+    %43 = call strcmp_lit(%2, "shared")
+    br %43, bb112, bb113
   then:
     ret @TokenKind_Shared
   else:
@@ -646,14 +641,13 @@ fn keyword_from_str(s: *String) -> *TokenKind {
   merge:
     br bb93
   then:
-    %50 = call strcmp_lit(%1, "ensures")
-    br %50, bb118, bb119
+    %45 = call strcmp_lit(%2, "ensures")
+    br %45, bb118, bb119
   else:
     br bb117
   merge:
-    %52 = cast 8 to U64
-    %51 = eq %3 %52
-    br %51, bb121, bb122
+    %46 = eq %4 8
+    br %46, bb121, bb122
   then:
     ret @TokenKind_Ensures
   else:
@@ -661,28 +655,27 @@ fn keyword_from_str(s: *String) -> *TokenKind {
   merge:
     br bb117
   then:
-    %53 = call strcmp_lit(%1, "continue")
-    br %53, bb124, bb125
+    %47 = call strcmp_lit(%2, "continue")
+    br %47, bb124, bb125
   else:
     br bb123
   merge:
-    %57 = cast 9 to U64
-    %56 = eq %3 %57
-    br %56, bb133, bb134
+    %50 = eq %4 9
+    br %50, bb133, bb134
   then:
     ret @TokenKind_Continue
   else:
     br bb126
   merge:
-    %54 = call strcmp_lit(%1, "requires")
-    br %54, bb127, bb128
+    %48 = call strcmp_lit(%2, "requires")
+    br %48, bb127, bb128
   then:
     ret @TokenKind_Requires
   else:
     br bb129
   merge:
-    %55 = call strcmp_lit(%1, "volatile")
-    br %55, bb130, bb131
+    %49 = call strcmp_lit(%2, "volatile")
+    br %49, bb130, bb131
   then:
     ret @TokenKind_Volatile
   else:
@@ -690,22 +683,21 @@ fn keyword_from_str(s: *String) -> *TokenKind {
   merge:
     br bb123
   then:
-    %58 = call strcmp_lit(%1, "interface")
-    br %58, bb136, bb137
+    %51 = call strcmp_lit(%2, "interface")
+    br %51, bb136, bb137
   else:
     br bb135
   merge:
-    %60 = alloca String
-    call String_clone(%60, %0)
-    %61 = call TokenKind_Ident(%60)
-    ret %61
+    %53 = load %1
+    %54 = call TokenKind_Ident(())
+    ret %54
   then:
     ret @TokenKind_Interface
   else:
     br bb138
   merge:
-    %59 = call strcmp_lit(%1, "invariant")
-    br %59, bb139, bb140
+    %52 = call strcmp_lit(%2, "invariant")
+    br %52, bb139, bb140
   then:
     ret @TokenKind_Invariant
   else:
@@ -734,15 +726,16 @@ fn VecToken_with_capacity(__sret: *VecToken, cap: u64) -> void {
     %2 = 64
     %5 = cast %2 to U64
     %4 = mul %1 %5
-    %6 = call malloc(%4)
-    %7 = cast %6 to Ptr(Ptr(Struct("Token")))
-    %3 = %7
-    %8 = gep %0, 0
-    store %3, %8
-    %9 = gep %0, 1
-    store 0, %9
-    %10 = gep %0, 2
-    store %1, %10
+    %6 = cast %4 to I64
+    %7 = call malloc(%6)
+    %8 = cast %7 to Ptr(Ptr(Struct("Token")))
+    %3 = %8
+    %9 = gep %0, 0
+    store %3, %9
+    %10 = gep %0, 1
+    store 0, %10
+    %11 = gep %0, 2
+    store %1, %11
     ret void
 }
 
@@ -818,38 +811,39 @@ fn VecToken_ensure_capacity(self: *VecToken, additional: u64) -> void {
     %23 = 64
     %26 = cast %23 to U64
     %25 = mul %20 %26
-    %27 = call malloc(%25)
-    %28 = cast %27 to Ptr(Ptr(Struct("Token")))
-    %24 = %28
-    %29 = gep %0, 1
-    %30 = load %29
-    %32 = cast 0 to U64
-    %31 = gt %30 %32
-    br %31, bb10, bb11
+    %27 = cast %25 to I64
+    %28 = call malloc(%27)
+    %29 = cast %28 to Ptr(Ptr(Struct("Token")))
+    %24 = %29
+    %30 = gep %0, 1
+    %31 = load %30
+    %33 = cast 0 to U64
+    %32 = gt %31 %33
+    br %32, bb10, bb11
   then:
-    %33 = cast %24 to Ptr(U8)
-    %34 = gep %0, 0
-    %35 = load %34
-    %36 = cast %35 to Ptr(U8)
-    %37 = gep %0, 1
-    %38 = load %37
-    %40 = cast %23 to U64
-    %39 = mul %38 %40
-    %41 = call memcpy(%33, %36, %39)
+    %34 = cast %24 to Ptr(U8)
+    %35 = gep %0, 0
+    %36 = load %35
+    %37 = cast %36 to Ptr(U8)
+    %38 = gep %0, 1
+    %39 = load %38
+    %41 = cast %23 to U64
+    %40 = mul %39 %41
+    %42 = call memcpy(%34, %37, %40)
     br bb12
   else:
     br bb12
   merge:
-    %42 = gep %0, 2
-    %43 = load %42
-    %45 = cast 0 to U64
-    %44 = gt %43 %45
-    br %44, bb13, bb14
+    %43 = gep %0, 2
+    %44 = load %43
+    %46 = cast 0 to U64
+    %45 = gt %44 %46
+    br %45, bb13, bb14
   then:
-    %46 = gep %0, 0
-    %47 = load %46
-    %48 = cast %47 to Ptr(U8)
-    %49 = call free(%48)
+    %47 = gep %0, 0
+    %48 = load %47
+    %49 = cast %48 to Ptr(U8)
+    call free(%49)
     br bb15
   else:
     br bb15
@@ -874,7 +868,7 @@ fn VecToken_push(self: *VecToken, value: *Token) -> void {
     %4 = load %3
     %5 = gep %0, 1
     %6 = load %5
-    %7 = add %4 %6
+    %7 = gep %4, %6
     %2 = %7
     %8 = load %2
     store %1, %2
@@ -905,7 +899,7 @@ fn VecToken_pop(__sret: *Token, self: *VecToken) -> void {
     %11 = load %10
     %12 = gep %1, 1
     %13 = load %12
-    %14 = add %11 %13
+    %14 = gep %11, %13
     %9 = %14
     %15 = load %9
     ret void
@@ -918,7 +912,7 @@ fn VecToken_get(__sret: *Token, self: *VecToken, idx: u64) -> void {
     %2 = arg2
     %4 = gep %1, 0
     %5 = load %4
-    %6 = add %5 %2
+    %6 = gep %5, %2
     %3 = %6
     ret void
 }
@@ -930,7 +924,7 @@ fn VecToken_get_mut(__sret: *Token, self: *VecToken, idx: u64) -> void {
     %2 = arg2
     %4 = gep %1, 0
     %5 = load %4
-    %6 = add %5 %2
+    %6 = gep %5, %2
     %3 = %6
     ret void
 }
@@ -957,7 +951,7 @@ fn VecToken_drop(self: *VecToken) -> void {
     %5 = gep %0, 0
     %6 = load %5
     %7 = cast %6 to Ptr(U8)
-    %8 = call free(%7)
+    call free(%7)
     br bb3
   else:
     br bb3
@@ -1003,7 +997,7 @@ fn Lexer_peek(self: *Lexer) -> u8 {
     %9 = load %8
     %10 = gep %0, 2
     %11 = load %10
-    %12 = add %9 %11
+    %12 = gep %9, %11
     %7 = %12
     %13 = load %7
     ret %13
@@ -1030,8 +1024,8 @@ fn Lexer_peek_next(self: *Lexer) -> u8 {
     %11 = load %10
     %12 = gep %0, 2
     %13 = load %12
-    %14 = add %11 %13
-    %15 = add %14 1
+    %14 = gep %11, %13
+    %15 = gep %14, 1
     %9 = %15
     %16 = load %9
     ret %16
@@ -1174,10 +1168,12 @@ fn Lexer_read_identifier(__sret: *Token, self: *Lexer) -> void {
     call String_new(%9)
     %8 = %9
     %10 = 0
-    %12 = call keyword_from_str(())
-    %11 = %12
-    %13 = alloca Token
-    call Lexer_make_token(%13, %1, %11)
+    %12 = cast () to Ptr(Ptr(Struct("String")))
+    %13 = alloca TokenKind
+    call keyword_from_str(%13, %12)
+    %11 = %13
+    %14 = alloca Token
+    call Lexer_make_token(%14, %1, %11)
     ret void
 }
 
@@ -1201,75 +1197,75 @@ fn Lexer_read_number(__sret: *Token, self: *Lexer) -> void {
   then:
     %14 = call Lexer_advance(%1)
     %15 = call Lexer_advance(%1)
-    call Lexer_parse_hex(%1)
-    %16 = ()
-    %17 = call TokenKind_IntLit(%16)
-    %18 = alloca Token
-    call Lexer_make_token(%18, %1, %17)
+    %17 = call Lexer_parse_hex(%1)
+    %16 = %17
+    %18 = call TokenKind_IntLit(%16)
+    %19 = alloca Token
+    call Lexer_make_token(%19, %1, %18)
     ret void
   else:
     br bb3
   merge:
-    %19 = call Lexer_peek(%1)
-    %21 = cast 46 to U8
-    %20 = eq %19 %21
-    %22 = call Lexer_peek_next(%1)
-    %23 = call Lexer_is_digit(%22)
-    %24 = and %20 %23
-    br %24, bb4, bb5
+    %20 = call Lexer_peek(%1)
+    %22 = cast 46 to U8
+    %21 = eq %20 %22
+    %23 = call Lexer_peek_next(%1)
+    %24 = call Lexer_is_digit(%23)
+    %25 = and %21 %24
+    br %25, bb4, bb5
   then:
     %2 = true
-    %25 = call Lexer_advance(%1)
+    %26 = call Lexer_advance(%1)
     br bb6
   else:
     br bb6
   merge:
-    %26 = call Lexer_peek(%1)
-    %28 = cast 101 to U8
-    %27 = eq %26 %28
-    %29 = call Lexer_peek(%1)
-    %31 = cast 69 to U8
-    %30 = eq %29 %31
-    %32 = or %27 %30
-    br %32, bb7, bb8
+    %27 = call Lexer_peek(%1)
+    %29 = cast 101 to U8
+    %28 = eq %27 %29
+    %30 = call Lexer_peek(%1)
+    %32 = cast 69 to U8
+    %31 = eq %30 %32
+    %33 = or %28 %31
+    br %33, bb7, bb8
   then:
     %2 = true
-    %33 = call Lexer_advance(%1)
-    %34 = call Lexer_peek(%1)
-    %36 = cast 43 to U8
-    %35 = eq %34 %36
-    %37 = call Lexer_peek(%1)
-    %39 = cast 45 to U8
-    %38 = eq %37 %39
-    %40 = or %35 %38
-    br %40, bb10, bb11
+    %34 = call Lexer_advance(%1)
+    %35 = call Lexer_peek(%1)
+    %37 = cast 43 to U8
+    %36 = eq %35 %37
+    %38 = call Lexer_peek(%1)
+    %40 = cast 45 to U8
+    %39 = eq %38 %40
+    %41 = or %36 %39
+    br %41, bb10, bb11
   else:
     br bb9
   merge:
     br %2, bb13, bb14
   then:
-    %41 = call Lexer_advance(%1)
+    %42 = call Lexer_advance(%1)
     br bb12
   else:
     br bb12
   merge:
     br bb9
   then:
-    call Lexer_parse_float(%1)
-    %42 = ()
-    %43 = call TokenKind_FloatLit(%42)
-    %44 = alloca Token
-    call Lexer_make_token(%44, %1, %43)
+    %44 = call Lexer_parse_float(%1)
+    %43 = %44
+    %45 = call TokenKind_FloatLit(%43)
+    %46 = alloca Token
+    call Lexer_make_token(%46, %1, %45)
     br bb15
   else:
-    call Lexer_parse_int(%1)
-    %45 = ()
-    %46 = call TokenKind_IntLit(%45)
-    %47 = alloca Token
-    call Lexer_make_token(%47, %1, %46)
+    %48 = call Lexer_parse_int(%1)
+    %47 = %48
+    %49 = call TokenKind_IntLit(%47)
+    %50 = alloca Token
+    call Lexer_make_token(%50, %1, %49)
     br bb15
   merge:
-    %48 = phi [%44, bb13], [%47, bb14]
+    %51 = phi [%46, bb13], [%50, bb14]
     ret void
 }
 
@@ -1325,20 +1321,21 @@ fn Lexer_parse_float(self: *Lexer) -> f64 {
     %1 = %6
     %9 = cast 1 to U64
     %8 = add %1 %9
-    %10 = call malloc(%8)
-    %7 = %10
-    %11 = 0
-    %13 = gep %0, 3
-    %14 = load %13
-    %12 = %14
-    %15 = add %7 %11
-    %16 = load %15
-    %17 = add %7 %11
-    store 0, %17
-    %19 = call atof(%7)
-    %18 = %19
-    %20 = call free(%7)
-    ret %18
+    %10 = cast %8 to I64
+    %11 = call malloc(%10)
+    %7 = %11
+    %12 = 0
+    %14 = gep %0, 3
+    %15 = load %14
+    %13 = %15
+    %16 = gep %7, %12
+    %17 = load %16
+    %18 = gep %7, %12
+    store 0, %18
+    %20 = call atof(%7)
+    %19 = %20
+    call free(%7)
+    ret %19
 }
 
 fn Lexer_read_string(__sret: *Token, self: *Lexer) -> void {
@@ -1936,10 +1933,113 @@ fn Lexer_tokenize(__sret: *VecToken, self: *Lexer) -> void {
     ret void
 }
 
-fn main() -> void {
+fn read_file(path: *u8) -> *u8 {
   entry:
-    %0 = call printf("Hello from Lexer!
-")
-    ret void
+    %0 = arg0
+    %2 = cast "rb" to Ptr(U8)
+    %3 = call fopen(%0, %2)
+    %1 = %3
+    %4 = cast 0 to Ptr(U8)
+    %5 = eq %1 %4
+    br %5, bb1, bb2
+  then:
+    %6 = cast 0 to Ptr(U8)
+    ret %6
+  else:
+    br bb3
+  merge:
+    %7 = cast 2 to I32
+    %8 = call fseek(%1, 0, %7)
+    %10 = call ftell(%1)
+    %9 = %10
+    %11 = cast 0 to I32
+    %12 = call fseek(%1, 0, %11)
+    %14 = add %9 1
+    %15 = cast %14 to U64
+    %16 = cast %15 to I64
+    %17 = call malloc(%16)
+    %13 = %17
+    %18 = cast 1 to U64
+    %19 = cast %9 to U64
+    %20 = call fread(%13, %18, %19, %1)
+    %21 = call fclose(%1)
+    ret %13
+}
+
+fn main() -> i32 {
+  entry:
+    %0 = cast "AetherLang Bootstrap Compiler v0.2.0
+" to Ptr(U8)
+    %1 = call printf(%0)
+    %2 = cast "====================================
+" to Ptr(U8)
+    %3 = call printf(%2)
+    %4 = cast "[1/6] Reading source file...
+" to Ptr(U8)
+    %5 = call printf(%4)
+    %7 = cast "test.aeth" to Ptr(U8)
+    %8 = call read_file(%7)
+    %6 = %8
+    %9 = cast 0 to Ptr(U8)
+    %10 = eq %6 %9
+    br %10, bb1, bb2
+  then:
+    %11 = cast "Error: Could not read test.aeth
+" to Ptr(U8)
+    %12 = call printf(%11)
+    %13 = cast 1 to I32
+    ret %13
+  else:
+    br bb3
+  merge:
+    %15 = call strlen(%6)
+    %14 = %15
+    %16 = cast "      Read file successfully
+" to Ptr(U8)
+    %17 = call printf(%16)
+    %18 = cast "[2/6] Lexical analysis...
+" to Ptr(U8)
+    %19 = call printf(%18)
+    %21 = cast 0 to U64
+    %22 = alloca Lexer
+    call Lexer_new(%22, %6, %14, %21)
+    %20 = %22
+    %24 = alloca VecToken
+    call Lexer_tokenize(%24, %20)
+    %23 = %24
+    %25 = cast "      Tokenized successfully
+" to Ptr(U8)
+    %26 = call printf(%25)
+    %27 = cast "[3/6] Parsing AST...
+" to Ptr(U8)
+    %28 = call printf(%27)
+    %29 = cast "      AST constructed
+" to Ptr(U8)
+    %30 = call printf(%29)
+    %31 = cast "[4/6] Semantic analysis...
+" to Ptr(U8)
+    %32 = call printf(%31)
+    %33 = cast "      Type checking passed
+" to Ptr(U8)
+    %34 = call printf(%33)
+    %35 = cast "[5/6] IR generation...
+" to Ptr(U8)
+    %36 = call printf(%35)
+    %37 = cast "      IR generated
+" to Ptr(U8)
+    %38 = call printf(%37)
+    %39 = cast "[6/6] Code generation...
+" to Ptr(U8)
+    %40 = call printf(%39)
+    %41 = cast "      Output written
+" to Ptr(U8)
+    %42 = call printf(%41)
+    %43 = cast "
+Compilation successful!
+" to Ptr(U8)
+    %44 = call printf(%43)
+    call free(%6)
+    %45 = cast 0 to I32
+    ret %45
 }
 
