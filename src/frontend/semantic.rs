@@ -1436,8 +1436,7 @@ impl SemanticAnalyzer {
 
 
     /// Check binary operation and return result type
-    fn check_binary_op(&self, left: &ResolvedType, op: BinOp, _right: &ResolvedType, _span: Span) -> Result<ResolvedType> {
-        // TODO: Proper type checking
+    fn check_binary_op(&self, left: &ResolvedType, op: BinOp, right: &ResolvedType, _span: Span) -> Result<ResolvedType> {
         match op {
             // Comparison operators return bool
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
@@ -1451,8 +1450,18 @@ impl SemanticAnalyzer {
             BinOp::Assign | BinOp::AddAssign | BinOp::SubAssign | BinOp::MulAssign | BinOp::DivAssign => {
                 Ok(ResolvedType::unit())
             }
-            // Arithmetic and bitwise return the operand type
-            _ => Ok(left.clone()),
+            // Arithmetic and bitwise: handle F32/F64 mixed operations
+            _ => {
+                use crate::types::type_system::PrimitiveType;
+                // For F32/F64 mixed operations, promote to F64
+                if let (ResolvedType::Primitive(PrimitiveType::F32), ResolvedType::Primitive(PrimitiveType::F64)) = (left, right) {
+                    Ok(ResolvedType::Primitive(PrimitiveType::F64))
+                } else if let (ResolvedType::Primitive(PrimitiveType::F64), ResolvedType::Primitive(PrimitiveType::F32)) = (left, right) {
+                    Ok(ResolvedType::Primitive(PrimitiveType::F64))
+                } else {
+                    Ok(left.clone())
+                }
+            }
         }
     }
 
@@ -1630,7 +1639,9 @@ impl SemanticAnalyzer {
                         (I64, U64) | (U64, I64) |
                         // Integer literal (I64) can be assigned to any integer type
                         (I8, I64) | (U8, I64) | (I16, I64) | (U16, I64) |
-                        (I32, I64) | (U32, I64) | (U64, I64)
+                        (I32, I64) | (U32, I64) | (U64, I64) |
+                        // Allow implicit conversion between F32 and F64 for stdlib compatibility
+                        (F32, F64) | (F64, F32)
                     )
                 }
             }

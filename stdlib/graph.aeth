@@ -140,10 +140,10 @@ pub fn sigmoid_node(g: *Graph, a: i32) -> i32 {
 // ==================== Evaluation ====================
 
 extern "C" {
-    fn exp(x: f64) -> f64;
-    fn log(x: f64) -> f64;
-    fn sin(x: f64) -> f64;
-    fn cos(x: f64) -> f64;
+    fn expf(x: f32) -> f32;
+    fn logf(x: f32) -> f32;
+    fn sinf(x: f32) -> f32;
+    fn cosf(x: f32) -> f32;
 }
 
 // Evaluate a single node (recursive)
@@ -178,13 +178,13 @@ fn eval_node(g: *Graph, id: i32) -> f32 {
     } else if node.op == OP_NEG {
         result = -v1
     } else if node.op == OP_EXP {
-        result = exp(v1 as f64) as f32
+        result = expf(v1)
     } else if node.op == OP_LOG {
-        result = log(v1 as f64) as f32
+        result = logf(v1)
     } else if node.op == OP_SIN {
-        result = sin(v1 as f64) as f32
+        result = sinf(v1)
     } else if node.op == OP_COS {
-        result = cos(v1 as f64) as f32
+        result = cosf(v1)
     } else if node.op == OP_RELU {
         if v1 > 0.0 {
             result = v1
@@ -192,7 +192,7 @@ fn eval_node(g: *Graph, id: i32) -> f32 {
             result = 0.0
         }
     } else if node.op == OP_SIGMOID {
-        result = 1.0 / (1.0 + exp(-v1 as f64) as f32)
+        result = 1.0 / (1.0 + expf(-v1))
     }
     
     // Cache result
