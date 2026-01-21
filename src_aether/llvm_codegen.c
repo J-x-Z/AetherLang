@@ -279,9 +279,12 @@ void* LLVMCodeGen_add_function(struct LLVMCodeGen** _arg0, uint8_t* _arg1, void*
     int64_t _t4;
     int64_t _t5;
     struct LLVMCodeGen* _t3;
+    struct LLVMCodeGen* _t6;
+    struct LLVMCodeGen* _t7;
     struct LLVMCodeGen** _t0;
     uint8_t* _t1;
     void* _t2;
+    void** _t8;
     
     _t0 = _arg0;
     _t1 = _arg1;
@@ -289,6 +292,10 @@ void* LLVMCodeGen_add_function(struct LLVMCodeGen** _arg0, uint8_t* _arg1, void*
     _t3 = *_t0;
     LLVMAddFunction(((void)0), _t1, _t2);
     _t5 = _t4;
+    _t6 = *_t0;
+    _t7 = *_t0;
+    _t8 = &_t7->current_func;
+    *_t8 = _t5;
     return _t5;
 }
 

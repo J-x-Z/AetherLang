@@ -191,6 +191,7 @@ impl LLVMCodeGen {
     
     pub fn add_function(self: *LLVMCodeGen, name: *u8, ty: *void) -> *void {
         let func = LLVMAddFunction((*self).module, name, ty);
+        (*self).current_func = func;
         return func;
     }
     

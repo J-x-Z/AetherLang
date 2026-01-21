@@ -687,11 +687,23 @@ impl IRGenerator {
                             }
                         }
                     } 
-                    // 2. Assign to Field
+                    // 2. Assign to Field (including (*ptr).field = val pattern)
                     else if let Expr::Field { expr: base, field, .. } = left.as_ref() {
-                         // We need the address of the field (LValue)
-                         let mut base_val = self.generate_expr(base)?;
-                         let base_ty = self.get_value_type(&base_val);
+                         // Handle (*ptr).field = val pattern: base is Deref expression
+                         // In this case, we need to get the pointer from the deref, not the value
+                         let (base_val, base_ty) = if let Expr::Deref { expr: inner_ptr, .. } = base.as_ref() {
+                             // base is (*ptr), so inner_ptr is the pointer - use it directly
+                             let ptr_val = self.generate_expr(inner_ptr)?;
+                             let ptr_ty = self.get_value_type(&ptr_val);
+                             (ptr_val, ptr_ty)
+                         } else {
+                             // Normal case: base is already a pointer expression
+                             let val = self.generate_expr(base)?;
+                             let ty = self.get_value_type(&val);
+                             (val, ty)
+                         };
+                         
+                         let mut base_val = base_val;
                          
                          // Handle Ptr(Ptr(Struct)) case - &mut self where self is a reference
                          // Load the inner pointer first
