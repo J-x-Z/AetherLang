@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <immintrin.h>  /* SSE/AVX */
+#include <string.h>
 
 /* AetherLang Runtime */
 static void aether_print(const char* s) { printf("%s", s); }
@@ -65,7 +65,7 @@ void Span_merge(struct Span*, struct Span*, struct Span*);
 void Token_new(struct Token*, struct TokenKind*, struct Span*);
 void Token_eof(struct Token*, struct Span*);
 bool strcmp_lit(uint8_t*, uint8_t*);
-struct TokenKind* keyword_from_str(struct String*);
+void keyword_from_str(struct TokenKind*, struct String**);
 void VecToken_new(struct VecToken*);
 void VecToken_with_capacity(struct VecToken*, uint64_t);
 uint64_t VecToken_len(struct VecToken*);
@@ -101,18 +101,19 @@ void Lexer_read_char(struct Token*, struct Lexer*);
 void Lexer_match_operator(struct TokenKind*, struct Lexer*, uint8_t);
 void Lexer_next_token(struct Token*, struct Lexer*);
 void Lexer_tokenize(struct VecToken*, struct Lexer*);
-void main(void);
+uint8_t* read_file(uint8_t*);
+int32_t main(void);
 
 void my_println(uint8_t* _arg0) {
+    int32_t _t1;
     int32_t _t2;
-    int64_t _t1;
-    int64_t _t3;
+    int32_t _t3;
     uint8_t* _t0;
     
     _t0 = _arg0;
-    printf(_t0);
+    _t1 = printf(_t0);
     _t2 = (int32_t)10LL;
-    putchar(_t2);
+    _t3 = putchar(_t2);
     return;
 }
 
@@ -124,32 +125,32 @@ void my_assert(bool _arg0) {
     
     _t0 = _arg0;
     _t1 = !_t0;
-    if (_t1) goto L_then; else goto L_else;
-L_then:
+    if (_t1) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t2 = (int32_t)1LL;
     exit(_t2);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    goto L_merge_3;
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     return;
 }
 
 void String_new(struct String* _arg0) {
     int64_t _t1;
-    int64_t _t2;
-    int64_t _t3;
     struct String* _t0;
     uint64_t* _t8;
     uint64_t* _t9;
     uint8_t _t5;
+    uint8_t* _t2;
+    uint8_t* _t3;
     uint8_t* _t4;
     uint8_t* _t6;
     uint8_t** _t7;
     
     _t0 = _arg0;
     _t1 = 16LL;
-    malloc(_t1);
+    _t2 = malloc(_t1);
     _t3 = _t2;
     _t4 = (uint8_t*)_t3;
     _t5 = *_t4;
@@ -165,32 +166,32 @@ void String_new(struct String* _arg0) {
 }
 
 void String_from_cstr(struct String* _arg0, uint8_t* _arg1) {
-    int64_t _t10;
-    int64_t _t2;
-    int64_t _t3;
     int64_t _t5;
     int64_t _t6;
     int64_t _t7;
-    int64_t _t8;
-    int64_t _t9;
     struct String* _t0;
+    uint64_t _t2;
+    uint64_t _t3;
     uint64_t _t4;
     uint64_t* _t12;
     uint64_t* _t13;
+    uint8_t* _t10;
     uint8_t* _t1;
+    uint8_t* _t8;
+    uint8_t* _t9;
     uint8_t** _t11;
     
     _t0 = _arg0;
     _t1 = _arg1;
-    strlen(_t1);
+    _t2 = strlen(_t1);
     _t3 = _t2;
     _t4 = (uint64_t)1LL;
     _t5 = _t3 + _t4;
     _t6 = _t5;
     _t7 = (int64_t)_t6;
-    malloc(_t7);
+    _t8 = malloc(_t7);
     _t9 = _t8;
-    memcpy(_t9, _t1, _t6);
+    _t10 = memcpy(_t9, _t1, _t6);
     _t11 = &_t0->data;
     *_t11 = _t9;
     _t12 = &_t0->len;
@@ -241,7 +242,6 @@ void String_ensure_capacity(struct String* _arg0, uint64_t _arg1) {
     int64_t _t10;
     int64_t _t12;
     int64_t _t13;
-    int64_t _t18;
     int64_t _t4;
     int64_t _t6;
     int64_t _t7;
@@ -258,6 +258,7 @@ void String_ensure_capacity(struct String* _arg0, uint64_t _arg1) {
     uint64_t* _t8;
     uint8_t* _t15;
     uint8_t* _t17;
+    uint8_t* _t18;
     uint8_t** _t14;
     uint8_t** _t16;
     uint8_t** _t19;
@@ -273,8 +274,8 @@ void String_ensure_capacity(struct String* _arg0, uint64_t _arg1) {
     _t8 = &_t0->capacity;
     _t9 = *_t8;
     _t10 = _t7 > _t9;
-    if (_t10) goto L_then; else goto L_else;
-L_then:
+    if (_t10) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t11 = (uint64_t)2LL;
     _t12 = _t7 * _t11;
     _t13 = _t12;
@@ -282,17 +283,17 @@ L_then:
     _t15 = *_t14;
     _t16 = &_t0->data;
     _t17 = *_t16;
-    realloc(_t17, _t13);
+    _t18 = realloc(_t17, _t13);
     _t19 = &_t0->data;
     *_t19 = _t18;
     _t20 = &_t0->capacity;
     _t21 = *_t20;
     _t22 = &_t0->capacity;
     *_t22 = _t13;
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    goto L_merge_3;
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     return;
 }
 
@@ -352,7 +353,6 @@ void String_push(struct String* _arg0, uint8_t _arg1) {
 }
 
 void String_push_str(struct String* _arg0, struct String* _arg1) {
-    int64_t _t13;
     int64_t _t20;
     struct String* _t0;
     struct String* _t1;
@@ -373,6 +373,7 @@ void String_push_str(struct String* _arg0, struct String* _arg1) {
     uint64_t* _t6;
     uint8_t _t28;
     uint8_t* _t10;
+    uint8_t* _t13;
     uint8_t* _t23;
     uint8_t* _t26;
     uint8_t* _t27;
@@ -396,7 +397,7 @@ void String_push_str(struct String* _arg0, struct String* _arg1) {
     _t10 = *_t9;
     _t11 = &_t1->len;
     _t12 = *_t11;
-    memcpy(_t8, _t10, _t12);
+    _t13 = memcpy(_t8, _t10, _t12);
     _t14 = &_t0->len;
     _t15 = *_t14;
     _t16 = &_t0->len;
@@ -462,7 +463,7 @@ uint8_t String_char_at(struct String* _arg0, uint64_t _arg1) {
 }
 
 void String_print(struct String* _arg0) {
-    int64_t _t3;
+    int32_t _t3;
     struct String* _t0;
     uint8_t* _t2;
     uint8_t** _t1;
@@ -470,7 +471,7 @@ void String_print(struct String* _arg0) {
     _t0 = _arg0;
     _t1 = &_t0->data;
     _t2 = *_t1;
-    printf(_t2);
+    _t3 = printf(_t2);
     return;
 }
 
@@ -586,16 +587,16 @@ void Span_merge(struct Span* _arg0, struct Span* _arg1, struct Span* _arg2) {
     _t8 = &_t2->start;
     _t9 = *_t8;
     _t10 = _t7 < _t9;
-    if (_t10) goto L_then; else goto L_else;
-L_then:
+    if (_t10) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t11 = &_t1->start;
     _t12 = *_t11;
-    goto L_merge;
-L_else:
+    goto L_merge_3;
+L_else_2:
     _t13 = &_t2->start;
     _t14 = *_t13;
-    goto L_merge;
-L_merge:
+    goto L_merge_3;
+L_merge_3:
     _t15 = _t12;
     _t16 = &_t0->start;
     *_t16 = _t15;
@@ -604,16 +605,16 @@ L_merge:
     _t19 = &_t2->end;
     _t20 = *_t19;
     _t21 = _t18 > _t20;
-    if (_t21) goto L_then; else goto L_else;
-L_then:
+    if (_t21) goto L_then_4; else goto L_else_5;
+L_then_4:
     _t22 = &_t1->end;
     _t23 = *_t22;
-    goto L_merge;
-L_else:
+    goto L_merge_6;
+L_else_5:
     _t24 = &_t2->end;
     _t25 = *_t24;
-    goto L_merge;
-L_merge:
+    goto L_merge_6;
+L_merge_6:
     _t26 = _t23;
     _t27 = &_t0->end;
     *_t27 = _t26;
@@ -653,431 +654,417 @@ void Token_eof(struct Token* _arg0, struct Span* _arg1) {
 }
 
 bool strcmp_lit(uint8_t* _arg0, uint8_t* _arg1) {
+    int32_t _t2;
     int32_t _t3;
-    int64_t _t2;
     int64_t _t4;
     uint8_t* _t0;
     uint8_t* _t1;
     
     _t0 = _arg0;
     _t1 = _arg1;
-    strcmp(_t0, _t1);
+    _t2 = strcmp(_t0, _t1);
     _t3 = (int32_t)0LL;
     _t4 = _t2 == _t3;
     return _t4;
 }
 
-struct TokenKind* keyword_from_str(struct String* _arg0) {
+void keyword_from_str(struct TokenKind* _arg0, struct String** _arg1) {
     bool _t10;
     bool _t11;
     bool _t12;
     bool _t13;
+    bool _t15;
     bool _t16;
     bool _t17;
     bool _t18;
     bool _t19;
     bool _t20;
     bool _t21;
-    bool _t22;
+    bool _t23;
+    bool _t24;
     bool _t25;
     bool _t26;
     bool _t27;
     bool _t28;
     bool _t29;
-    bool _t30;
     bool _t31;
+    bool _t32;
+    bool _t33;
     bool _t34;
     bool _t35;
     bool _t36;
     bool _t37;
     bool _t38;
-    bool _t39;
     bool _t40;
     bool _t41;
+    bool _t42;
+    bool _t43;
     bool _t44;
     bool _t45;
     bool _t46;
-    bool _t47;
     bool _t48;
-    bool _t49;
     bool _t50;
-    bool _t53;
-    bool _t56;
-    bool _t57;
-    bool _t58;
-    bool _t61;
-    bool _t7;
-    int64_t _t15;
-    int64_t _t24;
-    int64_t _t33;
-    int64_t _t43;
-    int64_t _t52;
-    int64_t _t55;
-    int64_t _t60;
+    bool _t51;
+    bool _t52;
+    bool _t55;
+    bool _t8;
+    int64_t _t14;
+    int64_t _t22;
+    int64_t _t30;
+    int64_t _t39;
+    int64_t _t47;
+    int64_t _t49;
+    int64_t _t4;
+    int64_t _t54;
     int64_t _t6;
+    int64_t _t7;
     int64_t _t9;
-    struct String* _t0;
-    struct String* _t59;
-    uint64_t _t14;
-    uint64_t _t23;
-    uint64_t _t32;
-    uint64_t _t3;
-    uint64_t _t42;
-    uint64_t _t4;
-    uint64_t _t51;
-    uint64_t _t54;
-    uint64_t _t5;
-    uint64_t _t8;
-    uint8_t* _t1;
-    uint8_t* _t2;
+    struct String* _t3;
+    struct String* _t53;
+    struct String* _t5;
+    struct String** _t1;
+    struct String** _t2;
+    struct TokenKind* _t0;
     
     _t0 = _arg0;
-    _t1 = String_as_ptr(_t0);
+    _t1 = _arg1;
     _t2 = _t1;
-    _t3 = String_len(_t0);
-    _t4 = _t3;
-    _t5 = (uint64_t)2LL;
-    _t6 = _t4 == _t5;
-    if (_t6) goto L_then; else goto L_else;
-L_then:
-    _t7 = strcmp_lit(_t2, "fn");
-    if (_t7) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t8 = (uint64_t)3LL;
-    _t9 = _t4 == _t8;
-    if (_t9) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Fn;
-L_else:
-    goto L_merge;
-L_merge:
-    _t10 = strcmp_lit(_t2, "if");
-    if (_t10) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_If;
-L_else:
-    goto L_merge;
-L_merge:
-    _t11 = strcmp_lit(_t2, "in");
-    if (_t11) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_In;
-L_else:
-    goto L_merge;
-L_merge:
-    _t12 = strcmp_lit(_t2, "as");
-    if (_t12) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_As;
-L_else:
-    goto L_merge;
-L_merge:
-    goto L_merge;
-L_then:
-    _t13 = strcmp_lit(_t2, "let");
-    if (_t13) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t14 = (uint64_t)4LL;
-    _t15 = _t4 == _t14;
-    if (_t15) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Let;
-L_else:
-    goto L_merge;
-L_merge:
-    _t16 = strcmp_lit(_t2, "mut");
-    if (_t16) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Mut;
-L_else:
-    goto L_merge;
-L_merge:
-    _t17 = strcmp_lit(_t2, "for");
-    if (_t17) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_For;
-L_else:
-    goto L_merge;
-L_merge:
-    _t18 = strcmp_lit(_t2, "ref");
-    if (_t18) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Ref;
-L_else:
-    goto L_merge;
-L_merge:
-    _t19 = strcmp_lit(_t2, "own");
-    if (_t19) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Own;
-L_else:
-    goto L_merge;
-L_merge:
-    _t20 = strcmp_lit(_t2, "asm");
-    if (_t20) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Asm;
-L_else:
-    goto L_merge;
-L_merge:
-    _t21 = strcmp_lit(_t2, "pub");
-    if (_t21) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Pub;
-L_else:
-    goto L_merge;
-L_merge:
-    goto L_merge;
-L_then:
-    _t22 = strcmp_lit(_t2, "else");
-    if (_t22) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t23 = (uint64_t)5LL;
-    _t24 = _t4 == _t23;
-    if (_t24) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t25 = strcmp_lit(_t2, "loop");
-    if (_t25) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Loop;
-L_else:
-    goto L_merge;
-L_merge:
-    _t26 = strcmp_lit(_t2, "true");
-    if (_t26) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_True;
-L_else:
-    goto L_merge;
-L_merge:
-    _t27 = strcmp_lit(_t2, "enum");
-    if (_t27) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Enum;
-L_else:
-    goto L_merge;
-L_merge:
-    _t28 = strcmp_lit(_t2, "impl");
-    if (_t28) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Impl;
-L_else:
-    goto L_merge;
-L_merge:
-    _t29 = strcmp_lit(_t2, "type");
-    if (_t29) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Type;
-L_else:
-    goto L_merge;
-L_merge:
-    _t30 = strcmp_lit(_t2, "pure");
-    if (_t30) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Pure;
-L_else:
-    goto L_merge;
-L_merge:
-    goto L_merge;
-L_then:
-    _t31 = strcmp_lit(_t2, "while");
-    if (_t31) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t32 = (uint64_t)6LL;
-    _t33 = _t4 == _t32;
-    if (_t33) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_While;
-L_else:
-    goto L_merge;
-L_merge:
-    _t34 = strcmp_lit(_t2, "match");
-    if (_t34) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Match;
-L_else:
-    goto L_merge;
-L_merge:
-    _t35 = strcmp_lit(_t2, "break");
-    if (_t35) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Break;
-L_else:
-    goto L_merge;
-L_merge:
-    _t36 = strcmp_lit(_t2, "false");
-    if (_t36) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_False;
-L_else:
-    goto L_merge;
-L_merge:
-    _t37 = strcmp_lit(_t2, "const");
-    if (_t37) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Const;
-L_else:
-    goto L_merge;
-L_merge:
-    _t38 = strcmp_lit(_t2, "trait");
-    if (_t38) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Trait;
-L_else:
-    goto L_merge;
-L_merge:
-    _t39 = strcmp_lit(_t2, "where");
-    if (_t39) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Where;
-L_else:
-    goto L_merge;
-L_merge:
-    _t40 = strcmp_lit(_t2, "union");
-    if (_t40) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Union;
-L_else:
-    goto L_merge;
-L_merge:
-    goto L_merge;
-L_then:
-    _t41 = strcmp_lit(_t2, "return");
-    if (_t41) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t42 = (uint64_t)7LL;
-    _t43 = _t4 == _t42;
-    if (_t43) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Return;
-L_else:
-    goto L_merge;
-L_merge:
-    _t44 = strcmp_lit(_t2, "struct");
-    if (_t44) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Struct;
-L_else:
-    goto L_merge;
-L_merge:
-    _t45 = strcmp_lit(_t2, "unsafe");
-    if (_t45) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Unsafe;
-L_else:
-    goto L_merge;
-L_merge:
-    _t46 = strcmp_lit(_t2, "extern");
-    if (_t46) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Extern;
-L_else:
-    goto L_merge;
-L_merge:
-    _t47 = strcmp_lit(_t2, "static");
-    if (_t47) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Static;
-L_else:
-    goto L_merge;
-L_merge:
-    _t48 = strcmp_lit(_t2, "effect");
-    if (_t48) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Effect;
-L_else:
-    goto L_merge;
-L_merge:
-    _t49 = strcmp_lit(_t2, "shared");
-    if (_t49) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Shared;
-L_else:
-    goto L_merge;
-L_merge:
-    goto L_merge;
-L_then:
-    _t50 = strcmp_lit(_t2, "ensures");
-    if (_t50) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t51 = (uint64_t)8LL;
-    _t52 = _t4 == _t51;
-    if (_t52) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Ensures;
-L_else:
-    goto L_merge;
-L_merge:
-    goto L_merge;
-L_then:
-    _t53 = strcmp_lit(_t2, "continue");
-    if (_t53) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t54 = (uint64_t)9LL;
-    _t55 = _t4 == _t54;
-    if (_t55) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Continue;
-L_else:
-    goto L_merge;
-L_merge:
-    _t56 = strcmp_lit(_t2, "requires");
-    if (_t56) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Requires;
-L_else:
-    goto L_merge;
-L_merge:
-    _t57 = strcmp_lit(_t2, "volatile");
-    if (_t57) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Volatile;
-L_else:
-    goto L_merge;
-L_merge:
-    goto L_merge;
-L_then:
-    _t58 = strcmp_lit(_t2, "interface");
-    if (_t58) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    struct String _alloca__t59;
-    _t59 = &_alloca__t59;
-    String_clone(_t59, _t0);
-    TokenKind_Ident(_t59);
-    return _t60;
-L_then:
-    return TokenKind_Interface;
-L_else:
-    goto L_merge;
-L_merge:
-    _t61 = strcmp_lit(_t2, "invariant");
-    if (_t61) goto L_then; else goto L_else;
-L_then:
-    return TokenKind_Invariant;
-L_else:
-    goto L_merge;
-L_merge:
-    goto L_merge;
+    _t3 = *_t2;
+    _t4 = ((void)0);
+    _t5 = *_t2;
+    _t6 = ((void)0);
+    _t7 = _t6 == 2LL;
+    if (_t7) goto L_then_1; else goto L_else_2;
+L_then_1:
+    _t8 = strcmp_lit(_t4, "fn");
+    if (_t8) goto L_then_4; else goto L_else_5;
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
+    _t9 = _t6 == 3LL;
+    if (_t9) goto L_then_16; else goto L_else_17;
+L_then_4:
+    return;
+L_else_5:
+    goto L_merge_6;
+L_merge_6:
+    _t10 = strcmp_lit(_t4, "if");
+    if (_t10) goto L_then_7; else goto L_else_8;
+L_then_7:
+    return;
+L_else_8:
+    goto L_merge_9;
+L_merge_9:
+    _t11 = strcmp_lit(_t4, "in");
+    if (_t11) goto L_then_10; else goto L_else_11;
+L_then_10:
+    return;
+L_else_11:
+    goto L_merge_12;
+L_merge_12:
+    _t12 = strcmp_lit(_t4, "as");
+    if (_t12) goto L_then_13; else goto L_else_14;
+L_then_13:
+    return;
+L_else_14:
+    goto L_merge_15;
+L_merge_15:
+    goto L_merge_3;
+L_then_16:
+    _t13 = strcmp_lit(_t4, "let");
+    if (_t13) goto L_then_19; else goto L_else_20;
+L_else_17:
+    goto L_merge_18;
+L_merge_18:
+    _t14 = _t6 == 4LL;
+    if (_t14) goto L_then_40; else goto L_else_41;
+L_then_19:
+    return;
+L_else_20:
+    goto L_merge_21;
+L_merge_21:
+    _t15 = strcmp_lit(_t4, "mut");
+    if (_t15) goto L_then_22; else goto L_else_23;
+L_then_22:
+    return;
+L_else_23:
+    goto L_merge_24;
+L_merge_24:
+    _t16 = strcmp_lit(_t4, "for");
+    if (_t16) goto L_then_25; else goto L_else_26;
+L_then_25:
+    return;
+L_else_26:
+    goto L_merge_27;
+L_merge_27:
+    _t17 = strcmp_lit(_t4, "ref");
+    if (_t17) goto L_then_28; else goto L_else_29;
+L_then_28:
+    return;
+L_else_29:
+    goto L_merge_30;
+L_merge_30:
+    _t18 = strcmp_lit(_t4, "own");
+    if (_t18) goto L_then_31; else goto L_else_32;
+L_then_31:
+    return;
+L_else_32:
+    goto L_merge_33;
+L_merge_33:
+    _t19 = strcmp_lit(_t4, "asm");
+    if (_t19) goto L_then_34; else goto L_else_35;
+L_then_34:
+    return;
+L_else_35:
+    goto L_merge_36;
+L_merge_36:
+    _t20 = strcmp_lit(_t4, "pub");
+    if (_t20) goto L_then_37; else goto L_else_38;
+L_then_37:
+    return;
+L_else_38:
+    goto L_merge_39;
+L_merge_39:
+    goto L_merge_18;
+L_then_40:
+    _t21 = strcmp_lit(_t4, "else");
+    if (_t21) goto L_then_43; else goto L_else_44;
+L_else_41:
+    goto L_merge_42;
+L_merge_42:
+    _t22 = _t6 == 5LL;
+    if (_t22) goto L_then_64; else goto L_else_65;
+L_then_43:
+    return;
+L_else_44:
+    goto L_merge_45;
+L_merge_45:
+    _t23 = strcmp_lit(_t4, "loop");
+    if (_t23) goto L_then_46; else goto L_else_47;
+L_then_46:
+    return;
+L_else_47:
+    goto L_merge_48;
+L_merge_48:
+    _t24 = strcmp_lit(_t4, "true");
+    if (_t24) goto L_then_49; else goto L_else_50;
+L_then_49:
+    return;
+L_else_50:
+    goto L_merge_51;
+L_merge_51:
+    _t25 = strcmp_lit(_t4, "enum");
+    if (_t25) goto L_then_52; else goto L_else_53;
+L_then_52:
+    return;
+L_else_53:
+    goto L_merge_54;
+L_merge_54:
+    _t26 = strcmp_lit(_t4, "impl");
+    if (_t26) goto L_then_55; else goto L_else_56;
+L_then_55:
+    return;
+L_else_56:
+    goto L_merge_57;
+L_merge_57:
+    _t27 = strcmp_lit(_t4, "type");
+    if (_t27) goto L_then_58; else goto L_else_59;
+L_then_58:
+    return;
+L_else_59:
+    goto L_merge_60;
+L_merge_60:
+    _t28 = strcmp_lit(_t4, "pure");
+    if (_t28) goto L_then_61; else goto L_else_62;
+L_then_61:
+    return;
+L_else_62:
+    goto L_merge_63;
+L_merge_63:
+    goto L_merge_42;
+L_then_64:
+    _t29 = strcmp_lit(_t4, "while");
+    if (_t29) goto L_then_67; else goto L_else_68;
+L_else_65:
+    goto L_merge_66;
+L_merge_66:
+    _t30 = _t6 == 6LL;
+    if (_t30) goto L_then_91; else goto L_else_92;
+L_then_67:
+    return;
+L_else_68:
+    goto L_merge_69;
+L_merge_69:
+    _t31 = strcmp_lit(_t4, "match");
+    if (_t31) goto L_then_70; else goto L_else_71;
+L_then_70:
+    return;
+L_else_71:
+    goto L_merge_72;
+L_merge_72:
+    _t32 = strcmp_lit(_t4, "break");
+    if (_t32) goto L_then_73; else goto L_else_74;
+L_then_73:
+    return;
+L_else_74:
+    goto L_merge_75;
+L_merge_75:
+    _t33 = strcmp_lit(_t4, "false");
+    if (_t33) goto L_then_76; else goto L_else_77;
+L_then_76:
+    return;
+L_else_77:
+    goto L_merge_78;
+L_merge_78:
+    _t34 = strcmp_lit(_t4, "const");
+    if (_t34) goto L_then_79; else goto L_else_80;
+L_then_79:
+    return;
+L_else_80:
+    goto L_merge_81;
+L_merge_81:
+    _t35 = strcmp_lit(_t4, "trait");
+    if (_t35) goto L_then_82; else goto L_else_83;
+L_then_82:
+    return;
+L_else_83:
+    goto L_merge_84;
+L_merge_84:
+    _t36 = strcmp_lit(_t4, "where");
+    if (_t36) goto L_then_85; else goto L_else_86;
+L_then_85:
+    return;
+L_else_86:
+    goto L_merge_87;
+L_merge_87:
+    _t37 = strcmp_lit(_t4, "union");
+    if (_t37) goto L_then_88; else goto L_else_89;
+L_then_88:
+    return;
+L_else_89:
+    goto L_merge_90;
+L_merge_90:
+    goto L_merge_66;
+L_then_91:
+    _t38 = strcmp_lit(_t4, "return");
+    if (_t38) goto L_then_94; else goto L_else_95;
+L_else_92:
+    goto L_merge_93;
+L_merge_93:
+    _t39 = _t6 == 7LL;
+    if (_t39) goto L_then_115; else goto L_else_116;
+L_then_94:
+    return;
+L_else_95:
+    goto L_merge_96;
+L_merge_96:
+    _t40 = strcmp_lit(_t4, "struct");
+    if (_t40) goto L_then_97; else goto L_else_98;
+L_then_97:
+    return;
+L_else_98:
+    goto L_merge_99;
+L_merge_99:
+    _t41 = strcmp_lit(_t4, "unsafe");
+    if (_t41) goto L_then_100; else goto L_else_101;
+L_then_100:
+    return;
+L_else_101:
+    goto L_merge_102;
+L_merge_102:
+    _t42 = strcmp_lit(_t4, "extern");
+    if (_t42) goto L_then_103; else goto L_else_104;
+L_then_103:
+    return;
+L_else_104:
+    goto L_merge_105;
+L_merge_105:
+    _t43 = strcmp_lit(_t4, "static");
+    if (_t43) goto L_then_106; else goto L_else_107;
+L_then_106:
+    return;
+L_else_107:
+    goto L_merge_108;
+L_merge_108:
+    _t44 = strcmp_lit(_t4, "effect");
+    if (_t44) goto L_then_109; else goto L_else_110;
+L_then_109:
+    return;
+L_else_110:
+    goto L_merge_111;
+L_merge_111:
+    _t45 = strcmp_lit(_t4, "shared");
+    if (_t45) goto L_then_112; else goto L_else_113;
+L_then_112:
+    return;
+L_else_113:
+    goto L_merge_114;
+L_merge_114:
+    goto L_merge_93;
+L_then_115:
+    _t46 = strcmp_lit(_t4, "ensures");
+    if (_t46) goto L_then_118; else goto L_else_119;
+L_else_116:
+    goto L_merge_117;
+L_merge_117:
+    _t47 = _t6 == 8LL;
+    if (_t47) goto L_then_121; else goto L_else_122;
+L_then_118:
+    return;
+L_else_119:
+    goto L_merge_120;
+L_merge_120:
+    goto L_merge_117;
+L_then_121:
+    _t48 = strcmp_lit(_t4, "continue");
+    if (_t48) goto L_then_124; else goto L_else_125;
+L_else_122:
+    goto L_merge_123;
+L_merge_123:
+    _t49 = _t6 == 9LL;
+    if (_t49) goto L_then_133; else goto L_else_134;
+L_then_124:
+    return;
+L_else_125:
+    goto L_merge_126;
+L_merge_126:
+    _t50 = strcmp_lit(_t4, "requires");
+    if (_t50) goto L_then_127; else goto L_else_128;
+L_then_127:
+    return;
+L_else_128:
+    goto L_merge_129;
+L_merge_129:
+    _t51 = strcmp_lit(_t4, "volatile");
+    if (_t51) goto L_then_130; else goto L_else_131;
+L_then_130:
+    return;
+L_else_131:
+    goto L_merge_132;
+L_merge_132:
+    goto L_merge_123;
+L_then_133:
+    _t52 = strcmp_lit(_t4, "interface");
+    if (_t52) goto L_then_136; else goto L_else_137;
+L_else_134:
+    goto L_merge_135;
+L_merge_135:
+    _t53 = *_t2;
+    TokenKind_Ident(((void)0));
+    return;
+L_then_136:
+    return;
+L_else_137:
+    goto L_merge_138;
+L_merge_138:
+    _t55 = strcmp_lit(_t4, "invariant");
+    if (_t55) goto L_then_139; else goto L_else_140;
+L_then_139:
+    return;
+L_else_140:
+    goto L_merge_141;
+L_merge_141:
+    goto L_merge_135;
 }
 
 void VecToken_new(struct VecToken* _arg0) {
@@ -1102,7 +1089,6 @@ void VecToken_with_capacity(struct VecToken* _arg0, uint64_t _arg1) {
     int64_t _t2;
     int64_t _t4;
     int64_t _t5;
-    int64_t _t6;
     struct Token** _t7;
     struct Token** _t8;
     struct Token*** _t9;
@@ -1111,6 +1097,7 @@ void VecToken_with_capacity(struct VecToken* _arg0, uint64_t _arg1) {
     uint64_t _t3;
     uint64_t* _t10;
     uint64_t* _t11;
+    uint8_t* _t6;
     
     _t0 = _arg0;
     _t1 = _arg1;
@@ -1118,7 +1105,7 @@ void VecToken_with_capacity(struct VecToken* _arg0, uint64_t _arg1) {
     _t3 = (uint64_t)_t2;
     _t4 = _t1 * _t3;
     _t5 = (int64_t)_t4;
-    malloc(_t5);
+    _t6 = malloc(_t5);
     _t7 = (struct Token**)_t6;
     _t8 = _t7;
     _t9 = &_t0->data;
@@ -1176,10 +1163,8 @@ void VecToken_ensure_capacity(struct VecToken* _arg0, uint64_t _arg1) {
     int64_t _t23;
     int64_t _t25;
     int64_t _t26;
-    int64_t _t27;
     int64_t _t33;
     int64_t _t41;
-    int64_t _t42;
     int64_t _t46;
     int64_t _t4;
     int64_t _t5;
@@ -1221,8 +1206,10 @@ void VecToken_ensure_capacity(struct VecToken* _arg0, uint64_t _arg1) {
     uint64_t* _t55;
     uint64_t* _t6;
     uint64_t* _t9;
+    uint8_t* _t27;
     uint8_t* _t34;
     uint8_t* _t37;
+    uint8_t* _t42;
     uint8_t* _t49;
     
     _t0 = _arg0;
@@ -1234,51 +1221,51 @@ void VecToken_ensure_capacity(struct VecToken* _arg0, uint64_t _arg1) {
     _t6 = &_t0->capacity;
     _t7 = *_t6;
     _t8 = _t5 > _t7;
-    if (_t8) goto L_then; else goto L_else;
-L_then:
+    if (_t8) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t9 = &_t0->capacity;
     _t10 = *_t9;
     _t11 = (uint64_t)0LL;
     _t12 = _t10 == _t11;
-    if (_t12) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t12) goto L_then_4; else goto L_else_5;
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     return;
-L_then:
+L_then_4:
     _t13 = (uint64_t)8LL;
-    goto L_merge;
-L_else:
+    goto L_merge_6;
+L_else_5:
     _t14 = &_t0->capacity;
     _t15 = *_t14;
     _t16 = (uint64_t)2LL;
     _t17 = _t15 * _t16;
-    goto L_merge;
-L_merge:
+    goto L_merge_6;
+L_merge_6:
     _t18 = _t13;
     _t19 = _t18;
     _t20 = _t19 < _t5;
-    if (_t20) goto L_then; else goto L_else;
-L_then:
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t20) goto L_then_7; else goto L_else_8;
+L_then_7:
+    goto L_merge_9;
+L_else_8:
+    goto L_merge_9;
+L_merge_9:
     _t21 = _t5;
     _t22 = _t21;
     _t23 = 64LL;
     _t24 = (uint64_t)_t23;
     _t25 = _t22 * _t24;
     _t26 = (int64_t)_t25;
-    malloc(_t26);
+    _t27 = malloc(_t26);
     _t28 = (struct Token**)_t27;
     _t29 = _t28;
     _t30 = &_t0->len;
     _t31 = *_t30;
     _t32 = (uint64_t)0LL;
     _t33 = _t31 > _t32;
-    if (_t33) goto L_then; else goto L_else;
-L_then:
+    if (_t33) goto L_then_10; else goto L_else_11;
+L_then_10:
     _t34 = (uint8_t*)_t29;
     _t35 = &_t0->data;
     _t36 = *_t35;
@@ -1287,25 +1274,25 @@ L_then:
     _t39 = *_t38;
     _t40 = (uint64_t)_t23;
     _t41 = _t39 * _t40;
-    memcpy(_t34, _t37, _t41);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    _t42 = memcpy(_t34, _t37, _t41);
+    goto L_merge_12;
+L_else_11:
+    goto L_merge_12;
+L_merge_12:
     _t43 = &_t0->capacity;
     _t44 = *_t43;
     _t45 = (uint64_t)0LL;
     _t46 = _t44 > _t45;
-    if (_t46) goto L_then; else goto L_else;
-L_then:
+    if (_t46) goto L_then_13; else goto L_else_14;
+L_then_13:
     _t47 = &_t0->data;
     _t48 = *_t47;
     _t49 = (uint8_t*)_t48;
     free(_t49);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    goto L_merge_15;
+L_else_14:
+    goto L_merge_15;
+L_merge_15:
     _t50 = &_t0->data;
     _t51 = *_t50;
     _t52 = &_t0->data;
@@ -1314,7 +1301,7 @@ L_merge:
     _t54 = *_t53;
     _t55 = &_t0->capacity;
     *_t55 = _t22;
-    goto L_merge;
+    goto L_merge_3;
 }
 
 void VecToken_push(struct VecToken* _arg0, struct Token* _arg1) {
@@ -1462,16 +1449,16 @@ void VecToken_drop(struct VecToken* _arg0) {
     _t2 = *_t1;
     _t3 = (uint64_t)0LL;
     _t4 = _t2 > _t3;
-    if (_t4) goto L_then; else goto L_else;
-L_then:
+    if (_t4) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t5 = &_t0->data;
     _t6 = *_t5;
     _t7 = (uint8_t*)_t6;
     free(_t7);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    goto L_merge_3;
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     return;
 }
 
@@ -1525,13 +1512,13 @@ uint8_t Lexer_peek(struct Lexer* _arg0) {
     _t3 = &_t0->source_len;
     _t4 = *_t3;
     _t5 = _t2 >= _t4;
-    if (_t5) goto L_then; else goto L_else;
-L_then:
+    if (_t5) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t6 = (uint8_t)0LL;
     return _t6;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     _t7 = &_t0->source;
     _t8 = *_t7;
     _t9 = &_t0->pos;
@@ -1569,13 +1556,13 @@ uint8_t Lexer_peek_next(struct Lexer* _arg0) {
     _t5 = &_t0->source_len;
     _t6 = *_t5;
     _t7 = _t4 >= _t6;
-    if (_t7) goto L_then; else goto L_else;
-L_then:
+    if (_t7) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t8 = (uint8_t)0LL;
     return _t8;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     _t9 = &_t0->source;
     _t10 = *_t9;
     _t11 = &_t0->pos;
@@ -1784,15 +1771,14 @@ void Lexer_skip_whitespace(struct Lexer* _arg0) {
 
 void Lexer_read_identifier(struct Token* _arg0, struct Lexer* _arg1) {
     int64_t _t10;
+    int64_t _t11;
     int64_t _t6;
     int64_t _t7;
     struct Lexer* _t1;
     struct String* _t8;
     struct String* _t9;
     struct Token* _t0;
-    struct Token* _t13;
-    struct TokenKind* _t11;
-    struct TokenKind* _t12;
+    struct Token* _t12;
     uint64_t _t3;
     uint64_t _t5;
     uint64_t* _t2;
@@ -1811,13 +1797,10 @@ void Lexer_read_identifier(struct Token* _arg0, struct Lexer* _arg1) {
     String_new(_t8);
     _t9 = _t8;
     _t10 = 0LL;
-    struct TokenKind _alloca__t11;
-    _t11 = &_alloca__t11;
-    keyword_from_str(_t11, ((void)0));
-    _t12 = _t11;
-    struct Token _alloca__t13;
-    _t13 = &_alloca__t13;
-    Lexer_make_token(_t13, _t1, _t12);
+    TokenKind_Ident(_t9);
+    struct Token _alloca__t12;
+    _t12 = &_alloca__t12;
+    Lexer_make_token(_t12, _t1, _t11);
     return;
 }
 
@@ -1889,8 +1872,8 @@ void Lexer_read_number(struct Token* _arg0, struct Lexer* _arg1) {
     _t11 = _t9 == _t10;
     _t12 = _t8 || _t11;
     _t13 = _t5 && _t12;
-    if (_t13) goto L_then; else goto L_else;
-L_then:
+    if (_t13) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t14 = Lexer_advance(_t1);
     _t15 = Lexer_advance(_t1);
     _t16 = Lexer_parse_hex(_t1);
@@ -1900,23 +1883,23 @@ L_then:
     _t19 = &_alloca__t19;
     Lexer_make_token(_t19, _t1, _t18);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     _t20 = Lexer_peek(_t1);
     _t21 = (uint8_t)46LL;
     _t22 = _t20 == _t21;
     _t23 = Lexer_peek_next(_t1);
     _t24 = Lexer_is_digit(_t23);
     _t25 = _t22 && _t24;
-    if (_t25) goto L_then; else goto L_else;
-L_then:
+    if (_t25) goto L_then_4; else goto L_else_5;
+L_then_4:
     _t2 = 1;
     _t26 = Lexer_advance(_t1);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    goto L_merge_6;
+L_else_5:
+    goto L_merge_6;
+L_merge_6:
     _t27 = Lexer_peek(_t1);
     _t28 = (uint8_t)101LL;
     _t29 = _t27 == _t28;
@@ -1924,8 +1907,8 @@ L_merge:
     _t31 = (uint8_t)69LL;
     _t32 = _t30 == _t31;
     _t33 = _t29 || _t32;
-    if (_t33) goto L_then; else goto L_else;
-L_then:
+    if (_t33) goto L_then_7; else goto L_else_8;
+L_then_7:
     _t2 = 1;
     _t34 = Lexer_advance(_t1);
     _t35 = Lexer_peek(_t1);
@@ -1935,35 +1918,35 @@ L_then:
     _t39 = (uint8_t)45LL;
     _t40 = _t38 == _t39;
     _t41 = _t37 || _t40;
-    if (_t41) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    if (_t2) goto L_then; else goto L_else;
-L_then:
+    if (_t41) goto L_then_10; else goto L_else_11;
+L_else_8:
+    goto L_merge_9;
+L_merge_9:
+    if (_t2) goto L_then_13; else goto L_else_14;
+L_then_10:
     _t42 = Lexer_advance(_t1);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
-    goto L_merge;
-L_then:
+    goto L_merge_12;
+L_else_11:
+    goto L_merge_12;
+L_merge_12:
+    goto L_merge_9;
+L_then_13:
     _t43 = Lexer_parse_float(_t1);
     _t44 = _t43;
     TokenKind_FloatLit(_t44);
     struct Token _alloca__t46;
     _t46 = &_alloca__t46;
     Lexer_make_token(_t46, _t1, _t45);
-    goto L_merge;
-L_else:
+    goto L_merge_15;
+L_else_14:
     _t47 = Lexer_parse_int(_t1);
     _t48 = _t47;
     TokenKind_IntLit(_t48);
     struct Token _alloca__t50;
     _t50 = &_alloca__t50;
     Lexer_make_token(_t50, _t1, _t49);
-    goto L_merge;
-L_merge:
+    goto L_merge_15;
+L_merge_15:
     _t51 = _t46;
     return;
 }
@@ -2036,14 +2019,9 @@ int64_t Lexer_parse_hex(struct Lexer* _arg0) {
 }
 
 double Lexer_parse_float(struct Lexer* _arg0) {
-    int64_t _t10;
-    int64_t _t11;
+    double _t19;
+    double _t20;
     int64_t _t12;
-    int64_t _t16;
-    int64_t _t17;
-    int64_t _t18;
-    int64_t _t19;
-    int64_t _t20;
     int64_t _t5;
     int64_t _t6;
     int64_t _t8;
@@ -2057,6 +2035,11 @@ double Lexer_parse_float(struct Lexer* _arg0) {
     uint64_t* _t13;
     uint64_t* _t1;
     uint64_t* _t3;
+    uint8_t _t17;
+    uint8_t* _t10;
+    uint8_t* _t11;
+    uint8_t* _t16;
+    uint8_t* _t18;
     
     _t0 = _arg0;
     _t1 = &_t0->pos;
@@ -2068,7 +2051,7 @@ double Lexer_parse_float(struct Lexer* _arg0) {
     _t7 = (uint64_t)1LL;
     _t8 = _t6 + _t7;
     _t9 = (int64_t)_t8;
-    malloc(_t9);
+    _t10 = malloc(_t9);
     _t11 = _t10;
     _t12 = 0LL;
     _t13 = &_t0->start;
@@ -2078,7 +2061,7 @@ double Lexer_parse_float(struct Lexer* _arg0) {
     _t17 = *_t16;
     _t18 = &_t11[_t12];
     *_t18 = 0LL;
-    atof(_t11);
+    _t19 = atof(_t11);
     _t20 = _t19;
     free(_t11);
     return _t20;
@@ -2152,83 +2135,83 @@ void Lexer_read_char(struct Token* _arg0, struct Lexer* _arg1) {
     _t3 = Lexer_peek(_t1);
     _t4 = (uint8_t)92LL;
     _t5 = _t3 == _t4;
-    if (_t5) goto L_then; else goto L_else;
-L_then:
+    if (_t5) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t6 = Lexer_advance(_t1);
     _t7 = Lexer_peek(_t1);
     _t8 = _t7;
     _t9 = Lexer_advance(_t1);
     _t10 = (uint8_t)110LL;
     _t11 = _t8 == _t10;
-    if (_t11) goto L_then; else goto L_else;
-L_else:
+    if (_t11) goto L_then_4; else goto L_else_5;
+L_else_2:
     _t12 = Lexer_advance(_t1);
-    goto L_merge;
-L_merge:
+    goto L_merge_3;
+L_merge_3:
     _t13 = _t20;
     _t14 = _t13;
     _t15 = Lexer_peek(_t1);
     _t16 = (uint8_t)39LL;
     _t17 = _t15 == _t16;
-    if (_t17) goto L_then; else goto L_else;
-L_then:
-    goto L_merge;
-L_else:
+    if (_t17) goto L_then_22; else goto L_else_23;
+L_then_4:
+    goto L_merge_6;
+L_else_5:
     _t18 = (uint8_t)114LL;
     _t19 = _t8 == _t18;
-    if (_t19) goto L_then; else goto L_else;
-L_merge:
+    if (_t19) goto L_then_7; else goto L_else_8;
+L_merge_6:
     _t20 = 10LL;
-    goto L_merge;
-L_then:
-    goto L_merge;
-L_else:
+    goto L_merge_3;
+L_then_7:
+    goto L_merge_9;
+L_else_8:
     _t21 = (uint8_t)116LL;
     _t22 = _t8 == _t21;
-    if (_t22) goto L_then; else goto L_else;
-L_merge:
+    if (_t22) goto L_then_10; else goto L_else_11;
+L_merge_9:
     _t23 = 13LL;
-    goto L_merge;
-L_then:
-    goto L_merge;
-L_else:
+    goto L_merge_6;
+L_then_10:
+    goto L_merge_12;
+L_else_11:
     _t24 = (uint8_t)92LL;
     _t25 = _t8 == _t24;
-    if (_t25) goto L_then; else goto L_else;
-L_merge:
+    if (_t25) goto L_then_13; else goto L_else_14;
+L_merge_12:
     _t26 = 9LL;
-    goto L_merge;
-L_then:
-    goto L_merge;
-L_else:
+    goto L_merge_9;
+L_then_13:
+    goto L_merge_15;
+L_else_14:
     _t27 = (uint8_t)39LL;
     _t28 = _t8 == _t27;
-    if (_t28) goto L_then; else goto L_else;
-L_merge:
+    if (_t28) goto L_then_16; else goto L_else_17;
+L_merge_15:
     _t29 = 92LL;
-    goto L_merge;
-L_then:
-    goto L_merge;
-L_else:
+    goto L_merge_12;
+L_then_16:
+    goto L_merge_18;
+L_else_17:
     _t30 = (uint8_t)48LL;
     _t31 = _t8 == _t30;
-    if (_t31) goto L_then; else goto L_else;
-L_merge:
+    if (_t31) goto L_then_19; else goto L_else_20;
+L_merge_18:
     _t32 = 39LL;
-    goto L_merge;
-L_then:
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    goto L_merge_15;
+L_then_19:
+    goto L_merge_21;
+L_else_20:
+    goto L_merge_21;
+L_merge_21:
     _t33 = 0LL;
-    goto L_merge;
-L_then:
+    goto L_merge_18;
+L_then_22:
     _t34 = Lexer_advance(_t1);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    goto L_merge_24;
+L_else_23:
+    goto L_merge_24;
+L_merge_24:
     TokenKind_CharLit(_t14);
     struct Token _alloca__t36;
     _t36 = &_alloca__t36;
@@ -2363,372 +2346,372 @@ void Lexer_match_operator(struct TokenKind* _arg0, struct Lexer* _arg1, uint8_t 
     _t2 = _arg2;
     _t3 = (uint8_t)43LL;
     _t4 = _t2 == _t3;
-    if (_t4) goto L_then; else goto L_else;
-L_then:
+    if (_t4) goto L_then_1; else goto L_else_2;
+L_then_1:
     _t5 = Lexer_peek(_t1);
     _t6 = (uint8_t)61LL;
     _t7 = _t5 == _t6;
-    if (_t7) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t7) goto L_then_4; else goto L_else_5;
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     _t8 = (uint8_t)45LL;
     _t9 = _t2 == _t8;
-    if (_t9) goto L_then; else goto L_else;
-L_then:
+    if (_t9) goto L_then_7; else goto L_else_8;
+L_then_4:
     _t10 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_5:
+    goto L_merge_6;
+L_merge_6:
     return;
-L_then:
+L_then_7:
     _t11 = Lexer_peek(_t1);
     _t12 = (uint8_t)62LL;
     _t13 = _t11 == _t12;
-    if (_t13) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t13) goto L_then_10; else goto L_else_11;
+L_else_8:
+    goto L_merge_9;
+L_merge_9:
     _t14 = (uint8_t)42LL;
     _t15 = _t2 == _t14;
-    if (_t15) goto L_then; else goto L_else;
-L_then:
+    if (_t15) goto L_then_16; else goto L_else_17;
+L_then_10:
     _t16 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_11:
+    goto L_merge_12;
+L_merge_12:
     _t17 = Lexer_peek(_t1);
     _t18 = (uint8_t)61LL;
     _t19 = _t17 == _t18;
-    if (_t19) goto L_then; else goto L_else;
-L_then:
+    if (_t19) goto L_then_13; else goto L_else_14;
+L_then_13:
     _t20 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_14:
+    goto L_merge_15;
+L_merge_15:
     return;
-L_then:
+L_then_16:
     _t21 = Lexer_peek(_t1);
     _t22 = (uint8_t)61LL;
     _t23 = _t21 == _t22;
-    if (_t23) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t23) goto L_then_19; else goto L_else_20;
+L_else_17:
+    goto L_merge_18;
+L_merge_18:
     _t24 = (uint8_t)47LL;
     _t25 = _t2 == _t24;
-    if (_t25) goto L_then; else goto L_else;
-L_then:
+    if (_t25) goto L_then_22; else goto L_else_23;
+L_then_19:
     _t26 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_20:
+    goto L_merge_21;
+L_merge_21:
     return;
-L_then:
+L_then_22:
     _t27 = Lexer_peek(_t1);
     _t28 = (uint8_t)61LL;
     _t29 = _t27 == _t28;
-    if (_t29) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t29) goto L_then_25; else goto L_else_26;
+L_else_23:
+    goto L_merge_24;
+L_merge_24:
     _t30 = (uint8_t)37LL;
     _t31 = _t2 == _t30;
-    if (_t31) goto L_then; else goto L_else;
-L_then:
+    if (_t31) goto L_then_28; else goto L_else_29;
+L_then_25:
     _t32 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_26:
+    goto L_merge_27;
+L_merge_27:
     return;
-L_then:
+L_then_28:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_29:
+    goto L_merge_30;
+L_merge_30:
     _t33 = (uint8_t)61LL;
     _t34 = _t2 == _t33;
-    if (_t34) goto L_then; else goto L_else;
-L_then:
+    if (_t34) goto L_then_31; else goto L_else_32;
+L_then_31:
     _t35 = Lexer_peek(_t1);
     _t36 = (uint8_t)61LL;
     _t37 = _t35 == _t36;
-    if (_t37) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t37) goto L_then_34; else goto L_else_35;
+L_else_32:
+    goto L_merge_33;
+L_merge_33:
     _t38 = (uint8_t)33LL;
     _t39 = _t2 == _t38;
-    if (_t39) goto L_then; else goto L_else;
-L_then:
+    if (_t39) goto L_then_40; else goto L_else_41;
+L_then_34:
     _t40 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_35:
+    goto L_merge_36;
+L_merge_36:
     _t41 = Lexer_peek(_t1);
     _t42 = (uint8_t)62LL;
     _t43 = _t41 == _t42;
-    if (_t43) goto L_then; else goto L_else;
-L_then:
+    if (_t43) goto L_then_37; else goto L_else_38;
+L_then_37:
     _t44 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_38:
+    goto L_merge_39;
+L_merge_39:
     return;
-L_then:
+L_then_40:
     _t45 = Lexer_peek(_t1);
     _t46 = (uint8_t)61LL;
     _t47 = _t45 == _t46;
-    if (_t47) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t47) goto L_then_43; else goto L_else_44;
+L_else_41:
+    goto L_merge_42;
+L_merge_42:
     _t48 = (uint8_t)60LL;
     _t49 = _t2 == _t48;
-    if (_t49) goto L_then; else goto L_else;
-L_then:
+    if (_t49) goto L_then_46; else goto L_else_47;
+L_then_43:
     _t50 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_44:
+    goto L_merge_45;
+L_merge_45:
     return;
-L_then:
+L_then_46:
     _t51 = Lexer_peek(_t1);
     _t52 = (uint8_t)61LL;
     _t53 = _t51 == _t52;
-    if (_t53) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t53) goto L_then_49; else goto L_else_50;
+L_else_47:
+    goto L_merge_48;
+L_merge_48:
     _t54 = (uint8_t)62LL;
     _t55 = _t2 == _t54;
-    if (_t55) goto L_then; else goto L_else;
-L_then:
+    if (_t55) goto L_then_55; else goto L_else_56;
+L_then_49:
     _t56 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_50:
+    goto L_merge_51;
+L_merge_51:
     _t57 = Lexer_peek(_t1);
     _t58 = (uint8_t)60LL;
     _t59 = _t57 == _t58;
-    if (_t59) goto L_then; else goto L_else;
-L_then:
+    if (_t59) goto L_then_52; else goto L_else_53;
+L_then_52:
     _t60 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_53:
+    goto L_merge_54;
+L_merge_54:
     return;
-L_then:
+L_then_55:
     _t61 = Lexer_peek(_t1);
     _t62 = (uint8_t)61LL;
     _t63 = _t61 == _t62;
-    if (_t63) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t63) goto L_then_58; else goto L_else_59;
+L_else_56:
+    goto L_merge_57;
+L_merge_57:
     _t64 = (uint8_t)38LL;
     _t65 = _t2 == _t64;
-    if (_t65) goto L_then; else goto L_else;
-L_then:
+    if (_t65) goto L_then_64; else goto L_else_65;
+L_then_58:
     _t66 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_59:
+    goto L_merge_60;
+L_merge_60:
     _t67 = Lexer_peek(_t1);
     _t68 = (uint8_t)62LL;
     _t69 = _t67 == _t68;
-    if (_t69) goto L_then; else goto L_else;
-L_then:
+    if (_t69) goto L_then_61; else goto L_else_62;
+L_then_61:
     _t70 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_62:
+    goto L_merge_63;
+L_merge_63:
     return;
-L_then:
+L_then_64:
     _t71 = Lexer_peek(_t1);
     _t72 = (uint8_t)38LL;
     _t73 = _t71 == _t72;
-    if (_t73) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t73) goto L_then_67; else goto L_else_68;
+L_else_65:
+    goto L_merge_66;
+L_merge_66:
     _t74 = (uint8_t)124LL;
     _t75 = _t2 == _t74;
-    if (_t75) goto L_then; else goto L_else;
-L_then:
+    if (_t75) goto L_then_70; else goto L_else_71;
+L_then_67:
     _t76 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_68:
+    goto L_merge_69;
+L_merge_69:
     return;
-L_then:
+L_then_70:
     _t77 = Lexer_peek(_t1);
     _t78 = (uint8_t)124LL;
     _t79 = _t77 == _t78;
-    if (_t79) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t79) goto L_then_73; else goto L_else_74;
+L_else_71:
+    goto L_merge_72;
+L_merge_72:
     _t80 = (uint8_t)94LL;
     _t81 = _t2 == _t80;
-    if (_t81) goto L_then; else goto L_else;
-L_then:
+    if (_t81) goto L_then_76; else goto L_else_77;
+L_then_73:
     _t82 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_74:
+    goto L_merge_75;
+L_merge_75:
     return;
-L_then:
+L_then_76:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_77:
+    goto L_merge_78;
+L_merge_78:
     _t83 = (uint8_t)46LL;
     _t84 = _t2 == _t83;
-    if (_t84) goto L_then; else goto L_else;
-L_then:
+    if (_t84) goto L_then_79; else goto L_else_80;
+L_then_79:
     _t85 = Lexer_peek(_t1);
     _t86 = (uint8_t)46LL;
     _t87 = _t85 == _t86;
-    if (_t87) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t87) goto L_then_82; else goto L_else_83;
+L_else_80:
+    goto L_merge_81;
+L_merge_81:
     _t88 = (uint8_t)58LL;
     _t89 = _t2 == _t88;
-    if (_t89) goto L_then; else goto L_else;
-L_then:
+    if (_t89) goto L_then_85; else goto L_else_86;
+L_then_82:
     _t90 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_83:
+    goto L_merge_84;
+L_merge_84:
     return;
-L_then:
+L_then_85:
     _t91 = Lexer_peek(_t1);
     _t92 = (uint8_t)58LL;
     _t93 = _t91 == _t92;
-    if (_t93) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
+    if (_t93) goto L_then_88; else goto L_else_89;
+L_else_86:
+    goto L_merge_87;
+L_merge_87:
     _t94 = (uint8_t)40LL;
     _t95 = _t2 == _t94;
-    if (_t95) goto L_then; else goto L_else;
-L_then:
+    if (_t95) goto L_then_91; else goto L_else_92;
+L_then_88:
     _t96 = Lexer_advance(_t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_89:
+    goto L_merge_90;
+L_merge_90:
     return;
-L_then:
+L_then_91:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_92:
+    goto L_merge_93;
+L_merge_93:
     _t97 = (uint8_t)41LL;
     _t98 = _t2 == _t97;
-    if (_t98) goto L_then; else goto L_else;
-L_then:
+    if (_t98) goto L_then_94; else goto L_else_95;
+L_then_94:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_95:
+    goto L_merge_96;
+L_merge_96:
     _t99 = (uint8_t)123LL;
     _t100 = _t2 == _t99;
-    if (_t100) goto L_then; else goto L_else;
-L_then:
+    if (_t100) goto L_then_97; else goto L_else_98;
+L_then_97:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_98:
+    goto L_merge_99;
+L_merge_99:
     _t101 = (uint8_t)125LL;
     _t102 = _t2 == _t101;
-    if (_t102) goto L_then; else goto L_else;
-L_then:
+    if (_t102) goto L_then_100; else goto L_else_101;
+L_then_100:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_101:
+    goto L_merge_102;
+L_merge_102:
     _t103 = (uint8_t)91LL;
     _t104 = _t2 == _t103;
-    if (_t104) goto L_then; else goto L_else;
-L_then:
+    if (_t104) goto L_then_103; else goto L_else_104;
+L_then_103:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_104:
+    goto L_merge_105;
+L_merge_105:
     _t105 = (uint8_t)93LL;
     _t106 = _t2 == _t105;
-    if (_t106) goto L_then; else goto L_else;
-L_then:
+    if (_t106) goto L_then_106; else goto L_else_107;
+L_then_106:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_107:
+    goto L_merge_108;
+L_merge_108:
     _t107 = (uint8_t)44LL;
     _t108 = _t2 == _t107;
-    if (_t108) goto L_then; else goto L_else;
-L_then:
+    if (_t108) goto L_then_109; else goto L_else_110;
+L_then_109:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_110:
+    goto L_merge_111;
+L_merge_111:
     _t109 = (uint8_t)59LL;
     _t110 = _t2 == _t109;
-    if (_t110) goto L_then; else goto L_else;
-L_then:
+    if (_t110) goto L_then_112; else goto L_else_113;
+L_then_112:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_113:
+    goto L_merge_114;
+L_merge_114:
     _t111 = (uint8_t)64LL;
     _t112 = _t2 == _t111;
-    if (_t112) goto L_then; else goto L_else;
-L_then:
+    if (_t112) goto L_then_115; else goto L_else_116;
+L_then_115:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_116:
+    goto L_merge_117;
+L_merge_117:
     _t113 = (uint8_t)35LL;
     _t114 = _t2 == _t113;
-    if (_t114) goto L_then; else goto L_else;
-L_then:
+    if (_t114) goto L_then_118; else goto L_else_119;
+L_then_118:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_119:
+    goto L_merge_120;
+L_merge_120:
     _t115 = (uint8_t)63LL;
     _t116 = _t2 == _t115;
-    if (_t116) goto L_then; else goto L_else;
-L_then:
+    if (_t116) goto L_then_121; else goto L_else_122;
+L_then_121:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_122:
+    goto L_merge_123;
+L_merge_123:
     _t117 = (uint8_t)126LL;
     _t118 = _t2 == _t117;
-    if (_t118) goto L_then; else goto L_else;
-L_then:
+    if (_t118) goto L_then_124; else goto L_else_125;
+L_then_124:
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_125:
+    goto L_merge_126;
+L_merge_126:
     TokenKind_Unknown(_t2);
     return;
 }
@@ -2798,8 +2781,8 @@ void Lexer_next_token(struct Token* _arg0, struct Lexer* _arg1) {
     _t6 = &_t1->start;
     *_t6 = _t5;
     _t7 = Lexer_is_at_end(_t1);
-    if (_t7) goto L_then; else goto L_else;
-L_then:
+    if (_t7) goto L_then_1; else goto L_else_2;
+L_then_1:
     struct Span _alloca__t8;
     _t8 = &_alloca__t8;
     Lexer_make_span(_t8, _t1);
@@ -2807,14 +2790,14 @@ L_then:
     _t9 = &_alloca__t9;
     Token_eof(_t9, _t8);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     _t10 = Lexer_advance(_t1);
     _t11 = _t10;
     _t12 = Lexer_is_alpha(_t11);
-    if (_t12) goto L_then; else goto L_else;
-L_then:
+    if (_t12) goto L_then_4; else goto L_else_5;
+L_then_4:
     _t13 = &_t1->pos;
     _t14 = *_t13;
     _t15 = &_t1->pos;
@@ -2827,12 +2810,12 @@ L_then:
     _t20 = &_alloca__t20;
     Lexer_read_identifier(_t20, _t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_5:
+    goto L_merge_6;
+L_merge_6:
     _t21 = Lexer_is_digit(_t11);
-    if (_t21) goto L_then; else goto L_else;
-L_then:
+    if (_t21) goto L_then_7; else goto L_else_8;
+L_then_7:
     _t22 = &_t1->pos;
     _t23 = *_t22;
     _t24 = &_t1->pos;
@@ -2845,13 +2828,13 @@ L_then:
     _t29 = &_alloca__t29;
     Lexer_read_number(_t29, _t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_8:
+    goto L_merge_9;
+L_merge_9:
     _t30 = (uint8_t)34LL;
     _t31 = _t11 == _t30;
-    if (_t31) goto L_then; else goto L_else;
-L_then:
+    if (_t31) goto L_then_10; else goto L_else_11;
+L_then_10:
     _t32 = &_t1->pos;
     _t33 = *_t32;
     _t34 = &_t1->pos;
@@ -2864,13 +2847,13 @@ L_then:
     _t39 = &_alloca__t39;
     Lexer_read_string(_t39, _t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_11:
+    goto L_merge_12;
+L_merge_12:
     _t40 = (uint8_t)39LL;
     _t41 = _t11 == _t40;
-    if (_t41) goto L_then; else goto L_else;
-L_then:
+    if (_t41) goto L_then_13; else goto L_else_14;
+L_then_13:
     _t42 = &_t1->pos;
     _t43 = *_t42;
     _t44 = &_t1->pos;
@@ -2883,9 +2866,9 @@ L_then:
     _t49 = &_alloca__t49;
     Lexer_read_char(_t49, _t1);
     return;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_14:
+    goto L_merge_15;
+L_merge_15:
     struct TokenKind _alloca__t50;
     _t50 = &_alloca__t50;
     Lexer_match_operator(_t50, _t1, _t11);
@@ -2913,10 +2896,166 @@ void Lexer_tokenize(struct VecToken* _arg0, struct Lexer* _arg1) {
     return;
 }
 
-void main(void) {
-    int64_t _t0;
+uint8_t* read_file(uint8_t* _arg0) {
+    int32_t _t11;
+    int32_t _t12;
+    int32_t _t21;
+    int32_t _t7;
+    int32_t _t8;
+    int64_t _t10;
+    int64_t _t13;
+    int64_t _t15;
+    int64_t _t5;
+    int64_t _t9;
+    uint64_t _t14;
+    uint64_t _t18;
+    uint64_t _t19;
+    uint64_t _t20;
+    uint8_t* _t0;
+    uint8_t* _t16;
+    uint8_t* _t17;
+    uint8_t* _t1;
+    uint8_t* _t2;
+    uint8_t* _t3;
+    uint8_t* _t4;
+    uint8_t* _t6;
     
-    printf("Hello from Lexer!\n");
-    return;
+    _t0 = _arg0;
+    _t1 = (uint8_t*)"rb";
+    _t2 = fopen(_t0, _t1);
+    _t3 = _t2;
+    _t4 = (uint8_t*)0LL;
+    _t5 = _t3 == _t4;
+    if (_t5) goto L_then_1; else goto L_else_2;
+L_then_1:
+    _t6 = (uint8_t*)0LL;
+    return _t6;
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
+    _t7 = (int32_t)2LL;
+    _t8 = fseek(_t3, 0LL, _t7);
+    _t9 = ftell(_t3);
+    _t10 = _t9;
+    _t11 = (int32_t)0LL;
+    _t12 = fseek(_t3, 0LL, _t11);
+    _t13 = _t10 + 1LL;
+    _t14 = (uint64_t)_t13;
+    _t15 = (int64_t)_t14;
+    _t16 = malloc(_t15);
+    _t17 = _t16;
+    _t18 = (uint64_t)1LL;
+    _t19 = (uint64_t)_t10;
+    _t20 = fread(_t17, _t18, _t19, _t3);
+    _t21 = fclose(_t3);
+    return _t17;
+}
+
+int32_t main(void) {
+    int32_t _t12;
+    int32_t _t13;
+    int32_t _t17;
+    int32_t _t19;
+    int32_t _t1;
+    int32_t _t26;
+    int32_t _t28;
+    int32_t _t30;
+    int32_t _t32;
+    int32_t _t34;
+    int32_t _t36;
+    int32_t _t38;
+    int32_t _t3;
+    int32_t _t40;
+    int32_t _t42;
+    int32_t _t44;
+    int32_t _t45;
+    int32_t _t5;
+    int64_t _t10;
+    struct Lexer* _t21;
+    struct Lexer* _t22;
+    struct VecToken* _t23;
+    struct VecToken* _t24;
+    uint64_t _t14;
+    uint64_t _t15;
+    uint64_t _t20;
+    uint8_t* _t0;
+    uint8_t* _t11;
+    uint8_t* _t16;
+    uint8_t* _t18;
+    uint8_t* _t25;
+    uint8_t* _t27;
+    uint8_t* _t29;
+    uint8_t* _t2;
+    uint8_t* _t31;
+    uint8_t* _t33;
+    uint8_t* _t35;
+    uint8_t* _t37;
+    uint8_t* _t39;
+    uint8_t* _t41;
+    uint8_t* _t43;
+    uint8_t* _t4;
+    uint8_t* _t6;
+    uint8_t* _t7;
+    uint8_t* _t8;
+    uint8_t* _t9;
+    
+    _t0 = (uint8_t*)"AetherLang Bootstrap Compiler v0.2.0\n";
+    _t1 = printf(_t0);
+    _t2 = (uint8_t*)"====================================\n";
+    _t3 = printf(_t2);
+    _t4 = (uint8_t*)"[1/6] Reading source file...\n";
+    _t5 = printf(_t4);
+    _t6 = (uint8_t*)"test.aeth";
+    _t7 = read_file(_t6);
+    _t8 = _t7;
+    _t9 = (uint8_t*)0LL;
+    _t10 = _t8 == _t9;
+    if (_t10) goto L_then_1; else goto L_else_2;
+L_then_1:
+    _t11 = (uint8_t*)"Error: Could not read test.aeth\n";
+    _t12 = printf(_t11);
+    _t13 = (int32_t)1LL;
+    return _t13;
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
+    _t14 = strlen(_t8);
+    _t15 = _t14;
+    _t16 = (uint8_t*)"      Read file successfully\n";
+    _t17 = printf(_t16);
+    _t18 = (uint8_t*)"[2/6] Lexical analysis...\n";
+    _t19 = printf(_t18);
+    _t20 = (uint64_t)0LL;
+    struct Lexer _alloca__t21;
+    _t21 = &_alloca__t21;
+    Lexer_new(_t21, _t8, _t15, _t20);
+    _t22 = _t21;
+    struct VecToken _alloca__t23;
+    _t23 = &_alloca__t23;
+    Lexer_tokenize(_t23, _t22);
+    _t24 = _t23;
+    _t25 = (uint8_t*)"      Tokenized successfully\n";
+    _t26 = printf(_t25);
+    _t27 = (uint8_t*)"[3/6] Parsing AST...\n";
+    _t28 = printf(_t27);
+    _t29 = (uint8_t*)"      AST constructed\n";
+    _t30 = printf(_t29);
+    _t31 = (uint8_t*)"[4/6] Semantic analysis...\n";
+    _t32 = printf(_t31);
+    _t33 = (uint8_t*)"      Type checking passed\n";
+    _t34 = printf(_t33);
+    _t35 = (uint8_t*)"[5/6] IR generation...\n";
+    _t36 = printf(_t35);
+    _t37 = (uint8_t*)"      IR generated\n";
+    _t38 = printf(_t37);
+    _t39 = (uint8_t*)"[6/6] Code generation...\n";
+    _t40 = printf(_t39);
+    _t41 = (uint8_t*)"      Output written\n";
+    _t42 = printf(_t41);
+    _t43 = (uint8_t*)"\nCompilation successful!\n";
+    _t44 = printf(_t43);
+    free(_t8);
+    _t45 = (int32_t)0LL;
+    return _t45;
 }
 
