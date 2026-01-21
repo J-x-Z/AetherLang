@@ -97,6 +97,8 @@ pub enum TokenKind {
     Invariant,
     /// use (import statement)
     Use,
+    /// mod (module declaration)
+    Mod,
     
     // ============ System Keywords (Phase 8) ============
     /// extern (foreign function interface)
@@ -311,6 +313,7 @@ impl TokenKind {
             "ensures" => Some(TokenKind::Ensures),
             "invariant" => Some(TokenKind::Invariant),
             "use" => Some(TokenKind::Use),
+            "mod" => Some(TokenKind::Mod),
             // System keywords (Phase 8)
             "extern" => Some(TokenKind::Extern),
             "static" => Some(TokenKind::Static),

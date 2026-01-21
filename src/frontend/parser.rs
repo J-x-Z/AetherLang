@@ -205,6 +205,8 @@ impl Parser {
             TokenKind::Type => Ok(Item::TypeAlias(self.parse_type_alias()?)),
             // Use/import statement
             TokenKind::Use => Ok(Item::Use(self.parse_use()?)),
+            // Module declaration
+            TokenKind::Mod => Ok(Item::Module(self.parse_mod()?)),
             _ => Err(Error::UnexpectedToken {
                 expected: "item (fn, struct, enum, impl, interface, const, extern, static, union, trait, type, use)".to_string(),
                 got: format!("{:?}", self.current_kind()),
@@ -1711,6 +1713,35 @@ impl Parser {
         Ok(UseDecl {
             path,
             kind,
+            span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
+            is_pub: false,
+        })
+    }
+    
+    /// Parse module declaration: mod name { items } or mod name;
+    fn parse_mod(&mut self) -> Result<ModuleDef> {
+        let start = self.current().span;
+        self.expect(TokenKind::Mod)?;
+        
+        let name = self.parse_ident()?;
+        
+        // Check for inline module (mod foo { ... }) or external (mod foo;)
+        let items = if self.consume(&TokenKind::LBrace) {
+            let mut items = Vec::new();
+            while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+                items.push(self.parse_item()?);
+            }
+            self.expect(TokenKind::RBrace)?;
+            Some(items)
+        } else {
+            // External module - file will be loaded by semantic phase
+            self.consume(&TokenKind::Semicolon);
+            None
+        };
+        
+        Ok(ModuleDef {
+            name,
+            items,
             span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
             is_pub: false,
         })

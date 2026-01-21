@@ -1,0 +1,17 @@
+// Test module syntax parsing only
+// Semantic analysis for modules is future work
+
+mod utils {
+    fn helper() -> i32 {
+        return 42
+    }
+}
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+fn main() -> i32 {
+    puts("Module syntax test\0" as *u8)
+    return 0
+}
