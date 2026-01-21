@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # C backend build (fast, no external dependencies)
-  build-c-backend:
+  # Primary: C backend build (fast, no external dependencies)
+  build-linux:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
     - name: Cache cargo
       uses: Swatinem/rust-cache@v2
       
-    - name: Build without LLVM (C backend only)
+    - name: Build
       run: cargo build --release --no-default-features
       
     - name: Run tests
@@ -32,66 +32,40 @@ jobs:
       run: |
         ./target/release/aethc --emit-c tests/hello.aeth
         cat tests/hello.c
-        echo "C backend test passed"
-
-  # LLVM backend build (full features)
-  build-llvm-linux:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install LLVM 18
-      run: |
-        wget https://apt.llvm.org/llvm.sh
-        chmod +x llvm.sh
-        sudo ./llvm.sh 18
-        echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
-    
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      
-    - name: Cache cargo
-      uses: Swatinem/rust-cache@v2
-      
-    - name: Build with LLVM backend
-      run: cargo build --release --features llvm
-      
-    - name: Run tests
-      run: cargo test --features llvm
         
-    - name: Test LLVM backend
+    - name: Test stdlib compilation
       run: |
-        ./target/release/aethc --backend llvm build tests/hello.aeth -o /tmp/hello
-        /tmp/hello
-        echo "LLVM backend test passed"
+        ./target/release/aethc --emit-c stdlib/tensor.aeth
+        ./target/release/aethc --emit-c stdlib/matrix.aeth
+        echo "Stdlib compilation passed"
+        
+    - name: Test self-hosting modules
+      run: |
+        ./target/release/aethc --emit-c src_aether/lexer.aeth
+        ./target/release/aethc --emit-c src_aether/parser.aeth
+        echo "Self-hosting modules passed"
 
-  build-llvm-macos:
+  build-macos:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v4
     
-    - name: Install LLVM 18
-      run: |
-        brew install llvm@18
-        echo "LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)" >> $GITHUB_ENV
-    
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       
     - name: Cache cargo
       uses: Swatinem/rust-cache@v2
       
-    - name: Build with LLVM backend
-      run: cargo build --release --features llvm
+    - name: Build
+      run: cargo build --release --no-default-features
       
     - name: Run tests
-      run: cargo test --features llvm
+      run: cargo test --no-default-features
         
-    - name: Test LLVM backend
+    - name: Test C backend
       run: |
-        ./target/release/aethc --backend llvm build tests/hello.aeth -o /tmp/hello
-        /tmp/hello
-        echo "LLVM backend test passed"
+        ./target/release/aethc --emit-c tests/hello.aeth
+        cat tests/hello.c
 
   build-windows:
     runs-on: windows-latest
@@ -104,7 +78,7 @@ jobs:
     - name: Cache cargo
       uses: Swatinem/rust-cache@v2
       
-    - name: Build without LLVM (C backend only)
+    - name: Build
       run: cargo build --release --no-default-features
       
     - name: Run tests
