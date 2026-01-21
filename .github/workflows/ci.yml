@@ -29,7 +29,8 @@ jobs:
         
     - name: Test C backend
       run: |
-        ./target/release/aethc --backend c build tests/hello.aeth --output hello.c
+        ./target/release/aethc --emit-c tests/hello.aeth
+        cat tests/hello.c
         echo "C backend test passed"
 
   build-macos:
@@ -51,8 +52,9 @@ jobs:
         
     - name: Test C backend
       run: |
-        ./target/release/aethc --backend c build tests/hello.aeth --output hello.c
-        cat hello.c
+        ./target/release/aethc --emit-c tests/hello.aeth
+        cat tests/hello.c
+        echo "C backend test passed"
 
   build-windows:
     runs-on: windows-latest
