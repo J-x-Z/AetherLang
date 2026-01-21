@@ -1,0 +1,85 @@
+// AetherLang JNI (Java Native Interface) Bindings
+// Provides access to JVM and JNI API
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// ==================== JNI Version Constants ====================
+
+fn jni_version_1_1() -> i32 { return 0x00010001; }
+fn jni_version_1_2() -> i32 { return 0x00010002; }
+fn jni_version_1_4() -> i32 { return 0x00010004; }
+fn jni_version_1_6() -> i32 { return 0x00010006; }
+fn jni_version_1_8() -> i32 { return 0x00010008; }
+fn jni_version_9() -> i32 { return 0x00090000; }
+fn jni_version_10() -> i32 { return 0x000a0000; }
+
+// ==================== JNI Return Codes ====================
+
+fn jni_ok() -> i32 { return 0; }
+fn jni_err() -> i32 { return -1; }
+fn jni_edetached() -> i32 { return -2; }
+fn jni_eversion() -> i32 { return -3; }
+fn jni_enomem() -> i32 { return -4; }
+fn jni_eexist() -> i32 { return -5; }
+fn jni_einval() -> i32 { return -6; }
+
+// ==================== JNI External Functions ====================
+// Link with -ljvm to use these functions
+
+extern "C" {
+    // JVM Creation/Destruction
+    fn JNI_CreateJavaVM(pvm: *void, penv: *void, args: *void) -> i32;
+    fn JNI_GetDefaultJavaVMInitArgs(args: *void) -> i32;
+    fn JNI_GetCreatedJavaVMs(vmBuf: *void, bufLen: i32, nVMs: *i32) -> i32;
+}
+
+// ==================== JNI Wrapper Types ====================
+
+/// JNI Environment wrapper
+pub struct JNIEnv {
+    pub ptr: *void,
+}
+
+/// Java Virtual Machine wrapper  
+pub struct JavaVM {
+    pub ptr: *void,
+}
+
+/// JNI Initialization Arguments
+pub struct JavaVMInitArgs {
+    pub version: i32,
+    pub nOptions: i32,
+    pub options: *void,
+    pub ignoreUnrecognized: u8,
+}
+
+// ==================== JNI Usage Example ====================
+// 
+// To use JNI in AetherLang:
+//
+// 1. Include jni.aeth:
+//    use jni::{jni_version_1_8, jni_ok, JNI_CreateJavaVM, JavaVMInitArgs}
+//
+// 2. Create JVM:
+//    let args: JavaVMInitArgs = JavaVMInitArgs {
+//        version: jni_version_1_8(),
+//        nOptions: 0,
+//        options: 0 as *void,
+//        ignoreUnrecognized: 0,
+//    };
+//    let vm: *void = 0 as *void;
+//    let env: *void = 0 as *void;
+//    let result: i32 = JNI_CreateJavaVM(&vm as *void, &env as *void, &args as *void);
+//
+// 3. Link with: -L$JAVA_HOME/lib/server -ljvm
+
+// ==================== Test ====================
+
+fn main() -> i32 {
+    puts("JNI Module for AetherLang" as *u8)
+    puts("Version: 1.1, 1.2, 1.4, 1.6, 1.8, 9, 10" as *u8)
+    puts("Functions: JNI_CreateJavaVM, JNI_GetDefaultJavaVMInitArgs" as *u8)
+    return 0
+}
