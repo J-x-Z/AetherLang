@@ -254,9 +254,9 @@ impl CCodeGen {
             self.param_types.insert(i, ty.clone());
         }
 
-        // Generate block labels with L_ prefix to avoid C reserved words
+        // Generate block labels with L_ prefix and index to avoid conflicts and C reserved words
         for (i, block) in func.blocks.iter().enumerate() {
-            self.block_labels.insert(i, format!("L_{}", block.label));
+            self.block_labels.insert(i, format!("L_{}_{}", block.label, i));
         }
 
 
@@ -712,6 +712,7 @@ impl CCodeGen {
         self.writeln("#include <stdbool.h>");
         self.writeln("#include <stdio.h>");
         self.writeln("#include <stdlib.h>");
+        self.writeln("#include <string.h>");
         // SIMD headers (platform-specific)
         if self.target_triple.contains("aarch64") || self.target_triple.contains("arm64") || self.target_triple.contains("arm") {
             self.writeln("#include <arm_neon.h>");
@@ -759,9 +760,14 @@ impl CCodeGen {
             self.struct_layouts.insert(struct_def.name.clone(), struct_def.fields.clone());
         }
         
-        // Populate function return types
+        // Populate function return types for internal functions
         for func in &module.functions {
             self.func_ret_types.insert(func.name.clone(), func.ret_type.clone());
+        }
+        
+        // Also register extern function return types
+        for ext in &module.externs {
+            self.func_ret_types.insert(ext.name.clone(), ext.ret_type.clone());
         }
         
         // Forward declarations
