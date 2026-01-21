@@ -434,6 +434,18 @@ impl CCodeGen {
                     "alloc" => ("malloc", false),
                     "free" => ("free", true),
                     "exit" => ("exit", true),
+                    // SIMD intrinsics - map to platform-specific calls
+                    "f32x4_splat" => ("_mm_set1_ps", false),
+                    "f32x4_add" => ("_mm_add_ps", false),
+                    "f32x4_sub" => ("_mm_sub_ps", false),
+                    "f32x4_mul" => ("_mm_mul_ps", false),
+                    "f32x4_div" => ("_mm_div_ps", false),
+                    "f64x2_splat" => ("_mm_set1_pd", false),
+                    "f64x2_add" => ("_mm_add_pd", false),
+                    "f64x2_mul" => ("_mm_mul_pd", false),
+                    "i32x4_splat" => ("_mm_set1_epi32", false),
+                    "i32x4_add" => ("_mm_add_epi32", false),
+                    "i32x4_mul" => ("_mm_mullo_epi32", false),
                     _ => (func.as_str(), false),
                 };
                 
@@ -659,6 +671,12 @@ impl CCodeGen {
         self.writeln("#include <stdbool.h>");
         self.writeln("#include <stdio.h>");
         self.writeln("#include <stdlib.h>");
+        // SIMD headers (platform-specific)
+        if self.target_triple.contains("aarch64") || self.target_triple.contains("arm") {
+            self.writeln("#include <arm_neon.h>");
+        } else {
+            self.writeln("#include <immintrin.h>  /* SSE/AVX */");
+        }
         self.writeln("");
         
         // Runtime support functions

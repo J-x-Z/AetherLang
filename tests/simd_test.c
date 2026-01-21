@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <immintrin.h>  /* SSE/AVX */
 
 /* AetherLang Runtime */
 static void aether_print(const char* s) { printf("%s", s); }
@@ -12,20 +13,46 @@ static void aether_println_i64(int64_t n) { printf("%lld\n", (long long)n); }
 static void aether_assert(bool c) { if(!c) { fprintf(stderr, "Assertion failed\n"); exit(1); } }
 
 /* Struct Definitions */
-__m128 use_vector(__m128);
+__m128 vec_add(__m128, __m128);
+__m128 vec_mul(__m128, __m128);
+__m128 splat_test(float);
 void main(void);
 
-__m128 use_vector(__m128 _arg0) {
+__m128 vec_add(__m128 _arg0, __m128 _arg1) {
     __m128 _t0;
+    __m128 _t1;
+    int64_t _t2;
     
     _t0 = _arg0;
-    return _t0;
+    _t1 = _arg1;
+    _mm_add_ps(_t0, _t1);
+    return _t2;
+}
+
+__m128 vec_mul(__m128 _arg0, __m128 _arg1) {
+    __m128 _t0;
+    __m128 _t1;
+    int64_t _t2;
+    
+    _t0 = _arg0;
+    _t1 = _arg1;
+    _mm_mul_ps(_t0, _t1);
+    return _t2;
+}
+
+__m128 splat_test(float _arg0) {
+    float _t0;
+    int64_t _t1;
+    
+    _t0 = _arg0;
+    _mm_set1_ps(_t0);
+    return _t1;
 }
 
 void main(void) {
     int64_t _t0;
     
-    aether_println("SIMD type f32x4 parsed successfully!");
+    aether_println("SIMD intrinsics test!");
     return;
 }
 
