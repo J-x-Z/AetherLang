@@ -725,6 +725,28 @@ impl IRGenerator {
                         });
                         return Ok(right_val);
                     }
+                    // 4. Assign to Index (ptr[i] = val)
+                    else if let Expr::Index { expr: base_expr, index, .. } = left.as_ref() {
+                        let base_val = self.generate_expr(base_expr)?;
+                        let idx_val = self.generate_expr(index)?;
+                        
+                        // Use GetElementPtr to calculate address
+                        let gep_reg = self.alloc_register();
+                        let elem_ty = IRType::F32; // Default to F32
+                        self.emit_current_with_type(Instruction::GetElementPtr {
+                            dest: gep_reg,
+                            ptr: base_val,
+                            index: idx_val,
+                            elem_ty: elem_ty.clone(),
+                        }, IRType::Ptr(Box::new(elem_ty)));
+                        
+                        // Store to the calculated address
+                        self.emit_current(Instruction::Store {
+                            ptr: Value::Register(gep_reg),
+                            value: right_val.clone(),
+                        });
+                        return Ok(right_val);
+                    }
                     
                     // 4. Fallback: If we get here with Assign, the target is not in locals
                     // This can happen with re-assignment to variables. Handle by storing to the register.
@@ -1234,7 +1256,32 @@ impl IRGenerator {
                      }
                  }
             },
-            Expr::Index { .. } => Ok(Value::Unit),
+            Expr::Index { expr, index, .. } => {
+                // Generate base pointer/array
+                let base_val = self.generate_expr(expr)?;
+                // Generate index
+                let idx_val = self.generate_expr(index)?;
+                
+                // Use GetElementPtr to calculate pointer offset
+                let gep_reg = self.alloc_register();
+                let elem_type = IRType::F32; // Default to F32 for tensor-like usage
+                self.emit_current_with_type(Instruction::GetElementPtr {
+                    dest: gep_reg,
+                    ptr: base_val,
+                    index: idx_val,
+                    elem_ty: elem_type.clone(),
+                }, IRType::Ptr(Box::new(elem_type.clone())));
+                
+                // Load the element
+                let dest = self.alloc_register();
+                self.emit_current_with_type(Instruction::Load {
+                    dest,
+                    ptr: Value::Register(gep_reg),
+                    ty: elem_type.clone(),
+                }, elem_type);
+                
+                Ok(Value::Register(dest))
+            },
             Expr::Ref { .. } => Ok(Value::Unit),
             Expr::Deref { expr: ptr_expr, .. } => {
                 // Generate the pointer value

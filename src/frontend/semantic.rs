@@ -1211,6 +1211,8 @@ impl SemanticAnalyzer {
                 match expr_ty {
                     ResolvedType::Array { elem, .. } => Ok(*elem),
                     ResolvedType::Slice(elem) => Ok(*elem),
+                    // Support pointer indexing: ptr[i] dereferences and offsets
+                    ResolvedType::Pointer(elem) => Ok(*elem),
                     _ => Err(Error::NotIndexable { span: *span }),
                 }
             }
@@ -1425,7 +1427,7 @@ impl SemanticAnalyzer {
     fn literal_type(&self, lit: &Literal) -> ResolvedType {
         match lit {
             Literal::Int(_, _) => ResolvedType::Primitive(PrimitiveType::I64), // Default to i64
-            Literal::Float(_, _) => ResolvedType::Primitive(PrimitiveType::F64),
+            Literal::Float(_, _) => ResolvedType::Primitive(PrimitiveType::F32),
             Literal::String(_, _) => ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8))), // C-style string pointer
             Literal::Char(_, _) => ResolvedType::Primitive(PrimitiveType::Char),
             Literal::Bool(_, _) => ResolvedType::Primitive(PrimitiveType::Bool),

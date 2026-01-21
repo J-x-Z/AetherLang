@@ -35,7 +35,10 @@ pub struct Tensor4D {
 
 // ==================== Tensor Creation ====================
 
-extern "C" fn malloc(size: u64) -> *void
+extern "C" {
+    fn malloc(size: u64) -> *void;
+    fn exp(x: f64) -> f64;
+}
 
 pub fn tensor1d_new(size: i32) -> Tensor1D {
     let bytes = size * 4  // f32 = 4 bytes
