@@ -1,6 +1,11 @@
 // AetherLang Matrix Library
 // Generic matrix types with basic linear algebra operations
 
+extern "C" {
+    fn sqrtf(x: f32) -> f32;
+    fn tanf(x: f32) -> f32;
+}
+
 // ==================== Matrix Type ====================
 // Matrix<T, M, N> - M rows, N columns of element type T
 // For now, use concrete types since const generics not fully supported
@@ -145,7 +150,7 @@ pub fn vec3_cross(a: *Vec3, b: *Vec3, out: *Vec3) {
 }
 
 pub fn vec3_length(v: *Vec3) -> f32 {
-    return sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+    return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z)
 }
 
 pub fn vec3_normalize(v: *Vec3, out: *Vec3) {
@@ -179,7 +184,7 @@ pub fn mat4_scale(x: f32, y: f32, z: f32) -> Matrix4x4 {
 // Perspective projection matrix
 pub fn mat4_perspective(fov: f32, aspect: f32, near: f32, far: f32) -> Matrix4x4 {
     let m = mat4_zero()
-    let f = 1.0 / tan(fov / 2.0)
+    let f = 1.0 / tanf(fov / 2.0)
     mat4_set(&m, 0, 0, f / aspect)
     mat4_set(&m, 1, 1, f)
     mat4_set(&m, 2, 2, (far + near) / (near - far))

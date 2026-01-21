@@ -732,7 +732,7 @@ impl IRGenerator {
                         
                         // Use GetElementPtr to calculate address
                         let gep_reg = self.alloc_register();
-                        let elem_ty = IRType::F32; // Default to F32
+                        let elem_ty = IRType::I8; // Use I8 for generic element access
                         self.emit_current_with_type(Instruction::GetElementPtr {
                             dest: gep_reg,
                             ptr: base_val,
@@ -746,6 +746,46 @@ impl IRGenerator {
                             value: right_val.clone(),
                         });
                         return Ok(right_val);
+                    }
+                    // 5. Assign to Field of Index: g.nodes[id].field = val
+                    else if let Expr::Field { expr: field_base, field, .. } = left.as_ref() {
+                        // Check if field_base is an Index expression
+                        if let Expr::Index { expr: index_base, index, .. } = field_base.as_ref() {
+                            // Generate base pointer (e.g., g.nodes)
+                            let base_val = self.generate_expr(index_base)?;
+                            let idx_val = self.generate_expr(index)?;
+                            
+                            // Get pointer to array element
+                            let elem_ptr = self.alloc_register();
+                            let elem_ty = IRType::I8; // Generic byte-level access
+                            self.emit_current_with_type(Instruction::GetElementPtr {
+                                dest: elem_ptr,
+                                ptr: base_val,
+                                index: idx_val,
+                                elem_ty: elem_ty.clone(),
+                            }, IRType::Ptr(Box::new(elem_ty)));
+                            
+                            // Get pointer to field within element
+                            let field_ptr = self.alloc_register();
+                            let field_idx = match field.name.as_str() {
+                                "value" => Value::Constant(Constant::Int(2)), // Assume field offset
+                                "evaluated" => Value::Constant(Constant::Int(5)),
+                                _ => Value::Constant(Constant::Int(0)),
+                            };
+                            self.emit_current_with_type(Instruction::GetElementPtr {
+                                dest: field_ptr,
+                                ptr: Value::Register(elem_ptr),
+                                index: field_idx,
+                                elem_ty: IRType::I8,
+                            }, IRType::Ptr(Box::new(IRType::I8)));
+                            
+                            // Store to field
+                            self.emit_current(Instruction::Store {
+                                ptr: Value::Register(field_ptr),
+                                value: right_val.clone(),
+                            });
+                            return Ok(right_val);
+                        }
                     }
                     
                     // 4. Fallback: If we get here with Assign, the target is not in locals

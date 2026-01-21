@@ -65,15 +65,18 @@ pub fn dual_neg(a: Dual) -> Dual {
 
 // ==================== Math Functions ====================
 
-extern "C" fn exp(x: f64) -> f64
-extern "C" fn log(x: f64) -> f64
-extern "C" fn sin(x: f64) -> f64
-extern "C" fn cos(x: f64) -> f64
-extern "C" fn sqrt(x: f64) -> f64
+extern "C" {
+    fn expf(x: f32) -> f32;
+    fn logf(x: f32) -> f32;
+    fn sinf(x: f32) -> f32;
+    fn cosf(x: f32) -> f32;
+    fn sqrtf(x: f32) -> f32;
+    fn powf(x: f32, y: f32) -> f32;
+}
 
 // Exponential: d(e^x) = e^x * dx
 pub fn dual_exp(a: Dual) -> Dual {
-    let e = exp(a.val as f64) as f32
+    let e = expf(a.val)
     return Dual {
         val: e,
         deriv: e * a.deriv,
@@ -83,7 +86,7 @@ pub fn dual_exp(a: Dual) -> Dual {
 // Natural log: d(ln(x)) = dx / x
 pub fn dual_log(a: Dual) -> Dual {
     return Dual {
-        val: log(a.val as f64) as f32,
+        val: logf(a.val),
         deriv: a.deriv / a.val,
     }
 }
@@ -91,22 +94,22 @@ pub fn dual_log(a: Dual) -> Dual {
 // Sine: d(sin(x)) = cos(x) * dx
 pub fn dual_sin(a: Dual) -> Dual {
     return Dual {
-        val: sin(a.val as f64) as f32,
-        deriv: cos(a.val as f64) as f32 * a.deriv,
+        val: sinf(a.val),
+        deriv: cosf(a.val) * a.deriv,
     }
 }
 
 // Cosine: d(cos(x)) = -sin(x) * dx
 pub fn dual_cos(a: Dual) -> Dual {
     return Dual {
-        val: cos(a.val as f64) as f32,
-        deriv: -sin(a.val as f64) as f32 * a.deriv,
+        val: cosf(a.val),
+        deriv: -sinf(a.val) * a.deriv,
     }
 }
 
 // Square root: d(sqrt(x)) = dx / (2 * sqrt(x))
 pub fn dual_sqrt(a: Dual) -> Dual {
-    let s = sqrt(a.val as f64) as f32
+    let s = sqrtf(a.val)
     return Dual {
         val: s,
         deriv: a.deriv / (2.0 * s),
@@ -115,10 +118,10 @@ pub fn dual_sqrt(a: Dual) -> Dual {
 
 // Power: d(x^n) = n * x^(n-1) * dx
 pub fn dual_pow(a: Dual, n: f32) -> Dual {
-    let p = pow(a.val, n)
+    let p = powf(a.val, n)
     return Dual {
         val: p,
-        deriv: n * pow(a.val, n - 1.0) * a.deriv,
+        deriv: n * powf(a.val, n - 1.0) * a.deriv,
     }
 }
 
@@ -134,7 +137,7 @@ pub fn dual_relu(a: Dual) -> Dual {
 
 // Sigmoid: d(σ(x)) = σ(x) * (1 - σ(x)) * dx
 pub fn dual_sigmoid(a: Dual) -> Dual {
-    let s = 1.0 / (1.0 + exp(-a.val as f64) as f32)
+    let s = 1.0 / (1.0 + expf(-a.val))
     return Dual {
         val: s,
         deriv: s * (1.0 - s) * a.deriv,
@@ -143,7 +146,7 @@ pub fn dual_sigmoid(a: Dual) -> Dual {
 
 // Tanh: d(tanh(x)) = (1 - tanh(x)^2) * dx
 pub fn dual_tanh(a: Dual) -> Dual {
-    let e2x = exp(2.0 * a.val as f64) as f32
+    let e2x = expf(2.0 * a.val)
     let t = (e2x - 1.0) / (e2x + 1.0)
     return Dual {
         val: t,
