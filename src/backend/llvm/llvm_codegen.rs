@@ -30,6 +30,8 @@ pub struct LLVMCodeGen {
     block_map: HashMap<usize, LLVMBasicBlockRef>,
     // Current function being generated
     current_function: Option<LLVMValueRef>,
+    // Allocas for multiply-assigned registers
+    alloca_map: HashMap<Register, LLVMValueRef>,
 }
 
 impl LLVMCodeGen {
@@ -48,6 +50,7 @@ impl LLVMCodeGen {
                 value_map: HashMap::new(),
                 block_map: HashMap::new(),
                 current_function: None,
+                alloca_map: HashMap::new(),
             };
             
             codegen.declare_builtins();
@@ -238,6 +241,42 @@ impl LLVMCodeGen {
                 }
             }
             
+            // Pre-scan: find registers that are assigned multiple times (need alloca)
+            let mut assign_counts: std::collections::HashMap<Register, u32> = std::collections::HashMap::new();
+            for block in &func.blocks {
+                for inst in &block.instructions {
+                    if let Instruction::Assign { dest, .. } = inst {
+                        *assign_counts.entry(*dest).or_insert(0) += 1;
+                    }
+                }
+            }
+            
+            // Create allocas for multiply-assigned registers at function entry
+            let mut alloca_map: std::collections::HashMap<Register, LLVMValueRef> = std::collections::HashMap::new();
+            if !func.blocks.is_empty() {
+                let entry_block = self.block_map[&0];
+                // Position at start of entry block
+                let first_inst = LLVMGetFirstInstruction(entry_block);
+                if !first_inst.is_null() {
+                    LLVMPositionBuilderBefore(self.builder, first_inst);
+                } else {
+                    LLVMPositionBuilderAtEnd(self.builder, entry_block);
+                }
+                
+                for (&reg, &count) in &assign_counts {
+                    if count > 1 {
+                        // Create alloca for this register
+                        let name = CString::new(format!("var_{}", reg.0)).unwrap();
+                        let i64_ty = LLVMInt64TypeInContext(self.context);
+                        let alloca = LLVMBuildAlloca(self.builder, i64_ty, name.as_ptr());
+                        alloca_map.insert(reg, alloca);
+                    }
+                }
+            }
+            
+            // Store alloca_map for use in generate_instruction
+            self.alloca_map = alloca_map;
+            
             // Generate code for each block
             for (i, block) in func.blocks.iter().enumerate() {
                 let llvm_block = self.block_map[&i];
@@ -268,7 +307,29 @@ impl LLVMCodeGen {
             match inst {
                 Instruction::Assign { dest, value } => {
                     let val = self.get_value(value)?;
-                    self.value_map.insert(*dest, val);
+                    
+                    // Check if this register uses alloca (multiply-assigned)
+                    if let Some(&alloca) = self.alloca_map.get(dest) {
+                        // Store to alloca
+                        // Cast val to i64 if needed for consistency
+                        let i64_ty = LLVMInt64TypeInContext(self.context);
+                        let val_ty = LLVMTypeOf(val);
+                        let store_val = if val_ty != i64_ty {
+                            let name = CString::new("").unwrap();
+                            if LLVMGetTypeKind(val_ty) == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind {
+                                LLVMBuildPtrToInt(self.builder, val, i64_ty, name.as_ptr())
+                            } else if LLVMGetTypeKind(val_ty) == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                                LLVMBuildZExt(self.builder, val, i64_ty, name.as_ptr())
+                            } else {
+                                val
+                            }
+                        } else {
+                            val
+                        };
+                        LLVMBuildStore(self.builder, store_val, alloca);
+                    } else {
+                        self.value_map.insert(*dest, val);
+                    }
                 }
                 
                 Instruction::BinOp { dest, op, left, right } => {
@@ -721,6 +782,15 @@ impl LLVMCodeGen {
         unsafe {
             match val {
                 Value::Register(reg) => {
+                    // Check if this register uses alloca (multiply-assigned)
+                    if let Some(&alloca) = self.alloca_map.get(reg) {
+                        // Load from alloca
+                        let name = CString::new("").unwrap();
+                        let i64_ty = LLVMInt64TypeInContext(self.context);
+                        let loaded = LLVMBuildLoad2(self.builder, i64_ty, alloca, name.as_ptr());
+                        return Ok(loaded);
+                    }
+                    
                     self.value_map.get(reg)
                         .copied()
                         .ok_or_else(|| Error::CodeGen(format!("Unknown register: {:?}", reg)))
