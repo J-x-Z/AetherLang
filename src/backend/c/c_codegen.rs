@@ -703,14 +703,19 @@ impl CCodeGen {
         }
         self.writeln("");
         
-        // Runtime support functions
-        self.writeln("/* AetherLang Runtime */");
-        self.writeln("static void aether_print(const char* s) { printf(\"%s\", s); }");
-        self.writeln("static void aether_println(const char* s) { printf(\"%s\\n\", s); }");
-        self.writeln("static void aether_print_i64(int64_t n) { printf(\"%lld\", (long long)n); }");
-        self.writeln("static void aether_println_i64(int64_t n) { printf(\"%lld\\n\", (long long)n); }");
-        self.writeln("static void aether_assert(bool c) { if(!c) { fprintf(stderr, \"Assertion failed\\n\"); exit(1); } }");
-        self.writeln("");
+        // Runtime support functions (skip for no_std)
+        if !module.no_std {
+            self.writeln("/* AetherLang Runtime */");
+            self.writeln("static void aether_print(const char* s) { printf(\"%s\", s); }");
+            self.writeln("static void aether_println(const char* s) { printf(\"%s\\n\", s); }");
+            self.writeln("static void aether_print_i64(int64_t n) { printf(\"%lld\", (long long)n); }");
+            self.writeln("static void aether_println_i64(int64_t n) { printf(\"%lld\\n\", (long long)n); }");
+            self.writeln("static void aether_assert(bool c) { if(!c) { fprintf(stderr, \"Assertion failed\\n\"); exit(1); } }");
+            self.writeln("");
+        } else {
+            self.writeln("/* no_std mode - runtime disabled */");
+            self.writeln("");
+        }
         
         // Struct definitions
         self.writeln("/* Struct Definitions */");

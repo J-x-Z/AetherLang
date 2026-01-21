@@ -39,6 +39,10 @@ pub struct IRModule {
     pub functions: Vec<IRFunction>,
     pub structs: Vec<IRStruct>,
     pub externs: Vec<IRExtern>,
+    /// #![no_std] - disable standard library
+    pub no_std: bool,
+    /// #![no_main] - no default main entry point
+    pub no_main: bool,
 }
 
 /// External function declaration
@@ -56,6 +60,8 @@ impl IRModule {
             functions: Vec::new(),
             structs: Vec::new(),
             externs: Vec::new(),
+            no_std: false,
+            no_main: false,
         }
     }
     

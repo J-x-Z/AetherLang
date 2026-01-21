@@ -9,6 +9,8 @@ use crate::utils::Span;
 #[derive(Debug, Clone)]
 pub struct Program {
     pub items: Vec<Item>,
+    /// Inner attributes: #![no_std], #![no_main], etc.
+    pub inner_attrs: Vec<Annotation>,
 }
 
 /// Top-level items

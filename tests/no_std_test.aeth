@@ -1,0 +1,13 @@
+#![no_std]
+#![no_main]
+
+// Bare-metal kernel entry point
+@naked
+fn _start() {
+    asm!("cli; hlt")
+}
+
+@interrupt
+fn timer_handler() {
+    // Handle timer interrupt
+}

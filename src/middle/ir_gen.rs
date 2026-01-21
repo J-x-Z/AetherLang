@@ -53,8 +53,20 @@ impl IRGenerator {
 
     /// Generate IR for a program
     pub fn generate(&mut self, program: &Program) -> Result<IRModule> {
+        // Process inner attributes: #![no_std], #![no_main]
+        for attr in &program.inner_attrs {
+            match attr.name.name.as_str() {
+                "no_std" => self.module.no_std = true,
+                "no_main" => self.module.no_main = true,
+                _ => {}
+            }
+        }
+        
         // Phase 0: Register C library extern functions for self-hosting
-        self.register_c_library_externs();
+        // Skip if no_std is set
+        if !self.module.no_std {
+            self.register_c_library_externs();
+        }
         
         // Phase 1: Collect all function signatures (for forward reference)
         for item in &program.items {

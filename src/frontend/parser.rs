@@ -100,13 +100,43 @@ impl Parser {
 
     /// Parse a complete program
     pub fn parse_program(&mut self) -> Result<Program> {
+        // Parse inner attributes: #![no_std], #![no_main], etc.
+        let mut inner_attrs = Vec::new();
+        while self.check(&TokenKind::Hash) {
+            if let Some(next) = self.peek() {
+                if next.kind == TokenKind::Not {
+                    inner_attrs.push(self.parse_inner_attribute()?);
+                    continue;
+                }
+            }
+            break;
+        }
+        
         let mut items = Vec::new();
-
         while !self.is_at_end() {
             items.push(self.parse_item()?);
         }
 
-        Ok(Program { items })
+        Ok(Program { items, inner_attrs })
+    }
+    
+    /// Parse inner attribute: #![name]
+    fn parse_inner_attribute(&mut self) -> Result<Annotation> {
+        let start_span = self.current().span;
+        self.expect(TokenKind::Hash)?;
+        self.expect(TokenKind::Not)?;
+        self.expect(TokenKind::LBracket)?;
+        
+        let name = self.parse_ident()?;
+        
+        // Inner attributes like #![no_std] don't need args
+        self.expect(TokenKind::RBracket)?;
+        
+        Ok(Annotation {
+            name,
+            args: Vec::new(),
+            span: start_span.merge(&self.tokens[self.pos.saturating_sub(1)].span),
+        })
     }
 
     /// Parse a top-level item
