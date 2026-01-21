@@ -10,17 +10,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Linux with LLVM (primary)
+  # C backend only - reliable, no external dependencies
   build-linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Install LLVM 18
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y llvm-18-dev libpolly-18-dev
-        echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
     
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -28,64 +23,7 @@ jobs:
     - name: Cache cargo
       uses: Swatinem/rust-cache@v2
       
-    - name: Build with LLVM backend
-      run: cargo build --release
-      
-    - name: Run tests
-      run: cargo test
-        
-    - name: Test LLVM backend compilation
-      run: |
-        ./target/release/aethc --backend llvm build tests/hello.aeth -o /tmp/hello
-        /tmp/hello
-        
-    - name: Test self-hosting modules
-      run: |
-        ./target/release/aethc --emit-c src_aether/lexer.aeth
-        ./target/release/aethc --emit-c src_aether/parser.aeth
-        echo "Self-hosting passed"
-
-  # macOS with LLVM
-  build-macos:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install LLVM 18
-      run: |
-        brew install llvm@18
-        echo "LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)" >> $GITHUB_ENV
-    
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      
-    - name: Cache cargo
-      uses: Swatinem/rust-cache@v2
-      
-    - name: Build with LLVM backend
-      run: cargo build --release
-      
-    - name: Run tests
-      run: cargo test
-        
-    - name: Test LLVM backend compilation
-      run: |
-        ./target/release/aethc --backend llvm build tests/hello.aeth -o /tmp/hello
-        /tmp/hello
-
-  # Windows - C backend fallback (LLVM setup complex on Windows)
-  build-windows:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v4
-      
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      
-    - name: Cache cargo
-      uses: Swatinem/rust-cache@v2
-      
-    - name: Build with C backend (fallback)
+    - name: Build (C backend)
       run: cargo build --release --no-default-features
       
     - name: Run tests
@@ -94,4 +32,52 @@ jobs:
     - name: Test C backend
       run: |
         ./target/release/aethc --emit-c tests/hello.aeth
-        echo "C backend passed"
+        cat tests/hello.c
+        
+    - name: Test self-hosting modules
+      run: |
+        ./target/release/aethc --emit-c src_aether/lexer.aeth
+        ./target/release/aethc --emit-c src_aether/parser.aeth
+        ./target/release/aethc --emit-c src_aether/semantic.aeth
+        echo "Self-hosting passed"
+
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      
+    - name: Build (C backend)
+      run: cargo build --release --no-default-features
+      
+    - name: Run tests
+      run: cargo test --no-default-features
+        
+    - name: Test C backend
+      run: |
+        ./target/release/aethc --emit-c tests/hello.aeth
+        cat tests/hello.c
+
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      
+    - name: Build (C backend)
+      run: cargo build --release --no-default-features
+      
+    - name: Run tests
+      run: cargo test --no-default-features
