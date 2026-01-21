@@ -1,0 +1,109 @@
+// AetherLang Volatile MMIO Library
+// Memory-mapped I/O operations for hardware register access
+
+// ==================== Volatile Read ====================
+
+// Read u8 from MMIO address (volatile)
+@volatile
+pub fn mmio_read_u8(addr: *u8) -> u8 {
+    return __volatile_read_u8(addr)
+}
+
+// Read u16 from MMIO address (volatile)
+@volatile
+pub fn mmio_read_u16(addr: *u16) -> u16 {
+    return __volatile_read_u16(addr)
+}
+
+// Read u32 from MMIO address (volatile)
+@volatile  
+pub fn mmio_read_u32(addr: *u32) -> u32 {
+    return __volatile_read_u32(addr)
+}
+
+// Read u64 from MMIO address (volatile)
+@volatile
+pub fn mmio_read_u64(addr: *u64) -> u64 {
+    return __volatile_read_u64(addr)
+}
+
+// ==================== Volatile Write ====================
+
+// Write u8 to MMIO address (volatile)
+@volatile
+pub fn mmio_write_u8(addr: *u8, val: u8) {
+    __volatile_write_u8(addr, val)
+}
+
+// Write u16 to MMIO address (volatile)
+@volatile
+pub fn mmio_write_u16(addr: *u16, val: u16) {
+    __volatile_write_u16(addr, val)
+}
+
+// Write u32 to MMIO address (volatile)
+@volatile
+pub fn mmio_write_u32(addr: *u32, val: u32) {
+    __volatile_write_u32(addr, val)
+}
+
+// Write u64 to MMIO address (volatile)
+@volatile
+pub fn mmio_write_u64(addr: *u64, val: u64) {
+    __volatile_write_u64(addr, val)
+}
+
+// ==================== I/O Port Access (x86) ====================
+
+// Read byte from I/O port
+pub fn port_in_u8(port: u16) -> u8 {
+    let val: u8 = 0
+    asm!("inb %dx, %al" : "=a"(val) : "d"(port))
+    return val
+}
+
+// Write byte to I/O port
+pub fn port_out_u8(port: u16, val: u8) {
+    asm!("outb %al, %dx" :: "a"(val), "d"(port))
+}
+
+// Read word from I/O port
+pub fn port_in_u16(port: u16) -> u16 {
+    let val: u16 = 0
+    asm!("inw %dx, %ax" : "=a"(val) : "d"(port))
+    return val
+}
+
+// Write word to I/O port
+pub fn port_out_u16(port: u16, val: u16) {
+    asm!("outw %ax, %dx" :: "a"(val), "d"(port))
+}
+
+// Read dword from I/O port
+pub fn port_in_u32(port: u16) -> u32 {
+    let val: u32 = 0
+    asm!("inl %dx, %eax" : "=a"(val) : "d"(port))
+    return val
+}
+
+// Write dword to I/O port
+pub fn port_out_u32(port: u16, val: u32) {
+    asm!("outl %eax, %dx" :: "a"(val), "d"(port))
+}
+
+// ==================== Memory Barrier ====================
+
+// Full memory barrier
+pub fn memory_barrier() {
+    asm!("mfence" ::: "memory")
+}
+
+// Read memory barrier  
+pub fn read_barrier() {
+    asm!("lfence" ::: "memory")
+}
+
+// Write memory barrier
+pub fn write_barrier() {
+    asm!("sfence" ::: "memory")
+}

@@ -87,6 +87,8 @@ pub struct IRFunction {
     pub naked: bool,
     /// Interrupt handler function
     pub interrupt: bool,
+    /// Volatile function - all memory accesses are volatile (for MMIO)
+    pub volatile: bool,
 }
 
 /// Contract expressions for runtime assertion generation
@@ -113,6 +115,7 @@ impl IRFunction {
             simd: false,
             naked: false,
             interrupt: false,
+            volatile: false,
         }
     }
 
