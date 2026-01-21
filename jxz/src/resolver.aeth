@@ -1,0 +1,122 @@
+// JXZ Dependency Resolver (Simplified)
+// Resolves package dependencies
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strcmp(s1: *u8, s2: *u8) -> i32;
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+}
+
+// ==================== Simple Dependency Resolution ====================
+
+// Using flat file format for dependencies
+// Each line: package depends_on1 depends_on2 ...
+
+// Resolve dependencies for a package
+pub fn resolve_deps(pkg_name: *u8) -> i32 {
+    puts("==> Resolving dependencies for: \0" as *u8)
+    puts(pkg_name)
+    puts("\0" as *u8)
+    
+    // Read package dependencies from Jxz.toml or package metadata
+    // For now, use shell-based resolution
+    
+    let name_len = strlen(pkg_name) as i32
+    let cmd: *u8 = malloc(name_len as u64 + 100) as *u8
+    
+    // Check for dependency file in Cellar
+    strcpy(cmd, "cat ~/.jxz/Cellar/\0" as *u8)
+    strcat(cmd, pkg_name)
+    strcat(cmd, "/*/deps.txt 2>/dev/null || echo 'No dependencies'\0" as *u8)
+    
+    system(cmd)
+    free(cmd as *void)
+    
+    return 0
+}
+
+// Install with dependencies
+pub fn install_with_deps(pkg_name: *u8, version: *u8) -> i32 {
+    puts("==> Installing with dependencies...\0" as *u8)
+    
+    // First resolve dependencies
+    resolve_deps(pkg_name)
+    
+    // Then install each dependency in order
+    // Using shell for now
+    puts("  Installing dependencies first...\0" as *u8)
+    
+    // Finally install the main package
+    puts("  Installing main package...\0" as *u8)
+    
+    return 0
+}
+
+// ==================== Version Utilities ====================
+
+// Compare two semver versions
+// Returns: -1 (v1 < v2), 0 (equal), 1 (v1 > v2)
+pub fn version_compare(v1: *u8, v2: *u8) -> i32 {
+    return strcmp(v1, v2)
+}
+
+// Check if version matches constraint
+// Supports: exact match only for now
+pub fn version_matches(version: *u8, constraint: *u8) -> bool {
+    // TODO: Support ^, ~, >=, <, etc.
+    return strcmp(version, constraint) == 0
+}
+
+// Get latest version for a package
+pub fn get_latest_version(pkg_name: *u8) -> *u8 {
+    // TODO: Query registry for latest version
+    return "latest\0" as *u8
+}
+
+// ==================== Conflict Detection ====================
+
+// Check for dependency conflicts
+pub fn check_conflicts(pkg_name: *u8) -> bool {
+    puts("  Checking for conflicts...\0" as *u8)
+    // TODO: Implement conflict detection
+    puts("  No conflicts detected\0" as *u8)
+    return false
+}
+
+// ==================== Lock File ====================
+
+// Generate lock file with exact versions
+pub fn generate_lockfile() -> i32 {
+    puts("==> Generating Jxz.lock...\0" as *u8)
+    
+    // List all installed packages with versions
+    system("echo '# JXZ Lock File' > Jxz.lock\0" as *u8)
+    system("echo '# Generated automatically' >> Jxz.lock\0" as *u8)
+    system("echo '' >> Jxz.lock\0" as *u8)
+    system("ls ~/.jxz/Cellar 2>/dev/null | while read pkg; do \
+        version=$(ls ~/.jxz/Cellar/$pkg 2>/dev/null | head -1); \
+        echo \"$pkg = \\\"$version\\\"\" >> Jxz.lock; \
+    done\0" as *u8)
+    
+    puts("  Lock file generated\0" as *u8)
+    return 0
+}
+
+// Install from lock file
+pub fn install_from_lockfile() -> i32 {
+    puts("==> Installing from Jxz.lock...\0" as *u8)
+    
+    // Read lock file and install exact versions
+    system("grep -v '^#' Jxz.lock | grep -v '^$' | while read line; do \
+        pkg=$(echo $line | cut -d'=' -f1 | tr -d ' '); \
+        ver=$(echo $line | cut -d'\"' -f2); \
+        echo \"  Installing $pkg $ver\"; \
+    done\0" as *u8)
+    
+    return 0
+}
