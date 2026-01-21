@@ -125,15 +125,11 @@ impl IRGenerator {
                     IRType::Void
                 };
                 
-                // Check if this is an sret function
-                let sret_type = if let IRType::Ptr(inner) = &ret_type {
-                    if matches!(inner.as_ref(), IRType::Struct(_)) {
-                        Some(ret_type.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
+                // Check if this is an sret function (direct struct or pointer-to-struct return)
+                let sret_type = match &ret_type {
+                    IRType::Struct(_) => Some(IRType::Ptr(Box::new(ret_type.clone()))),  // Convert to pointer
+                    IRType::Ptr(inner) if matches!(inner.as_ref(), IRType::Struct(_)) => Some(ret_type.clone()),
+                    _ => None,
                 };
                 
                 self.function_signatures.insert(func_name, (ret_type, sret_type));
@@ -148,14 +144,11 @@ impl IRGenerator {
                         IRType::Void
                     };
                     
-                    let sret_type = if let IRType::Ptr(inner) = &ret_type {
-                        if matches!(inner.as_ref(), IRType::Struct(_)) {
-                            Some(ret_type.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
+                    // Check if this is an sret function (direct struct or pointer-to-struct return)
+                    let sret_type = match &ret_type {
+                        IRType::Struct(_) => Some(IRType::Ptr(Box::new(ret_type.clone()))),
+                        IRType::Ptr(inner) if matches!(inner.as_ref(), IRType::Struct(_)) => Some(ret_type.clone()),
+                        _ => None,
                     };
                     
                     self.function_signatures.insert(func_name, (ret_type, sret_type));
@@ -354,17 +347,29 @@ impl IRGenerator {
         };
         
         // Check if this function returns a struct (sret calling convention)
-        let uses_sret = if let IRType::Ptr(inner) = &ret_type {
-            matches!(inner.as_ref(), IRType::Struct(_))
+        // Both direct struct returns and pointer-to-struct returns use sret
+        let uses_sret = match &ret_type {
+            IRType::Struct(_) => true,  // Direct struct return
+            IRType::Ptr(inner) => matches!(inner.as_ref(), IRType::Struct(_)),  // Ptr(Struct)
+            _ => false,
+        };
+        // Debug: panic on specific function to confirm sret detection
+        if name == "config_default" {
+        }
+        
+        // For sret functions, convert return type to pointer and add as first param
+        let sret_ret_type = if uses_sret && !matches!(&ret_type, IRType::Ptr(_)) {
+            // Direct struct -> convert to pointer
+            IRType::Ptr(Box::new(ret_type.clone()))
         } else {
-            false
+            ret_type.clone()
         };
         
         // For sret functions, add implicit sret parameter at position 0
         // and change return type to void
         let actual_ret_type = if uses_sret {
             // Insert sret pointer as first parameter
-            params.insert(0, ("__sret".to_string(), ret_type.clone()));
+            params.insert(0, ("__sret".to_string(), sret_ret_type.clone()));
             IRType::Void
         } else {
             ret_type.clone()
@@ -373,7 +378,7 @@ impl IRGenerator {
         let mut ir_func = IRFunction::new(name, params.clone(), actual_ret_type);
         // Mark as sret function if it returns a struct
         if uses_sret {
-            ir_func.sret_type = Some(ret_type.clone());
+            ir_func.sret_type = Some(sret_ret_type.clone());
         }
         let entry_block = ir_func.add_block("entry");
         self.current_block = entry_block;
@@ -434,9 +439,10 @@ impl IRGenerator {
         self.next_register = 0;
         self.locals.clear();
         self.reg_types.clear();
+        self.sret_ptr = None;
 
         // Convert parameters
-        let params: Vec<(String, IRType)> = func.params.iter()
+        let mut params: Vec<(String, IRType)> = func.params.iter()
             .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
             .collect();
             
@@ -446,7 +452,34 @@ impl IRGenerator {
             IRType::Void
         };
 
-        let mut ir_func = IRFunction::new(&func.name.name, params.clone(), ret_type);
+        // Check if this function returns a struct (sret calling convention)
+        let uses_sret = match &ret_type {
+            IRType::Struct(_) => true,
+            IRType::Ptr(inner) => matches!(inner.as_ref(), IRType::Struct(_)),
+            _ => false,
+        };
+        
+        // For sret functions, convert return type to pointer if needed
+        let sret_ret_type = if uses_sret && !matches!(&ret_type, IRType::Ptr(_)) {
+            IRType::Ptr(Box::new(ret_type.clone()))
+        } else {
+            ret_type.clone()
+        };
+        
+        // For sret functions, add implicit sret parameter and change return type
+        let actual_ret_type = if uses_sret {
+            params.insert(0, ("__sret".to_string(), sret_ret_type.clone()));
+            IRType::Void
+        } else {
+            ret_type.clone()
+        };
+
+        let mut ir_func = IRFunction::new(&func.name.name, params.clone(), actual_ret_type);
+        
+        // Mark as sret function
+        if uses_sret {
+            ir_func.sret_type = Some(sret_ret_type.clone());
+        }
         
         // Check for function annotations (@simd, @naked, @interrupt, @volatile, @gpu)
         for annotation in &func.annotations {
@@ -476,6 +509,11 @@ impl IRGenerator {
                     dest: reg,
                     value: Value::Parameter(i),
                 });
+            }
+            
+            // Track sret pointer if this is the __sret parameter
+            if name == "__sret" {
+                self.sret_ptr = Some(Value::Register(reg));
             }
             
             self.locals.insert(name.clone(), (Value::Register(reg), ty.clone()));

@@ -216,6 +216,28 @@ impl LLVMCodeGen {
                 self.value_map.insert(Register(1000 + i), param);
             }
             
+            // Add sret attribute for functions returning structs via pointer
+            // The first parameter named "__sret" gets the sret attribute
+            if func.sret_type.is_some() && !func.params.is_empty() {
+                if let Some((name, _)) = func.params.first() {
+                    if name == "__sret" {
+                        // Parameter index 0 is for return value, 1 is first param
+                        let sret_attr_kind = llvm_sys::core::LLVMGetEnumAttributeKindForName(
+                            b"sret\0".as_ptr() as *const _,
+                            4
+                        );
+                        if sret_attr_kind != 0 {
+                            let sret_attr = llvm_sys::core::LLVMCreateEnumAttribute(
+                                self.context,
+                                sret_attr_kind,
+                                0
+                            );
+                            llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, 1, sret_attr);
+                        }
+                    }
+                }
+            }
+            
             // Generate code for each block
             for (i, block) in func.blocks.iter().enumerate() {
                 let llvm_block = self.block_map[&i];
