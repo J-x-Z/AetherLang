@@ -140,10 +140,36 @@ fn main() -> i32 { ... }
 |-------|--------|-------------|
 | **P0: Self-Hosting** | ✅ | 5/5 modules, 259 functions compiled |
 | **P1: Core Language** | ✅ | Floats, generics, closures, traits, lifetimes, modules |
-| **P2: Platforms** | 🚧 | Linux, Windows (planned) |
-| **P3: SIMD/Matrix** | 📋 | Vector types, BLAS FFI (planned) |
-| **P4: Kernel Dev** | 📋 | Inline ASM, naked functions (planned) |
-| **P5: AI/GPU** | 📋 | CUDA, Metal, tensors (planned) |
+| **P2: Platforms** | ✅ | Linux, macOS, Windows CI passing |
+| **P3: SIMD/Matrix** | ✅ | Vector types `f32x4`, BLAS FFI, Matrix4x4 |
+| **P4: Kernel Dev** | ✅ | Inline ASM, naked functions, atomic, MMIO |
+| **P5: AI/GPU** | ✅ | CUDA, Metal, Tensor, Autograd |
+
+## 📦 JXZ Package Manager
+
+AetherLang includes **JXZ** - a cross-platform package manager (like Homebrew/Cargo):
+
+```bash
+# Project management
+jxz init          # Create new project
+jxz build         # Build project
+jxz run           # Build and run
+jxz test          # Run tests
+
+# Dependency management
+jxz add <pkg>     # Add dependency
+jxz install       # Install from Jxz.lock
+jxz update        # Update dependencies
+
+# System packages (Homebrew-style)
+jxz install <pkg> # Install to ~/.jxz/Cellar
+jxz search <q>    # Search registry
+jxz list          # List installed
+jxz doctor        # Check for issues
+```
+
+**161 functions** written entirely in AetherLang (self-hosting!)
+
 
 ## 📚 Documentation
 
