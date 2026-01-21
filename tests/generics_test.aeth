@@ -1,0 +1,22 @@
+// Test generic syntax parsing
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// Generic struct
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
+// Generic function (syntax test)
+fn identity<T>(x: T) -> T {
+    return x
+}
+
+fn main() -> i32 {
+    let x: i32 = identity(42)
+    puts("Generics syntax test\0" as *u8)
+    return 0
+}
