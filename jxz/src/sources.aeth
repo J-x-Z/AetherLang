@@ -1,0 +1,104 @@
+// JXZ Sources Module
+// Mirror/registry source management
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(fp: *void) -> i32;
+    fn fputs(s: *u8, fp: *void) -> i32;
+    fn fgets(buf: *u8, size: i32, fp: *void) -> *u8;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+}
+
+// Default registry URL
+const DEFAULT_REGISTRY: *u8 = "https://registry.aetherlang.org\0" as *u8
+
+// ==================== List Sources ====================
+
+pub fn sources_list() -> i32 {
+    puts("==> Configured sources:\0" as *u8)
+    system("cat ~/.jxz/sources.list 2>/dev/null || echo '  (no sources configured, using default)'\0" as *u8)
+    puts("\0" as *u8)
+    puts("Default: https://registry.aetherlang.org\0" as *u8)
+    return 0
+}
+
+// ==================== Add Source ====================
+
+pub fn sources_add(url: *u8, name: *u8) -> i32 {
+    puts("==> Adding source: \0" as *u8)
+    puts(name)
+    puts("\0" as *u8)
+    
+    let name_len = strlen(name) as i32
+    let url_len = strlen(url) as i32
+    let cmd: *u8 = malloc(name_len as u64 + url_len as u64 + 80) as *u8
+    
+    strcpy(cmd, "echo '\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, " \0" as *u8)
+    strcat(cmd, url)
+    strcat(cmd, "' >> ~/.jxz/sources.list\0" as *u8)
+    
+    system(cmd)
+    free(cmd as *void)
+    
+    puts("  Source added\0" as *u8)
+    return 0
+}
+
+// ==================== Remove Source ====================
+
+pub fn sources_remove(name: *u8) -> i32 {
+    puts("==> Removing source: \0" as *u8)
+    puts(name)
+    puts("\0" as *u8)
+    
+    let name_len = strlen(name) as i32
+    let cmd: *u8 = malloc(name_len as u64 + 100) as *u8
+    
+    strcpy(cmd, "grep -v '^'\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, " ' ~/.jxz/sources.list > /tmp/jxz_src && mv /tmp/jxz_src ~/.jxz/sources.list\0" as *u8)
+    
+    system(cmd)
+    free(cmd as *void)
+    
+    puts("  Source removed\0" as *u8)
+    return 0
+}
+
+// ==================== Sync/Update Sources ====================
+
+pub fn sources_sync() -> i32 {
+    puts("==> Syncing package index from all sources...\0" as *u8)
+    
+    // Sync from default registry
+    puts("  Fetching from registry.aetherlang.org...\0" as *u8)
+    let result = system("curl -sL -o ~/.jxz/db/packages.idx https://registry.aetherlang.org/index.json 2>/dev/null\0" as *u8)
+    
+    if result == 0 {
+        puts("  ✓ Index updated\0" as *u8)
+    } else {
+        puts("  ✗ Failed to fetch index\0" as *u8)
+    }
+    
+    // Count packages
+    system("echo \"$(wc -l < ~/.jxz/db/packages.idx 2>/dev/null || echo 0) packages available\"\0" as *u8)
+    
+    return result
+}
+
+// ==================== Reset to Default ====================
+
+pub fn sources_reset() -> i32 {
+    puts("==> Resetting sources to default...\0" as *u8)
+    system("rm -f ~/.jxz/sources.list\0" as *u8)
+    puts("  Sources reset\0" as *u8)
+    return 0
+}

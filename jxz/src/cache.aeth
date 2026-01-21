@@ -1,0 +1,51 @@
+// JXZ Cache Module
+// Download cache management
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+}
+
+// ==================== Cache Commands ====================
+
+// Show cache info
+pub fn cache_info() -> i32 {
+    puts("==> Cache information:\0" as *u8)
+    system("echo \"  Location: ~/.jxz/cache\"\0" as *u8)
+    system("echo \"  Size: $(du -sh ~/.jxz/cache 2>/dev/null | cut -f1 || echo 'N/A')\"\0" as *u8)
+    system("echo \"  Files: $(ls ~/.jxz/cache 2>/dev/null | wc -l || echo 0)\"\0" as *u8)
+    return 0
+}
+
+// List cached packages
+pub fn cache_list() -> i32 {
+    puts("==> Cached packages:\0" as *u8)
+    system("ls -lh ~/.jxz/cache 2>/dev/null | tail -n +2 || echo '  (empty)'\0" as *u8)
+    return 0
+}
+
+// Clean cache
+pub fn cache_clean() -> i32 {
+    puts("==> Cleaning cache...\0" as *u8)
+    system("rm -rf ~/.jxz/cache/*\0" as *u8)
+    puts("  Cache cleaned\0" as *u8)
+    return 0
+}
+
+// Clean old cache (keep latest versions)
+pub fn cache_clean_old() -> i32 {
+    puts("==> Cleaning old cache files...\0" as *u8)
+    // Remove files older than 30 days
+    system("find ~/.jxz/cache -type f -mtime +30 -delete 2>/dev/null\0" as *u8)
+    puts("  Old files removed\0" as *u8)
+    return 0
+}
+
+// Verify cache integrity
+pub fn cache_verify() -> i32 {
+    puts("==> Verifying cache integrity...\0" as *u8)
+    // Check for corrupted archives
+    system("for f in ~/.jxz/cache/*.tar.gz; do [ -f \"$f\" ] && (tar -tzf \"$f\" >/dev/null 2>&1 || echo \"  Corrupted: $f\"); done\0" as *u8)
+    puts("  Verification complete\0" as *u8)
+    return 0
+}

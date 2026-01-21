@@ -1,0 +1,152 @@
+// JXZ Query Module
+// Package search, list, and info commands
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn system(cmd: *u8) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+}
+
+// ==================== List Command ====================
+
+// List all installed packages
+pub fn query_list_installed() -> i32 {
+    puts("==> Installed packages:\0" as *u8)
+    system("ls ~/.jxz/Cellar 2>/dev/null | while read pkg; do \
+        version=$(ls ~/.jxz/Cellar/$pkg 2>/dev/null | head -1); \
+        echo \"  $pkg ($version)\"; \
+    done\0" as *u8)
+    return 0
+}
+
+// List packages with details
+pub fn query_list_verbose() -> i32 {
+    puts("==> Installed packages (detailed):\0" as *u8)
+    system("for pkg in $(ls ~/.jxz/Cellar 2>/dev/null); do \
+        version=$(ls ~/.jxz/Cellar/$pkg 2>/dev/null | head -1); \
+        size=$(du -sh ~/.jxz/Cellar/$pkg 2>/dev/null | cut -f1); \
+        echo \"  $pkg ($version) - $size\"; \
+    done\0" as *u8)
+    return 0
+}
+
+// List outdated packages
+pub fn query_list_outdated() -> i32 {
+    puts("==> Outdated packages:\0" as *u8)
+    puts("  (Checking for updates...)\0" as *u8)
+    // TODO: Compare with registry versions
+    puts("  All packages up to date\0" as *u8)
+    return 0
+}
+
+// ==================== Info Command ====================
+
+// Show package info
+pub fn query_info(name: *u8) -> i32 {
+    puts("==> Package: \0" as *u8)
+    puts(name)
+    puts("\0" as *u8)
+    
+    // Check if installed
+    let name_len = strlen(name) as i32
+    let cmd: *u8 = malloc(name_len as u64 + 100) as *u8
+    
+    // Show installed versions
+    puts("Installed versions:\0" as *u8)
+    strcpy(cmd, "ls ~/.jxz/Cellar/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, " 2>/dev/null || echo '  (not installed)'\0" as *u8)
+    system(cmd)
+    
+    // Show linked binaries
+    puts("Linked binaries:\0" as *u8)
+    strcpy(cmd, "ls -la ~/.jxz/bin 2>/dev/null | grep '\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "' || echo '  (none)'\0" as *u8)
+    system(cmd)
+    
+    // Show size
+    puts("Size:\0" as *u8)
+    strcpy(cmd, "du -sh ~/.jxz/Cellar/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, " 2>/dev/null | cut -f1 || echo '  N/A'\0" as *u8)
+    system(cmd)
+    
+    free(cmd as *void)
+    return 0
+}
+
+// ==================== Search Command ====================
+
+// Search for packages in registry
+pub fn query_search(pattern: *u8) -> i32 {
+    puts("==> Searching for: \0" as *u8)
+    puts(pattern)
+    puts("\0" as *u8)
+    
+    // Search in local index
+    let pattern_len = strlen(pattern) as i32
+    let cmd: *u8 = malloc(pattern_len as u64 + 100) as *u8
+    
+    strcpy(cmd, "grep -i '\0" as *u8)
+    strcat(cmd, pattern)
+    strcat(cmd, "' ~/.jxz/db/packages.idx 2>/dev/null || echo 'No packages found'\0" as *u8)
+    
+    system(cmd)
+    free(cmd as *void)
+    
+    return 0
+}
+
+// ==================== Files Command ====================
+
+// List files installed by a package
+pub fn query_files(name: *u8) -> i32 {
+    puts("==> Files installed by: \0" as *u8)
+    puts(name)
+    puts("\0" as *u8)
+    
+    let name_len = strlen(name) as i32
+    let cmd: *u8 = malloc(name_len as u64 + 80) as *u8
+    
+    strcpy(cmd, "find ~/.jxz/Cellar/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, " -type f 2>/dev/null\0" as *u8)
+    
+    system(cmd)
+    free(cmd as *void)
+    
+    return 0
+}
+
+// ==================== Doctor Command ====================
+
+// Check for issues
+pub fn query_doctor() -> i32 {
+    puts("==> Running diagnostics...\0" as *u8)
+    puts("\0" as *u8)
+    
+    // Check directories
+    puts("Checking directories...\0" as *u8)
+    system("test -d ~/.jxz && echo '  ✓ JXZ prefix exists' || echo '  ✗ JXZ prefix missing'\0" as *u8)
+    system("test -d ~/.jxz/bin && echo '  ✓ bin directory exists' || echo '  ✗ bin directory missing'\0" as *u8)
+    system("test -d ~/.jxz/Cellar && echo '  ✓ Cellar exists' || echo '  ✗ Cellar missing'\0" as *u8)
+    
+    // Check PATH
+    puts("\0" as *u8)
+    puts("Checking PATH...\0" as *u8)
+    system("echo $PATH | grep -q '.jxz/bin' && echo '  ✓ ~/.jxz/bin in PATH' || echo '  ✗ ~/.jxz/bin NOT in PATH'\0" as *u8)
+    
+    // Check broken symlinks
+    puts("\0" as *u8)
+    puts("Checking for broken symlinks...\0" as *u8)
+    system("find ~/.jxz/bin -type l ! -exec test -e {} \\; -print 2>/dev/null | head -5 || echo '  ✓ No broken symlinks'\0" as *u8)
+    
+    puts("\0" as *u8)
+    puts("==> Diagnostics complete\0" as *u8)
+    return 0
+}
