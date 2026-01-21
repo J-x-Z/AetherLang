@@ -1302,9 +1302,20 @@ impl IRGenerator {
                 // Generate index
                 let idx_val = self.generate_expr(index)?;
                 
+                // Infer element type from base type
+                let base_ty = self.get_value_type(&base_val);
+                let elem_type = if let Some(IRType::Ptr(inner)) = base_ty {
+                    // For Ptr(T), element type is T
+                    (*inner).clone()
+                } else if let Some(IRType::Array(inner, _)) = base_ty {
+                    (*inner).clone()
+                } else {
+                    // Fallback to pointer type (for **u8 argv case)
+                    IRType::Ptr(Box::new(IRType::U8))
+                };
+                
                 // Use GetElementPtr to calculate pointer offset
                 let gep_reg = self.alloc_register();
-                let elem_type = IRType::F32; // Default to F32 for tensor-like usage
                 self.emit_current_with_type(Instruction::GetElementPtr {
                     dest: gep_reg,
                     ptr: base_val,
