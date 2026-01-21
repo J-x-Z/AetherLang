@@ -1,0 +1,404 @@
+// AetherLang IR to LLVM Converter
+// Converts AetherLang IR to LLVM IR for native code generation
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+}
+
+// LLVM FFI imports (subset)
+extern "C" {
+    // Context
+    fn LLVMContextCreate() -> *void;
+    fn LLVMContextDispose(ctx: *void);
+    
+    // Module
+    fn LLVMModuleCreateWithNameInContext(name: *u8, ctx: *void) -> *void;
+    fn LLVMDisposeModule(m: *void);
+    fn LLVMSetTarget(m: *void, triple: *u8);
+    fn LLVMPrintModuleToString(m: *void) -> *u8;
+    fn LLVMDisposeMessage(msg: *u8);
+    
+    // Types
+    fn LLVMVoidTypeInContext(ctx: *void) -> *void;
+    fn LLVMInt1TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt8TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt16TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt32TypeInContext(ctx: *void) -> *void;
+    fn LLVMInt64TypeInContext(ctx: *void) -> *void;
+    fn LLVMFloatTypeInContext(ctx: *void) -> *void;
+    fn LLVMDoubleTypeInContext(ctx: *void) -> *void;
+    fn LLVMPointerType(elem: *void, addr_space: u32) -> *void;
+    fn LLVMFunctionType(ret: *void, params: **void, count: u32, vararg: i32) -> *void;
+    
+    // Builder
+    fn LLVMCreateBuilderInContext(ctx: *void) -> *void;
+    fn LLVMDisposeBuilder(b: *void);
+    fn LLVMPositionBuilderAtEnd(b: *void, block: *void);
+    
+    // Functions
+    fn LLVMAddFunction(m: *void, name: *u8, ty: *void) -> *void;
+    fn LLVMGetParam(func: *void, idx: u32) -> *void;
+    
+    // Basic Blocks
+    fn LLVMAppendBasicBlockInContext(ctx: *void, func: *void, name: *u8) -> *void;
+    
+    // Constants
+    fn LLVMConstInt(ty: *void, n: u64, sign_extend: i32) -> *void;
+    fn LLVMConstReal(ty: *void, n: f64) -> *void;
+    fn LLVMConstNull(ty: *void) -> *void;
+    
+    // Instructions - Arithmetic
+    fn LLVMBuildAdd(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildSub(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildMul(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildSDiv(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildSRem(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    
+    // Instructions - Bitwise
+    fn LLVMBuildAnd(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildOr(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildXor(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildShl(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    fn LLVMBuildAShr(b: *void, lhs: *void, rhs: *void, name: *u8) -> *void;
+    
+    // Instructions - Comparison
+    fn LLVMBuildICmp(b: *void, op: i32, lhs: *void, rhs: *void, name: *u8) -> *void;
+    
+    // Instructions - Memory
+    fn LLVMBuildAlloca(b: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildLoad2(b: *void, ty: *void, ptr: *void, name: *u8) -> *void;
+    fn LLVMBuildStore(b: *void, val: *void, ptr: *void) -> *void;
+    fn LLVMBuildGEP2(b: *void, ty: *void, ptr: *void, indices: **void, num: u32, name: *u8) -> *void;
+    
+    // Instructions - Control Flow
+    fn LLVMBuildBr(b: *void, dest: *void) -> *void;
+    fn LLVMBuildCondBr(b: *void, cond: *void, then_bb: *void, else_bb: *void) -> *void;
+    fn LLVMBuildRet(b: *void, val: *void) -> *void;
+    fn LLVMBuildRetVoid(b: *void) -> *void;
+    fn LLVMBuildCall2(b: *void, ty: *void, func: *void, args: **void, num: u32, name: *u8) -> *void;
+    
+    // Instructions - Conversion
+    fn LLVMBuildZExt(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildSExt(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildTrunc(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildBitCast(b: *void, val: *void, ty: *void, name: *u8) -> *void;
+    fn LLVMBuildGlobalStringPtr(b: *void, str: *u8, name: *u8) -> *void;
+    
+    // Target
+    fn LLVMInitializeAllTargetInfos();
+    fn LLVMInitializeAllTargets();
+    fn LLVMInitializeAllTargetMCs();
+    fn LLVMInitializeAllAsmPrinters();
+    fn LLVMGetDefaultTargetTriple() -> *u8;
+    fn LLVMGetTargetFromTriple(triple: *u8, target: **void, error: **u8) -> i32;
+    fn LLVMCreateTargetMachine(
+        target: *void, triple: *u8, cpu: *u8, features: *u8,
+        level: i32, reloc: i32, code_model: i32
+    ) -> *void;
+    fn LLVMTargetMachineEmitToFile(
+        tm: *void, m: *void, filename: *u8, codegen: i32, error: **u8
+    ) -> i32;
+    fn LLVMDisposeTargetMachine(tm: *void);
+}
+
+// ICmp predicates
+const ICMP_EQ: i32 = 32
+const ICMP_NE: i32 = 33
+const ICMP_SGT: i32 = 38
+const ICMP_SGE: i32 = 39
+const ICMP_SLT: i32 = 40
+const ICMP_SLE: i32 = 41
+
+// ==================== IR to LLVM Converter ====================
+
+pub struct IRToLLVM {
+    context: *void,
+    module: *void,
+    builder: *void,
+    current_func: *void,
+    target_triple: *u8,
+    // Value map: register id -> LLVM value (simplified, would need proper map)
+    // Block map: block id -> LLVM basic block
+}
+
+impl IRToLLVM {
+    /// Create a new IR to LLVM converter
+    pub fn new(module_name: *u8, target: *u8) -> IRToLLVM {
+        // Initialize LLVM targets
+        LLVMInitializeAllTargetInfos();
+        LLVMInitializeAllTargets();
+        LLVMInitializeAllTargetMCs();
+        LLVMInitializeAllAsmPrinters();
+        
+        let ctx = LLVMContextCreate();
+        let m = LLVMModuleCreateWithNameInContext(module_name, ctx);
+        let b = LLVMCreateBuilderInContext(ctx);
+        
+        LLVMSetTarget(m, target);
+        
+        return IRToLLVM {
+            context: ctx,
+            module: m,
+            builder: b,
+            current_func: 0 as *void,
+            target_triple: target,
+        };
+    }
+    
+    /// Dispose of resources
+    pub fn dispose(self: *IRToLLVM) {
+        if (*self).builder != (0 as *void) {
+            LLVMDisposeBuilder((*self).builder);
+        }
+        if (*self).module != (0 as *void) {
+            LLVMDisposeModule((*self).module);
+        }
+        if (*self).context != (0 as *void) {
+            LLVMContextDispose((*self).context);
+        }
+    }
+    
+    // ==================== Type Conversion ====================
+    
+    /// Convert IR type ID to LLVM type
+    /// Type IDs: 0=I8, 1=I16, 2=I32, 3=I64, 4=U8..., 8=Bool, 9=Void, 10=Ptr
+    pub fn ir_type_to_llvm(self: *IRToLLVM, type_id: u8) -> *void {
+        let ctx = (*self).context;
+        
+        if type_id == 0 {
+            return LLVMInt8TypeInContext(ctx);
+        } else if type_id == 1 {
+            return LLVMInt16TypeInContext(ctx);
+        } else if type_id == 2 {
+            return LLVMInt32TypeInContext(ctx);
+        } else if type_id == 3 {
+            return LLVMInt64TypeInContext(ctx);
+        } else if type_id == 4 {
+            return LLVMInt8TypeInContext(ctx);  // U8
+        } else if type_id == 5 {
+            return LLVMInt16TypeInContext(ctx); // U16
+        } else if type_id == 6 {
+            return LLVMInt32TypeInContext(ctx); // U32
+        } else if type_id == 7 {
+            return LLVMInt64TypeInContext(ctx); // U64
+        } else if type_id == 8 {
+            return LLVMInt1TypeInContext(ctx);  // Bool
+        } else if type_id == 9 {
+            return LLVMVoidTypeInContext(ctx);  // Void
+        } else if type_id == 10 {
+            // Ptr - default to i8*
+            let i8_ty = LLVMInt8TypeInContext(ctx);
+            return LLVMPointerType(i8_ty, 0);
+        }
+        
+        // Default to i64
+        return LLVMInt64TypeInContext(ctx);
+    }
+    
+    /// Get i64 type
+    pub fn i64_type(self: *IRToLLVM) -> *void {
+        return LLVMInt64TypeInContext((*self).context);
+    }
+    
+    /// Get i32 type
+    pub fn i32_type(self: *IRToLLVM) -> *void {
+        return LLVMInt32TypeInContext((*self).context);
+    }
+    
+    /// Get i1 (bool) type
+    pub fn bool_type(self: *IRToLLVM) -> *void {
+        return LLVMInt1TypeInContext((*self).context);
+    }
+    
+    /// Get void type
+    pub fn void_type(self: *IRToLLVM) -> *void {
+        return LLVMVoidTypeInContext((*self).context);
+    }
+    
+    /// Get pointer type
+    pub fn ptr_type(self: *IRToLLVM, elem: *void) -> *void {
+        return LLVMPointerType(elem, 0);
+    }
+    
+    // ==================== Function Generation ====================
+    
+    /// Add a function to the module
+    pub fn add_function(self: *IRToLLVM, name: *u8, ret_type: *void, param_types: **void, param_count: u32) -> *void {
+        let func_ty = LLVMFunctionType(ret_type, param_types, param_count, 0);
+        let func = LLVMAddFunction((*self).module, name, func_ty);
+        (*self).current_func = func;
+        return func;
+    }
+    
+    /// Create a basic block
+    pub fn create_block(self: *IRToLLVM, name: *u8) -> *void {
+        return LLVMAppendBasicBlockInContext((*self).context, (*self).current_func, name);
+    }
+    
+    /// Position builder at end of block
+    pub fn position_at_end(self: *IRToLLVM, block: *void) {
+        LLVMPositionBuilderAtEnd((*self).builder, block);
+    }
+    
+    // ==================== Instruction Generation ====================
+    
+    /// Generate binary operation
+    /// op: 0=Add, 1=Sub, 2=Mul, 3=Div, 4=Rem, 5=And, 6=Or, 7=Xor, 8=Shl, 9=Shr, 10=Eq, 11=Ne, 12=Lt, 13=Le, 14=Gt, 15=Ge
+    pub fn gen_binop(self: *IRToLLVM, op: u8, lhs: *void, rhs: *void, name: *u8) -> *void {
+        let b = (*self).builder;
+        
+        if op == 0 {
+            return LLVMBuildAdd(b, lhs, rhs, name);
+        } else if op == 1 {
+            return LLVMBuildSub(b, lhs, rhs, name);
+        } else if op == 2 {
+            return LLVMBuildMul(b, lhs, rhs, name);
+        } else if op == 3 {
+            return LLVMBuildSDiv(b, lhs, rhs, name);
+        } else if op == 4 {
+            return LLVMBuildSRem(b, lhs, rhs, name);
+        } else if op == 5 {
+            return LLVMBuildAnd(b, lhs, rhs, name);
+        } else if op == 6 {
+            return LLVMBuildOr(b, lhs, rhs, name);
+        } else if op == 7 {
+            return LLVMBuildXor(b, lhs, rhs, name);
+        } else if op == 8 {
+            return LLVMBuildShl(b, lhs, rhs, name);
+        } else if op == 9 {
+            return LLVMBuildAShr(b, lhs, rhs, name);
+        } else if op == 10 {
+            return LLVMBuildICmp(b, ICMP_EQ, lhs, rhs, name);
+        } else if op == 11 {
+            return LLVMBuildICmp(b, ICMP_NE, lhs, rhs, name);
+        } else if op == 12 {
+            return LLVMBuildICmp(b, ICMP_SLT, lhs, rhs, name);
+        } else if op == 13 {
+            return LLVMBuildICmp(b, ICMP_SLE, lhs, rhs, name);
+        } else if op == 14 {
+            return LLVMBuildICmp(b, ICMP_SGT, lhs, rhs, name);
+        } else if op == 15 {
+            return LLVMBuildICmp(b, ICMP_SGE, lhs, rhs, name);
+        }
+        
+        // Default: add
+        return LLVMBuildAdd(b, lhs, rhs, name);
+    }
+    
+    /// Generate alloca
+    pub fn gen_alloca(self: *IRToLLVM, ty: *void, name: *u8) -> *void {
+        return LLVMBuildAlloca((*self).builder, ty, name);
+    }
+    
+    /// Generate load
+    pub fn gen_load(self: *IRToLLVM, ty: *void, ptr: *void, name: *u8) -> *void {
+        return LLVMBuildLoad2((*self).builder, ty, ptr, name);
+    }
+    
+    /// Generate store
+    pub fn gen_store(self: *IRToLLVM, val: *void, ptr: *void) {
+        LLVMBuildStore((*self).builder, val, ptr);
+    }
+    
+    /// Generate branch
+    pub fn gen_br(self: *IRToLLVM, dest: *void) {
+        LLVMBuildBr((*self).builder, dest);
+    }
+    
+    /// Generate conditional branch
+    pub fn gen_cond_br(self: *IRToLLVM, cond: *void, then_bb: *void, else_bb: *void) {
+        LLVMBuildCondBr((*self).builder, cond, then_bb, else_bb);
+    }
+    
+    /// Generate return
+    pub fn gen_ret(self: *IRToLLVM, val: *void) {
+        LLVMBuildRet((*self).builder, val);
+    }
+    
+    /// Generate return void
+    pub fn gen_ret_void(self: *IRToLLVM) {
+        LLVMBuildRetVoid((*self).builder);
+    }
+    
+    /// Generate function call
+    pub fn gen_call(self: *IRToLLVM, func_ty: *void, func: *void, args: **void, arg_count: u32, name: *u8) -> *void {
+        return LLVMBuildCall2((*self).builder, func_ty, func, args, arg_count, name);
+    }
+    
+    // ==================== Constants ====================
+    
+    /// Generate i64 constant
+    pub fn const_i64(self: *IRToLLVM, n: i64) -> *void {
+        let ty = (*self).i64_type();
+        return LLVMConstInt(ty, n as u64, 1);
+    }
+    
+    /// Generate i32 constant
+    pub fn const_i32(self: *IRToLLVM, n: i32) -> *void {
+        let ty = (*self).i32_type();
+        return LLVMConstInt(ty, n as u64, 1);
+    }
+    
+    /// Generate bool constant
+    pub fn const_bool(self: *IRToLLVM, b: bool) -> *void {
+        let ty = (*self).bool_type();
+        let val: u64 = if b { 1 } else { 0 };
+        return LLVMConstInt(ty, val, 0);
+    }
+    
+    /// Generate global string
+    pub fn const_string(self: *IRToLLVM, s: *u8, name: *u8) -> *void {
+        return LLVMBuildGlobalStringPtr((*self).builder, s, name);
+    }
+    
+    // ==================== Output ====================
+    
+    /// Print LLVM IR to stdout
+    pub fn print_ir(self: *IRToLLVM) {
+        let ir = LLVMPrintModuleToString((*self).module);
+        puts(ir);
+        LLVMDisposeMessage(ir);
+    }
+    
+    /// Get the LLVM module
+    pub fn get_module(self: *IRToLLVM) -> *void {
+        return (*self).module;
+    }
+}
+
+// ==================== Test ====================
+
+fn main() -> i32 {
+    puts("IR to LLVM Converter for AetherLang\0" as *u8);
+    
+    // Create converter
+    let conv = IRToLLVM::new("test_module\0" as *u8, "arm64-apple-macosx\0" as *u8);
+    
+    // Create a simple function: fn add(a: i64, b: i64) -> i64 { return a + b; }
+    let i64_ty = conv.i64_type();
+    let func = conv.add_function("add\0" as *u8, i64_ty, 0 as **void, 0);
+    
+    // Create entry block
+    let entry = conv.create_block("entry\0" as *u8);
+    conv.position_at_end(entry);
+    
+    // Generate: a + b (simplified - would get params)
+    let a = conv.const_i64(10);
+    let b = conv.const_i64(20);
+    let sum = conv.gen_binop(0, a, b, "sum\0" as *u8);
+    
+    // Return sum
+    conv.gen_ret(sum);
+    
+    // Print IR
+    puts("\n--- Generated LLVM IR ---\0" as *u8);
+    conv.print_ir();
+    
+    // Cleanup
+    conv.dispose();
+    
+    puts("\n--- Done ---\0" as *u8);
+    return 0;
+}
