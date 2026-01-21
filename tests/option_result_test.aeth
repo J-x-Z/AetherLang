@@ -1,0 +1,22 @@
+// Test enum and Option/Result types
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+// Option type
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+// Result type  
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+fn main() -> i32 {
+    puts("Enum/Option/Result test\0" as *u8)
+    return 0
+}
