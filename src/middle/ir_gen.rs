@@ -435,6 +435,14 @@ impl IRGenerator {
         };
 
         let mut ir_func = IRFunction::new(&func.name.name, params.clone(), ret_type);
+        
+        // Check for @simd annotation
+        for annotation in &func.annotations {
+            if annotation.name.name == "simd" {
+                ir_func.simd = true;
+            }
+        }
+        
         let entry_block = ir_func.add_block("entry");
         self.current_block = entry_block;
 

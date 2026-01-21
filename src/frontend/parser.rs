@@ -117,6 +117,11 @@ impl Parser {
             attributes.push(self.parse_attribute()?);
         }
         
+        // Collect @annotations (@simd, @inline, etc.)
+        while self.check(&TokenKind::At) {
+            attributes.push(self.parse_annotation()?);
+        }
+        
         // Handle pub modifier - peek ahead to see what comes next
         match self.current_kind() {
             TokenKind::Pub => {
@@ -151,7 +156,11 @@ impl Parser {
                     })
                 }
             }
-            TokenKind::Fn => Ok(Item::Function(self.parse_function()?)),
+            TokenKind::Fn => {
+                let mut func = self.parse_function()?;
+                func.annotations = attributes;
+                Ok(Item::Function(func))
+            }
             TokenKind::Struct => Ok(Item::Struct(self.parse_struct_with_attrs(attributes)?)),
             TokenKind::Enum => Ok(Item::Enum(self.parse_enum()?)),
             TokenKind::Impl => Ok(Item::Impl(self.parse_impl()?)),

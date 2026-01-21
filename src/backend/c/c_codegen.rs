@@ -272,6 +272,14 @@ impl CCodeGen {
             self.writeln(&format!("/* @effects: {} */", effects_str));
         }
         
+        // Generate SIMD vectorization hints for @simd annotated functions
+        if func.simd {
+            self.writeln("/* @simd: auto-vectorization enabled */");
+            self.writeln("#if defined(__GNUC__) || defined(__clang__)");
+            self.writeln("__attribute__((optimize(\"tree-vectorize\")))");
+            self.writeln("#endif");
+        }
+        
         let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
         self.writeln(&format!("{} {}({}) {{", ret_type, func.name, params_str));
         self.indent += 1;

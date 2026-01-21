@@ -81,6 +81,8 @@ pub struct IRFunction {
     pub entry_block: BlockId,
     /// Contract assertions for runtime checking
     pub contracts: IRContracts,
+    /// SIMD annotation - enable auto-vectorization hints
+    pub simd: bool,
 }
 
 /// Contract expressions for runtime assertion generation
@@ -104,6 +106,7 @@ impl IRFunction {
             blocks: Vec::new(),
             entry_block: BlockId(0),
             contracts: IRContracts::default(),
+            simd: false,
         }
     }
 

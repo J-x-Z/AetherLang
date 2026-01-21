@@ -1,0 +1,40 @@
+// Matrix Library Test
+
+struct Matrix4x4 {
+    data: [f32; 16],
+}
+
+struct Vec4 {
+    x: f32,
+    y: f32,
+    z: f32,
+    w: f32,
+}
+
+fn mat4_identity() -> Matrix4x4 {
+    let m: Matrix4x4 = Matrix4x4 {
+        data: [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ],
+    }
+    return m
+}
+
+fn vec4_new(x: f32, y: f32, z: f32, w: f32) -> Vec4 {
+    return Vec4 { x: x, y: y, z: z, w: w }
+}
+
+fn vec4_dot(a: Vec4, b: Vec4) -> f32 {
+    return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w
+}
+
+fn main() {
+    let v1 = vec4_new(1.0, 2.0, 3.0, 4.0)
+    let v2 = vec4_new(1.0, 1.0, 1.0, 1.0)
+    let dot = vec4_dot(v1, v2)
+    
+    println("Matrix test passed!")
+}

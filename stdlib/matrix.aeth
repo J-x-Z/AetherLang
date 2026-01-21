@@ -1,0 +1,189 @@
+// AetherLang Matrix Library
+// Generic matrix types with basic linear algebra operations
+
+// ==================== Matrix Type ====================
+// Matrix<T, M, N> - M rows, N columns of element type T
+// For now, use concrete types since const generics not fully supported
+
+pub struct Matrix4x4 {
+    data: [f32; 16],
+}
+
+pub struct Matrix3x3 {
+    data: [f32; 9],
+}
+
+pub struct Vec4 {
+    x: f32,
+    y: f32,
+    z: f32,
+    w: f32,
+}
+
+pub struct Vec3 {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+// ==================== Matrix4x4 Operations ====================
+
+pub fn mat4_identity() -> Matrix4x4 {
+    let m: Matrix4x4 = Matrix4x4 {
+        data: [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ],
+    }
+    return m
+}
+
+pub fn mat4_zero() -> Matrix4x4 {
+    let m: Matrix4x4 = Matrix4x4 {
+        data: [
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+        ],
+    }
+    return m
+}
+
+// Get element at row, col (0-indexed)
+pub fn mat4_get(m: *Matrix4x4, row: i32, col: i32) -> f32 {
+    let idx = row * 4 + col
+    return m.data[idx]
+}
+
+// Set element at row, col
+pub fn mat4_set(m: *Matrix4x4, row: i32, col: i32, val: f32) {
+    let idx = row * 4 + col
+    m.data[idx] = val
+}
+
+// Matrix-matrix multiplication: C = A * B
+pub fn mat4_mul(a: *Matrix4x4, b: *Matrix4x4, c: *Matrix4x4) {
+    let i: i32 = 0
+    while i < 4 {
+        let j: i32 = 0
+        while j < 4 {
+            let sum: f32 = 0.0
+            let k: i32 = 0
+            while k < 4 {
+                sum = sum + mat4_get(a, i, k) * mat4_get(b, k, j)
+                k = k + 1
+            }
+            mat4_set(c, i, j, sum)
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+// Matrix-vector multiplication: v' = M * v
+pub fn mat4_mul_vec4(m: *Matrix4x4, v: *Vec4, out: *Vec4) {
+    out.x = mat4_get(m, 0, 0) * v.x + mat4_get(m, 0, 1) * v.y + mat4_get(m, 0, 2) * v.z + mat4_get(m, 0, 3) * v.w
+    out.y = mat4_get(m, 1, 0) * v.x + mat4_get(m, 1, 1) * v.y + mat4_get(m, 1, 2) * v.z + mat4_get(m, 1, 3) * v.w
+    out.z = mat4_get(m, 2, 0) * v.x + mat4_get(m, 2, 1) * v.y + mat4_get(m, 2, 2) * v.z + mat4_get(m, 2, 3) * v.w
+    out.w = mat4_get(m, 3, 0) * v.x + mat4_get(m, 3, 1) * v.y + mat4_get(m, 3, 2) * v.z + mat4_get(m, 3, 3) * v.w
+}
+
+// Transpose: M^T
+pub fn mat4_transpose(m: *Matrix4x4, out: *Matrix4x4) {
+    let i: i32 = 0
+    while i < 4 {
+        let j: i32 = 0
+        while j < 4 {
+            mat4_set(out, j, i, mat4_get(m, i, j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+// ==================== Vec4 Operations ====================
+
+pub fn vec4_new(x: f32, y: f32, z: f32, w: f32) -> Vec4 {
+    return Vec4 { x: x, y: y, z: z, w: w }
+}
+
+pub fn vec4_dot(a: *Vec4, b: *Vec4) -> f32 {
+    return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w
+}
+
+pub fn vec4_add(a: *Vec4, b: *Vec4, out: *Vec4) {
+    out.x = a.x + b.x
+    out.y = a.y + b.y
+    out.z = a.z + b.z
+    out.w = a.w + b.w
+}
+
+pub fn vec4_scale(v: *Vec4, s: f32, out: *Vec4) {
+    out.x = v.x * s
+    out.y = v.y * s
+    out.z = v.z * s
+    out.w = v.w * s
+}
+
+// ==================== Vec3 Operations ====================
+
+pub fn vec3_new(x: f32, y: f32, z: f32) -> Vec3 {
+    return Vec3 { x: x, y: y, z: z }
+}
+
+pub fn vec3_dot(a: *Vec3, b: *Vec3) -> f32 {
+    return a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+pub fn vec3_cross(a: *Vec3, b: *Vec3, out: *Vec3) {
+    out.x = a.y * b.z - a.z * b.y
+    out.y = a.z * b.x - a.x * b.z
+    out.z = a.x * b.y - a.y * b.x
+}
+
+pub fn vec3_length(v: *Vec3) -> f32 {
+    return sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+}
+
+pub fn vec3_normalize(v: *Vec3, out: *Vec3) {
+    let len = vec3_length(v)
+    out.x = v.x / len
+    out.y = v.y / len
+    out.z = v.z / len
+}
+
+// ==================== Transformation Matrices ====================
+
+// Translation matrix
+pub fn mat4_translate(x: f32, y: f32, z: f32) -> Matrix4x4 {
+    let m = mat4_identity()
+    mat4_set(&m, 0, 3, x)
+    mat4_set(&m, 1, 3, y)
+    mat4_set(&m, 2, 3, z)
+    return m
+}
+
+// Scale matrix
+pub fn mat4_scale(x: f32, y: f32, z: f32) -> Matrix4x4 {
+    let m = mat4_zero()
+    mat4_set(&m, 0, 0, x)
+    mat4_set(&m, 1, 1, y)
+    mat4_set(&m, 2, 2, z)
+    mat4_set(&m, 3, 3, 1.0)
+    return m
+}
+
+// Perspective projection matrix
+pub fn mat4_perspective(fov: f32, aspect: f32, near: f32, far: f32) -> Matrix4x4 {
+    let m = mat4_zero()
+    let f = 1.0 / tan(fov / 2.0)
+    mat4_set(&m, 0, 0, f / aspect)
+    mat4_set(&m, 1, 1, f)
+    mat4_set(&m, 2, 2, (far + near) / (near - far))
+    mat4_set(&m, 2, 3, 2.0 * far * near / (near - far))
+    mat4_set(&m, 3, 2, -1.0)
+    return m
+}

@@ -1,0 +1,16 @@
+// @simd Annotation Test
+
+@simd
+fn double_values(n: i32) -> i32 {
+    let sum: i32 = 0
+    let i: i32 = 0
+    while i < n {
+        sum = sum + i
+        i = i + 1
+    }
+    return sum
+}
+
+fn main() {
+    println("@simd annotation test!")
+}
