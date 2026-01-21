@@ -364,342 +364,355 @@ fn strcmp_lit(s: *u8, lit: *u8) -> bool {
     ret %3
 }
 
-fn keyword_from_str(s_ptr: **String) -> *TokenKind {
+fn keyword_from_str(__sret: *TokenKind, s_ptr: **String) -> void {
   entry:
     %0 = arg0
-    %1 = %0
-    %3 = load %1
-    %2 = ()
-    %5 = load %1
-    %4 = ()
-    %6 = eq %4 2
-    br %6, bb1, bb2
+    %1 = arg1
+    %2 = %1
+    %4 = load %2
+    %5 = call String_as_ptr(%4)
+    %3 = %5
+    %7 = load %2
+    %8 = call String_len(%7)
+    %6 = %8
+    %10 = cast 2 to U64
+    %9 = eq %6 %10
+    br %9, bb1, bb2
   then:
-    %7 = call strcmp_lit(%2, "fn")
-    br %7, bb4, bb5
+    %11 = call strcmp_lit(%3, "fn")
+    br %11, bb4, bb5
   else:
     br bb3
   merge:
-    %11 = eq %4 3
-    br %11, bb16, bb17
+    %16 = cast 3 to U64
+    %15 = eq %6 %16
+    br %15, bb16, bb17
   then:
-    ret @TokenKind_Fn
+    ret void
   else:
     br bb6
   merge:
-    %8 = call strcmp_lit(%2, "if")
-    br %8, bb7, bb8
+    %12 = call strcmp_lit(%3, "if")
+    br %12, bb7, bb8
   then:
-    ret @TokenKind_If
+    ret void
   else:
     br bb9
   merge:
-    %9 = call strcmp_lit(%2, "in")
-    br %9, bb10, bb11
+    %13 = call strcmp_lit(%3, "in")
+    br %13, bb10, bb11
   then:
-    ret @TokenKind_In
+    ret void
   else:
     br bb12
   merge:
-    %10 = call strcmp_lit(%2, "as")
-    br %10, bb13, bb14
+    %14 = call strcmp_lit(%3, "as")
+    br %14, bb13, bb14
   then:
-    ret @TokenKind_As
+    ret void
   else:
     br bb15
   merge:
     br bb3
   then:
-    %12 = call strcmp_lit(%2, "let")
-    br %12, bb19, bb20
+    %17 = call strcmp_lit(%3, "let")
+    br %17, bb19, bb20
   else:
     br bb18
   merge:
-    %19 = eq %4 4
-    br %19, bb40, bb41
+    %25 = cast 4 to U64
+    %24 = eq %6 %25
+    br %24, bb40, bb41
   then:
-    ret @TokenKind_Let
+    ret void
   else:
     br bb21
   merge:
-    %13 = call strcmp_lit(%2, "mut")
-    br %13, bb22, bb23
+    %18 = call strcmp_lit(%3, "mut")
+    br %18, bb22, bb23
   then:
-    ret @TokenKind_Mut
+    ret void
   else:
     br bb24
   merge:
-    %14 = call strcmp_lit(%2, "for")
-    br %14, bb25, bb26
+    %19 = call strcmp_lit(%3, "for")
+    br %19, bb25, bb26
   then:
-    ret @TokenKind_For
+    ret void
   else:
     br bb27
   merge:
-    %15 = call strcmp_lit(%2, "ref")
-    br %15, bb28, bb29
+    %20 = call strcmp_lit(%3, "ref")
+    br %20, bb28, bb29
   then:
-    ret @TokenKind_Ref
+    ret void
   else:
     br bb30
   merge:
-    %16 = call strcmp_lit(%2, "own")
-    br %16, bb31, bb32
+    %21 = call strcmp_lit(%3, "own")
+    br %21, bb31, bb32
   then:
-    ret @TokenKind_Own
+    ret void
   else:
     br bb33
   merge:
-    %17 = call strcmp_lit(%2, "asm")
-    br %17, bb34, bb35
+    %22 = call strcmp_lit(%3, "asm")
+    br %22, bb34, bb35
   then:
-    ret @TokenKind_Asm
+    ret void
   else:
     br bb36
   merge:
-    %18 = call strcmp_lit(%2, "pub")
-    br %18, bb37, bb38
+    %23 = call strcmp_lit(%3, "pub")
+    br %23, bb37, bb38
   then:
-    ret @TokenKind_Pub
+    ret void
   else:
     br bb39
   merge:
     br bb18
   then:
-    %20 = call strcmp_lit(%2, "else")
-    br %20, bb43, bb44
+    %26 = call strcmp_lit(%3, "else")
+    br %26, bb43, bb44
   else:
     br bb42
   merge:
-    %27 = eq %4 5
-    br %27, bb64, bb65
+    %34 = cast 5 to U64
+    %33 = eq %6 %34
+    br %33, bb64, bb65
   then:
-    ret @TokenKind_Else
+    ret void
   else:
     br bb45
   merge:
-    %21 = call strcmp_lit(%2, "loop")
-    br %21, bb46, bb47
+    %27 = call strcmp_lit(%3, "loop")
+    br %27, bb46, bb47
   then:
-    ret @TokenKind_Loop
+    ret void
   else:
     br bb48
   merge:
-    %22 = call strcmp_lit(%2, "true")
-    br %22, bb49, bb50
+    %28 = call strcmp_lit(%3, "true")
+    br %28, bb49, bb50
   then:
-    ret @TokenKind_True
+    ret void
   else:
     br bb51
   merge:
-    %23 = call strcmp_lit(%2, "enum")
-    br %23, bb52, bb53
+    %29 = call strcmp_lit(%3, "enum")
+    br %29, bb52, bb53
   then:
-    ret @TokenKind_Enum
+    ret void
   else:
     br bb54
   merge:
-    %24 = call strcmp_lit(%2, "impl")
-    br %24, bb55, bb56
+    %30 = call strcmp_lit(%3, "impl")
+    br %30, bb55, bb56
   then:
-    ret @TokenKind_Impl
+    ret void
   else:
     br bb57
   merge:
-    %25 = call strcmp_lit(%2, "type")
-    br %25, bb58, bb59
+    %31 = call strcmp_lit(%3, "type")
+    br %31, bb58, bb59
   then:
-    ret @TokenKind_Type
+    ret void
   else:
     br bb60
   merge:
-    %26 = call strcmp_lit(%2, "pure")
-    br %26, bb61, bb62
+    %32 = call strcmp_lit(%3, "pure")
+    br %32, bb61, bb62
   then:
-    ret @TokenKind_Pure
+    ret void
   else:
     br bb63
   merge:
     br bb42
   then:
-    %28 = call strcmp_lit(%2, "while")
-    br %28, bb67, bb68
+    %35 = call strcmp_lit(%3, "while")
+    br %35, bb67, bb68
   else:
     br bb66
   merge:
-    %36 = eq %4 6
-    br %36, bb91, bb92
+    %44 = cast 6 to U64
+    %43 = eq %6 %44
+    br %43, bb91, bb92
   then:
-    ret @TokenKind_While
+    ret void
   else:
     br bb69
   merge:
-    %29 = call strcmp_lit(%2, "match")
-    br %29, bb70, bb71
+    %36 = call strcmp_lit(%3, "match")
+    br %36, bb70, bb71
   then:
-    ret @TokenKind_Match
+    ret void
   else:
     br bb72
   merge:
-    %30 = call strcmp_lit(%2, "break")
-    br %30, bb73, bb74
+    %37 = call strcmp_lit(%3, "break")
+    br %37, bb73, bb74
   then:
-    ret @TokenKind_Break
+    ret void
   else:
     br bb75
   merge:
-    %31 = call strcmp_lit(%2, "false")
-    br %31, bb76, bb77
+    %38 = call strcmp_lit(%3, "false")
+    br %38, bb76, bb77
   then:
-    ret @TokenKind_False
+    ret void
   else:
     br bb78
   merge:
-    %32 = call strcmp_lit(%2, "const")
-    br %32, bb79, bb80
+    %39 = call strcmp_lit(%3, "const")
+    br %39, bb79, bb80
   then:
-    ret @TokenKind_Const
+    ret void
   else:
     br bb81
   merge:
-    %33 = call strcmp_lit(%2, "trait")
-    br %33, bb82, bb83
+    %40 = call strcmp_lit(%3, "trait")
+    br %40, bb82, bb83
   then:
-    ret @TokenKind_Trait
+    ret void
   else:
     br bb84
   merge:
-    %34 = call strcmp_lit(%2, "where")
-    br %34, bb85, bb86
+    %41 = call strcmp_lit(%3, "where")
+    br %41, bb85, bb86
   then:
-    ret @TokenKind_Where
+    ret void
   else:
     br bb87
   merge:
-    %35 = call strcmp_lit(%2, "union")
-    br %35, bb88, bb89
+    %42 = call strcmp_lit(%3, "union")
+    br %42, bb88, bb89
   then:
-    ret @TokenKind_Union
+    ret void
   else:
     br bb90
   merge:
     br bb66
   then:
-    %37 = call strcmp_lit(%2, "return")
-    br %37, bb94, bb95
+    %45 = call strcmp_lit(%3, "return")
+    br %45, bb94, bb95
   else:
     br bb93
   merge:
-    %44 = eq %4 7
-    br %44, bb115, bb116
+    %53 = cast 7 to U64
+    %52 = eq %6 %53
+    br %52, bb115, bb116
   then:
-    ret @TokenKind_Return
+    ret void
   else:
     br bb96
   merge:
-    %38 = call strcmp_lit(%2, "struct")
-    br %38, bb97, bb98
+    %46 = call strcmp_lit(%3, "struct")
+    br %46, bb97, bb98
   then:
-    ret @TokenKind_Struct
+    ret void
   else:
     br bb99
   merge:
-    %39 = call strcmp_lit(%2, "unsafe")
-    br %39, bb100, bb101
+    %47 = call strcmp_lit(%3, "unsafe")
+    br %47, bb100, bb101
   then:
-    ret @TokenKind_Unsafe
+    ret void
   else:
     br bb102
   merge:
-    %40 = call strcmp_lit(%2, "extern")
-    br %40, bb103, bb104
+    %48 = call strcmp_lit(%3, "extern")
+    br %48, bb103, bb104
   then:
-    ret @TokenKind_Extern
+    ret void
   else:
     br bb105
   merge:
-    %41 = call strcmp_lit(%2, "static")
-    br %41, bb106, bb107
+    %49 = call strcmp_lit(%3, "static")
+    br %49, bb106, bb107
   then:
-    ret @TokenKind_Static
+    ret void
   else:
     br bb108
   merge:
-    %42 = call strcmp_lit(%2, "effect")
-    br %42, bb109, bb110
+    %50 = call strcmp_lit(%3, "effect")
+    br %50, bb109, bb110
   then:
-    ret @TokenKind_Effect
+    ret void
   else:
     br bb111
   merge:
-    %43 = call strcmp_lit(%2, "shared")
-    br %43, bb112, bb113
+    %51 = call strcmp_lit(%3, "shared")
+    br %51, bb112, bb113
   then:
-    ret @TokenKind_Shared
+    ret void
   else:
     br bb114
   merge:
     br bb93
   then:
-    %45 = call strcmp_lit(%2, "ensures")
-    br %45, bb118, bb119
+    %54 = call strcmp_lit(%3, "ensures")
+    br %54, bb118, bb119
   else:
     br bb117
   merge:
-    %46 = eq %4 8
-    br %46, bb121, bb122
+    %56 = cast 8 to U64
+    %55 = eq %6 %56
+    br %55, bb121, bb122
   then:
-    ret @TokenKind_Ensures
+    ret void
   else:
     br bb120
   merge:
     br bb117
   then:
-    %47 = call strcmp_lit(%2, "continue")
-    br %47, bb124, bb125
+    %57 = call strcmp_lit(%3, "continue")
+    br %57, bb124, bb125
   else:
     br bb123
   merge:
-    %50 = eq %4 9
-    br %50, bb133, bb134
+    %61 = cast 9 to U64
+    %60 = eq %6 %61
+    br %60, bb133, bb134
   then:
-    ret @TokenKind_Continue
+    ret void
   else:
     br bb126
   merge:
-    %48 = call strcmp_lit(%2, "requires")
-    br %48, bb127, bb128
+    %58 = call strcmp_lit(%3, "requires")
+    br %58, bb127, bb128
   then:
-    ret @TokenKind_Requires
+    ret void
   else:
     br bb129
   merge:
-    %49 = call strcmp_lit(%2, "volatile")
-    br %49, bb130, bb131
+    %59 = call strcmp_lit(%3, "volatile")
+    br %59, bb130, bb131
   then:
-    ret @TokenKind_Volatile
+    ret void
   else:
     br bb132
   merge:
     br bb123
   then:
-    %51 = call strcmp_lit(%2, "interface")
-    br %51, bb136, bb137
+    %62 = call strcmp_lit(%3, "interface")
+    br %62, bb136, bb137
   else:
     br bb135
   merge:
-    %53 = load %1
-    %54 = call TokenKind_Ident(())
-    ret %54
+    %64 = load %2
+    %65 = alloca String
+    call String_clone(%65, %64)
+    %66 = call TokenKind_Ident(%65)
+    ret void
   then:
-    ret @TokenKind_Interface
+    ret void
   else:
     br bb138
   merge:
-    %52 = call strcmp_lit(%2, "invariant")
-    br %52, bb139, bb140
+    %63 = call strcmp_lit(%3, "invariant")
+    br %63, bb139, bb140
   then:
-    ret @TokenKind_Invariant
+    ret void
   else:
     br bb141
   merge:
@@ -1168,12 +1181,9 @@ fn Lexer_read_identifier(__sret: *Token, self: *Lexer) -> void {
     call String_new(%9)
     %8 = %9
     %10 = 0
-    %12 = cast () to Ptr(Ptr(Struct("String")))
-    %13 = alloca TokenKind
-    call keyword_from_str(%13, %12)
-    %11 = %13
-    %14 = alloca Token
-    call Lexer_make_token(%14, %1, %11)
+    %11 = call TokenKind_Ident(%8)
+    %12 = alloca Token
+    call Lexer_make_token(%12, %1, %11)
     ret void
 }
 

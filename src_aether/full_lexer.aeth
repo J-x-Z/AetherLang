@@ -318,10 +318,7 @@ impl Token {
         Token { kind: kind, span: span }
     }
     
-    /// Create an EOF token
-    pub fn eof(span: Span) -> Token {
-        Token { kind: TokenKind::Eof, span: span }
-    }
+    // Note: eof() removed due to enum variant as value issue in C codegen
 }
 
 /// Helper to compare string with literal

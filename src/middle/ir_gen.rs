@@ -1387,10 +1387,15 @@ impl IRGenerator {
             Expr::Deref { expr: ptr_expr, .. } => {
                 // Generate the pointer value
                 let ptr_val = self.generate_expr(ptr_expr)?;
+                let ptr_ty = self.get_value_type(&ptr_val);
                 
-                // Use U8 as the default element type for pointer dereference
-                // This handles the common case of *u8 pointers (e.g., string access)
-                let elem_type = IRType::U8;
+                // Infer element type from pointer type
+                let elem_type = if let Some(IRType::Ptr(inner)) = ptr_ty {
+                    (*inner).clone()
+                } else {
+                    // Fallback to U8 for unknown pointer types
+                    IRType::U8
+                };
                 
                 // Generate Load instruction
                 let dest = self.alloc_register();
