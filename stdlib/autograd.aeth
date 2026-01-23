@@ -1,188 +1,421 @@
-// AetherLang Autograd Library
-// Automatic differentiation for machine learning
-
-// ==================== Dual Numbers (Forward Mode AD) ====================
-
-// Dual number for forward-mode automatic differentiation
-// value + epsilon * derivative
-pub struct Dual {
-    val: f32,     // Function value
-    deriv: f32,   // Derivative value
-}
-
-// Create a dual number (variable)
-pub fn dual_var(x: f32) -> Dual {
-    return Dual { val: x, deriv: 1.0 }
-}
-
-// Create a dual number (constant)
-pub fn dual_const(x: f32) -> Dual {
-    return Dual { val: x, deriv: 0.0 }
-}
-
-// ==================== Basic Operations ====================
-
-// Addition: d(a + b) = da + db
-pub fn dual_add(a: Dual, b: Dual) -> Dual {
-    return Dual {
-        val: a.val + b.val,
-        deriv: a.deriv + b.deriv,
-    }
-}
-
-// Subtraction: d(a - b) = da - db
-pub fn dual_sub(a: Dual, b: Dual) -> Dual {
-    return Dual {
-        val: a.val - b.val,
-        deriv: a.deriv - b.deriv,
-    }
-}
-
-// Multiplication: d(a * b) = a * db + b * da (product rule)
-pub fn dual_mul(a: Dual, b: Dual) -> Dual {
-    return Dual {
-        val: a.val * b.val,
-        deriv: a.val * b.deriv + a.deriv * b.val,
-    }
-}
-
-// Division: d(a / b) = (da * b - a * db) / b^2 (quotient rule)
-pub fn dual_div(a: Dual, b: Dual) -> Dual {
-    let b2 = b.val * b.val
-    return Dual {
-        val: a.val / b.val,
-        deriv: (a.deriv * b.val - a.val * b.deriv) / b2,
-    }
-}
-
-// Negation: d(-a) = -da
-pub fn dual_neg(a: Dual) -> Dual {
-    return Dual {
-        val: -a.val,
-        deriv: -a.deriv,
-    }
-}
-
-// ==================== Math Functions ====================
+// Automatic Differentiation Library for AetherLang
+// Tape-based reverse-mode autodiff for neural network training
+//
+// Design: Each operation is recorded on a tape, then backward() traverses
+// the tape in reverse order to compute gradients via chain rule.
 
 extern "C" {
-    fn expf(x: f32) -> f32;
-    fn logf(x: f32) -> f32;
-    fn sinf(x: f32) -> f32;
-    fn cosf(x: f32) -> f32;
-    fn sqrtf(x: f32) -> f32;
-    fn powf(x: f32, y: f32) -> f32;
+    fn malloc(size: u64) -> *u8;
+    fn free(ptr: *u8);
+    fn memset(dst: *u8, c: i32, n: u64) -> *u8;
 }
 
-// Exponential: d(e^x) = e^x * dx
-pub fn dual_exp(a: Dual) -> Dual {
-    let e = expf(a.val)
-    return Dual {
-        val: e,
-        deriv: e * a.deriv,
+// ==================== Operation Types ====================
+
+pub const OP_NONE: i32 = 0      // Leaf node (input/parameter)
+pub const OP_ADD: i32 = 1       // z = x + y
+pub const OP_MUL: i32 = 2       // z = x * y
+pub const OP_SUB: i32 = 3       // z = x - y
+pub const OP_DIV: i32 = 4       // z = x / y
+pub const OP_NEG: i32 = 5       // z = -x
+pub const OP_EXP: i32 = 6       // z = exp(x)
+pub const OP_LOG: i32 = 7       // z = log(x)
+pub const OP_POW: i32 = 8       // z = x^y
+pub const OP_RELU: i32 = 9      // z = max(0, x)
+pub const OP_SIGMOID: i32 = 10  // z = 1/(1+exp(-x))
+pub const OP_TANH: i32 = 11     // z = tanh(x)
+pub const OP_SUM: i32 = 12      // z = sum(x)
+pub const OP_MATMUL: i32 = 13   // z = x @ y
+
+// ==================== Value Node ====================
+
+/// A value in the computation graph with gradient tracking
+pub struct Value {
+    pub data: f32,          // Forward value
+    pub grad: f32,          // Gradient (accumulated during backward)
+    pub op: i32,            // Operation that created this value
+    pub parent1: *Value,    // First parent (null for leaves)
+    pub parent2: *Value,    // Second parent (null for unary ops)
+    pub requires_grad: bool, // Whether to track gradients
+}
+
+impl Value {
+    /// Create a new leaf value (parameter or input)
+    pub fn new(data: f32) -> Value {
+        return Value {
+            data: data,
+            grad: 0.0,
+            op: OP_NONE,
+            parent1: 0 as *Value,
+            parent2: 0 as *Value,
+            requires_grad: true,
+        };
+    }
+
+    /// Create a constant (no gradient tracking)
+    pub fn constant(data: f32) -> Value {
+        return Value {
+            data: data,
+            grad: 0.0,
+            op: OP_NONE,
+            parent1: 0 as *Value,
+            parent2: 0 as *Value,
+            requires_grad: false,
+        };
+    }
+
+    /// Zero the gradient
+    pub fn zero_grad(self: *Value) {
+        (*self).grad = 0.0;
     }
 }
 
-// Natural log: d(ln(x)) = dx / x
-pub fn dual_log(a: Dual) -> Dual {
-    return Dual {
-        val: logf(a.val),
-        deriv: a.deriv / a.val,
+// ==================== Forward Operations ====================
+
+/// Addition: z = x + y
+pub fn add(x: *Value, y: *Value) -> Value {
+    return Value {
+        data: (*x).data + (*y).data,
+        grad: 0.0,
+        op: OP_ADD,
+        parent1: x,
+        parent2: y,
+        requires_grad: (*x).requires_grad || (*y).requires_grad,
+    };
+}
+
+/// Multiplication: z = x * y
+pub fn mul(x: *Value, y: *Value) -> Value {
+    return Value {
+        data: (*x).data * (*y).data,
+        grad: 0.0,
+        op: OP_MUL,
+        parent1: x,
+        parent2: y,
+        requires_grad: (*x).requires_grad || (*y).requires_grad,
+    };
+}
+
+/// Subtraction: z = x - y
+pub fn sub(x: *Value, y: *Value) -> Value {
+    return Value {
+        data: (*x).data - (*y).data,
+        grad: 0.0,
+        op: OP_SUB,
+        parent1: x,
+        parent2: y,
+        requires_grad: (*x).requires_grad || (*y).requires_grad,
+    };
+}
+
+/// Negation: z = -x
+pub fn neg(x: *Value) -> Value {
+    return Value {
+        data: 0.0 - (*x).data,
+        grad: 0.0,
+        op: OP_NEG,
+        parent1: x,
+        parent2: 0 as *Value,
+        requires_grad: (*x).requires_grad,
+    };
+}
+
+/// ReLU: z = max(0, x)
+pub fn relu(x: *Value) -> Value {
+    let data: f32 = if (*x).data > 0.0 { (*x).data } else { 0.0 };
+    return Value {
+        data: data,
+        grad: 0.0,
+        op: OP_RELU,
+        parent1: x,
+        parent2: 0 as *Value,
+        requires_grad: (*x).requires_grad,
+    };
+}
+
+/// Sigmoid: z = 1 / (1 + exp(-x))
+pub fn sigmoid(x: *Value) -> Value {
+    // Approximation: sigmoid(x) ≈ 0.5 + 0.5 * tanh(x/2)
+    let half_x: f32 = (*x).data * 0.5;
+    let abs_x: f32 = if half_x < 0.0 { 0.0 - half_x } else { half_x };
+    let tanh_approx: f32 = half_x / (1.0 + abs_x + half_x * half_x / 3.0);
+    let data: f32 = 0.5 + 0.5 * tanh_approx;
+    return Value {
+        data: data,
+        grad: 0.0,
+        op: OP_SIGMOID,
+        parent1: x,
+        parent2: 0 as *Value,
+        requires_grad: (*x).requires_grad,
+    };
+}
+
+/// Tanh: z = tanh(x)
+pub fn tanh(x: *Value) -> Value {
+    let v: f32 = (*x).data;
+    let abs_v: f32 = if v < 0.0 { 0.0 - v } else { v };
+    let data: f32 = v / (1.0 + abs_v + v * v / 3.0);
+    return Value {
+        data: data,
+        grad: 0.0,
+        op: OP_TANH,
+        parent1: x,
+        parent2: 0 as *Value,
+        requires_grad: (*x).requires_grad,
+    };
+}
+
+// ==================== Backward Pass ====================
+
+/// Compute gradients for a single node (local backward)
+pub fn backward_node(node: *Value) {
+    let op: i32 = (*node).op;
+    let grad: f32 = (*node).grad;
+    let p1: *Value = (*node).parent1;
+    let p2: *Value = (*node).parent2;
+
+    if op == OP_NONE {
+        // Leaf node - nothing to propagate
+        return;
+    }
+
+    if op == OP_ADD {
+        // z = x + y  =>  dL/dx = dL/dz, dL/dy = dL/dz
+        if p1 != 0 as *Value && (*p1).requires_grad {
+            (*p1).grad = (*p1).grad + grad;
+        }
+        if p2 != 0 as *Value && (*p2).requires_grad {
+            (*p2).grad = (*p2).grad + grad;
+        }
+    }
+
+    if op == OP_MUL {
+        // z = x * y  =>  dL/dx = dL/dz * y, dL/dy = dL/dz * x
+        if p1 != 0 as *Value && (*p1).requires_grad {
+            (*p1).grad = (*p1).grad + grad * (*p2).data;
+        }
+        if p2 != 0 as *Value && (*p2).requires_grad {
+            (*p2).grad = (*p2).grad + grad * (*p1).data;
+        }
+    }
+
+    if op == OP_SUB {
+        // z = x - y  =>  dL/dx = dL/dz, dL/dy = -dL/dz
+        if p1 != 0 as *Value && (*p1).requires_grad {
+            (*p1).grad = (*p1).grad + grad;
+        }
+        if p2 != 0 as *Value && (*p2).requires_grad {
+            (*p2).grad = (*p2).grad - grad;
+        }
+    }
+
+    if op == OP_NEG {
+        // z = -x  =>  dL/dx = -dL/dz
+        if p1 != 0 as *Value && (*p1).requires_grad {
+            (*p1).grad = (*p1).grad - grad;
+        }
+    }
+
+    if op == OP_RELU {
+        // z = relu(x)  =>  dL/dx = dL/dz if x > 0 else 0
+        if p1 != 0 as *Value && (*p1).requires_grad {
+            if (*p1).data > 0.0 {
+                (*p1).grad = (*p1).grad + grad;
+            }
+            // else: gradient is 0, nothing to add
+        }
+    }
+
+    if op == OP_SIGMOID {
+        // z = sigmoid(x)  =>  dL/dx = dL/dz * z * (1 - z)
+        if p1 != 0 as *Value && (*p1).requires_grad {
+            let z: f32 = (*node).data;
+            (*p1).grad = (*p1).grad + grad * z * (1.0 - z);
+        }
+    }
+
+    if op == OP_TANH {
+        // z = tanh(x)  =>  dL/dx = dL/dz * (1 - z^2)
+        if p1 != 0 as *Value && (*p1).requires_grad {
+            let z: f32 = (*node).data;
+            (*p1).grad = (*p1).grad + grad * (1.0 - z * z);
+        }
     }
 }
 
-// Sine: d(sin(x)) = cos(x) * dx
-pub fn dual_sin(a: Dual) -> Dual {
-    return Dual {
-        val: sinf(a.val),
-        deriv: cosf(a.val) * a.deriv,
+// ==================== Tape for Automatic Backward ====================
+
+/// Maximum number of operations in a tape
+pub const TAPE_MAX_SIZE: u64 = 1024
+
+/// Computation tape for recording operations
+pub struct Tape {
+    pub nodes: *Value,      // Array of value nodes
+    pub len: u64,           // Number of nodes
+    pub cap: u64,           // Capacity
+}
+
+impl Tape {
+    /// Create a new empty tape
+    pub fn new() -> Tape {
+        let size: u64 = TAPE_MAX_SIZE * 48;  // sizeof(Value) ≈ 48
+        let nodes: *Value = malloc(size) as *Value;
+        memset(nodes as *u8, 0, size);
+        return Tape {
+            nodes: nodes,
+            len: 0,
+            cap: TAPE_MAX_SIZE,
+        };
+    }
+
+    /// Add a value to the tape, returns pointer to stored value
+    pub fn push(self: *Tape, v: Value) -> *Value {
+        if (*self).len >= (*self).cap {
+            // Tape full - just return null (should handle error)
+            return 0 as *Value;
+        }
+        let idx: u64 = (*self).len;
+        let ptr: *Value = ((*self).nodes as u64 + idx * 48) as *Value;
+        *ptr = v;
+        (*self).len = (*self).len + 1;
+        return ptr;
+    }
+
+    /// Create a leaf value and add to tape
+    pub fn var(self: *Tape, data: f32) -> *Value {
+        return (*self).push(Value::new(data));
+    }
+
+    /// Create a constant and add to tape
+    pub fn const_val(self: *Tape, data: f32) -> *Value {
+        return (*self).push(Value::constant(data));
+    }
+
+    /// Zero all gradients in the tape
+    pub fn zero_grad(self: *Tape) {
+        let mut i: u64 = 0;
+        while i < (*self).len {
+            let ptr: *Value = ((*self).nodes as u64 + i * 48) as *Value;
+            (*ptr).grad = 0.0;
+            i = i + 1;
+        }
+    }
+
+    /// Run backward pass from a loss value
+    /// The loss should be the last value added to tape
+    pub fn backward(self: *Tape, loss: *Value) {
+        // Set gradient of loss to 1.0
+        (*loss).grad = 1.0;
+
+        // Traverse tape in reverse order
+        let mut i: u64 = (*self).len;
+        while i > 0 {
+            i = i - 1;
+            let ptr: *Value = ((*self).nodes as u64 + i * 48) as *Value;
+            backward_node(ptr);
+        }
+    }
+
+    /// Free tape memory
+    pub fn drop(self: *Tape) {
+        free((*self).nodes as *u8);
     }
 }
 
-// Cosine: d(cos(x)) = -sin(x) * dx
-pub fn dual_cos(a: Dual) -> Dual {
-    return Dual {
-        val: cosf(a.val),
-        deriv: -sinf(a.val) * a.deriv,
-    }
+// ==================== Tape Operations ====================
+
+/// Add with tape recording
+pub fn tape_add(tape: *Tape, x: *Value, y: *Value) -> *Value {
+    let result: Value = add(x, y);
+    return (*tape).push(result);
 }
 
-// Square root: d(sqrt(x)) = dx / (2 * sqrt(x))
-pub fn dual_sqrt(a: Dual) -> Dual {
-    let s = sqrtf(a.val)
-    return Dual {
-        val: s,
-        deriv: a.deriv / (2.0 * s),
-    }
+/// Multiply with tape recording
+pub fn tape_mul(tape: *Tape, x: *Value, y: *Value) -> *Value {
+    let result: Value = mul(x, y);
+    return (*tape).push(result);
 }
 
-// Power: d(x^n) = n * x^(n-1) * dx
-pub fn dual_pow(a: Dual, n: f32) -> Dual {
-    let p = powf(a.val, n)
-    return Dual {
-        val: p,
-        deriv: n * powf(a.val, n - 1.0) * a.deriv,
-    }
+/// Subtract with tape recording
+pub fn tape_sub(tape: *Tape, x: *Value, y: *Value) -> *Value {
+    let result: Value = sub(x, y);
+    return (*tape).push(result);
 }
 
-// ==================== Activation Functions ====================
-
-// ReLU: d(max(0, x)) = 1 if x > 0 else 0
-pub fn dual_relu(a: Dual) -> Dual {
-    if a.val > 0.0 {
-        return a
-    }
-    return Dual { val: 0.0, deriv: 0.0 }
+/// ReLU with tape recording
+pub fn tape_relu(tape: *Tape, x: *Value) -> *Value {
+    let result: Value = relu(x);
+    return (*tape).push(result);
 }
 
-// Sigmoid: d(σ(x)) = σ(x) * (1 - σ(x)) * dx
-pub fn dual_sigmoid(a: Dual) -> Dual {
-    let s = 1.0 / (1.0 + expf(-a.val))
-    return Dual {
-        val: s,
-        deriv: s * (1.0 - s) * a.deriv,
-    }
+/// Sigmoid with tape recording
+pub fn tape_sigmoid(tape: *Tape, x: *Value) -> *Value {
+    let result: Value = sigmoid(x);
+    return (*tape).push(result);
 }
 
-// Tanh: d(tanh(x)) = (1 - tanh(x)^2) * dx
-pub fn dual_tanh(a: Dual) -> Dual {
-    let e2x = expf(2.0 * a.val)
-    let t = (e2x - 1.0) / (e2x + 1.0)
-    return Dual {
-        val: t,
-        deriv: (1.0 - t * t) * a.deriv,
-    }
+/// Tanh with tape recording
+pub fn tape_tanh(tape: *Tape, x: *Value) -> *Value {
+    let result: Value = tanh(x);
+    return (*tape).push(result);
 }
 
 // ==================== Loss Functions ====================
 
-// Mean Squared Error derivative: d(0.5 * (pred - target)^2) = (pred - target)
-pub fn mse_grad(pred: f32, target: f32) -> f32 {
-    return pred - target
+/// Mean Squared Error: (pred - target)^2
+pub fn mse_loss(tape: *Tape, pred: *Value, target: *Value) -> *Value {
+    let diff: *Value = tape_sub(tape, pred, target);
+    return tape_mul(tape, diff, diff);
 }
 
-// Cross-entropy derivative (for softmax output)
-pub fn cross_entropy_grad(pred: f32, target: f32) -> f32 {
-    return pred - target
+// ==================== Optimizer ====================
+
+/// SGD update: param = param - lr * grad
+pub fn sgd_step(params: *Value, num_params: u64, lr: f32) {
+    let mut i: u64 = 0;
+    while i < num_params {
+        let ptr: *Value = (params as u64 + i * 48) as *Value;
+        if (*ptr).requires_grad {
+            (*ptr).data = (*ptr).data - lr * (*ptr).grad;
+        }
+        i = i + 1;
+    }
 }
 
-// ==================== Example Usage ====================
+// ==================== Example: Simple Neuron ====================
 
-// Compute f(x) = x^2 + 2x + 1 and its derivative
-pub fn example_derivative(x: f32) -> Dual {
-    let dx = dual_var(x)
-    let two = dual_const(2.0)
-    let one = dual_const(1.0)
-    
-    // x^2
-    let x2 = dual_mul(dx, dx)
-    // 2x
-    let twox = dual_mul(two, dx)
-    // x^2 + 2x
-    let sum1 = dual_add(x2, twox)
-    // x^2 + 2x + 1
-    let result = dual_add(sum1, one)
-    
-    return result
-    // result.val = f(x), result.deriv = f'(x) = 2x + 2
+fn main() {
+    // Create tape
+    let mut tape: Tape = Tape::new();
+
+    // Parameters: w1, w2, b
+    let w1: *Value = tape.var(0.5);
+    let w2: *Value = tape.var(-0.3);
+    let b: *Value = tape.var(0.1);
+
+    // Inputs
+    let x1: *Value = tape.const_val(2.0);
+    let x2: *Value = tape.const_val(3.0);
+
+    // Target
+    let target: *Value = tape.const_val(1.0);
+
+    // Forward: y = sigmoid(w1*x1 + w2*x2 + b)
+    let wx1: *Value = tape_mul(&tape, w1, x1);
+    let wx2: *Value = tape_mul(&tape, w2, x2);
+    let sum1: *Value = tape_add(&tape, wx1, wx2);
+    let sum2: *Value = tape_add(&tape, sum1, b);
+    let pred: *Value = tape_sigmoid(&tape, sum2);
+
+    // Loss: MSE
+    let loss: *Value = mse_loss(&tape, pred, target);
+
+    // Backward
+    tape.backward(loss);
+
+    // Update (SGD)
+    // sgd_step(w1, 3, 0.1);  // Would update w1, w2, b
+
+    // Cleanup
+    tape.drop();
 }
