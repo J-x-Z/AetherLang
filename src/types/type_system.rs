@@ -63,14 +63,71 @@ pub enum ResolvedType {
     Function { params: Vec<ResolvedType>, ret: Box<ResolvedType> },
     /// Generic type instantiation (e.g. Option<i32>)
     Generic(String, Vec<ResolvedType>),
+    /// Generic type instantiation with const args (e.g. Matrix<f32, 3, 3>)
+    GenericWithConsts {
+        name: String,
+        type_args: Vec<ResolvedType>,
+        const_args: Vec<ConstValue>,
+    },
     /// Generic Type Parameter (e.g. T in struct Foo<T>)
     GenericParam(String),
+    /// Const Generic Parameter (e.g. N in struct Array<T, const N: usize>)
+    ConstParam { name: String, ty: Box<ResolvedType> },
     /// String type (pointer to char array)
     String,
     /// SIMD vector type (element type, lane count)
     /// e.g., Vector(F32, 4) = f32x4
     Vector(Box<ResolvedType>, usize),
     Unknown,
+}
+
+/// Compile-time constant value for const generics
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConstValue {
+    /// Integer constant
+    Int(i64),
+    /// Boolean constant
+    Bool(bool),
+    /// Reference to a const parameter
+    Param(String),
+    /// Binary operation on const values
+    BinOp {
+        op: ConstBinOp,
+        lhs: Box<ConstValue>,
+        rhs: Box<ConstValue>,
+    },
+}
+
+/// Binary operations on const values
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConstBinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+}
+
+impl ConstValue {
+    /// Try to evaluate to a concrete integer value
+    pub fn try_eval(&self) -> Option<i64> {
+        match self {
+            ConstValue::Int(n) => Some(*n),
+            ConstValue::Bool(b) => Some(if *b { 1 } else { 0 }),
+            ConstValue::Param(_) => None, // Can't evaluate without context
+            ConstValue::BinOp { op, lhs, rhs } => {
+                let l = lhs.try_eval()?;
+                let r = rhs.try_eval()?;
+                Some(match op {
+                    ConstBinOp::Add => l + r,
+                    ConstBinOp::Sub => l - r,
+                    ConstBinOp::Mul => l * r,
+                    ConstBinOp::Div => l / r,
+                    ConstBinOp::Mod => l % r,
+                })
+            }
+        }
+    }
 }
 
 impl ResolvedType {

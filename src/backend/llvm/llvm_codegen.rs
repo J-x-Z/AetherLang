@@ -240,6 +240,39 @@ impl LLVMCodeGen {
                     }
                 }
             }
+
+            // Add naked attribute if function is marked naked
+            if func.naked {
+                let naked_attr_kind = llvm_sys::core::LLVMGetEnumAttributeKindForName(
+                    b"naked\0".as_ptr() as *const _,
+                    5
+                );
+                if naked_attr_kind != 0 {
+                    let naked_attr = llvm_sys::core::LLVMCreateEnumAttribute(
+                        self.context,
+                        naked_attr_kind,
+                        0
+                    );
+                    // Function index is -1 (LLVMAttributeFunctionIndex)
+                    llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, u32::MAX, naked_attr);
+                }
+            }
+
+            // Add interrupt attribute if function is marked interrupt
+            if func.interrupt {
+                let interrupt_attr_kind = llvm_sys::core::LLVMGetEnumAttributeKindForName(
+                    b"interrupt\0".as_ptr() as *const _,
+                    9
+                );
+                if interrupt_attr_kind != 0 {
+                    let interrupt_attr = llvm_sys::core::LLVMCreateEnumAttribute(
+                        self.context,
+                        interrupt_attr_kind,
+                        0
+                    );
+                    llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, u32::MAX, interrupt_attr);
+                }
+            }
             
             // Pre-scan: find registers that are assigned multiple times (need alloca)
             let mut assign_counts: std::collections::HashMap<Register, u32> = std::collections::HashMap::new();
@@ -558,9 +591,13 @@ impl LLVMCodeGen {
                     // Use the actual element type from IR
                     let elem_ty = self.ir_type_to_llvm(ty);
                     let result = LLVMBuildLoad2(self.builder, elem_ty, ptr_val, name.as_ptr());
+                    // Set volatile if function is marked volatile (for MMIO)
+                    if func.volatile {
+                        LLVMSetVolatile(result, 1);
+                    }
                     self.value_map.insert(*dest, result);
                 }
-                
+
                 Instruction::Store { ptr, value } => {
                     let mut ptr_val = self.get_value(ptr)?;
                     let store_val = self.get_value(value)?;
@@ -572,7 +609,11 @@ impl LLVMCodeGen {
                         let ptr_type = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
                         ptr_val = LLVMBuildIntToPtr(self.builder, ptr_val, ptr_type, name.as_ptr());
                     }
-                    LLVMBuildStore(self.builder, store_val, ptr_val);
+                    let store_inst = LLVMBuildStore(self.builder, store_val, ptr_val);
+                    // Set volatile if function is marked volatile (for MMIO)
+                    if func.volatile {
+                        LLVMSetVolatile(store_inst, 1);
+                    }
                 }
                 
                 Instruction::GetElementPtr { dest, ptr, index, elem_ty } => {
@@ -683,9 +724,117 @@ impl LLVMCodeGen {
                     self.value_map.insert(*dest, result);
                 }
                 
-                Instruction::InlineAsm { .. } => {
-                    // InlineAsm not yet supported in LLVM backend
-                    return Err(Error::CodeGen("InlineAsm not supported".to_string()));
+                Instruction::InlineAsm { template, operands } => {
+                    // Build LLVM inline assembly
+                    // Format: constraints and template for LLVM
+                    let mut inputs: Vec<LLVMValueRef> = Vec::new();
+                    let mut input_constraints = Vec::new();
+                    let mut output_constraints = Vec::new();
+                    let mut clobbers = Vec::new();
+                    let mut output_regs: Vec<Register> = Vec::new();
+
+                    for op in operands {
+                        match op.kind {
+                            IRAsmOperandKind::Input => {
+                                if let Some(ref val) = op.input {
+                                    let llvm_val = self.get_value(val)?;
+                                    inputs.push(llvm_val);
+                                    input_constraints.push(op.constraint.clone());
+                                }
+                            }
+                            IRAsmOperandKind::Output => {
+                                if let Some(reg) = op.output {
+                                    let constraint = if !op.constraint.starts_with('=') {
+                                        format!("={}", op.constraint)
+                                    } else {
+                                        op.constraint.clone()
+                                    };
+                                    output_constraints.push(constraint);
+                                    output_regs.push(reg);
+                                }
+                            }
+                            IRAsmOperandKind::InOut => {
+                                if let Some(reg) = op.output {
+                                    let constraint = if !op.constraint.starts_with('+') {
+                                        format!("+{}", op.constraint)
+                                    } else {
+                                        op.constraint.clone()
+                                    };
+                                    output_constraints.push(constraint);
+                                    output_regs.push(reg);
+                                    if let Some(ref val) = op.input {
+                                        let llvm_val = self.get_value(val)?;
+                                        inputs.push(llvm_val);
+                                    }
+                                }
+                            }
+                            IRAsmOperandKind::Clobber => {
+                                clobbers.push(format!("~{{{}}}", op.constraint));
+                            }
+                        }
+                    }
+
+                    // Build constraint string: "outputs,inputs,clobbers"
+                    let mut all_constraints = Vec::new();
+                    all_constraints.extend(output_constraints.clone());
+                    all_constraints.extend(input_constraints);
+                    all_constraints.extend(clobbers);
+                    let constraints_str = all_constraints.join(",");
+                    let constraints_c = CString::new(constraints_str).unwrap();
+                    let template_c = CString::new(template.as_str()).unwrap();
+
+                    // Determine output type (void if no outputs, i64 for single output, struct for multiple)
+                    let i64_ty = LLVMInt64TypeInContext(self.context);
+                    let void_ty = LLVMVoidTypeInContext(self.context);
+
+                    let ret_ty = if output_regs.is_empty() {
+                        void_ty
+                    } else if output_regs.len() == 1 {
+                        i64_ty
+                    } else {
+                        // Multiple outputs: use struct type
+                        let mut types: Vec<LLVMTypeRef> = vec![i64_ty; output_regs.len()];
+                        LLVMStructTypeInContext(self.context, types.as_mut_ptr(), types.len() as u32, 0)
+                    };
+
+                    // Build function type for inline asm
+                    let mut param_types: Vec<LLVMTypeRef> = inputs.iter().map(|_| i64_ty).collect();
+                    let asm_func_ty = LLVMFunctionType(ret_ty, param_types.as_mut_ptr(), param_types.len() as u32, 0);
+
+                    // Create inline asm value
+                    let asm_val = LLVMGetInlineAsm(
+                        asm_func_ty,
+                        template_c.as_ptr() as *mut i8,
+                        template.len(),
+                        constraints_c.as_ptr() as *mut i8,
+                        constraints_str.len(),
+                        1,  // has_side_effects
+                        0,  // is_align_stack
+                        llvm_sys::LLVMInlineAsmDialect::LLVMInlineAsmDialectATT,
+                        0,  // can_throw
+                    );
+
+                    // Call the inline asm
+                    let name = CString::new("asm_result").unwrap();
+                    let result = LLVMBuildCall2(
+                        self.builder,
+                        asm_func_ty,
+                        asm_val,
+                        inputs.as_mut_ptr(),
+                        inputs.len() as u32,
+                        name.as_ptr(),
+                    );
+
+                    // Store outputs
+                    if output_regs.len() == 1 {
+                        self.value_map.insert(output_regs[0], result);
+                    } else if output_regs.len() > 1 {
+                        for (i, reg) in output_regs.iter().enumerate() {
+                            let extract_name = CString::new(format!("asm_out_{}", i)).unwrap();
+                            let extracted = LLVMBuildExtractValue(self.builder, result, i as u32, extract_name.as_ptr());
+                            self.value_map.insert(*reg, extracted);
+                        }
+                    }
                 }
             }
         }
@@ -1030,12 +1179,16 @@ impl CodeGen for LLVMCodeGen {
                     let mut field_types: Vec<LLVMTypeRef> = ir_struct.fields.iter()
                         .map(|(_, ty)| self.ir_type_to_llvm(ty))
                         .collect();
-                    // Set struct body
+                    // Set struct body with appropriate packing based on repr
+                    let packed = match ir_struct.repr {
+                        StructRepr::Packed => 1,  // packed (no padding)
+                        _ => 0,  // C, Default, Transparent all use natural alignment
+                    };
                     LLVMStructSetBody(
                         struct_ty,
                         field_types.as_mut_ptr(),
                         field_types.len() as u32,
-                        0 // not packed
+                        packed
                     );
                 }
             }

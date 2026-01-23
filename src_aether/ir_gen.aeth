@@ -5,6 +5,16 @@ extern "C" {
     fn puts(s: *u8) -> i32;
 }
 
+// Import AST types
+use ast::{
+    Program, Item, ItemKind,
+    Function, Block, Stmt, StmtKind, StmtList,
+    Expr, ExprKind, ExprList,
+    Literal, LitKind,
+    BinOp as AstBinOp, UnOp,
+    Ident, Type, TypeKind,
+};
+
 // ==================== IR Types ====================
 
 pub enum IRType {
@@ -300,6 +310,86 @@ impl IRModule {
     }
 }
 
+// ==================== Scope Table ====================
+
+const MAX_SCOPE_ENTRIES: u64 = 256
+
+pub struct ScopeEntry {
+    name_ptr: *u8,
+    name_len: u64,
+    reg: u64,
+}
+
+pub struct Scope {
+    entries: [ScopeEntry; 256],
+    len: u64,
+    parent: *Scope,
+}
+
+impl Scope {
+    pub fn new() -> Scope {
+        return Scope {
+            entries: [ScopeEntry { name_ptr: 0 as *u8, name_len: 0, reg: 0 }; 256],
+            len: 0,
+            parent: 0 as *Scope,
+        };
+    }
+
+    pub fn with_parent(parent: *Scope) -> Scope {
+        return Scope {
+            entries: [ScopeEntry { name_ptr: 0 as *u8, name_len: 0, reg: 0 }; 256],
+            len: 0,
+            parent: parent,
+        };
+    }
+
+    pub fn define(self: *Scope, name_ptr: *u8, name_len: u64, reg: u64) {
+        if (*self).len < MAX_SCOPE_ENTRIES {
+            (*self).entries[(*self).len] = ScopeEntry {
+                name_ptr: name_ptr,
+                name_len: name_len,
+                reg: reg,
+            };
+            (*self).len = (*self).len + 1;
+        }
+    }
+
+    pub fn lookup(self: *Scope, name_ptr: *u8, name_len: u64) -> u64 {
+        // Search current scope
+        let mut i: u64 = 0;
+        while i < (*self).len {
+            let entry: ScopeEntry = (*self).entries[i];
+            if entry.name_len == name_len {
+                // Compare names byte by byte
+                let mut match_found: bool = true;
+                let mut j: u64 = 0;
+                while j < name_len {
+                    let a: u8 = *(entry.name_ptr as u64 + j) as *u8;
+                    let b: u8 = *(name_ptr as u64 + j) as *u8;
+                    if a != b {
+                        match_found = false;
+                        break;
+                    }
+                    j = j + 1;
+                }
+                if match_found {
+                    return entry.reg;
+                }
+            }
+            i = i + 1;
+        }
+        // Search parent scope
+        if (*self).parent != (0 as *Scope) {
+            return (*self).parent.lookup(name_ptr, name_len);
+        }
+        return 0; // Not found
+    }
+
+    pub fn clear(self: *Scope) {
+        (*self).len = 0;
+    }
+}
+
 // ==================== IR Generator ====================
 
 pub struct IRGenerator {
@@ -308,6 +398,11 @@ pub struct IRGenerator {
     pub next_block: u64,
     pub current_function: u64,
     pub current_block: u64,
+    // Loop context for break/continue
+    pub loop_exit_block: u64,
+    pub loop_cond_block: u64,
+    // Scope for variable lookup
+    pub scope: Scope,
 }
 
 impl IRGenerator {
@@ -318,6 +413,9 @@ impl IRGenerator {
             next_block: 0,
             current_function: 0,
             current_block: 0,
+            loop_exit_block: 0,
+            loop_cond_block: 0,
+            scope: Scope::new(),
         };
     }
     
@@ -362,19 +460,349 @@ impl IRGenerator {
         return self.generate_function();
     }
     
-    /// Generate IR for a block
+    /// Generate IR for a block with statement list
+    /// stmt_kinds: array of statement kinds (0=Let, 1=Return, 2=Expr, 3=While, 4=For, 5=Loop, 6=Break, 7=Continue)
+    pub fn generate_block_with_stmts(self: &mut IRGenerator, stmt_count: u64) -> Value {
+        let mut last_value: Value = Value::from_const(0);
+        let mut i: u64 = 0;
+
+        while i < stmt_count {
+            // In real impl, would get stmt from AST
+            last_value = self.generate_stmt_kind(0, 0); // placeholder
+            i = i + 1;
+        }
+
+        return last_value;
+    }
+
+    /// Generate IR for a block (compatibility stub)
     pub fn generate_block(self: &mut IRGenerator) -> Value {
-        // Generate each statement
-        // Return the last expression value if any
         return Value::from_const(0);
     }
-    
-    /// Generate IR for a statement
+
+    // ==================== AST-Connected Functions ====================
+
+    /// Generate IR for a Block from AST
+    pub fn generate_block_from_ast(self: &mut IRGenerator, block: *Block) -> Value {
+        if block == (0 as *Block) {
+            return Value::from_const(0);
+        }
+
+        let stmts: *StmtList = (*block).stmts;
+        if stmts == (0 as *StmtList) {
+            return Value::from_const(0);
+        }
+
+        let mut last_value: Value = Value::from_const(0);
+        let mut i: u64 = 0;
+        let len: u64 = (*stmts).len;
+        let data: *Stmt = (*stmts).data;
+
+        while i < len {
+            // Get pointer to i-th statement
+            let stmt_ptr: *Stmt = (data as u64 + i * 80) as *Stmt; // sizeof(Stmt) ≈ 80
+            last_value = self.generate_stmt_from_ast(stmt_ptr);
+            i = i + 1;
+        }
+
+        return last_value;
+    }
+
+    /// Generate IR for a Stmt from AST
+    pub fn generate_stmt_from_ast(self: &mut IRGenerator, stmt: *Stmt) -> Value {
+        if stmt == (0 as *Stmt) {
+            return Value::from_const(0);
+        }
+
+        let kind: StmtKind = (*stmt).kind;
+
+        if kind == StmtKind::Let {
+            // Let statement: alloca + optional store
+            let dest: u64 = self.alloc_reg();
+            let alloca_inst: Instruction = Instruction::alloca(dest);
+            self.emit(alloca_inst);
+
+            // Check if there's an initializer
+            let init_expr: *Expr = (*stmt).let_value;
+            if init_expr != (0 as *Expr) {
+                let init_val: Value = self.generate_expr_from_ast(init_expr);
+                let ptr_val: Value = Value::from_reg(dest);
+                let store_inst: Instruction = Instruction::store(ptr_val, init_val);
+                self.emit(store_inst);
+            }
+
+            // Register variable in scope
+            let var_name: Ident = (*stmt).let_name;
+            self.scope.define(var_name.name, var_name.len, dest);
+
+            return Value::from_reg(dest);
+
+        } else if kind == StmtKind::Return {
+            let ret_expr: *Expr = (*stmt).ret_value;
+            if ret_expr != (0 as *Expr) {
+                let ret_val: Value = self.generate_expr_from_ast(ret_expr);
+                let term: Terminator = Terminator::ret(ret_val);
+                self.set_terminator(term);
+            } else {
+                let term: Terminator = Terminator::ret(Value::from_const(0));
+                self.set_terminator(term);
+            }
+            return Value::from_const(0);
+
+        } else if kind == StmtKind::Expr {
+            let expr: *Expr = (*stmt).expr;
+            if expr != (0 as *Expr) {
+                return self.generate_expr_from_ast(expr);
+            }
+            return Value::from_const(0);
+
+        } else if kind == StmtKind::Break {
+            return self.generate_break();
+
+        } else if kind == StmtKind::Continue {
+            return self.generate_continue();
+
+        } else if kind == StmtKind::Empty {
+            return Value::from_const(0);
+        }
+
+        return Value::from_const(0);
+    }
+
+    /// Generate IR for an Expr from AST
+    pub fn generate_expr_from_ast(self: &mut IRGenerator, expr: *Expr) -> Value {
+        if expr == (0 as *Expr) {
+            return Value::from_const(0);
+        }
+
+        let kind: ExprKind = (*expr).kind;
+
+        if kind == ExprKind::Lit {
+            // Literal expression
+            let lit: Literal = (*expr).lit;
+            if lit.kind == LitKind::Int {
+                return Value::from_const(lit.int_val);
+            } else if lit.kind == LitKind::Bool {
+                let val: i64 = if lit.bool_val { 1 } else { 0 };
+                return Value::from_const(val);
+            }
+            return Value::from_const(0);
+
+        } else if kind == ExprKind::Ident {
+            // Variable reference - lookup in scope
+            let var_name: Ident = (*expr).name;
+            let reg: u64 = self.scope.lookup(var_name.name, var_name.len);
+            if reg != 0 {
+                // Load the variable value
+                let dest: u64 = self.alloc_reg();
+                let ptr_val: Value = Value::from_reg(reg);
+                let load_inst: Instruction = Instruction::load(dest, ptr_val);
+                self.emit(load_inst);
+                return Value::from_reg(dest);
+            }
+            return Value::from_reg(0); // Not found
+
+        } else if kind == ExprKind::Binary {
+            // Binary operation
+            let left: *Expr = (*expr).left;
+            let right: *Expr = (*expr).right;
+            let op: AstBinOp = (*expr).bin_op;
+
+            let left_val: Value = self.generate_expr_from_ast(left);
+            let right_val: Value = self.generate_expr_from_ast(right);
+
+            let dest: u64 = self.alloc_reg();
+            let ir_op: BinOp = self.convert_binop(op);
+            let inst: Instruction = Instruction::binop(dest, ir_op, left_val, right_val);
+            self.emit(inst);
+
+            return Value::from_reg(dest);
+
+        } else if kind == ExprKind::Unary {
+            // Unary operation
+            let operand: *Expr = (*expr).operand;
+            let operand_val: Value = self.generate_expr_from_ast(operand);
+            let dest: u64 = self.alloc_reg();
+            // TODO: Implement unary ops properly
+            return Value::from_reg(dest);
+
+        } else if kind == ExprKind::Call {
+            // Function call
+            let callee: *Expr = (*expr).callee;
+            let args: *ExprList = (*expr).args;
+            let dest: u64 = self.alloc_reg();
+            // TODO: Generate call instruction with args
+            return Value::from_reg(dest);
+
+        } else if kind == ExprKind::Field {
+            // Field access
+            let object: *Expr = (*expr).object;
+            let object_val: Value = self.generate_expr_from_ast(object);
+            let dest: u64 = self.alloc_reg();
+            // TODO: Generate GEP for field
+            return Value::from_reg(dest);
+
+        } else if kind == ExprKind::Index {
+            // Array indexing - use existing generate_index_access
+            return self.generate_index_access();
+
+        } else if kind == ExprKind::If {
+            // If expression
+            let cond: *Expr = (*expr).cond;
+            let then_block: *Block = (*expr).then_block;
+            let else_block: *Block = (*expr).else_block;
+
+            let cond_val: Value = self.generate_expr_from_ast(cond);
+
+            // Create blocks
+            let then_bb: u64 = self.alloc_block();
+            let else_bb: u64 = self.alloc_block();
+            let merge_bb: u64 = self.alloc_block();
+
+            // Conditional branch
+            self.set_terminator(Terminator::cond_branch(cond_val, then_bb, else_bb));
+
+            // Then block
+            self.current_block = then_bb;
+            let then_val: Value = self.generate_block_from_ast(then_block);
+            if !self.has_terminator() {
+                self.set_terminator(Terminator::branch(merge_bb));
+            }
+
+            // Else block
+            self.current_block = else_bb;
+            if else_block != (0 as *Block) {
+                let else_val: Value = self.generate_block_from_ast(else_block);
+            }
+            if !self.has_terminator() {
+                self.set_terminator(Terminator::branch(merge_bb));
+            }
+
+            // Continue at merge
+            self.current_block = merge_bb;
+            return Value::from_const(0); // TODO: PHI node for if-expression value
+
+        } else if kind == ExprKind::While {
+            // While loop
+            let cond: *Expr = (*expr).cond;
+            let body: *Block = (*expr).body;
+
+            let cond_bb: u64 = self.alloc_block();
+            let body_bb: u64 = self.alloc_block();
+            let exit_bb: u64 = self.alloc_block();
+
+            // Save and set loop context
+            let saved_exit: u64 = self.loop_exit_block;
+            let saved_cond: u64 = self.loop_cond_block;
+            self.loop_exit_block = exit_bb;
+            self.loop_cond_block = cond_bb;
+
+            // Branch to condition
+            self.set_terminator(Terminator::branch(cond_bb));
+
+            // Condition block
+            self.current_block = cond_bb;
+            let cond_val: Value = self.generate_expr_from_ast(cond);
+            self.set_terminator(Terminator::cond_branch(cond_val, body_bb, exit_bb));
+
+            // Body block
+            self.current_block = body_bb;
+            self.generate_block_from_ast(body);
+            if !self.has_terminator() {
+                self.set_terminator(Terminator::branch(cond_bb));
+            }
+
+            // Restore loop context
+            self.loop_exit_block = saved_exit;
+            self.loop_cond_block = saved_cond;
+
+            // Continue at exit
+            self.current_block = exit_bb;
+            return Value::from_const(0);
+
+        } else if kind == ExprKind::Block {
+            // Block expression
+            let body: *Block = (*expr).body;
+            return self.generate_block_from_ast(body);
+        }
+
+        return Value::from_const(0);
+    }
+
+    /// Convert AST BinOp to IR BinOp
+    pub fn convert_binop(self: &IRGenerator, op: AstBinOp) -> BinOp {
+        if op == AstBinOp::Add { return BinOp::Add; }
+        else if op == AstBinOp::Sub { return BinOp::Sub; }
+        else if op == AstBinOp::Mul { return BinOp::Mul; }
+        else if op == AstBinOp::Div { return BinOp::Div; }
+        else if op == AstBinOp::Mod { return BinOp::Rem; }
+        else if op == AstBinOp::And { return BinOp::And; }
+        else if op == AstBinOp::Or { return BinOp::Or; }
+        else if op == AstBinOp::Eq { return BinOp::Eq; }
+        else if op == AstBinOp::Ne { return BinOp::Ne; }
+        else if op == AstBinOp::Lt { return BinOp::Lt; }
+        else if op == AstBinOp::Le { return BinOp::Le; }
+        else if op == AstBinOp::Gt { return BinOp::Gt; }
+        else if op == AstBinOp::Ge { return BinOp::Ge; }
+        return BinOp::Add;
+    }
+
+    /// Generate IR for a statement by kind
+    /// kind: 0=Let, 1=Return, 2=Expr, 3=While, 4=For, 5=Loop, 6=Break, 7=Continue
+    pub fn generate_stmt_kind(self: &mut IRGenerator, kind: u8, has_value: u8) -> Value {
+        if kind == 0 {
+            // Let statement: alloca + optional store
+            let dest: u64 = self.alloc_reg();
+            let alloca_inst: Instruction = Instruction::alloca(dest);
+            self.emit(alloca_inst);
+
+            if has_value == 1 {
+                // Would generate init expr and store
+                let init_val: Value = Value::from_const(0); // placeholder
+                let ptr_val: Value = Value::from_reg(dest);
+                let store_inst: Instruction = Instruction::store(ptr_val, init_val);
+                self.emit(store_inst);
+            }
+
+            return Value::from_reg(dest);
+        } else if kind == 1 {
+            // Return statement
+            let ret_val: Value = Value::from_const(0); // Would get from expr
+            if has_value == 1 {
+                // Return with value
+                let term: Terminator = Terminator::ret(ret_val);
+                self.set_terminator(term);
+            } else {
+                // Return void - use const 0 as placeholder
+                let term: Terminator = Terminator::ret(Value::from_const(0));
+                self.set_terminator(term);
+            }
+            return Value::from_const(0);
+        } else if kind == 2 {
+            // Expression statement
+            return self.generate_expr();
+        } else if kind == 3 {
+            // While loop
+            return self.generate_while_loop();
+        } else if kind == 4 {
+            // For loop
+            return self.generate_for_loop();
+        } else if kind == 5 {
+            // Infinite loop
+            return self.generate_loop();
+        } else if kind == 6 {
+            // Break - jump to loop exit block
+            return self.generate_break();
+        } else if kind == 7 {
+            // Continue - jump to loop condition block
+            return self.generate_continue();
+        }
+
+        return Value::from_const(0);
+    }
+
+    /// Generate IR for a statement (compatibility stub)
     pub fn generate_stmt(self: &mut IRGenerator) -> Value {
-        // Dispatch based on statement kind
-        // Let -> alloca + store
-        // Return -> generate return terminator
-        // Expr -> generate_expr
         return Value::from_const(0);
     }
     
@@ -536,12 +964,301 @@ impl IRGenerator {
     pub fn generate_while(self: &mut IRGenerator) -> Value {
         return self.generate_while_loop();
     }
+
+    /// Generate IR for infinite loop (loop { ... })
+    pub fn generate_loop(self: &mut IRGenerator) -> Value {
+        // Create blocks
+        let body_block: u64 = self.alloc_block();
+        let exit_block: u64 = self.alloc_block();
+
+        // Store exit block for break statements
+        let saved_exit: u64 = self.loop_exit_block;
+        let saved_cond: u64 = self.loop_cond_block;
+        self.loop_exit_block = exit_block;
+        self.loop_cond_block = body_block; // For continue, jump back to body start
+
+        // Branch to body
+        self.set_terminator(Terminator::branch(body_block));
+
+        // Generate body
+        self.current_block = body_block;
+        // Would generate loop body here
+
+        // Loop back to body (infinite loop)
+        if !self.has_terminator() {
+            self.set_terminator(Terminator::branch(body_block));
+        }
+
+        // Restore saved loop context
+        self.loop_exit_block = saved_exit;
+        self.loop_cond_block = saved_cond;
+
+        // Continue at exit block
+        self.current_block = exit_block;
+
+        return Value::from_const(0);
+    }
+
+    /// Generate IR for for-in loop (for x in iter { ... })
+    pub fn generate_for_loop(self: &mut IRGenerator) -> Value {
+        // For loops desugar to:
+        // let mut iter = <iterable>.into_iter();
+        // loop {
+        //     match iter.next() {
+        //         Some(x) => { <body> }
+        //         None => break
+        //     }
+        // }
+
+        // Create blocks
+        let init_block: u64 = self.alloc_block();
+        let cond_block: u64 = self.alloc_block();
+        let body_block: u64 = self.alloc_block();
+        let incr_block: u64 = self.alloc_block();
+        let exit_block: u64 = self.alloc_block();
+
+        // Store loop context for break/continue
+        let saved_exit: u64 = self.loop_exit_block;
+        let saved_cond: u64 = self.loop_cond_block;
+        self.loop_exit_block = exit_block;
+        self.loop_cond_block = incr_block; // Continue jumps to increment
+
+        // Branch to init
+        self.set_terminator(Terminator::branch(init_block));
+
+        // Init block: initialize loop variable
+        self.current_block = init_block;
+        let loop_var: u64 = self.alloc_reg();
+        let alloca_inst: Instruction = Instruction::alloca(loop_var);
+        self.emit(alloca_inst);
+        // Store initial value (0 or iterator start)
+        let init_val: Value = Value::from_const(0);
+        let loop_var_ptr: Value = Value::from_reg(loop_var);
+        let store_inst: Instruction = Instruction::store(loop_var_ptr, init_val);
+        self.emit(store_inst);
+        self.set_terminator(Terminator::branch(cond_block));
+
+        // Condition block: check if iteration should continue
+        self.current_block = cond_block;
+        // Load current value and compare with end
+        let load_dest: u64 = self.alloc_reg();
+        let load_inst: Instruction = Instruction::load(load_dest, loop_var_ptr);
+        self.emit(load_inst);
+        let current_val: Value = Value::from_reg(load_dest);
+        let end_val: Value = Value::from_const(10); // placeholder end value
+        let cmp_dest: u64 = self.alloc_reg();
+        let cmp_inst: Instruction = Instruction::binop(cmp_dest, BinOp::Lt, current_val, end_val);
+        self.emit(cmp_inst);
+        let cond: Value = Value::from_reg(cmp_dest);
+        self.set_terminator(Terminator::cond_branch(cond, body_block, exit_block));
+
+        // Body block
+        self.current_block = body_block;
+        // Would generate loop body here
+        if !self.has_terminator() {
+            self.set_terminator(Terminator::branch(incr_block));
+        }
+
+        // Increment block
+        self.current_block = incr_block;
+        // Load, increment, store
+        let load_dest2: u64 = self.alloc_reg();
+        let load_inst2: Instruction = Instruction::load(load_dest2, loop_var_ptr);
+        self.emit(load_inst2);
+        let incr_dest: u64 = self.alloc_reg();
+        let one: Value = Value::from_const(1);
+        let incr_inst: Instruction = Instruction::binop(incr_dest, BinOp::Add, Value::from_reg(load_dest2), one);
+        self.emit(incr_inst);
+        let store_inst2: Instruction = Instruction::store(loop_var_ptr, Value::from_reg(incr_dest));
+        self.emit(store_inst2);
+        self.set_terminator(Terminator::branch(cond_block));
+
+        // Restore loop context
+        self.loop_exit_block = saved_exit;
+        self.loop_cond_block = saved_cond;
+
+        // Continue at exit
+        self.current_block = exit_block;
+
+        return Value::from_const(0);
+    }
+
+    /// Generate IR for break statement
+    pub fn generate_break(self: &mut IRGenerator) -> Value {
+        // Jump to loop exit block
+        if self.loop_exit_block != 0 {
+            self.set_terminator(Terminator::branch(self.loop_exit_block));
+        }
+        return Value::from_const(0);
+    }
+
+    /// Generate IR for continue statement
+    pub fn generate_continue(self: &mut IRGenerator) -> Value {
+        // Jump to loop condition block
+        if self.loop_cond_block != 0 {
+            self.set_terminator(Terminator::branch(self.loop_cond_block));
+        }
+        return Value::from_const(0);
+    }
+
+    /// Generate IR for array literal [a, b, c]
+    pub fn generate_array_literal(self: &mut IRGenerator, elem_count: u64) -> Value {
+        // Allocate space for array
+        let array_reg: u64 = self.alloc_reg();
+        let alloca_inst: Instruction = Instruction::alloca(array_reg);
+        self.emit(alloca_inst);
+        let array_ptr: Value = Value::from_reg(array_reg);
+
+        // Store each element at its index
+        let mut i: u64 = 0;
+        while i < elem_count {
+            // Would get element value from AST
+            let elem_val: Value = Value::from_const(i as i64); // placeholder
+
+            // Calculate element pointer (GEP)
+            // In real impl, would emit GEP instruction
+            // For now, just emit a store
+            let store_inst: Instruction = Instruction::store(array_ptr, elem_val);
+            self.emit(store_inst);
+
+            i = i + 1;
+        }
+
+        return array_ptr;
+    }
+
+    /// Generate IR for tuple literal (a, b, c)
+    pub fn generate_tuple_literal(self: &mut IRGenerator, elem_count: u64) -> Value {
+        // Similar to array, but with struct semantics
+        return self.generate_array_literal(elem_count);
+    }
+
+    /// Generate IR for closure |args| body
+    /// Closures compile to:
+    /// 1. A struct containing captured variables (environment)
+    /// 2. A function that takes env + args
+    /// 3. A closure object = (env_ptr, fn_ptr)
+    pub fn generate_closure(self: &mut IRGenerator, param_count: u64, capture_count: u64) -> Value {
+        // Allocate closure struct: { env*, fn* }
+        let closure_reg: u64 = self.alloc_reg();
+        let closure_alloca: Instruction = Instruction::alloca(closure_reg);
+        self.emit(closure_alloca);
+        let closure_ptr: Value = Value::from_reg(closure_reg);
+
+        // Allocate environment struct if there are captures
+        if capture_count > 0 {
+            let env_reg: u64 = self.alloc_reg();
+            let env_alloca: Instruction = Instruction::alloca(env_reg);
+            self.emit(env_alloca);
+            let env_ptr: Value = Value::from_reg(env_reg);
+
+            // Copy captured variables into environment
+            let mut i: u64 = 0;
+            while i < capture_count {
+                // Would lookup captured variable and store into env
+                // Placeholder: store index as value
+                let captured_val: Value = Value::from_const(i as i64);
+                let store_inst: Instruction = Instruction::store(env_ptr, captured_val);
+                self.emit(store_inst);
+                i = i + 1;
+            }
+
+            // Store env pointer in closure
+            let store_env: Instruction = Instruction::store(closure_ptr, env_ptr);
+            self.emit(store_env);
+        }
+
+        // The function pointer would be set to the generated closure function
+        // In real impl, would generate a separate function and store its address
+
+        return closure_ptr;
+    }
+
+    /// Generate IR for closure with explicit captures
+    pub fn generate_closure_with_captures(self: &mut IRGenerator, captures: *u64, capture_count: u64) -> Value {
+        return self.generate_closure(0, capture_count);
+    }
     
     /// Generate IR for match expression
-    pub fn generate_match(self: &mut IRGenerator) -> Value {
-        // Would create block for each arm
-        // Generate switch or comparison chain
-        return Value::from_const(0);
+    /// Generates a comparison chain with conditional branches
+    pub fn generate_match(self: &mut IRGenerator, arm_count: u64) -> Value {
+        // Allocate result register
+        let result_reg: u64 = self.alloc_reg();
+        let result_ptr: Value = Value::from_reg(result_reg);
+
+        // Create exit block
+        let exit_block: u64 = self.alloc_block();
+
+        // Get the scrutinee value (would come from AST)
+        let scrutinee: Value = Value::from_reg(0); // placeholder
+
+        // Generate comparison chain for each arm
+        let mut i: u64 = 0;
+        while i < arm_count {
+            let arm_cond_block: u64 = self.alloc_block();
+            let arm_body_block: u64 = self.alloc_block();
+            let next_arm_block: u64 = self.alloc_block();
+
+            // Jump to this arm's condition check
+            if i == 0 {
+                self.set_terminator(Terminator::branch(arm_cond_block));
+            }
+
+            // Generate condition check
+            self.current_block = arm_cond_block;
+
+            // Compare scrutinee with pattern (would get pattern from AST)
+            let pattern_val: Value = Value::from_const(i as i64);
+            let cmp_dest: u64 = self.alloc_reg();
+            let cmp_left: Value = scrutinee;
+            let cmp_right: Value = pattern_val;
+            let cmp_inst: Instruction = Instruction::binop(cmp_dest, BinOp::Eq, cmp_left, cmp_right);
+            self.emit(cmp_inst);
+
+            let cmp_result: Value = Value::from_reg(cmp_dest);
+
+            // Check if this is the last arm (wildcard)
+            if i == arm_count - 1 {
+                // Last arm - unconditional jump to body (wildcard `_`)
+                self.set_terminator(Terminator::branch(arm_body_block));
+            } else {
+                // Conditional branch: if match -> body, else -> next arm
+                self.set_terminator(Terminator::cond_branch(cmp_result, arm_body_block, next_arm_block));
+            }
+
+            // Generate arm body
+            self.current_block = arm_body_block;
+            // Would generate arm expression here
+            let arm_value: Value = Value::from_const(i as i64 * 100 + 100); // placeholder
+
+            // Store result and jump to exit
+            let store_inst: Instruction = Instruction::store(result_ptr, arm_value);
+            self.emit(store_inst);
+            self.set_terminator(Terminator::branch(exit_block));
+
+            // Set up next arm block for next iteration
+            self.current_block = next_arm_block;
+
+            i = i + 1;
+        }
+
+        // Continue at exit block
+        self.current_block = exit_block;
+
+        // Load and return result
+        let load_dest: u64 = self.alloc_reg();
+        let load_inst: Instruction = Instruction::load(load_dest, result_ptr);
+        self.emit(load_inst);
+
+        return Value::from_reg(load_dest);
+    }
+
+    /// Generate IR for match expression with values
+    /// scrutinee_reg: register containing the value to match
+    /// patterns: array of pattern values
+    /// arm_count: number of match arms
+    pub fn generate_match_expr(self: &mut IRGenerator, scrutinee_reg: u64, arm_count: u64) -> Value {
+        return self.generate_match(arm_count);
     }
     
     /// Generate IR for field access

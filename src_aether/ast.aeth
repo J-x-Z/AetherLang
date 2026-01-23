@@ -7,6 +7,117 @@ extern "C" {
     fn malloc(size: u64) -> *u8;
 }
 
+// ==================== Attributes ====================
+
+/// Representation kind for #[repr(...)]
+pub enum ReprKind {
+    Default,    // Aether default layout
+    C,          // C-compatible layout
+    Packed,     // Packed (no padding)
+    Transparent, // Single-field struct optimization
+}
+
+/// Attribute kind
+pub enum AttrKind {
+    Repr,       // #[repr(C)]
+    Naked,      // #[naked]
+    Interrupt,  // #[interrupt]
+    Simd,       // #[simd]
+    Inline,     // #[inline] / #[inline(always)]
+    NoMangle,   // #[no_mangle]
+    Custom,     // User-defined attribute
+}
+
+/// A single attribute: #[name] or #[name(args)]
+pub struct Attribute {
+    pub kind: AttrKind,
+    pub name: Ident,
+    pub repr: ReprKind,     // For #[repr(...)]
+    pub has_args: bool,
+    pub arg_str: *u8,       // Raw argument string
+    pub arg_len: u64,
+    pub span: Span,
+}
+
+impl Attribute {
+    pub fn new_repr(repr: ReprKind) -> Attribute {
+        return Attribute {
+            kind: AttrKind::Repr,
+            name: Ident::new("repr\0" as *u8, 4),
+            repr: repr,
+            has_args: true,
+            arg_str: 0 as *u8,
+            arg_len: 0,
+            span: Span::dummy(),
+        };
+    }
+
+    pub fn new_naked() -> Attribute {
+        return Attribute {
+            kind: AttrKind::Naked,
+            name: Ident::new("naked\0" as *u8, 5),
+            repr: ReprKind::Default,
+            has_args: false,
+            arg_str: 0 as *u8,
+            arg_len: 0,
+            span: Span::dummy(),
+        };
+    }
+
+    pub fn new_interrupt() -> Attribute {
+        return Attribute {
+            kind: AttrKind::Interrupt,
+            name: Ident::new("interrupt\0" as *u8, 9),
+            repr: ReprKind::Default,
+            has_args: false,
+            arg_str: 0 as *u8,
+            arg_len: 0,
+            span: Span::dummy(),
+        };
+    }
+}
+
+/// List of attributes
+pub struct AttributeList {
+    pub data: *Attribute,
+    pub len: u64,
+    pub cap: u64,
+}
+
+impl AttributeList {
+    pub fn new() -> AttributeList {
+        return AttributeList {
+            data: 0 as *Attribute,
+            len: 0,
+            cap: 0,
+        };
+    }
+
+    pub fn has_repr_c(self: *AttributeList) -> bool {
+        let mut i: u64 = 0;
+        while i < (*self).len {
+            let attr: *Attribute = ((*self).data as u64 + i * 64) as *Attribute;
+            if (*attr).kind == AttrKind::Repr && (*attr).repr == ReprKind::C {
+                return true;
+            }
+            i = i + 1;
+        }
+        return false;
+    }
+
+    pub fn has_naked(self: *AttributeList) -> bool {
+        let mut i: u64 = 0;
+        while i < (*self).len {
+            let attr: *Attribute = ((*self).data as u64 + i * 64) as *Attribute;
+            if (*attr).kind == AttrKind::Naked {
+                return true;
+            }
+            i = i + 1;
+        }
+        return false;
+    }
+}
+
 // ==================== Basic Types ====================
 
 /// Identifier with span (simplified - just name for now)
@@ -249,6 +360,7 @@ pub struct Function {
     pub ret_type: *Type,
     pub body: Block,
     pub is_pub: bool,
+    pub attrs: *AttributeList,  // #[naked], #[interrupt], etc.
     pub span: Span,
 }
 
@@ -262,6 +374,7 @@ pub struct StructDef {
     pub name: Ident,
     pub fields: *FieldList,
     pub is_pub: bool,
+    pub attrs: *AttributeList,  // #[repr(C)], #[repr(packed)], etc.
     pub span: Span,
 }
 
@@ -274,6 +387,7 @@ pub struct EnumDef {
     pub name: Ident,
     pub variants: *VariantList,
     pub is_pub: bool,
+    pub attrs: *AttributeList,  // #[repr(C)], #[repr(u8)], etc.
     pub span: Span,
 }
 

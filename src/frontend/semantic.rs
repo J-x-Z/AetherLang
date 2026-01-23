@@ -9,7 +9,9 @@
 
 use std::collections::HashMap;
 use crate::frontend::ast::*;
+use crate::frontend::module::ModuleLoader;
 use crate::types::*;
+use crate::types::type_system::ConstBinOp;
 use crate::utils::{Span, Error, Result};
 
 // ==================== Symbol Table ====================
@@ -32,11 +34,13 @@ pub struct Symbol {
 #[derive(Debug, Clone)]
 pub enum SymbolKind {
     Variable,
-    Function { params: Vec<ResolvedType>, ret: ResolvedType, type_params: Vec<String> },
-    Struct { fields: Vec<(String, ResolvedType)>, type_params: Vec<String> },
-    Enum { variants: Vec<String> },
+    Function { params: Vec<ResolvedType>, ret: ResolvedType, type_params: Vec<String>, const_params: Vec<(String, ResolvedType)> },
+    Struct { fields: Vec<(String, ResolvedType)>, type_params: Vec<String>, const_params: Vec<(String, ResolvedType)> },
+    Enum { variants: Vec<String>, type_params: Vec<String>, const_params: Vec<(String, ResolvedType)> },
     Param { ownership: Ownership },
     TypeParam,
+    /// Const generic parameter (e.g., N in `const N: usize`)
+    ConstParam { ty: ResolvedType },
     TypeAlias { target: ResolvedType },
 }
 
@@ -255,6 +259,8 @@ pub struct ModuleResolver {
     search_paths: Vec<PathBuf>,
     /// Cached module symbols by module name
     cached_modules: HashMap<String, Vec<Symbol>>,
+    /// Module loader for parsing modules
+    loader: ModuleLoader,
 }
 
 impl ModuleResolver {
@@ -266,18 +272,153 @@ impl ModuleResolver {
                 PathBuf::from("stdlib"),
             ],
             cached_modules: HashMap::new(),
+            loader: ModuleLoader::new(),
         }
     }
     
     /// Find module file by name
     pub fn find_module(&self, name: &str) -> Option<PathBuf> {
-        for path in &self.search_paths {
-            let module_path = path.join(format!("{}.aeth", name));
-            if module_path.exists() {
-                return Some(module_path);
+        self.loader.find_module_file(name)
+    }
+    
+    /// Load a module and return its public items as symbols
+    pub fn load_module_symbols(&mut self, module_name: &str, span: Span) -> Result<Vec<(String, Symbol)>> {
+        // Check cache first
+        if let Some(cached) = self.cached_modules.get(module_name) {
+            return Ok(cached.iter().map(|s| (s.name.clone(), s.clone())).collect());
+        }
+        
+        // Load and parse the module
+        let parsed = self.loader.load_module(module_name)?;
+        
+        // Clone the items to avoid borrow conflict
+        let items: Vec<Item> = parsed.items.clone();
+        
+        // Convert public items to symbols
+        let mut symbols = Vec::new();
+        for item in &items {
+            if Self::is_item_public(&item) {
+                if let Some(symbol) = self.item_to_symbol(&item, span) {
+                    symbols.push(symbol);
+                }
             }
         }
-        None
+        
+        // Cache the symbols
+        self.cached_modules.insert(module_name.to_string(), symbols.clone());
+        
+        Ok(symbols.iter().map(|s| (s.name.clone(), s.clone())).collect())
+    }
+    
+    /// Check if an item is public
+    fn is_item_public(item: &Item) -> bool {
+        match item {
+            Item::Function(f) => f.is_pub,
+            Item::Struct(s) => s.is_pub,
+            Item::Enum(_) => true,
+            Item::Const(_) => true,
+            _ => false,
+        }
+    }
+
+    
+    /// Convert an AST item to a symbol
+    fn item_to_symbol(&self, item: &Item, span: Span) -> Option<Symbol> {
+        match item {
+            Item::Function(f) => {
+                let params: Vec<ResolvedType> = f.params.iter()
+                    .map(|p| self.ast_type_to_resolved(&p.ty))
+                    .collect();
+                let ret = f.ret_type.as_ref()
+                    .map(|t| self.ast_type_to_resolved(t))
+                    .unwrap_or(ResolvedType::unit());
+                Some(Symbol {
+                    name: f.name.name.clone(),
+                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: vec![], const_params: vec![] },
+                    ty: ResolvedType::Function { params, ret: Box::new(ret) },
+                    span,
+                    mutable: false,
+                })
+            }
+            Item::Struct(s) => {
+                let fields: Vec<(String, ResolvedType)> = s.fields.iter()
+                    .map(|f| (f.name.name.clone(), self.ast_type_to_resolved(&f.ty)))
+                    .collect();
+                Some(Symbol {
+                    name: s.name.name.clone(),
+                    kind: SymbolKind::Struct { fields: fields.clone(), type_params: vec![], const_params: vec![] },
+                    ty: ResolvedType::Struct { name: s.name.name.clone(), fields },
+                    span,
+                    mutable: false,
+                })
+            }
+            Item::Enum(e) => {
+                let variants: Vec<String> = e.variants.iter()
+                    .map(|v| v.name.name.clone())
+                    .collect();
+                Some(Symbol {
+                    name: e.name.name.clone(),
+                    kind: SymbolKind::Enum { variants, type_params: vec![], const_params: vec![] },
+                    ty: ResolvedType::Enum { name: e.name.name.clone() },
+                    span,
+                    mutable: false,
+                })
+            }
+            Item::Const(c) => {
+                let ty = c.ty.as_ref()
+                    .map(|t| self.ast_type_to_resolved(t))
+                    .unwrap_or(ResolvedType::Unknown);
+                Some(Symbol {
+                    name: c.name.name.clone(),
+                    kind: SymbolKind::Variable,
+                    ty,
+                    span,
+                    mutable: false,
+                })
+            }
+            _ => None,
+        }
+    }
+    
+    /// Convert AST type to resolved type (simplified)
+    fn ast_type_to_resolved(&self, ty: &Type) -> ResolvedType {
+        match ty {
+            Type::Named(name, _) => {
+                match name.as_str() {
+                    "i8" => ResolvedType::Primitive(PrimitiveType::I8),
+                    "i16" => ResolvedType::Primitive(PrimitiveType::I16),
+                    "i32" => ResolvedType::Primitive(PrimitiveType::I32),
+                    "i64" => ResolvedType::Primitive(PrimitiveType::I64),
+                    "u8" => ResolvedType::Primitive(PrimitiveType::U8),
+                    "u16" => ResolvedType::Primitive(PrimitiveType::U16),
+                    "u32" => ResolvedType::Primitive(PrimitiveType::U32),
+                    "u64" => ResolvedType::Primitive(PrimitiveType::U64),
+                    "f32" => ResolvedType::Primitive(PrimitiveType::F32),
+                    "f64" => ResolvedType::Primitive(PrimitiveType::F64),
+                    "bool" => ResolvedType::Primitive(PrimitiveType::Bool),
+                    "void" => ResolvedType::UNIT,
+                    _ => ResolvedType::Struct { name: name.clone(), fields: vec![] },
+                }
+            }
+            Type::Pointer(inner, _) => {
+                ResolvedType::Pointer(Box::new(self.ast_type_to_resolved(inner)))
+            }
+            Type::Ref { mutable, inner, .. } => {
+                ResolvedType::Reference {
+                    mutable: *mutable,
+                    inner: Box::new(self.ast_type_to_resolved(inner)),
+                }
+            }
+            Type::Array { elem, size, .. } => {
+                ResolvedType::Array {
+                    elem: Box::new(self.ast_type_to_resolved(elem)),
+                    size: *size,
+                }
+            }
+            Type::Unit(_) => ResolvedType::UNIT,
+            Type::Never(_) => ResolvedType::never(),
+            _ => ResolvedType::Unknown,
+        }
     }
 }
 
@@ -295,6 +436,8 @@ pub struct SemanticAnalyzer {
     strict_mode: bool,
     /// Module resolver for use statements
     module_resolver: ModuleResolver,
+    /// Imported modules: module_name -> Vec<(symbol_name, Symbol)>
+    pub imported_modules: HashMap<String, Vec<(String, Symbol)>>,
 }
 
 impl SemanticAnalyzer {
@@ -306,6 +449,7 @@ impl SemanticAnalyzer {
             current_effects: None,
             strict_mode: false, // Default: lenient mode
             module_resolver: ModuleResolver::new(),
+            imported_modules: HashMap::new(),
         };
         analyzer.register_builtins();
         analyzer
@@ -403,7 +547,7 @@ impl SemanticAnalyzer {
     fn define_builtin(&mut self, name: &str, params: Vec<ResolvedType>, ret: ResolvedType) {
         let symbol = Symbol {
             name: name.to_string(),
-            kind: SymbolKind::Function { params, ret, type_params: vec![] },
+            kind: SymbolKind::Function { params, ret, type_params: vec![], const_params: vec![] },
             ty: ResolvedType::Unknown, // Function type handled by kind
             span: Span::dummy(), // Built-in, no source location
             mutable: false,
@@ -444,7 +588,7 @@ impl SemanticAnalyzer {
 
                 self.symbols.define(Symbol {
                     name: func.name.name.clone(),
-                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: func.type_params.iter().map(|p| p.name.clone()).collect() },
+                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: func.type_params.iter().map(|p| p.name.clone()).collect(), const_params: vec![] },
                     ty: ResolvedType::Function {
                         params,
                         ret: Box::new(ret),
@@ -455,30 +599,66 @@ impl SemanticAnalyzer {
             }
             Item::Struct(s) => {
                 self.symbols.enter_scope();
-                for param in &s.type_params {
-                     self.symbols.define(Symbol {
-                         name: param.name.clone(),
-                         kind: SymbolKind::TypeParam,
-                         ty: ResolvedType::GenericParam(param.name.clone()),
-                         span: param.span,
-                         mutable: false,
-                     })?;
+
+                // Collect type params and const params separately
+                let mut type_params = Vec::new();
+                let mut const_params = Vec::new();
+
+                for param in &s.generic_params {
+                    match param {
+                        crate::frontend::ast::GenericParam::Type(ident) => {
+                            type_params.push(ident.name.clone());
+                            self.symbols.define(Symbol {
+                                name: ident.name.clone(),
+                                kind: SymbolKind::TypeParam,
+                                ty: ResolvedType::GenericParam(ident.name.clone()),
+                                span: ident.span,
+                                mutable: false,
+                            })?;
+                        }
+                        crate::frontend::ast::GenericParam::Const { name, ty } => {
+                            let resolved_ty = self.resolve_type(ty)?;
+                            const_params.push((name.name.clone(), resolved_ty.clone()));
+                            self.symbols.define(Symbol {
+                                name: name.name.clone(),
+                                kind: SymbolKind::ConstParam { ty: resolved_ty.clone() },
+                                ty: resolved_ty,
+                                span: name.span,
+                                mutable: false,
+                            })?;
+                        }
+                    }
                 }
-                
+
+                // Also handle legacy type_params field for backward compatibility
+                for param in &s.type_params {
+                    if !type_params.contains(&param.name) {
+                        type_params.push(param.name.clone());
+                        self.symbols.define(Symbol {
+                            name: param.name.clone(),
+                            kind: SymbolKind::TypeParam,
+                            ty: ResolvedType::GenericParam(param.name.clone()),
+                            span: param.span,
+                            mutable: false,
+                        })?;
+                    }
+                }
+
                 let fields: Vec<(String, ResolvedType)> = s.fields.iter()
                     .map(|f| Ok((f.name.name.clone(), self.resolve_type(&f.ty)?)))
                     .collect::<Result<Vec<_>>>()?;
-                
+
                 self.symbols.exit_scope();
 
                 self.symbols.define(Symbol {
                     name: s.name.name.clone(),
-                    kind: SymbolKind::Struct { 
+                    kind: SymbolKind::Struct {
                         fields: fields.clone(),
-                        type_params: s.type_params.iter().map(|p| p.name.clone()).collect(),
+                        type_params,
+                        const_params,
                     },
-                    ty: ResolvedType::Struct { 
-                        name: s.name.name.clone(), 
+                    ty: ResolvedType::Struct {
+                        name: s.name.name.clone(),
                         fields, // Use generic fields
                     },
                     span: s.span,
@@ -487,25 +667,60 @@ impl SemanticAnalyzer {
             }
             Item::Enum(e) => {
                 self.symbols.enter_scope();
-                for param in &e.type_params {
-                     self.symbols.define(Symbol {
-                         name: param.name.clone(),
-                         kind: SymbolKind::TypeParam,
-                         ty: ResolvedType::GenericParam(param.name.clone()),
-                         span: param.span,
-                         mutable: false,
-                     })?;
+
+                // Collect type params and const params separately
+                let mut type_params = Vec::new();
+                let mut const_params = Vec::new();
+
+                for param in &e.generic_params {
+                    match param {
+                        crate::frontend::ast::GenericParam::Type(ident) => {
+                            type_params.push(ident.name.clone());
+                            self.symbols.define(Symbol {
+                                name: ident.name.clone(),
+                                kind: SymbolKind::TypeParam,
+                                ty: ResolvedType::GenericParam(ident.name.clone()),
+                                span: ident.span,
+                                mutable: false,
+                            })?;
+                        }
+                        crate::frontend::ast::GenericParam::Const { name, ty } => {
+                            let resolved_ty = self.resolve_type(ty)?;
+                            const_params.push((name.name.clone(), resolved_ty.clone()));
+                            self.symbols.define(Symbol {
+                                name: name.name.clone(),
+                                kind: SymbolKind::ConstParam { ty: resolved_ty.clone() },
+                                ty: resolved_ty,
+                                span: name.span,
+                                mutable: false,
+                            })?;
+                        }
+                    }
                 }
-                
+
+                // Also handle legacy type_params field for backward compatibility
+                for param in &e.type_params {
+                    if !type_params.contains(&param.name) {
+                        type_params.push(param.name.clone());
+                        self.symbols.define(Symbol {
+                            name: param.name.clone(),
+                            kind: SymbolKind::TypeParam,
+                            ty: ResolvedType::GenericParam(param.name.clone()),
+                            span: param.span,
+                            mutable: false,
+                        })?;
+                    }
+                }
+
                 let variants: Vec<String> = e.variants.iter()
                     .map(|v| v.name.name.clone())
                     .collect();
-                
+
                 self.symbols.exit_scope();
 
                 self.symbols.define(Symbol {
                     name: e.name.name.clone(),
-                    kind: SymbolKind::Enum { variants },
+                    kind: SymbolKind::Enum { variants, type_params, const_params },
                     ty: ResolvedType::Enum { name: e.name.name.clone() },
                     span: e.span,
                     mutable: false,
@@ -540,7 +755,7 @@ impl SemanticAnalyzer {
 
                             self.symbols.define(Symbol {
                                 name: name.name.clone(),
-                                kind: SymbolKind::Function { params: param_types.clone(), ret: ret.clone(), type_params: vec![] },
+                                kind: SymbolKind::Function { params: param_types.clone(), ret: ret.clone(), type_params: vec![], const_params: vec![] },
                                 ty: ResolvedType::Function {
                                     params: param_types,
                                     ret: Box::new(ret),
@@ -589,17 +804,39 @@ impl SemanticAnalyzer {
             return Ok(());
         }
         
-        let module_name = &use_decl.path[0].name;
+        let module_name = use_decl.path[0].name.clone();
         
-        // Check if module file exists
-        if let Some(_module_path) = self.module_resolver.find_module(module_name) {
-            // For now, just register placeholder symbols for common types
-            // Full implementation would parse the module file
-            self.register_module_placeholder(module_name, use_decl)?;
-        } else {
-            // Module not found - register placeholders anyway for self-hosting
-            self.register_module_placeholder(module_name, use_decl)?;
+        // Check if already imported
+        if self.imported_modules.contains_key(&module_name) {
+            return Ok(());
         }
+        
+        // Try to load the actual module file
+        if self.module_resolver.find_module(&module_name).is_some() {
+            // Load module and get symbols
+            match self.module_resolver.load_module_symbols(&module_name, use_decl.span) {
+                Ok(symbols) => {
+                    // Store in imported_modules for qualified name lookup
+                    self.imported_modules.insert(module_name.clone(), symbols.clone());
+                    
+                    // Also register symbols directly for simple imports
+                    for (name, symbol) in &symbols {
+                        // Create qualified name: module::symbol
+                        let qualified_name = format!("{}::{}", module_name, name);
+                        let mut qualified_symbol = symbol.clone();
+                        qualified_symbol.name = qualified_name;
+                        let _ = self.symbols.define(qualified_symbol);
+                    }
+                    return Ok(());
+                }
+                Err(_) => {
+                    // Fall back to placeholders
+                }
+            }
+        }
+        
+        // Module not found or failed to load - register placeholders for self-hosting
+        self.register_module_placeholder(&module_name, use_decl)?;
         
         Ok(())
     }
@@ -707,7 +944,7 @@ impl SemanticAnalyzer {
                 })?;
                 self.symbols.define(Symbol {
                     name: "TokenKind".to_string(),
-                    kind: SymbolKind::Enum { variants: vec![] },
+                    kind: SymbolKind::Enum { variants: vec![], type_params: vec![], const_params: vec![] },
                     ty: ResolvedType::Enum { name: "TokenKind".to_string() },
                     span: use_decl.span,
                     mutable: false,
@@ -722,6 +959,7 @@ impl SemanticAnalyzer {
                         }],
                         ret: ResolvedType::Enum { name: "TokenKind".to_string() },
                         type_params: vec![],
+                        const_params: vec![],
                     },
                     ty: ResolvedType::Function {
                         params: vec![ResolvedType::Reference {
@@ -943,7 +1181,7 @@ impl SemanticAnalyzer {
             Expr::Ident(ident) => {
                 if let Some(symbol) = self.symbols.lookup(&ident.name) {
                     // For functions, return the function type from SymbolKind
-                    if let SymbolKind::Function { params, ret, type_params: _ } = &symbol.kind {
+                    if let SymbolKind::Function { params, ret, .. } = &symbol.kind {
                         Ok(ResolvedType::Function {
                             params: params.clone(),
                             ret: Box::new(ret.clone()),
@@ -964,6 +1202,32 @@ impl SemanticAnalyzer {
                 // Phase 11: Basic path resolution for Enum constructors and Struct static methods
                 if segments.len() >= 2 {
                     let type_name = &segments[0].name;
+                    let symbol_name = &segments[1].name;
+                    
+                    // Check if this is an imported module symbol (e.g., helper::greet)
+                    if let Some(module_symbols) = self.imported_modules.get(type_name) {
+                        for (name, symbol) in module_symbols {
+                            if name == symbol_name {
+                                // Found the symbol in the imported module
+                                // For functions, ensure we return a Function type
+                                match &symbol.kind {
+                                    SymbolKind::Function { params, ret, .. } => {
+                                        return Ok(ResolvedType::Function {
+                                            params: params.clone(),
+                                            ret: Box::new(ret.clone()),
+                                        });
+                                    }
+                                    _ => return Ok(symbol.ty.clone()),
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Also check qualified name lookup (module::symbol registered in symbol table)
+                    let qualified_name = format!("{}::{}", type_name, symbol_name);
+                    if let Some(symbol) = self.symbols.lookup(&qualified_name) {
+                        return Ok(symbol.ty.clone());
+                    }
                     
                     if let Some(symbol) = self.symbols.lookup(type_name) {
                          // Enum variant (e.g., TokenKind::Eof)
@@ -982,6 +1246,7 @@ impl SemanticAnalyzer {
                     span: *span,
                 })
             }
+
 
             Expr::Binary { left, op, right, span } => {
                 let left_ty = self.check_expr(left)?;
@@ -1303,7 +1568,7 @@ impl SemanticAnalyzer {
                     .ok_or(Error::UndefinedType { name: name.name.clone(), span: *span })
                     .cloned()?;
 
-                if let SymbolKind::Struct { fields: def_fields, type_params } = &symbol.kind {
+                if let SymbolKind::Struct { fields: def_fields, type_params, .. } = &symbol.kind {
                     let mut inferred_params = std::collections::HashMap::new();
                     
                     // Check each field
@@ -1625,6 +1890,33 @@ impl SemanticAnalyzer {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(ResolvedType::Generic(name.clone(), resolved_args))
             }
+            Type::GenericWithArgs { name, args, .. } => {
+                // Separate type args and const args
+                let mut type_args = Vec::new();
+                let mut const_args = Vec::new();
+
+                for arg in args {
+                    match arg {
+                        crate::frontend::ast::GenericArg::Type(ty) => {
+                            type_args.push(self.resolve_type(ty)?);
+                        }
+                        crate::frontend::ast::GenericArg::Const(expr) => {
+                            const_args.push(self.eval_const_expr(expr)?);
+                        }
+                    }
+                }
+
+                // If no const args, use regular Generic
+                if const_args.is_empty() {
+                    Ok(ResolvedType::Generic(name.clone(), type_args))
+                } else {
+                    Ok(ResolvedType::GenericWithConsts {
+                        name: name.clone(),
+                        type_args,
+                        const_args,
+                    })
+                }
+            }
             Type::Function { params, ret, .. } => {
                 let param_types: Vec<ResolvedType> = params.iter()
                     .map(|t| self.resolve_type(t))
@@ -1643,6 +1935,66 @@ impl SemanticAnalyzer {
             Type::Volatile(inner, _) => {
                 Ok(ResolvedType::Pointer(Box::new(self.resolve_type(inner)?)))
             }
+        }
+    }
+
+    /// Evaluate a const expression to a ConstValue
+    fn eval_const_expr(&self, expr: &Expr) -> Result<ConstValue> {
+        match expr {
+            Expr::Literal(lit) => {
+                match lit {
+                    Literal::Int(n, _) => Ok(ConstValue::Int(*n)),
+                    Literal::Bool(b, _) => Ok(ConstValue::Bool(*b)),
+                    _ => Err(Error::TypeError {
+                        expected: "integer or boolean constant".to_string(),
+                        got: format!("{:?}", lit),
+                        span: lit.span(),
+                    }),
+                }
+            }
+            Expr::Ident(ident) => {
+                // Check if it's a const parameter
+                if let Some(sym) = self.symbols.lookup(&ident.name) {
+                    if let SymbolKind::ConstParam { .. } = &sym.kind {
+                        Ok(ConstValue::Param(ident.name.clone()))
+                    } else {
+                        Err(Error::TypeError {
+                            expected: "const parameter".to_string(),
+                            got: format!("{:?}", sym.kind),
+                            span: ident.span,
+                        })
+                    }
+                } else {
+                    // Assume it's a const parameter reference
+                    Ok(ConstValue::Param(ident.name.clone()))
+                }
+            }
+            Expr::Binary { op, left, right, .. } => {
+                let lhs = self.eval_const_expr(left)?;
+                let rhs = self.eval_const_expr(right)?;
+                let const_op = match op {
+                    BinOp::Add => ConstBinOp::Add,
+                    BinOp::Sub => ConstBinOp::Sub,
+                    BinOp::Mul => ConstBinOp::Mul,
+                    BinOp::Div => ConstBinOp::Div,
+                    BinOp::Mod => ConstBinOp::Mod,
+                    _ => return Err(Error::TypeError {
+                        expected: "arithmetic operator".to_string(),
+                        got: format!("{:?}", op),
+                        span: expr.span(),
+                    }),
+                };
+                Ok(ConstValue::BinOp {
+                    op: const_op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                })
+            }
+            _ => Err(Error::TypeError {
+                expected: "const expression".to_string(),
+                got: format!("{:?}", expr),
+                span: expr.span(),
+            }),
         }
     }
 

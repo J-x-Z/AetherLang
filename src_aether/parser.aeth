@@ -37,6 +37,9 @@ pub enum TokenKind {
     Slash,
     Eq,
     EqEq,
+    Hash,       // #
+    LBracket,   // [
+    RBracket,   // ]
     Eof,
 }
 
@@ -290,15 +293,18 @@ impl Parser {
     
     /// Parse a struct definition
     pub fn parse_struct(self: &mut Parser) -> bool {
+        // Parse attributes (e.g., #[repr(C)])
+        self.parse_attributes();
+
         // Expect 'struct'
         self.advance();
-        
+
         // Parse name
         self.advance();
-        
+
         // Parse { fields }
         self.advance(); // {
-        
+
         // Parse fields: name: Type,
         while !self.is_at_end() {
             // Would check for }
@@ -307,32 +313,35 @@ impl Parser {
             self.parse_type();
             // self.consume(Comma);
         }
-        
+
         self.advance(); // }
-        
+
         return true;
     }
     
     /// Parse an enum definition
     pub fn parse_enum(self: &mut Parser) -> bool {
+        // Parse attributes (e.g., #[repr(C)])
+        self.parse_attributes();
+
         // Expect 'enum'
         self.advance();
-        
+
         // Parse name
         self.advance();
-        
+
         // Parse { variants }
         self.advance(); // {
-        
+
         while !self.is_at_end() {
             // Would check for }
             // Parse variant name
             self.advance();
             // Optional: tuple fields (Type, Type)
         }
-        
+
         self.advance(); // }
-        
+
         return true;
     }
     
@@ -924,17 +933,67 @@ impl Parser {
     // ==================== Annotations ====================
     
     /// Parse an attribute: #[name] or #[name(args)]
-    pub fn parse_attribute(self: &mut Parser) -> bool {
-        // Consume #
+    /// Returns attribute kind: 0=unknown, 1=repr(C), 2=repr(packed), 3=naked, 4=interrupt
+    pub fn parse_attribute(self: &mut Parser) -> i32 {
+        // Expect #
+        if self.current().kind != TokenKind::Hash {
+            return 0;
+        }
         self.advance();
-        // Consume [
+
+        // Expect [
+        if self.current().kind != TokenKind::LBracket {
+            return 0;
+        }
         self.advance();
-        // Parse name
+
+        // Parse attribute name (identifier)
+        if self.current().kind != TokenKind::Ident {
+            return 0;
+        }
+
+        // Check attribute name
+        let attr_kind: i32 = 0;
+        let name_start: u64 = self.current().start;
+        let name_end: u64 = self.current().end;
         self.advance();
-        // Optional args
-        // Consume ]
-        self.advance();
-        return true;
+
+        // Check for (args)
+        if self.current().kind == TokenKind::LParen {
+            self.advance();
+
+            // Parse argument (e.g., C, packed, transparent)
+            if self.current().kind == TokenKind::Ident {
+                // Would check: C -> 1, packed -> 2, transparent -> 3
+                // For now, assume C
+                self.advance();
+            }
+
+            // Expect )
+            if self.current().kind == TokenKind::RParen {
+                self.advance();
+            }
+        }
+
+        // Expect ]
+        if self.current().kind == TokenKind::RBracket {
+            self.advance();
+        }
+
+        return 1; // repr(C) for now
+    }
+
+    /// Parse multiple attributes before an item
+    /// Returns true if any attributes were parsed
+    pub fn parse_attributes(self: &mut Parser) -> bool {
+        let mut found: bool = false;
+
+        while self.current().kind == TokenKind::Hash {
+            self.parse_attribute();
+            found = true;
+        }
+
+        return found;
     }
     
     /// Parse an annotation: @name or @name(args)

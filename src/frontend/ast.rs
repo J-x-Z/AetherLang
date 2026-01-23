@@ -5,6 +5,38 @@
 
 use crate::utils::Span;
 
+// ==================== Generic Parameters (Const Generics Support) ====================
+
+/// A generic parameter: either a type parameter or a const parameter
+#[derive(Debug, Clone)]
+pub enum GenericParam {
+    /// Type parameter: `T`, `U`
+    Type(Ident),
+    /// Const parameter: `const N: usize`
+    Const {
+        name: Ident,
+        ty: Box<Type>,
+    },
+}
+
+impl GenericParam {
+    pub fn name(&self) -> &Ident {
+        match self {
+            GenericParam::Type(name) => name,
+            GenericParam::Const { name, .. } => name,
+        }
+    }
+}
+
+/// A generic argument: either a type or a const value
+#[derive(Debug, Clone)]
+pub enum GenericArg {
+    /// Type argument: `i32`, `String`
+    Type(Type),
+    /// Const argument: `3`, `N`, `{N + 1}`
+    Const(Expr),
+}
+
 /// A complete program (compilation unit)
 #[derive(Debug, Clone)]
 pub struct Program {
@@ -139,6 +171,9 @@ pub struct StructDef {
     pub annotations: Vec<Annotation>,
     pub invariants: Vec<Contract>,
     pub is_pub: bool,
+    /// Generic parameters including const generics: `<T, const N: usize>`
+    pub generic_params: Vec<GenericParam>,
+    /// Legacy type_params for backward compatibility
     pub type_params: Vec<Ident>,
 }
 
@@ -156,6 +191,9 @@ pub struct EnumDef {
     pub name: Ident,
     pub variants: Vec<Variant>,
     pub span: Span,
+    /// Generic parameters including const generics
+    pub generic_params: Vec<GenericParam>,
+    /// Legacy type_params for backward compatibility
     pub type_params: Vec<Ident>,
 }
 
@@ -723,6 +761,12 @@ pub enum Type {
     Named(String, Span),
     /// Generic type instantiation (Option<T>, Vec<i32>)
     Generic(String, Vec<Type>, Span),
+    /// Generic type with mixed type and const args (Matrix<f32, 3, 3>)
+    GenericWithArgs {
+        name: String,
+        args: Vec<GenericArg>,
+        span: Span,
+    },
     /// Pointer type (*T)
     Pointer(Box<Type>, Span),
     /// Reference type (&T or &mut T or &'a T)
@@ -770,6 +814,7 @@ impl Type {
         match self {
             Type::Named(_, s) => *s,
             Type::Generic(_, _, s) => *s,
+            Type::GenericWithArgs { span, .. } => *span,
             Type::Pointer(_, s) => *s,
             Type::Ref { span, .. } => *span,
             Type::Array { span, .. } => *span,

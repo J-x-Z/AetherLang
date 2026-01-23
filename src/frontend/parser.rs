@@ -28,8 +28,38 @@ impl Parser {
         Self { tokens, pos: 0 }
     }
 
-    /// Parse generic parameters: <T, U>
-    fn parse_generic_params(&mut self) -> Result<Vec<Ident>> {
+    /// Parse generic parameters: <T, U> or <T, const N: usize>
+    fn parse_generic_params(&mut self) -> Result<Vec<GenericParam>> {
+        self.expect(TokenKind::Lt)?;
+        let mut params = Vec::new();
+        loop {
+            // Check for const generic: `const N: Type`
+            if self.check(&TokenKind::Const) {
+                self.advance(); // consume 'const'
+                let name = self.parse_ident()?;
+                self.expect(TokenKind::Colon)?;
+                let ty = self.parse_type()?;
+                params.push(GenericParam::Const {
+                    name,
+                    ty: Box::new(ty),
+                });
+            } else {
+                // Regular type parameter
+                let name = self.parse_ident()?;
+                params.push(GenericParam::Type(name));
+            }
+
+            if self.check(&TokenKind::Gt) {
+                break;
+            }
+            self.expect(TokenKind::Comma)?;
+        }
+        self.expect(TokenKind::Gt)?;
+        Ok(params)
+    }
+
+    /// Parse legacy type-only generic parameters (for backward compatibility)
+    fn parse_type_params_legacy(&mut self) -> Result<Vec<Ident>> {
         self.expect(TokenKind::Lt)?;
         let mut params = Vec::new();
         loop {
@@ -41,6 +71,60 @@ impl Parser {
         }
         self.expect(TokenKind::Gt)?;
         Ok(params)
+    }
+
+    /// Parse a generic argument: either a type or a const expression
+    /// Examples: `i32`, `String`, `3`, `N`, `{N + 1}`
+    fn parse_generic_arg(&mut self) -> Result<GenericArg> {
+        // Check for const expression in braces: {N + 1}
+        if self.check(&TokenKind::LBrace) {
+            self.advance();
+            let expr = self.parse_expr()?;
+            self.expect(TokenKind::RBrace)?;
+            return Ok(GenericArg::Const(expr));
+        }
+
+        // Check for integer literal: 3, 42
+        if let TokenKind::IntLiteral(n) = self.current_kind().clone() {
+            let span = self.current().span;
+            self.advance();
+            return Ok(GenericArg::Const(Expr::IntLiteral(n, span)));
+        }
+
+        // Check for identifier - could be type or const param
+        // Heuristic: if followed by < or ::, it's a type; if it's uppercase single letter, assume type param
+        // Otherwise, try to parse as type first
+        if let TokenKind::Ident(name) = self.current_kind().clone() {
+            // Look ahead to determine if this is a type or const
+            if let Some(next) = self.peek() {
+                match &next.kind {
+                    // Definitely a type: Vec<T>, std::io::Result
+                    TokenKind::Lt | TokenKind::ColonColon => {
+                        let ty = self.parse_type()?;
+                        return Ok(GenericArg::Type(ty));
+                    }
+                    // If followed by comma or >, could be either
+                    TokenKind::Comma | TokenKind::Gt => {
+                        // Heuristic: lowercase single-char or ALL_CAPS likely const param
+                        // Otherwise treat as type
+                        if name.chars().all(|c| c.is_ascii_uppercase() || c == '_') && name.len() > 1 {
+                            // Likely a const param name like SIZE, N, M
+                            let span = self.current().span;
+                            self.advance();
+                            return Ok(GenericArg::Const(Expr::Ident(Ident { name: name.clone(), span }, span)));
+                        }
+                        // Treat as type
+                        let ty = self.parse_type()?;
+                        return Ok(GenericArg::Type(ty));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Default: parse as type
+        let ty = self.parse_type()?;
+        Ok(GenericArg::Type(ty))
     }
 
     // ==================== Helper Methods ====================
@@ -581,18 +665,29 @@ impl Parser {
             self.advance();
             let ty_name = name;
 
-            // Parse generic arguments if present: Foo<i32, String>
+            // Parse generic arguments if present: Foo<i32, String> or Foo<i32, 3, 3>
             if self.consume(&TokenKind::Lt) {
-                 let mut inner_types = Vec::new();
+                 let mut generic_args = Vec::new();
                  loop {
-                     inner_types.push(self.parse_type()?);
+                     // Try to parse as a const expression first (number literals or identifiers that could be const params)
+                     let arg = self.parse_generic_arg()?;
+                     generic_args.push(arg);
+
                      if self.check(&TokenKind::Gt) {
                          break;
                      }
                      self.expect(TokenKind::Comma)?;
                  }
                  self.expect(TokenKind::Gt)?;
-                 
+
+                 // Convert to legacy format for backward compatibility
+                 let inner_types: Vec<Type> = generic_args.iter()
+                     .filter_map(|arg| match arg {
+                         GenericArg::Type(ty) => Some(ty.clone()),
+                         GenericArg::Const(_) => None,
+                     })
+                     .collect();
+
                  return Ok(Type::Generic(ty_name, inner_types, start.merge(&self.tokens[self.pos.saturating_sub(1)].span)));
             }
 
@@ -1401,11 +1496,19 @@ impl Parser {
 
         let name = self.parse_ident()?;
         
-        let type_params = if self.check(&TokenKind::Lt) {
+        let generic_params = if self.check(&TokenKind::Lt) {
             self.parse_generic_params()?
         } else {
             Vec::new()
         };
+
+        // Extract type-only params for backward compatibility
+        let type_params: Vec<Ident> = generic_params.iter()
+            .filter_map(|p| match p {
+                GenericParam::Type(name) => Some(name.clone()),
+                GenericParam::Const { .. } => None,
+            })
+            .collect();
 
         // Parse optional invariants/contracts before body
         let invariants = if self.check(&TokenKind::LBracket) {
@@ -1438,6 +1541,7 @@ impl Parser {
 
         Ok(StructDef {
             name,
+            generic_params,
             type_params,
             fields,
             span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
@@ -1452,11 +1556,19 @@ impl Parser {
         self.expect(TokenKind::Enum)?;
         let name = self.parse_ident()?;
         
-        let type_params = if self.check(&TokenKind::Lt) {
+        let generic_params = if self.check(&TokenKind::Lt) {
             self.parse_generic_params()?
         } else {
             Vec::new()
         };
+
+        // Extract type-only params for backward compatibility
+        let type_params: Vec<Ident> = generic_params.iter()
+            .filter_map(|p| match p {
+                GenericParam::Type(name) => Some(name.clone()),
+                GenericParam::Const { .. } => None,
+            })
+            .collect();
 
         self.expect(TokenKind::LBrace)?;
         let mut variants = Vec::new();
@@ -1489,6 +1601,7 @@ impl Parser {
             name,
             variants,
             span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
+            generic_params,
             type_params,
         })
     }

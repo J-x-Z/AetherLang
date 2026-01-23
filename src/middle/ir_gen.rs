@@ -196,7 +196,26 @@ impl IRGenerator {
                 self.module.add_struct(&struct_def.name.name, fields, repr);
                 Ok(())
             }
-            Item::Enum(_) => Ok(()),
+            Item::Enum(enum_def) => {
+                use crate::middle::ir::{IREnum, IRVariant};
+                let mut variants = Vec::new();
+                for variant in &enum_def.variants {
+                    let fields: Vec<IRType> = variant.fields
+                        .iter()
+                        .map(|ty| self.ast_type_to_ir(ty))
+                        .collect();
+                    variants.push(IRVariant {
+                        name: variant.name.name.clone(),
+                        fields,
+                    });
+                }
+                self.module.enums.push(IREnum {
+                    name: enum_def.name.name.clone(),
+                    variants,
+                });
+                Ok(())
+            }
+
             Item::Impl(impl_block) => {
                 let type_name = &impl_block.target.name;
                 for method in &impl_block.methods {
@@ -222,6 +241,9 @@ impl IRGenerator {
                 if !use_decl.path.is_empty() {
                     let module_name = &use_decl.path[0].name;
                     self.generate_module_types(module_name)?;
+                    
+                    // Also register function signatures from the imported module
+                    self.register_imported_functions(module_name)?;
                 }
                 Ok(())
             },
@@ -318,6 +340,50 @@ impl IRGenerator {
             }
             _ => {}
         }
+        Ok(())
+    }
+    
+    /// Register function signatures from an imported module
+    fn register_imported_functions(&mut self, module_name: &str) -> Result<()> {
+        use crate::frontend::module::ModuleLoader;
+        use crate::frontend::ast::Item;
+        
+        let mut loader = ModuleLoader::new();
+        
+        // Try to load the module
+        if let Ok(parsed) = loader.load_module(module_name) {
+            let items = parsed.items.clone();
+            
+            for item in &items {
+                if let Item::Function(func) = item {
+                    if func.is_pub {
+                        // Register function signature with module prefix
+                        let prefixed_name = format!("{}_{}", module_name, func.name.name);
+                        
+                        let ret_type = if let Some(ref ty) = func.ret_type {
+                            self.ast_type_to_ir(ty)
+                        } else {
+                            IRType::Void
+                        };
+                        
+                        // Register in function_signatures for return type lookup
+                        self.function_signatures.insert(prefixed_name.clone(), (ret_type.clone(), None));
+                        
+                        // Also register as extern so it can be linked
+                        let params: Vec<(String, IRType)> = func.params.iter()
+                            .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
+                            .collect();
+                        
+                        self.module.externs.push(IRExtern {
+                            name: prefixed_name,
+                            params,
+                            ret_type,
+                        });
+                    }
+                }
+            }
+        }
+        
         Ok(())
     }
 
@@ -474,7 +540,15 @@ impl IRGenerator {
             ret_type.clone()
         };
 
-        let mut ir_func = IRFunction::new(&func.name.name, params.clone(), actual_ret_type);
+        // Generate function name with module prefix for pub functions (but not main)
+        let func_name = if func.is_pub && func.name.name != "main" {
+            format!("{}_{}", self.module.name, func.name.name)
+        } else {
+            func.name.name.clone()
+        };
+
+        let mut ir_func = IRFunction::new(&func_name, params.clone(), actual_ret_type);
+
         
         // Mark as sret function
         if uses_sret {
@@ -646,6 +720,7 @@ impl IRGenerator {
 
             Stmt::Empty { .. } => Ok(None),
         }
+
     }
 
     /// Generate IR for an expression
@@ -663,12 +738,20 @@ impl IRGenerator {
             }
 
             Expr::Path { segments, .. } => {
-                // Return global path name (e.g. "Option_Some")
-                // Phase 11: Simple flattening
+                // Path to enum variant or module item (e.g. "TokenKind::IntLit")
+                // Generate as a function call to the constructor
                 let path_str = segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("_");
-                Ok(Value::Global(path_str))
+                
+                // For enum variants, generate a function call (constructor returns pointer)
+                // This handles unit variants like TokenKind::IntLit
+                let dest = self.alloc_register();
+                self.emit_current(Instruction::Call {
+                    dest: Some(dest),
+                    func: path_str,
+                    args: vec![],
+                });
+                Ok(Value::Register(dest))
             }
-
             Expr::Binary { left, op, right, .. } => {
                 let left_val = self.generate_expr(left)?;
                 let right_val = self.generate_expr(right)?;
@@ -1229,12 +1312,209 @@ impl IRGenerator {
             }
             
             // Minimal implementations for others
-            Expr::Loop { .. } => Ok(Value::Unit),
-            Expr::While { .. } => Ok(Value::Unit),
-            Expr::For { .. } => Ok(Value::Unit),
-            Expr::Match { .. } => Ok(Value::Unit),
-            Expr::Array { .. } => Ok(Value::Unit),
+            Expr::Loop { body, .. } => {
+                // Create blocks for infinite loop
+                let body_block = self.add_block("loop_body");
+                let exit_block = self.add_block("loop_exit");
+                
+                // Jump to body block
+                self.set_terminator_current(Terminator::Jump { target: body_block });
+                
+                // Body block
+                self.current_block = body_block;
+                self.generate_block(body)?;
+                // Jump back to body (infinite loop)
+                self.set_terminator_current(Terminator::Jump { target: body_block });
+                
+                // Exit block (unreachable unless break)
+                self.current_block = exit_block;
+                Ok(Value::Unit)
+            }
+            Expr::While { cond, body, .. } => {
+                // Create blocks for the loop
+                let cond_block = self.add_block("while_cond");
+                let body_block = self.add_block("while_body");
+                let exit_block = self.add_block("while_exit");
+                
+                // Jump to condition block
+                self.set_terminator_current(Terminator::Jump { target: cond_block });
+                
+                // Condition block
+                self.current_block = cond_block;
+                let cond_val = self.generate_expr(cond)?;
+                self.set_terminator_current(Terminator::Branch {
+                    cond: cond_val,
+                    then_target: body_block,
+                    else_target: exit_block,
+                });
+                
+                // Body block
+                self.current_block = body_block;
+                self.generate_block(body)?;
+                // Jump back to condition
+                self.set_terminator_current(Terminator::Jump { target: cond_block });
+                
+                // Continue in exit block
+                self.current_block = exit_block;
+                Ok(Value::Unit)
+            }
+            Expr::For { var, iter, body, .. } => {
+                // Simplified: evaluate iter as a range and loop
+                // For now treat as: evaluate iter, then execute body
+                let _iter_val = self.generate_expr(iter)?;
+                
+                // Create loop blocks
+                let body_block = self.add_block("for_body");
+                let exit_block = self.add_block("for_exit");
+                
+                // Register loop variable (placeholder)
+                let var_reg = self.alloc_register();
+                self.locals.insert(var.name.clone(), (Value::Register(var_reg), IRType::I64));
+                
+                // Jump to body
+                self.set_terminator_current(Terminator::Jump { target: body_block });
+                self.current_block = body_block;
+                self.generate_block(body)?;
+                self.set_terminator_current(Terminator::Jump { target: exit_block });
+                
+                self.current_block = exit_block;
+                Ok(Value::Unit)
+            }
+            Expr::Match { expr, arms, .. } => {
+                // Generate the value to match against
+                let match_val = self.generate_expr(expr)?;
+                let match_ty = self.get_value_type(&match_val).unwrap_or(IRType::I64);
+                
+                // Create blocks for each arm and the exit block
+                let exit_block = self.add_block("match_exit");
+                let mut arm_blocks: Vec<BlockId> = Vec::new();
+                let mut body_blocks: Vec<BlockId> = Vec::new();
+                
+                for (i, _) in arms.iter().enumerate() {
+                    arm_blocks.push(self.add_block(&format!("match_arm_{}", i)));
+                    body_blocks.push(self.add_block(&format!("match_body_{}", i)));
+                }
+                
+                // Result register for match value
+                let result_reg = self.alloc_register();
+                self.reg_types.insert(result_reg, match_ty.clone());
+                
+                // Jump to first arm
+                if !arm_blocks.is_empty() {
+                    self.set_terminator_current(Terminator::Jump { target: arm_blocks[0] });
+                } else {
+                    self.set_terminator_current(Terminator::Jump { target: exit_block });
+                }
+                
+                // Generate each arm
+                for (i, arm) in arms.iter().enumerate() {
+                    // Arm condition block
+                    self.current_block = arm_blocks[i];
+                    
+                    let next_block = if i + 1 < arm_blocks.len() {
+                        arm_blocks[i + 1]
+                    } else {
+                        exit_block // Default fallthrough
+                    };
+                    
+                    // Generate pattern matching condition
+                    match &arm.pattern {
+                        ast::Pattern::Wildcard { .. } => {
+                            // Wildcard always matches - jump to body
+                            self.set_terminator_current(Terminator::Jump { target: body_blocks[i] });
+                        }
+                        ast::Pattern::Literal(lit) => {
+                            // Compare with literal
+                            let lit_val = self.generate_literal(lit);
+                            let cmp_reg = self.alloc_register();
+                            self.emit_current_with_type(
+                                Instruction::BinOp {
+                                    dest: cmp_reg,
+                                    op: IRBinOp::Eq,
+                                    left: match_val.clone(),
+                                    right: lit_val,
+                                },
+                                IRType::Bool
+                            );
+                            self.set_terminator_current(Terminator::Branch {
+                                cond: Value::Register(cmp_reg),
+                                then_target: body_blocks[i],
+                                else_target: next_block,
+                            });
+                        }
+                        ast::Pattern::Binding { name, .. } => {
+                            // Binding always matches and binds the value
+                            self.locals.insert(name.name.clone(), (match_val.clone(), match_ty.clone()));
+                            self.set_terminator_current(Terminator::Jump { target: body_blocks[i] });
+                        }
+                        _ => {
+                            // Struct, Tuple, Variant patterns - simplified: just go to body
+                            self.set_terminator_current(Terminator::Jump { target: body_blocks[i] });
+                        }
+                    }
+                    
+                    // Arm body block
+                    self.current_block = body_blocks[i];
+                    let body_val = self.generate_expr(&arm.body)?;
+                    
+                    // Store result and jump to exit
+                    self.emit_current(Instruction::Assign {
+                        dest: result_reg,
+                        value: body_val,
+                    });
+                    self.set_terminator_current(Terminator::Jump { target: exit_block });
+                }
+                
+                // Exit block
+                self.current_block = exit_block;
+                Ok(Value::Register(result_reg))
+            }
+
+            Expr::Array { elements, .. } => {
+                // Allocate array on stack and return pointer
+                if elements.is_empty() {
+                    return Ok(Value::Unit);
+                }
+                
+                // Generate all elements
+                let mut vals = Vec::new();
+                for elem in elements {
+                    vals.push(self.generate_expr(elem)?);
+                }
+                
+                // Get element type from first element
+                let elem_ty = self.get_value_type(&vals[0]).unwrap_or(IRType::I64);
+                let arr_size = vals.len();
+                
+                // Allocate array
+                let dest = self.alloc_register();
+                self.emit_current_with_type(
+                    Instruction::Alloca { dest, ty: IRType::Array(Box::new(elem_ty.clone()), arr_size) },
+                    IRType::Ptr(Box::new(IRType::Array(Box::new(elem_ty.clone()), arr_size)))
+                );
+                
+                // Store each element
+                for (i, val) in vals.iter().enumerate() {
+                    let idx_reg = self.alloc_register();
+                    self.emit_current_with_type(
+                        Instruction::GetElementPtr {
+                            dest: idx_reg,
+                            ptr: Value::Register(dest),
+                            index: Value::Constant(Constant::Int(i as i64)),
+                            elem_ty: elem_ty.clone(),
+                        },
+                        IRType::Ptr(Box::new(elem_ty.clone()))
+                    );
+                    self.emit_current(Instruction::Store {
+                        ptr: Value::Register(idx_reg),
+                        value: val.clone(),
+                    });
+                }
+                
+                Ok(Value::Register(dest))
+            }
             Expr::Tuple { .. } => Ok(Value::Unit),
+
             Expr::MethodCall { expr: receiver, method, args, .. } => {
                  if method.name == "add" && args.len() == 1 {
                      let ptr_val = self.generate_expr(receiver)?;
@@ -1486,12 +1766,70 @@ impl IRGenerator {
                 self.generate_expr(expr)
             }
             
-            Expr::Closure { body, .. } => {
-                // Simplified closure: just evaluate body and return
-                // Full implementation would create closure struct with captured environment
-                // For now, inline the body as a simple function
-                self.generate_expr(body)
+            Expr::Closure { params, ret_type, body, .. } => {
+                // Generate a unique closure function name
+                static CLOSURE_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                let closure_id = CLOSURE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let closure_name = format!("__closure_{}", closure_id);
+                
+                // Save current state
+                let saved_fn = self.current_fn.take();
+                let saved_block = self.current_block;
+                let saved_locals = self.locals.clone();
+                let saved_reg = self.next_register;
+                
+                // Create new function for closure
+                self.next_register = 0;
+                self.locals.clear();
+                
+                // Convert parameters
+                let ir_params: Vec<(String, IRType)> = params.iter()
+                    .map(|p| {
+                        let ty = p.ty.as_ref()
+                            .map(|t| self.ast_type_to_ir(t))
+                            .unwrap_or(IRType::I64);
+                        (p.name.name.clone(), ty)
+                    })
+                    .collect();
+                
+                // Determine return type
+                let ir_ret = ret_type.as_ref()
+                    .map(|t| self.ast_type_to_ir(t))
+                    .unwrap_or(IRType::I64);
+                
+                // Create closure function
+                let mut closure_fn = IRFunction::new(&closure_name, ir_params.clone(), ir_ret.clone());
+                
+                // Create entry block
+                let entry_block = closure_fn.add_block("entry");
+                self.current_fn = Some(closure_fn);
+                self.current_block = entry_block;
+                
+                // Register parameters as locals
+                for (i, (name, ty)) in ir_params.iter().enumerate() {
+                    self.locals.insert(name.clone(), (Value::Parameter(i), ty.clone()));
+                }
+                
+                // Generate closure body
+                let body_val = self.generate_expr(body)?;
+                
+                // Add return
+                self.set_terminator_current(Terminator::Return { value: Some(body_val) });
+                
+                // Finalize and add function to module
+                let closure_fn = self.current_fn.take().unwrap();
+                self.module.functions.push(closure_fn);
+                
+                // Restore state
+                self.current_fn = saved_fn;
+                self.current_block = saved_block;
+                self.locals = saved_locals;
+                self.next_register = saved_reg;
+                
+                // Return function pointer as global reference
+                Ok(Value::Global(closure_name))
             }
+
         }
     }
 
@@ -1619,9 +1957,43 @@ impl IRGenerator {
             ast::BinOp::BitOr => IRBinOp::Or,
             ast::BinOp::Assign 
             | ast::BinOp::AddAssign 
-            | ast::BinOp::SubAssign 
-            | ast::BinOp::MulAssign 
+            | ast::BinOp::SubAssign
+            | ast::BinOp::MulAssign
             | ast::BinOp::DivAssign => panic!("Assignment should be handled separately"),
+        }
+    }
+
+    /// Try to evaluate a const expression to an integer value at compile time
+    fn try_eval_const_expr(&self, expr: &ast::Expr) -> Option<i64> {
+        match expr {
+            ast::Expr::Literal(lit) => {
+                match lit {
+                    ast::Literal::Int(n, _) => Some(*n),
+                    ast::Literal::Bool(b, _) => Some(if *b { 1 } else { 0 }),
+                    _ => None,
+                }
+            }
+            ast::Expr::Binary { op, left, right, .. } => {
+                let l = self.try_eval_const_expr(left)?;
+                let r = self.try_eval_const_expr(right)?;
+                Some(match op {
+                    ast::BinOp::Add => l + r,
+                    ast::BinOp::Sub => l - r,
+                    ast::BinOp::Mul => l * r,
+                    ast::BinOp::Div => l / r,
+                    ast::BinOp::Mod => l % r,
+                    _ => return None,
+                })
+            }
+            ast::Expr::Unary { op, operand, .. } => {
+                let v = self.try_eval_const_expr(operand)?;
+                Some(match op {
+                    ast::UnaryOp::Neg => -v,
+                    ast::UnaryOp::Not => if v == 0 { 1 } else { 0 },
+                    _ => return None,
+                })
+            }
+            _ => None, // Can't evaluate non-literal expressions
         }
     }
 
@@ -1673,6 +2045,33 @@ impl IRGenerator {
                          mangled.push_str("_");
                          mangled.push_str(n);
                      }
+                }
+                IRType::Struct(mangled)
+            }
+            AstType::GenericWithArgs { name, args, .. } => {
+                // Const generics monomorphization
+                // Mangle name with both type and const args: Matrix_f32_3_3
+                let mut mangled = name.clone();
+                for arg in args {
+                    mangled.push_str("_");
+                    match arg {
+                        crate::frontend::ast::GenericArg::Type(ty) => {
+                            // Recursively get type name
+                            match ty {
+                                AstType::Named(n, _) => mangled.push_str(n),
+                                AstType::Pointer(_, _) => mangled.push_str("ptr"),
+                                _ => mangled.push_str("T"),
+                            }
+                        }
+                        crate::frontend::ast::GenericArg::Const(expr) => {
+                            // Evaluate const expression to integer
+                            if let Some(val) = self.try_eval_const_expr(expr) {
+                                mangled.push_str(&val.to_string());
+                            } else {
+                                mangled.push_str("N");
+                            }
+                        }
+                    }
                 }
                 IRType::Struct(mangled)
             }

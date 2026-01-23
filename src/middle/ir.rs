@@ -32,12 +32,28 @@ pub struct IRStruct {
     pub repr: StructRepr,
 }
 
+/// IR Enum variant
+#[derive(Debug, Clone)]
+pub struct IRVariant {
+    pub name: String,
+    /// Fields of this variant (empty for unit variants)
+    pub fields: Vec<IRType>,
+}
+
+/// IR Enum definition (sum type / tagged union)
+#[derive(Debug, Clone)]
+pub struct IREnum {
+    pub name: String,
+    pub variants: Vec<IRVariant>,
+}
+
 /// IR Module - contains all functions
 #[derive(Debug, Clone)]
 pub struct IRModule {
     pub name: String,
     pub functions: Vec<IRFunction>,
     pub structs: Vec<IRStruct>,
+    pub enums: Vec<IREnum>,
     pub externs: Vec<IRExtern>,
     /// #![no_std] - disable standard library
     pub no_std: bool,
@@ -59,6 +75,7 @@ impl IRModule {
             name: name.to_string(),
             functions: Vec::new(),
             structs: Vec::new(),
+            enums: Vec::new(),
             externs: Vec::new(),
             no_std: false,
             no_main: false,

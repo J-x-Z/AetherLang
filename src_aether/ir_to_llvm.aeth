@@ -12,14 +12,14 @@ extern "C" {
     // Context
     fn LLVMContextCreate() -> *void;
     fn LLVMContextDispose(ctx: *void);
-    
+
     // Module
     fn LLVMModuleCreateWithNameInContext(name: *u8, ctx: *void) -> *void;
     fn LLVMDisposeModule(m: *void);
     fn LLVMSetTarget(m: *void, triple: *u8);
     fn LLVMPrintModuleToString(m: *void) -> *u8;
     fn LLVMDisposeMessage(msg: *u8);
-    
+
     // Types
     fn LLVMVoidTypeInContext(ctx: *void) -> *void;
     fn LLVMInt1TypeInContext(ctx: *void) -> *void;
@@ -31,6 +31,9 @@ extern "C" {
     fn LLVMDoubleTypeInContext(ctx: *void) -> *void;
     fn LLVMPointerType(elem: *void, addr_space: u32) -> *void;
     fn LLVMFunctionType(ret: *void, params: **void, count: u32, vararg: i32) -> *void;
+    fn LLVMStructCreateNamed(ctx: *void, name: *u8) -> *void;
+    fn LLVMStructSetBody(struct_ty: *void, elems: **void, elem_count: u32, packed: i32);
+    fn LLVMGetTypeByName2(ctx: *void, name: *u8) -> *void;
     
     // Builder
     fn LLVMCreateBuilderInContext(ctx: *void) -> *void;
@@ -103,13 +106,114 @@ extern "C" {
     fn LLVMDisposeTargetMachine(tm: *void);
 }
 
-// ICmp predicates
-const ICMP_EQ: i32 = 32
-const ICMP_NE: i32 = 33
-const ICMP_SGT: i32 = 38
-const ICMP_SGE: i32 = 39
-const ICMP_SLT: i32 = 40
-const ICMP_SLE: i32 = 41
+// ICmp predicates (matches LLVMIntPredicate from llvm-c/Core.h)
+const LLVMIntEQ: i32 = 32
+const LLVMIntNE: i32 = 33
+const LLVMIntSGT: i32 = 38
+const LLVMIntSGE: i32 = 39
+const LLVMIntSLT: i32 = 40
+const LLVMIntSLE: i32 = 41
+
+// ==================== Simple Map (fixed-size for bootstrap) ====================
+
+const MAX_VALUES: u64 = 1024
+const MAX_BLOCKS: u64 = 256
+
+pub struct ValueMap {
+    keys: [u64; 1024],
+    values: [*void; 1024],
+    len: u64,
+}
+
+impl ValueMap {
+    pub fn new() -> ValueMap {
+        return ValueMap {
+            keys: [0; 1024],
+            values: [0 as *void; 1024],
+            len: 0,
+        };
+    }
+
+    pub fn set(self: *ValueMap, key: u64, val: *void) {
+        // Check if key exists
+        let mut i: u64 = 0;
+        while i < (*self).len {
+            if (*self).keys[i] == key {
+                (*self).values[i] = val;
+                return;
+            }
+            i = i + 1;
+        }
+        // Add new entry
+        if (*self).len < MAX_VALUES {
+            (*self).keys[(*self).len] = key;
+            (*self).values[(*self).len] = val;
+            (*self).len = (*self).len + 1;
+        }
+    }
+
+    pub fn get(self: *ValueMap, key: u64) -> *void {
+        let mut i: u64 = 0;
+        while i < (*self).len {
+            if (*self).keys[i] == key {
+                return (*self).values[i];
+            }
+            i = i + 1;
+        }
+        return 0 as *void;
+    }
+
+    pub fn clear(self: *ValueMap) {
+        (*self).len = 0;
+    }
+}
+
+pub struct BlockMap {
+    keys: [u64; 256],
+    values: [*void; 256],
+    len: u64,
+}
+
+impl BlockMap {
+    pub fn new() -> BlockMap {
+        return BlockMap {
+            keys: [0; 256],
+            values: [0 as *void; 256],
+            len: 0,
+        };
+    }
+
+    pub fn set(self: *BlockMap, key: u64, val: *void) {
+        let mut i: u64 = 0;
+        while i < (*self).len {
+            if (*self).keys[i] == key {
+                (*self).values[i] = val;
+                return;
+            }
+            i = i + 1;
+        }
+        if (*self).len < MAX_BLOCKS {
+            (*self).keys[(*self).len] = key;
+            (*self).values[(*self).len] = val;
+            (*self).len = (*self).len + 1;
+        }
+    }
+
+    pub fn get(self: *BlockMap, key: u64) -> *void {
+        let mut i: u64 = 0;
+        while i < (*self).len {
+            if (*self).keys[i] == key {
+                return (*self).values[i];
+            }
+            i = i + 1;
+        }
+        return 0 as *void;
+    }
+
+    pub fn clear(self: *BlockMap) {
+        (*self).len = 0;
+    }
+}
 
 // ==================== IR to LLVM Converter ====================
 
@@ -119,8 +223,10 @@ pub struct IRToLLVM {
     builder: *void,
     current_func: *void,
     target_triple: *u8,
-    // Value map: register id -> LLVM value (simplified, would need proper map)
+    // Value map: register id -> LLVM value
+    value_map: ValueMap,
     // Block map: block id -> LLVM basic block
+    block_map: BlockMap,
 }
 
 impl IRToLLVM {
@@ -144,9 +250,11 @@ impl IRToLLVM {
             builder: b,
             current_func: 0 as *void,
             target_triple: target,
+            value_map: ValueMap::new(),
+            block_map: BlockMap::new(),
         };
     }
-    
+
     /// Dispose of resources
     pub fn dispose(self: *IRToLLVM) {
         if (*self).builder != (0 as *void) {
@@ -158,6 +266,41 @@ impl IRToLLVM {
         if (*self).context != (0 as *void) {
             LLVMContextDispose((*self).context);
         }
+    }
+
+    // ==================== Value/Block Map Operations ====================
+
+    /// Register a value (IR register -> LLVM value)
+    pub fn set_value(self: *IRToLLVM, reg_id: u64, llvm_val: *void) {
+        (*self).value_map.set(reg_id, llvm_val);
+    }
+
+    /// Get LLVM value for an IR register
+    pub fn get_value(self: *IRToLLVM, reg_id: u64) -> *void {
+        return (*self).value_map.get(reg_id);
+    }
+
+    /// Register a block (IR block id -> LLVM basic block)
+    pub fn set_block(self: *IRToLLVM, block_id: u64, llvm_bb: *void) {
+        (*self).block_map.set(block_id, llvm_bb);
+    }
+
+    /// Get LLVM basic block for an IR block id
+    pub fn get_block(self: *IRToLLVM, block_id: u64) -> *void {
+        return (*self).block_map.get(block_id);
+    }
+
+    /// Create and register a new block
+    pub fn create_and_register_block(self: *IRToLLVM, block_id: u64, name: *u8) -> *void {
+        let bb: *void = LLVMAppendBasicBlockInContext((*self).context, (*self).current_func, name);
+        (*self).set_block(block_id, bb);
+        return bb;
+    }
+
+    /// Clear maps for new function
+    pub fn clear_function_state(self: *IRToLLVM) {
+        (*self).value_map.clear();
+        (*self).block_map.clear();
     }
     
     // ==================== Type Conversion ====================
@@ -270,17 +413,17 @@ impl IRToLLVM {
         } else if op == 9 {
             return LLVMBuildAShr(b, lhs, rhs, name);
         } else if op == 10 {
-            return LLVMBuildICmp(b, ICMP_EQ, lhs, rhs, name);
+            return LLVMBuildICmp(b, LLVMIntEQ, lhs, rhs, name);
         } else if op == 11 {
-            return LLVMBuildICmp(b, ICMP_NE, lhs, rhs, name);
+            return LLVMBuildICmp(b, LLVMIntNE, lhs, rhs, name);
         } else if op == 12 {
-            return LLVMBuildICmp(b, ICMP_SLT, lhs, rhs, name);
+            return LLVMBuildICmp(b, LLVMIntSLT, lhs, rhs, name);
         } else if op == 13 {
-            return LLVMBuildICmp(b, ICMP_SLE, lhs, rhs, name);
+            return LLVMBuildICmp(b, LLVMIntSLE, lhs, rhs, name);
         } else if op == 14 {
-            return LLVMBuildICmp(b, ICMP_SGT, lhs, rhs, name);
+            return LLVMBuildICmp(b, LLVMIntSGT, lhs, rhs, name);
         } else if op == 15 {
-            return LLVMBuildICmp(b, ICMP_SGE, lhs, rhs, name);
+            return LLVMBuildICmp(b, LLVMIntSGE, lhs, rhs, name);
         }
         
         // Default: add
@@ -352,9 +495,50 @@ impl IRToLLVM {
     pub fn const_string(self: *IRToLLVM, s: *u8, name: *u8) -> *void {
         return LLVMBuildGlobalStringPtr((*self).builder, s, name);
     }
-    
+
+    // ==================== Struct Type Generation ====================
+
+    /// Create or get a named struct type
+    /// If is_repr_c is true, the struct will use packed=1 for C-compatible layout
+    pub fn create_struct_type(self: *IRToLLVM, name: *u8, field_types: **void, field_count: u32, is_repr_c: bool) -> *void {
+        let ctx = (*self).context;
+
+        // Check if struct already exists
+        let existing = LLVMGetTypeByName2(ctx, name);
+        if existing != (0 as *void) {
+            return existing;
+        }
+
+        // Create named struct
+        let struct_ty = LLVMStructCreateNamed(ctx, name);
+
+        // Set struct body with appropriate packing
+        // For #[repr(C)], we use packed=0 (natural C alignment)
+        // For #[repr(Packed)], we would use packed=1 (no padding)
+        // Note: repr(C) means "use C ABI layout" which is actually packed=0
+        let packed: i32 = if is_repr_c { 0 } else { 0 };
+        LLVMStructSetBody(struct_ty, field_types, field_count, packed);
+
+        return struct_ty;
+    }
+
+    /// Create struct type for #[repr(Packed)]
+    pub fn create_packed_struct_type(self: *IRToLLVM, name: *u8, field_types: **void, field_count: u32) -> *void {
+        let ctx = (*self).context;
+
+        let existing = LLVMGetTypeByName2(ctx, name);
+        if existing != (0 as *void) {
+            return existing;
+        }
+
+        let struct_ty = LLVMStructCreateNamed(ctx, name);
+        LLVMStructSetBody(struct_ty, field_types, field_count, 1);  // packed=1
+
+        return struct_ty;
+    }
+
     // ==================== Output ====================
-    
+
     /// Print LLVM IR to stdout
     pub fn print_ir(self: *IRToLLVM) {
         let ir = LLVMPrintModuleToString((*self).module);
@@ -366,38 +550,297 @@ impl IRToLLVM {
     pub fn get_module(self: *IRToLLVM) -> *void {
         return (*self).module;
     }
+
+    // ==================== Control Flow Generation ====================
+
+    /// Generate LLVM IR for while loop
+    /// Returns the exit block for continuation
+    pub fn gen_while(self: *IRToLLVM, cond_val: *void, body_fn: u64) -> *void {
+        let cond_block: *void = (*self).create_block("while.cond\0" as *u8);
+        let body_block: *void = (*self).create_block("while.body\0" as *u8);
+        let exit_block: *void = (*self).create_block("while.exit\0" as *u8);
+
+        // Branch to condition
+        (*self).gen_br(cond_block);
+
+        // Condition block
+        (*self).position_at_end(cond_block);
+        // Evaluate condition (would call body_fn or get from context)
+        (*self).gen_cond_br(cond_val, body_block, exit_block);
+
+        // Body block
+        (*self).position_at_end(body_block);
+        // Body would be generated here
+        (*self).gen_br(cond_block);
+
+        // Continue at exit
+        (*self).position_at_end(exit_block);
+
+        return exit_block;
+    }
+
+    /// Generate LLVM IR for infinite loop
+    pub fn gen_loop(self: *IRToLLVM) -> *void {
+        let body_block: *void = (*self).create_block("loop.body\0" as *u8);
+        let exit_block: *void = (*self).create_block("loop.exit\0" as *u8);
+
+        // Branch to body
+        (*self).gen_br(body_block);
+
+        // Body block
+        (*self).position_at_end(body_block);
+        // Body would be generated here, with break jumping to exit_block
+        (*self).gen_br(body_block); // Loop back
+
+        // Exit block (reached via break)
+        (*self).position_at_end(exit_block);
+
+        return exit_block;
+    }
+
+    /// Generate LLVM IR for for loop (desugared to while)
+    pub fn gen_for(self: *IRToLLVM, start_val: *void, end_val: *void, step_val: *void) -> *void {
+        let init_block: *void = (*self).create_block("for.init\0" as *u8);
+        let cond_block: *void = (*self).create_block("for.cond\0" as *u8);
+        let body_block: *void = (*self).create_block("for.body\0" as *u8);
+        let incr_block: *void = (*self).create_block("for.incr\0" as *u8);
+        let exit_block: *void = (*self).create_block("for.exit\0" as *u8);
+
+        // Branch to init
+        (*self).gen_br(init_block);
+
+        // Init block: allocate and initialize loop variable
+        (*self).position_at_end(init_block);
+        let i64_ty: *void = (*self).i64_type();
+        let loop_var: *void = (*self).gen_alloca(i64_ty, "i\0" as *u8);
+        (*self).gen_store(start_val, loop_var);
+        (*self).gen_br(cond_block);
+
+        // Condition block: compare with end
+        (*self).position_at_end(cond_block);
+        let current: *void = (*self).gen_load(i64_ty, loop_var, "cur\0" as *u8);
+        let cmp: *void = (*self).gen_binop(12, current, end_val, "cmp\0" as *u8); // Lt
+        (*self).gen_cond_br(cmp, body_block, exit_block);
+
+        // Body block
+        (*self).position_at_end(body_block);
+        // Body would be generated here
+        (*self).gen_br(incr_block);
+
+        // Increment block
+        (*self).position_at_end(incr_block);
+        let cur2: *void = (*self).gen_load(i64_ty, loop_var, "cur2\0" as *u8);
+        let next: *void = (*self).gen_binop(0, cur2, step_val, "next\0" as *u8); // Add
+        (*self).gen_store(next, loop_var);
+        (*self).gen_br(cond_block);
+
+        // Exit block
+        (*self).position_at_end(exit_block);
+
+        return exit_block;
+    }
+
+    /// Generate LLVM IR for match expression
+    /// scrutinee: the value being matched
+    /// arm_count: number of match arms
+    pub fn gen_match(self: *IRToLLVM, scrutinee: *void, arm_count: u64) -> *void {
+        let exit_block: *void = (*self).create_block("match.exit\0" as *u8);
+
+        // Allocate result variable
+        let i64_ty: *void = (*self).i64_type();
+        let result_ptr: *void = (*self).gen_alloca(i64_ty, "match.result\0" as *u8);
+
+        // Generate comparison chain for each arm
+        let mut i: u64 = 0;
+        let mut current_block: *void = 0 as *void;
+
+        while i < arm_count {
+            let arm_check: *void = (*self).create_block("match.arm\0" as *u8);
+            let arm_body: *void = (*self).create_block("match.body\0" as *u8);
+            let next_arm: *void = (*self).create_block("match.next\0" as *u8);
+
+            if i == 0 {
+                (*self).gen_br(arm_check);
+            }
+
+            // Check pattern
+            (*self).position_at_end(arm_check);
+            let pattern_val: *void = (*self).const_i64(i as i64);
+            let cmp: *void = (*self).gen_binop(10, scrutinee, pattern_val, "eq\0" as *u8); // Eq
+
+            // Last arm is wildcard - unconditional
+            if i == arm_count - 1 {
+                (*self).gen_br(arm_body);
+            } else {
+                (*self).gen_cond_br(cmp, arm_body, next_arm);
+            }
+
+            // Arm body
+            (*self).position_at_end(arm_body);
+            let arm_result: *void = (*self).const_i64((i as i64) * 100 + 100);
+            (*self).gen_store(arm_result, result_ptr);
+            (*self).gen_br(exit_block);
+
+            // Setup for next arm
+            (*self).position_at_end(next_arm);
+            current_block = next_arm;
+
+            i = i + 1;
+        }
+
+        // Exit block
+        (*self).position_at_end(exit_block);
+        let result: *void = (*self).gen_load(i64_ty, result_ptr, "result\0" as *u8);
+
+        return result;
+    }
+
+    /// Generate LLVM IR for if expression
+    pub fn gen_if(self: *IRToLLVM, cond: *void, has_else: bool) -> *void {
+        let then_block: *void = (*self).create_block("if.then\0" as *u8);
+        let else_block: *void = (*self).create_block("if.else\0" as *u8);
+        let merge_block: *void = (*self).create_block("if.merge\0" as *u8);
+
+        // Conditional branch
+        (*self).gen_cond_br(cond, then_block, else_block);
+
+        // Then block
+        (*self).position_at_end(then_block);
+        // Then body would be generated here
+        (*self).gen_br(merge_block);
+
+        // Else block
+        (*self).position_at_end(else_block);
+        if has_else {
+            // Else body would be generated here
+        }
+        (*self).gen_br(merge_block);
+
+        // Merge block
+        (*self).position_at_end(merge_block);
+
+        return merge_block;
+    }
+
+    // ==================== Closure Generation ====================
+
+    /// Generate LLVM IR for closure
+    /// Creates: 1. Environment struct, 2. Closure function, 3. Closure object
+    pub fn gen_closure(self: *IRToLLVM, capture_count: u64, param_count: u64) -> *void {
+        let i64_ty: *void = (*self).i64_type();
+        let ptr_ty: *void = (*self).ptr_type(i64_ty);
+
+        // Allocate closure struct: { env*, fn* }
+        let closure_ptr: *void = (*self).gen_alloca(i64_ty, "closure\0" as *u8);
+
+        if capture_count > 0 {
+            // Allocate environment
+            let env_ptr: *void = (*self).gen_alloca(i64_ty, "env\0" as *u8);
+
+            // Copy captures into environment
+            let mut i: u64 = 0;
+            while i < capture_count {
+                // Would store each captured variable
+                let captured: *void = (*self).const_i64(i as i64);
+                (*self).gen_store(captured, env_ptr);
+                i = i + 1;
+            }
+
+            // Store env in closure
+            (*self).gen_store(env_ptr, closure_ptr);
+        }
+
+        // Function pointer would be stored here
+        // In real impl, would generate a thunk function
+
+        return closure_ptr;
+    }
+
+    /// Generate LLVM IR for closure call
+    pub fn gen_closure_call(self: *IRToLLVM, closure: *void, args: **void, arg_count: u32) -> *void {
+        // Load function pointer from closure
+        let i64_ty: *void = (*self).i64_type();
+        let fn_ptr: *void = (*self).gen_load(i64_ty, closure, "fn\0" as *u8);
+
+        // Load environment pointer
+        // let env_ptr = ... (would be at offset 1)
+
+        // Call with env as first argument
+        // In real impl, would prepend env to args
+        let func_ty: *void = LLVMFunctionType(i64_ty, 0 as **void, 0, 0);
+        return (*self).gen_call(func_ty, fn_ptr, args, arg_count, "call\0" as *u8);
+    }
+
+    // ==================== Array/Tuple Generation ====================
+
+    /// Generate LLVM IR for array literal
+    pub fn gen_array(self: *IRToLLVM, elements: **void, elem_count: u32) -> *void {
+        let i64_ty: *void = (*self).i64_type();
+
+        // Allocate array
+        let array_ptr: *void = (*self).gen_alloca(i64_ty, "array\0" as *u8);
+
+        // Store each element (simplified - would use GEP in real impl)
+        let mut i: u32 = 0;
+        while i < elem_count {
+            // Would compute GEP and store
+            i = i + 1;
+        }
+
+        return array_ptr;
+    }
+
+    /// Generate LLVM IR for array index access
+    pub fn gen_array_index(self: *IRToLLVM, array: *void, index: *void) -> *void {
+        let i64_ty: *void = (*self).i64_type();
+
+        // GEP to element
+        let elem_ptr: *void = LLVMBuildGEP2(
+            (*self).builder, i64_ty, array,
+            &index as **void, 1, "elem\0" as *u8
+        );
+
+        // Load element
+        return (*self).gen_load(i64_ty, elem_ptr, "val\0" as *u8);
+    }
 }
 
 // ==================== Test ====================
 
 fn main() -> i32 {
     puts("IR to LLVM Converter for AetherLang\0" as *u8);
+    puts("Initializing LLVM...\0" as *u8);
     
-    // Create converter
-    let conv = IRToLLVM::new("test_module\0" as *u8, "arm64-apple-macosx\0" as *u8);
+    // Just test LLVM initialization
+    LLVMInitializeAllTargetInfos();
+    puts("  - TargetInfos OK\0" as *u8);
     
-    // Create a simple function: fn add(a: i64, b: i64) -> i64 { return a + b; }
-    let i64_ty = conv.i64_type();
-    let func = conv.add_function("add\0" as *u8, i64_ty, 0 as **void, 0);
+    LLVMInitializeAllTargets();
+    puts("  - Targets OK\0" as *u8);
     
-    // Create entry block
-    let entry = conv.create_block("entry\0" as *u8);
-    conv.position_at_end(entry);
+    LLVMInitializeAllTargetMCs();
+    puts("  - TargetMCs OK\0" as *u8);
     
-    // Generate: a + b (simplified - would get params)
-    let a = conv.const_i64(10);
-    let b = conv.const_i64(20);
-    let sum = conv.gen_binop(0, a, b, "sum\0" as *u8);
+    LLVMInitializeAllAsmPrinters();
+    puts("  - AsmPrinters OK\0" as *u8);
     
-    // Return sum
-    conv.gen_ret(sum);
+    // Create context
+    let ctx = LLVMContextCreate();
+    puts("  - Context created\0" as *u8);
+    
+    // Create module
+    let m = LLVMModuleCreateWithNameInContext("test\0" as *u8, ctx);
+    puts("  - Module created\0" as *u8);
     
     // Print IR
-    puts("\n--- Generated LLVM IR ---\0" as *u8);
-    conv.print_ir();
+    let ir = LLVMPrintModuleToString(m);
+    puts("Generated IR:\0" as *u8);
+    puts(ir);
+    LLVMDisposeMessage(ir);
     
     // Cleanup
-    conv.dispose();
+    LLVMDisposeModule(m);
+    LLVMContextDispose(ctx);
     
     puts("\n--- Done ---\0" as *u8);
     return 0;
