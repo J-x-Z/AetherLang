@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <immintrin.h>  /* SSE/AVX */
+#include <string.h>
 
 /* AetherLang Runtime */
 static void aether_print(const char* s) { printf("%s", s); }
@@ -13,557 +13,118 @@ static void aether_println_i64(int64_t n) { printf("%lld\n", (long long)n); }
 static void aether_assert(bool c) { if(!c) { fprintf(stderr, "Assertion failed\n"); exit(1); } }
 
 /* Struct Definitions */
-uint64_t str_len(uint8_t*);
-bool str_eq(uint8_t*, uint8_t*);
-bool str_eq_n(uint8_t*, uint8_t*, uint64_t);
-bool str_starts_with(uint8_t*, uint8_t*);
-bool str_ends_with(uint8_t*, uint8_t*);
-uint8_t* str_new(uint64_t);
-uint8_t* str_clone(uint8_t*);
-void str_free(uint8_t*);
-uint8_t* str_concat(uint8_t*, uint8_t*);
-uint8_t* str_substr(uint8_t*, uint64_t, uint64_t);
-int64_t str_find_char(uint8_t*, uint8_t);
-int64_t str_find(uint8_t*, uint8_t*);
-int32_t str_to_i32(uint8_t*);
-int64_t str_to_i64(uint8_t*);
-bool char_is_whitespace(uint8_t);
-bool char_is_digit(uint8_t);
-bool char_is_alpha(uint8_t);
-bool char_is_alnum(uint8_t);
-uint8_t* str_trim_left(uint8_t*);
-uint64_t str_trim_right_len(uint8_t*);
-uint8_t* str_trim_right(uint8_t*);
-uint8_t* str_trim(uint8_t*);
+/* Enum Definitions (Tagged Unions) */
+uint64_t string_len(uint8_t*);
+int32_t string_compare(uint8_t*, uint8_t*);
+bool string_equals(uint8_t*, uint8_t*);
+uint8_t* string_alloc(uint64_t);
+void string_dealloc(uint8_t*);
+uint8_t* string_copy(uint8_t*, uint8_t*);
+uint8_t* string_concat(uint8_t*, uint8_t*);
+uint8_t* string_dup(uint8_t*);
 
-uint64_t str_len(uint8_t* _arg0) {
-    int64_t _t1;
+uint64_t string_len(uint8_t* _arg0) {
+    uint64_t _t1;
     uint8_t* _t0;
     
     _t0 = _arg0;
-    strlen(_t0);
+    _t1 = strlen(_t0);
     return _t1;
 }
 
-bool str_eq(uint8_t* _arg0, uint8_t* _arg1) {
+int32_t string_compare(uint8_t* _arg0, uint8_t* _arg1) {
+    int32_t _t2;
+    uint8_t* _t0;
+    uint8_t* _t1;
+    
+    _t0 = _arg0;
+    _t1 = _arg1;
+    _t2 = strcmp(_t0, _t1);
+    return _t2;
+}
+
+bool string_equals(uint8_t* _arg0, uint8_t* _arg1) {
+    int32_t _t2;
     int32_t _t3;
-    int64_t _t2;
     int64_t _t4;
     uint8_t* _t0;
     uint8_t* _t1;
     
     _t0 = _arg0;
     _t1 = _arg1;
-    strcmp(_t0, _t1);
+    _t2 = strcmp(_t0, _t1);
     _t3 = (int32_t)0LL;
     _t4 = _t2 == _t3;
     return _t4;
 }
 
-bool str_eq_n(uint8_t* _arg0, uint8_t* _arg1, uint64_t _arg2) {
-    int32_t _t4;
-    int64_t _t3;
-    int64_t _t5;
-    uint64_t _t2;
-    uint8_t* _t0;
-    uint8_t* _t1;
-    
-    _t0 = _arg0;
-    _t1 = _arg1;
-    _t2 = _arg2;
-    strncmp(_t0, _t1, _t2);
-    _t4 = (int32_t)0LL;
-    _t5 = _t3 == _t4;
-    return _t5;
-}
-
-bool str_starts_with(uint8_t* _arg0, uint8_t* _arg1) {
-    int32_t _t5;
-    int64_t _t2;
-    int64_t _t3;
-    int64_t _t4;
-    int64_t _t6;
-    uint8_t* _t0;
-    uint8_t* _t1;
-    
-    _t0 = _arg0;
-    _t1 = _arg1;
-    strlen(_t1);
-    _t3 = _t2;
-    strncmp(_t0, _t1, _t3);
-    _t5 = (int32_t)0LL;
-    _t6 = _t4 == _t5;
-    return _t6;
-}
-
-bool str_ends_with(uint8_t* _arg0, uint8_t* _arg1) {
-    int32_t _t14;
-    int64_t _t10;
-    int64_t _t13;
-    int64_t _t15;
-    int64_t _t2;
-    int64_t _t3;
-    int64_t _t4;
-    int64_t _t5;
-    int64_t _t6;
-    int64_t _t7;
-    int64_t _t8;
-    uint64_t _t9;
-    uint8_t* _t0;
-    uint8_t* _t11;
-    uint8_t* _t12;
-    uint8_t* _t1;
-    
-    _t0 = _arg0;
-    _t1 = _arg1;
-    strlen(_t0);
-    _t3 = _t2;
-    strlen(_t1);
-    _t5 = _t4;
-    _t6 = _t5 > _t3;
-    if (_t6) goto L_then; else goto L_else;
-L_then:
-    return 0;
-L_else:
-    goto L_merge;
-L_merge:
-    _t7 = _t3 - _t5;
-    _t8 = _t7;
-    _t9 = (uint64_t)_t0;
-    _t10 = _t9 + _t8;
-    _t11 = (uint8_t*)_t10;
-    _t12 = _t11;
-    strcmp(_t12, _t1);
-    _t14 = (int32_t)0LL;
-    _t15 = _t13 == _t14;
-    return _t15;
-}
-
-uint8_t* str_new(uint64_t _arg0) {
-    int64_t _t2;
-    int64_t _t3;
-    int64_t _t4;
-    int64_t _t8;
-    uint64_t _t0;
-    uint64_t _t1;
-    uint8_t _t10;
-    uint8_t* _t11;
-    uint8_t* _t5;
-    uint8_t* _t6;
-    uint8_t* _t7;
-    uint8_t* _t9;
-    
-    _t0 = _arg0;
-    _t1 = (uint64_t)1LL;
-    _t2 = _t0 + _t1;
-    _t3 = (int64_t)_t2;
-    malloc(_t3);
-    _t5 = (uint8_t*)_t4;
-    _t6 = _t5;
-    _t7 = (uint8_t*)0LL;
-    _t8 = _t6 != _t7;
-    if (_t8) goto L_then; else goto L_else;
-L_then:
-    _t9 = &_t6[0LL];
-    _t10 = *_t9;
-    _t11 = &_t6[0LL];
-    *_t11 = 0LL;
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
-    return _t6;
-}
-
-uint8_t* str_clone(uint8_t* _arg0) {
-    int64_t _t10;
-    int64_t _t11;
+uint8_t* string_alloc(uint64_t _arg0) {
     int64_t _t1;
-    int64_t _t2;
+    uint64_t _t0;
+    uint8_t* _t3;
+    void* _t2;
+    
+    _t0 = _arg0;
+    _t1 = (int64_t)_t0;
+    _t2 = malloc(_t1);
+    _t3 = (uint8_t*)_t2;
+    return _t3;
+}
+
+void string_dealloc(uint8_t* _arg0) {
+    uint8_t* _t0;
+    void* _t1;
+    
+    _t0 = _arg0;
+    _t1 = (void*)_t0;
+    free(_t1);
+    return;
+}
+
+uint8_t* string_copy(uint8_t* _arg0, uint8_t* _arg1) {
+    uint8_t* _t0;
+    uint8_t* _t1;
+    uint8_t* _t2;
+    
+    _t0 = _arg0;
+    _t1 = _arg1;
+    _t2 = strcpy(_t0, _t1);
+    return _t2;
+}
+
+uint8_t* string_concat(uint8_t* _arg0, uint8_t* _arg1) {
+    uint8_t* _t0;
+    uint8_t* _t1;
+    uint8_t* _t2;
+    
+    _t0 = _arg0;
+    _t1 = _arg1;
+    _t2 = strcat(_t0, _t1);
+    return _t2;
+}
+
+uint8_t* string_dup(uint8_t* _arg0) {
+    int64_t _t3;
     int64_t _t4;
     int64_t _t5;
-    int64_t _t6;
-    uint64_t _t3;
+    uint64_t _t1;
+    uint64_t _t2;
     uint8_t* _t0;
     uint8_t* _t7;
     uint8_t* _t8;
     uint8_t* _t9;
+    void* _t6;
     
     _t0 = _arg0;
-    strlen(_t0);
-    _t2 = _t1;
-    _t3 = (uint64_t)1LL;
-    _t4 = _t2 + _t3;
+    _t1 = strlen(_t0);
+    _t2 = (uint64_t)1LL;
+    _t3 = _t1 + _t2;
+    _t4 = _t3;
     _t5 = (int64_t)_t4;
-    malloc(_t5);
+    _t6 = malloc(_t5);
     _t7 = (uint8_t*)_t6;
     _t8 = _t7;
-    _t9 = (uint8_t*)0LL;
-    _t10 = _t8 != _t9;
-    if (_t10) goto L_then; else goto L_else;
-L_then:
-    strcpy(_t8, _t0);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
+    _t9 = strcpy(_t8, _t0);
     return _t8;
-}
-
-void str_free(uint8_t* _arg0) {
-    int64_t _t2;
-    uint8_t* _t0;
-    uint8_t* _t1;
-    void* _t3;
-    
-    _t0 = _arg0;
-    _t1 = (uint8_t*)0LL;
-    _t2 = _t0 != _t1;
-    if (_t2) goto L_then; else goto L_else;
-L_then:
-    _t3 = (void*)_t0;
-    free(_t3);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
-    return;
-}
-
-uint8_t* str_concat(uint8_t* _arg0, uint8_t* _arg1) {
-    int64_t _t10;
-    int64_t _t14;
-    int64_t _t15;
-    int64_t _t16;
-    int64_t _t2;
-    int64_t _t3;
-    int64_t _t4;
-    int64_t _t5;
-    int64_t _t6;
-    int64_t _t8;
-    int64_t _t9;
-    uint64_t _t7;
-    uint8_t* _t0;
-    uint8_t* _t11;
-    uint8_t* _t12;
-    uint8_t* _t13;
-    uint8_t* _t1;
-    
-    _t0 = _arg0;
-    _t1 = _arg1;
-    strlen(_t0);
-    _t3 = _t2;
-    strlen(_t1);
-    _t5 = _t4;
-    _t6 = _t3 + _t5;
-    _t7 = (uint64_t)1LL;
-    _t8 = _t6 + _t7;
-    _t9 = (int64_t)_t8;
-    malloc(_t9);
-    _t11 = (uint8_t*)_t10;
-    _t12 = _t11;
-    _t13 = (uint8_t*)0LL;
-    _t14 = _t12 != _t13;
-    if (_t14) goto L_then; else goto L_else;
-L_then:
-    strcpy(_t12, _t0);
-    strcat(_t12, _t1);
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
-    return _t12;
-}
-
-uint8_t* str_substr(uint8_t* _arg0, uint64_t _arg1, uint64_t _arg2) {
-    int32_t _t18;
-    int32_t _t19;
-    int64_t _t12;
-    int64_t _t14;
-    int64_t _t17;
-    int64_t _t3;
-    int64_t _t4;
-    int64_t _t6;
-    int64_t _t7;
-    int64_t _t8;
-    uint64_t _t13;
-    uint64_t _t1;
-    uint64_t _t2;
-    uint64_t _t5;
-    uint8_t _t21;
-    uint8_t* _t0;
-    uint8_t* _t10;
-    uint8_t* _t11;
-    uint8_t* _t15;
-    uint8_t* _t16;
-    uint8_t* _t20;
-    uint8_t* _t22;
-    uint8_t* _t9;
-    
-    _t0 = _arg0;
-    _t1 = _arg1;
-    _t2 = _arg2;
-    _t3 = _t2 - _t1;
-    _t4 = _t3;
-    _t5 = (uint64_t)1LL;
-    _t6 = _t4 + _t5;
-    _t7 = (int64_t)_t6;
-    malloc(_t7);
-    _t9 = (uint8_t*)_t8;
-    _t10 = _t9;
-    _t11 = (uint8_t*)0LL;
-    _t12 = _t10 != _t11;
-    if (_t12) goto L_then; else goto L_else;
-L_then:
-    _t13 = (uint64_t)_t0;
-    _t14 = _t13 + _t1;
-    _t15 = (uint8_t*)_t14;
-    _t16 = _t15;
-    strncpy(_t10, _t16, _t4);
-    _t18 = (int32_t)_t4;
-    _t19 = _t18;
-    _t20 = &_t10[_t19];
-    _t21 = *_t20;
-    _t22 = &_t10[_t19];
-    *_t22 = 0LL;
-    goto L_merge;
-L_else:
-    goto L_merge;
-L_merge:
-    return _t10;
-}
-
-int64_t str_find_char(uint8_t* _arg0, uint8_t _arg1) {
-    int32_t _t2;
-    int64_t _t10;
-    int64_t _t11;
-    int64_t _t3;
-    int64_t _t4;
-    int64_t _t6;
-    int64_t _t7;
-    uint64_t _t8;
-    uint64_t _t9;
-    uint8_t _t1;
-    uint8_t* _t0;
-    uint8_t* _t5;
-    
-    _t0 = _arg0;
-    _t1 = _arg1;
-    _t2 = (int32_t)_t1;
-    strchr(_t0, _t2);
-    _t4 = _t3;
-    _t5 = (uint8_t*)0LL;
-    _t6 = _t4 == _t5;
-    if (_t6) goto L_then; else goto L_else;
-L_then:
-    _t7 = -1LL;
-    return _t7;
-L_else:
-    goto L_merge;
-L_merge:
-    _t8 = (uint64_t)_t4;
-    _t9 = (uint64_t)_t0;
-    _t10 = _t8 - _t9;
-    _t11 = (int64_t)_t10;
-    return _t11;
-}
-
-int64_t str_find(uint8_t* _arg0, uint8_t* _arg1) {
-    int64_t _t10;
-    int64_t _t2;
-    int64_t _t3;
-    int64_t _t5;
-    int64_t _t6;
-    int64_t _t9;
-    uint64_t _t7;
-    uint64_t _t8;
-    uint8_t* _t0;
-    uint8_t* _t1;
-    uint8_t* _t4;
-    
-    _t0 = _arg0;
-    _t1 = _arg1;
-    strstr(_t0, _t1);
-    _t3 = _t2;
-    _t4 = (uint8_t*)0LL;
-    _t5 = _t3 == _t4;
-    if (_t5) goto L_then; else goto L_else;
-L_then:
-    _t6 = -1LL;
-    return _t6;
-L_else:
-    goto L_merge;
-L_merge:
-    _t7 = (uint64_t)_t3;
-    _t8 = (uint64_t)_t0;
-    _t9 = _t7 - _t8;
-    _t10 = (int64_t)_t9;
-    return _t10;
-}
-
-int32_t str_to_i32(uint8_t* _arg0) {
-    int64_t _t1;
-    uint8_t* _t0;
-    
-    _t0 = _arg0;
-    atoi(_t0);
-    return _t1;
-}
-
-int64_t str_to_i64(uint8_t* _arg0) {
-    int64_t _t1;
-    uint8_t* _t0;
-    
-    _t0 = _arg0;
-    atol(_t0);
-    return _t1;
-}
-
-bool char_is_whitespace(uint8_t _arg0) {
-    int64_t _t10;
-    int64_t _t11;
-    int64_t _t2;
-    int64_t _t4;
-    int64_t _t5;
-    int64_t _t7;
-    int64_t _t8;
-    uint8_t _t0;
-    uint8_t _t1;
-    uint8_t _t3;
-    uint8_t _t6;
-    uint8_t _t9;
-    
-    _t0 = _arg0;
-    _t1 = (uint8_t)32LL;
-    _t2 = _t0 == _t1;
-    _t3 = (uint8_t)9LL;
-    _t4 = _t0 == _t3;
-    _t5 = _t2 || _t4;
-    _t6 = (uint8_t)10LL;
-    _t7 = _t0 == _t6;
-    _t8 = _t5 || _t7;
-    _t9 = (uint8_t)13LL;
-    _t10 = _t0 == _t9;
-    _t11 = _t8 || _t10;
-    return _t11;
-}
-
-bool char_is_digit(uint8_t _arg0) {
-    int64_t _t2;
-    int64_t _t4;
-    int64_t _t5;
-    uint8_t _t0;
-    uint8_t _t1;
-    uint8_t _t3;
-    
-    _t0 = _arg0;
-    _t1 = (uint8_t)48LL;
-    _t2 = _t0 >= _t1;
-    _t3 = (uint8_t)57LL;
-    _t4 = _t0 <= _t3;
-    _t5 = _t2 && _t4;
-    return _t5;
-}
-
-bool char_is_alpha(uint8_t _arg0) {
-    int64_t _t10;
-    int64_t _t11;
-    int64_t _t2;
-    int64_t _t4;
-    int64_t _t5;
-    int64_t _t7;
-    int64_t _t9;
-    uint8_t _t0;
-    uint8_t _t1;
-    uint8_t _t3;
-    uint8_t _t6;
-    uint8_t _t8;
-    
-    _t0 = _arg0;
-    _t1 = (uint8_t)65LL;
-    _t2 = _t0 >= _t1;
-    _t3 = (uint8_t)90LL;
-    _t4 = _t0 <= _t3;
-    _t5 = _t2 && _t4;
-    _t6 = (uint8_t)97LL;
-    _t7 = _t0 >= _t6;
-    _t8 = (uint8_t)122LL;
-    _t9 = _t0 <= _t8;
-    _t10 = _t7 && _t9;
-    _t11 = _t5 || _t10;
-    return _t11;
-}
-
-bool char_is_alnum(uint8_t _arg0) {
-    bool _t1;
-    bool _t2;
-    int64_t _t3;
-    uint8_t _t0;
-    
-    _t0 = _arg0;
-    _t1 = char_is_alpha(_t0);
-    _t2 = char_is_digit(_t0);
-    _t3 = _t1 || _t2;
-    return _t3;
-}
-
-uint8_t* str_trim_left(uint8_t* _arg0) {
-    uint8_t* _t0;
-    uint8_t* _t1;
-    
-    _t0 = _arg0;
-    _t1 = _t0;
-    return _t1;
-}
-
-uint64_t str_trim_right_len(uint8_t* _arg0) {
-    int32_t _t3;
-    int32_t _t4;
-    int64_t _t1;
-    int64_t _t2;
-    uint64_t _t5;
-    uint8_t* _t0;
-    
-    _t0 = _arg0;
-    strlen(_t0);
-    _t2 = _t1;
-    _t3 = (int32_t)_t2;
-    _t4 = _t3;
-    _t5 = (uint64_t)0LL;
-    return _t5;
-}
-
-uint8_t* str_trim_right(uint8_t* _arg0) {
-    uint64_t _t1;
-    uint64_t _t2;
-    uint64_t _t3;
-    uint8_t* _t0;
-    uint8_t* _t4;
-    
-    _t0 = _arg0;
-    _t1 = str_trim_right_len(_t0);
-    _t2 = _t1;
-    _t3 = (uint64_t)0LL;
-    _t4 = str_substr(_t0, _t3, _t2);
-    return _t4;
-}
-
-uint8_t* str_trim(uint8_t* _arg0) {
-    uint64_t _t3;
-    uint64_t _t4;
-    uint64_t _t5;
-    uint8_t* _t0;
-    uint8_t* _t1;
-    uint8_t* _t2;
-    uint8_t* _t6;
-    
-    _t0 = _arg0;
-    _t1 = str_trim_left(_t0);
-    _t2 = _t1;
-    _t3 = str_trim_right_len(_t2);
-    _t4 = _t3;
-    _t5 = (uint64_t)0LL;
-    _t6 = str_substr(_t2, _t5, _t4);
-    return _t6;
 }
 

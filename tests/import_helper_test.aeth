@@ -1,0 +1,23 @@
+// Test importing from helper module
+// This tests the use statement with a real module
+
+use helper;
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+fn main() -> i32 {
+    puts("Testing module import!\0" as *u8);
+    
+    // Call imported function
+    helper::greet();
+    
+    // Call imported function with return value
+    let result = helper::add(10, 20);
+    printf("10 + 20 = %d\n\0" as *u8, result);
+    
+    puts("Module import test passed!\0" as *u8);
+    return 0;
+}

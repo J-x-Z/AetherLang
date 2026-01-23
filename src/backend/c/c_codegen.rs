@@ -36,6 +36,10 @@ pub struct CCodeGen {
     
     // Track calls to undefined functions (potential enum variant constructors)
     undefined_calls: HashSet<(String, usize)>,  // (func_name, arg_count)
+    
+    // Current function being generated (for main's argc/argv handling)
+    current_func_name: String,
+    current_func_param_count: usize,
 }
 
 impl CCodeGen {
@@ -53,6 +57,8 @@ impl CCodeGen {
             func_ret_types: HashMap::new(),
             globals_used: HashSet::new(),
             undefined_calls: HashSet::new(),
+            current_func_name: String::new(),
+            current_func_param_count: 0,
         }
 
 
@@ -88,6 +94,29 @@ impl CCodeGen {
     /// Write raw line (no indent)
     fn write_raw(&mut self, line: &str) {
         self.output.push_str(line);
+    }
+
+    /// Escape string for C (converts to valid C escape sequences)
+    fn escape_for_c(s: &str) -> String {
+        let mut result = String::new();
+        for c in s.chars() {
+            match c {
+                '\0' => result.push_str("\\0"),
+                '\n' => result.push_str("\\n"),
+                '\r' => result.push_str("\\r"),
+                '\t' => result.push_str("\\t"),
+                '\\' => result.push_str("\\\\"),
+                '"' => result.push_str("\\\""),
+                c if c.is_ascii() && !c.is_control() => result.push(c),
+                c => {
+                    // Non-ASCII or control chars: use hex escape
+                    for b in c.to_string().bytes() {
+                        result.push_str(&format!("\\x{:02x}", b));
+                    }
+                }
+            }
+        }
+        result
     }
 
     /// Convert IR type to C type
@@ -172,16 +201,27 @@ impl CCodeGen {
                 Constant::Int(n) => format!("{}LL", n),
                 Constant::Float(f) => format!("{}", f),
                 Constant::Bool(b) => if *b { "1" } else { "0" }.to_string(),
-                Constant::String(s) => format!("\"{}\"", s.escape_default()),
+                Constant::String(s) => format!("\"{}\"", Self::escape_for_c(s)),
                 Constant::Null => "NULL".to_string(),
             },
-            Value::Parameter(i) => format!("_arg{}", i),
+            Value::Parameter(i) => {
+                // Special handling for main's argc/argv
+                if self.current_func_name == "main" && self.current_func_param_count == 2 {
+                    match i {
+                        0 => "argc".to_string(),
+                        1 => "argv".to_string(),
+                        _ => format!("_arg{}", i),
+                    }
+                } else {
+                    format!("_arg{}", i)
+                }
+            },
             Value::Global(name) => {
                 // Track this global for later definition generation
                 self.globals_used.insert(name.clone());
                 name.clone()
             },
-            Value::Unit => "((void)0)".to_string(),
+            Value::Unit => "NULL".to_string(),  // NULL is compatible with pointer casts
         }
     }
 
@@ -260,6 +300,10 @@ impl CCodeGen {
         self.block_labels.clear();
         self.reg_types.clear();
         self.param_types.clear();
+        // Track current function for argc/argv handling in main
+        self.current_func_name = func.name.clone();
+        self.current_func_param_count = func.params.len();
+
 
         // Populate param types
         for (i, (_, ty)) in func.params.iter().enumerate() {
@@ -274,9 +318,16 @@ impl CCodeGen {
 
         // Function signature
         let ret_type = self.ir_type_to_c(&func.ret_type);
-        let params: Vec<String> = func.params.iter().enumerate()
-            .map(|(i, (_, ty))| format!("{} _arg{}", self.ir_type_to_c(ty), i))
-            .collect();
+        
+        // Special handling for main function: use C standard signature
+        let params: Vec<String> = if func.name == "main" && func.params.len() == 2 {
+            // Use standard C main signature: int argc, char** argv
+            vec!["int argc".to_string(), "char** argv".to_string()]
+        } else {
+            func.params.iter().enumerate()
+                .map(|(i, (_, ty))| format!("{} _arg{}", self.ir_type_to_c(ty), i))
+                .collect()
+        };
         
         // Generate effect annotations as comments (for documentation/static analysis)
         if !func.contracts.effects.is_empty() {
@@ -310,6 +361,7 @@ impl CCodeGen {
         
         let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
         self.writeln(&format!("{} {}({}) {{", ret_type, func.name, params_str));
+
         self.indent += 1;
 
         // Generate precondition assertions (requires clauses)
@@ -738,8 +790,19 @@ impl CCodeGen {
         } else if self.target_triple.contains("x86") || self.target_triple.contains("i686") || self.target_triple.contains("x86_64") {
             self.writeln("#include <immintrin.h>  /* SSE/AVX */");
         }
+        // LLVM-C headers (if module uses LLVM functions)
+        let uses_llvm = module.externs.iter().any(|e| e.name.starts_with("LLVM"));
+        if uses_llvm {
+            self.writeln("#include <llvm-c/Core.h>");
+            self.writeln("#include <llvm-c/Analysis.h>");
+            self.writeln("#include <llvm-c/BitWriter.h>");
+            self.writeln("#include <llvm-c/Target.h>");
+            self.writeln("#include <llvm-c/TargetMachine.h>");
+        }
+
         // Skip SIMD headers for other platforms
         self.writeln("");
+
         
         // Runtime support functions (skip for no_std)
         if !module.no_std {
@@ -770,14 +833,106 @@ impl CCodeGen {
                 let c_type = self.ir_type_to_c(field_type);
                 self.writeln(&format!("    {} {};", c_type, field_name));
             }
+            self.writeln("};\n");
+            self.writeln("");
+        }
+        
+        // Enum definitions (tagged unions)
+        self.writeln("/* Enum Definitions (Tagged Unions) */");
+        for enum_def in &module.enums {
+            let enum_name = &enum_def.name;
+            
+            // Generate tag enum
+            self.writeln(&format!("enum {}_Tag {{", enum_name));
+            for (idx, variant) in enum_def.variants.iter().enumerate() {
+                self.writeln(&format!("    {}_{}_TAG = {},", enum_name, variant.name, idx));
+            }
             self.writeln("};");
             self.writeln("");
+            
+            // Generate the union of all variant data
+            let has_data_variants: Vec<_> = enum_def.variants.iter()
+                .filter(|v| !v.fields.is_empty())
+                .collect();
+            
+            if !has_data_variants.is_empty() {
+                self.writeln(&format!("union {}_Data {{", enum_name));
+                for variant in &has_data_variants {
+                    if variant.fields.len() == 1 {
+                        // Single field variant: union member is the field type directly
+                        let c_type = self.ir_type_to_c(&variant.fields[0]);
+                        self.writeln(&format!("    {} {};", c_type, variant.name.to_lowercase()));
+                    } else {
+                        // Multiple fields: wrap in a struct
+                        self.writeln(&format!("    struct {{"));
+                        for (i, field_ty) in variant.fields.iter().enumerate() {
+                            let c_type = self.ir_type_to_c(field_ty);
+                            self.writeln(&format!("        {} _{};", c_type, i));
+                        }
+                        self.writeln(&format!("    }} {};", variant.name.to_lowercase()));
+                    }
+                }
+                self.writeln("};");
+                self.writeln("");
+            }
+            
+            // Generate the main enum struct
+            self.writeln(&format!("struct {} {{", enum_name));
+            self.writeln(&format!("    enum {}_Tag tag;", enum_name));
+            if !has_data_variants.is_empty() {
+                self.writeln(&format!("    union {}_Data data;", enum_name));
+            }
+            self.writeln("};");
+            self.writeln("");
+            
+            // Generate constructor functions for each variant
+            // Constructors return pointers (heap-allocated) to match IR calling convention
+            for variant in &enum_def.variants {
+                let func_name = format!("{}_{}", enum_name, variant.name);
+                
+                // Register this as a known function with its return type (pointer to struct)
+                self.func_ret_types.insert(func_name.clone(), IRType::Ptr(Box::new(IRType::Struct(enum_name.clone()))));
+                
+                if variant.fields.is_empty() {
+                    // Unit variant constructor
+                    self.writeln(&format!("static struct {}* {}(void) {{", enum_name, func_name));
+                    self.writeln(&format!("    struct {}* result = (struct {}*)malloc(sizeof(struct {}));", enum_name, enum_name, enum_name));
+                    self.writeln(&format!("    result->tag = {}_{}_TAG;", enum_name, variant.name));
+                    self.writeln("    return result;");
+                    self.writeln("}");
+                } else if variant.fields.len() == 1 {
+                    // Single-field variant constructor
+                    let c_type = self.ir_type_to_c(&variant.fields[0]);
+                    self.writeln(&format!("static struct {}* {}({} value) {{", enum_name, func_name, c_type));
+                    self.writeln(&format!("    struct {}* result = (struct {}*)malloc(sizeof(struct {}));", enum_name, enum_name, enum_name));
+                    self.writeln(&format!("    result->tag = {}_{}_TAG;", enum_name, variant.name));
+                    self.writeln(&format!("    result->data.{} = value;", variant.name.to_lowercase()));
+                    self.writeln("    return result;");
+                    self.writeln("}");
+                } else {
+                    // Multi-field variant constructor
+                    let params: Vec<String> = variant.fields.iter().enumerate()
+                        .map(|(i, ty)| format!("{} _{}", self.ir_type_to_c(ty), i))
+                        .collect();
+                    self.writeln(&format!("static struct {}* {}({}) {{", enum_name, func_name, params.join(", ")));
+                    self.writeln(&format!("    struct {}* result = (struct {}*)malloc(sizeof(struct {}));", enum_name, enum_name, enum_name));
+                    self.writeln(&format!("    result->tag = {}_{}_TAG;", enum_name, variant.name));
+                    for i in 0..variant.fields.len() {
+                        self.writeln(&format!("    result->data.{}._{} = _{};", variant.name.to_lowercase(), i, i));
+                    }
+                    self.writeln("    return result;");
+                    self.writeln("}");
+                }
+                self.writeln("");
+            }
+
         }
             
         // Populate layout map
         for struct_def in &module.structs {
             self.struct_layouts.insert(struct_def.name.clone(), struct_def.fields.clone());
         }
+
         
         // Populate function return types for internal functions
         for func in &module.functions {
@@ -792,12 +947,18 @@ impl CCodeGen {
         // Forward declarations
         for func in &module.functions {
             let ret_type = self.ir_type_to_c(&func.ret_type);
-            let params: Vec<String> = func.params.iter()
-                .map(|(_, ty)| self.ir_type_to_c(ty))
-                .collect();
+            // Special handling for main function forward declaration
+            let params: Vec<String> = if func.name == "main" && func.params.len() == 2 {
+                vec!["int".to_string(), "char**".to_string()]
+            } else {
+                func.params.iter()
+                    .map(|(_, ty)| self.ir_type_to_c(ty))
+                    .collect()
+            };
             let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
             self.writeln(&format!("{} {}({});", ret_type, func.name, params_str));
         }
+
         self.writeln("");
         
         // Function definitions
@@ -805,63 +966,8 @@ impl CCodeGen {
             self.generate_function(func)?;
         }
         
-        // Generate enum variant constants that were collected during function generation
-        // Insert them at the beginning of the output (after headers, before structs)
-        if !self.globals_used.is_empty() {
-            let mut globals_code = String::new();
-            globals_code.push_str("\n/* Enum Variant Constants (auto-generated) */\n");
-            
-            let mut globals_sorted: Vec<_> = self.globals_used.iter().cloned().collect();
-            globals_sorted.sort();
-            
-            for (idx, name) in globals_sorted.iter().enumerate() {
-                // Generate a unique integer for each enum variant
-                // For proper tagged unions, we'd need more info, but this works for simple comparisons
-                globals_code.push_str(&format!("static const intptr_t {} = {};\n", name, idx + 1));
-            }
-            globals_code.push_str("\n");
-            
-            // Insert after "/* Struct Definitions */" line
-            if let Some(pos) = self.output.find("/* Struct Definitions */") {
-                self.output.insert_str(pos, &globals_code);
-            }
-        }
-        
-        // Generate stub functions for undefined calls (enum variant constructors)
-        if !self.undefined_calls.is_empty() {
-            let mut stubs = String::new();
-            stubs.push_str("\n/* Enum Variant Constructor Stubs (auto-generated) */\n");
-            
-            let mut calls_sorted: Vec<_> = self.undefined_calls.iter().cloned().collect();
-            calls_sorted.sort();
-            
-            for (func_name, arg_count) in calls_sorted.iter() {
-                // Generate a stub that takes N void* arguments
-                // This allows enum variant constructors to compile
-                if *arg_count == 0 {
-                    stubs.push_str(&format!("void {}(void) {{ /* enum stub */ }}\n", func_name));
-                } else {
-                    let params: Vec<_> = (0..*arg_count).map(|i| format!("void* _arg{}", i)).collect();
-                    stubs.push_str(&format!("void {}({}) {{ /* enum stub */ }}\n", func_name, params.join(", ")));
-                }
-            }
-            stubs.push_str("\n");
-            
-            // Insert before function definitions (after struct definitions)
-            // Find "/* Struct Definitions */" and insert after it
-            if let Some(struct_pos) = self.output.find("/* Struct Definitions */") {
-                // Find the first function definition after structs
-                if let Some(func_pos) = self.output[struct_pos..].find("\nint32_t ") {
-                    let insert_pos = struct_pos + func_pos;
-                    self.output.insert_str(insert_pos, &stubs);
-                } else if let Some(func_pos) = self.output[struct_pos..].find("\nvoid ") {
-                    let insert_pos = struct_pos + func_pos;
-                    self.output.insert_str(insert_pos, &stubs);
-                }
-            }
-        }
-        
         Ok(self.output.clone())
+
     }
 
     /// Compile C source to object file using clang/gcc

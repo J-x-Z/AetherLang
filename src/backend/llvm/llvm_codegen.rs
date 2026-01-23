@@ -273,7 +273,34 @@ impl LLVMCodeGen {
                     llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, u32::MAX, interrupt_attr);
                 }
             }
-            
+
+            // Add SIMD optimization hints if function is marked simd
+            if func.simd {
+                // Add target-features for SIMD (AVX2 on x86_64, NEON on ARM)
+                let target_features = CString::new("target-features").unwrap();
+                let simd_features = CString::new("+avx2,+sse4.2").unwrap();
+                let attr = llvm_sys::core::LLVMCreateStringAttribute(
+                    self.context,
+                    target_features.as_ptr(),
+                    target_features.as_bytes().len() as u32,
+                    simd_features.as_ptr(),
+                    simd_features.as_bytes().len() as u32,
+                );
+                llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, u32::MAX, attr);
+
+                // Add "no-nans-fp-math" for faster floating point
+                let no_nans = CString::new("no-nans-fp-math").unwrap();
+                let true_val = CString::new("true").unwrap();
+                let no_nans_attr = llvm_sys::core::LLVMCreateStringAttribute(
+                    self.context,
+                    no_nans.as_ptr(),
+                    no_nans.as_bytes().len() as u32,
+                    true_val.as_ptr(),
+                    true_val.as_bytes().len() as u32,
+                );
+                llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, u32::MAX, no_nans_attr);
+            }
+
             // Pre-scan: find registers that are assigned multiple times (need alloca)
             let mut assign_counts: std::collections::HashMap<Register, u32> = std::collections::HashMap::new();
             for block in &func.blocks {
@@ -591,10 +618,6 @@ impl LLVMCodeGen {
                     // Use the actual element type from IR
                     let elem_ty = self.ir_type_to_llvm(ty);
                     let result = LLVMBuildLoad2(self.builder, elem_ty, ptr_val, name.as_ptr());
-                    // Set volatile if function is marked volatile (for MMIO)
-                    if func.volatile {
-                        LLVMSetVolatile(result, 1);
-                    }
                     self.value_map.insert(*dest, result);
                 }
 
@@ -610,10 +633,7 @@ impl LLVMCodeGen {
                         ptr_val = LLVMBuildIntToPtr(self.builder, ptr_val, ptr_type, name.as_ptr());
                     }
                     let store_inst = LLVMBuildStore(self.builder, store_val, ptr_val);
-                    // Set volatile if function is marked volatile (for MMIO)
-                    if func.volatile {
-                        LLVMSetVolatile(store_inst, 1);
-                    }
+                    let _ = store_inst; // Suppress unused warning
                 }
                 
                 Instruction::GetElementPtr { dest, ptr, index, elem_ty } => {
@@ -780,7 +800,7 @@ impl LLVMCodeGen {
                     all_constraints.extend(input_constraints);
                     all_constraints.extend(clobbers);
                     let constraints_str = all_constraints.join(",");
-                    let constraints_c = CString::new(constraints_str).unwrap();
+                    let constraints_c = CString::new(constraints_str.clone()).unwrap();
                     let template_c = CString::new(template.as_str()).unwrap();
 
                     // Determine output type (void if no outputs, i64 for single output, struct for multiple)

@@ -29,7 +29,7 @@ impl GenericParam {
 }
 
 /// A generic argument: either a type or a const value
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum GenericArg {
     /// Type argument: `i32`, `String`
     Type(Type),
@@ -440,14 +440,14 @@ pub enum Repr {
 }
 
 /// Code block
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
     pub span: Span,
 }
 
 /// Statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// let [mut] name [: type] = expr
     Let {
@@ -473,7 +473,7 @@ pub enum Stmt {
 }
 
 /// Expression
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     /// Literal value
     Literal(Literal),
@@ -624,7 +624,7 @@ pub enum Expr {
 }
 
 /// Match arm
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Pattern,
     pub guard: Option<Box<Expr>>,
@@ -633,7 +633,7 @@ pub struct MatchArm {
 }
 
 /// Pattern for matching
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
     /// Wildcard (_)
     Wildcard { span: Span },
@@ -659,7 +659,7 @@ pub enum Pattern {
 }
 
 /// Inline assembly operand
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AsmOperand {
     pub kind: AsmOperandKind,
     pub options: String, // "reg", "memory", etc.
@@ -667,7 +667,7 @@ pub struct AsmOperand {
 }
 
 /// Closure parameter (optionally typed)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClosureParam {
     pub name: Ident,
     pub ty: Option<Type>,
@@ -682,7 +682,7 @@ pub enum AsmOperandKind {
 }
 
 /// Literal value
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Int(i64, Span),
     Float(f64, Span),
@@ -704,7 +704,7 @@ impl Literal {
 }
 
 /// Identifier
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Ident {
     pub name: String,
     pub span: Span,
@@ -755,7 +755,7 @@ pub enum UnOp {
 }
 
 /// Type representation
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     /// Named type (i32, String)
     Named(String, Span),

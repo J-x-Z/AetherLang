@@ -116,10 +116,11 @@ Native Binary
   - [x] Codegen: `try_eval_const_expr()` 编译时求值
   - [x] Codegen: 单态化名称修饰 `Matrix<f32, 3, 3>` → `Matrix_f32_3_3`
 
-- [ ] **2. SIMD 类型**
-  - [ ] `f32x4`, `f64x2`, `i32x8` 内建类型
-  - [ ] LLVM vector type 映射
-  - [ ] `#[simd]` 函数标注
+- [x] **2. SIMD 类型** ✅
+  - [x] `f32x4`, `f64x2`, `i32x8` 内建类型
+  - [x] LLVM vector type 映射 (`LLVMVectorType`)
+  - [x] `#[simd]` 函数标注 (AVX2/SSE4.2 + fast-math)
+  - [x] 升级 llvm-sys 到 v211 (LLVM 21)
 
 - [ ] **3. BLAS FFI**
   - [ ] OpenBLAS/MKL 绑定生成

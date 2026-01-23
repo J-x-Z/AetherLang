@@ -1,0 +1,10 @@
+// Simpler stdlib test - only io module
+use io;
+
+fn main() -> i32 {
+    // Test io module
+    io::println("Hello from stdlib!\0" as *u8);
+    io::println_int(42);
+    
+    return 0;
+}

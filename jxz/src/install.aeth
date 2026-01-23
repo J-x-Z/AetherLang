@@ -62,20 +62,26 @@ pub fn install_package(name: *u8, version: *u8) -> i32 {
 
 // Download package to cache
 fn download_pkg(name: *u8, version: *u8) -> i32 {
-    // Build URL and download using curl
+    // Build URL and download using curl from GitHub Releases
     let name_len = strlen(name) as i32
     let ver_len = strlen(version) as i32
     
+    // Create cache directory first
+    system("mkdir -p ~/.jxz/cache\0" as *u8)
+    
+    // URL: https://github.com/J-x-Z/aether-packages/releases/download/v{version}/{name}-{version}.tar.gz
     let cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 200) as *u8
     strcpy(cmd, "curl -sL -o ~/.jxz/cache/\0" as *u8)
     strcat(cmd, name)
     strcat(cmd, "-\0" as *u8)
     strcat(cmd, version)
-    strcat(cmd, ".tar.gz https://registry.aetherlang.org/packages/\0" as *u8)
-    strcat(cmd, name)
-    strcat(cmd, "/\0" as *u8)
+    strcat(cmd, ".tar.gz https://github.com/J-x-Z/aether-packages/releases/download/v\0" as *u8)
     strcat(cmd, version)
-    strcat(cmd, ".tar.gz 2>/dev/null\0" as *u8)
+    strcat(cmd, "/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "-\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, ".tar.gz\0" as *u8)
     
     let result = system(cmd)
     free(cmd as *void)
@@ -83,20 +89,21 @@ fn download_pkg(name: *u8, version: *u8) -> i32 {
     return result
 }
 
+
 // Extract package to Cellar
 fn extract_to_cellar(name: *u8, version: *u8) -> i32 {
     let name_len = strlen(name) as i32
     let ver_len = strlen(version) as i32
     
-    // Create Cellar directory
+    // Create Cellar directory: ~/.jxz/Cellar/{name}/{version}
     let cellar_dir: *u8 = malloc(name_len as u64 + ver_len as u64 + 50) as *u8
     strcpy(cellar_dir, "~/.jxz/Cellar/\0" as *u8)
     strcat(cellar_dir, name)
     strcat(cellar_dir, "/\0" as *u8)
     strcat(cellar_dir, version)
     
-    // mkdir -p and extract
-    let cmd: *u8 = malloc(name_len as u64 * 2 + ver_len as u64 * 2 + 150) as *u8
+    // mkdir -p and extract with --strip-components=1 to remove the package name directory
+    let cmd: *u8 = malloc(name_len as u64 * 2 + ver_len as u64 * 2 + 200) as *u8
     strcpy(cmd, "mkdir -p \0" as *u8)
     strcat(cmd, cellar_dir)
     strcat(cmd, " && tar -xzf ~/.jxz/cache/\0" as *u8)
@@ -105,6 +112,7 @@ fn extract_to_cellar(name: *u8, version: *u8) -> i32 {
     strcat(cmd, version)
     strcat(cmd, ".tar.gz -C \0" as *u8)
     strcat(cmd, cellar_dir)
+    strcat(cmd, " --strip-components=1\0" as *u8)
     
     let result = system(cmd)
     free(cmd as *void)
@@ -118,8 +126,11 @@ fn link_package(name: *u8, version: *u8) -> i32 {
     let name_len = strlen(name) as i32
     let ver_len = strlen(version) as i32
     
+    // Create bin directory first
+    system("mkdir -p ~/.jxz/bin\0" as *u8)
+    
     // Create symlinks from Cellar/name/version/bin/* to ~/.jxz/bin/
-    let cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 100) as *u8
+    let cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 150) as *u8
     strcpy(cmd, "ln -sf ~/.jxz/Cellar/\0" as *u8)
     strcat(cmd, name)
     strcat(cmd, "/\0" as *u8)
@@ -131,6 +142,7 @@ fn link_package(name: *u8, version: *u8) -> i32 {
     
     return result
 }
+
 
 // Register package in database
 fn register_installed(name: *u8, version: *u8) -> i32 {

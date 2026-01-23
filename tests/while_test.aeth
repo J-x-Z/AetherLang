@@ -1,0 +1,17 @@
+// Test while loop and array
+extern "C" {
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+fn main() -> i32 {
+    // Test while loop
+    let mut count = 0;
+    while count < 5 {
+        printf("Count: %d\n\0" as *u8, count);
+        count = count + 1;
+    }
+    
+    printf("Final count: %d\n\0" as *u8, count);
+    
+    return 0;
+}

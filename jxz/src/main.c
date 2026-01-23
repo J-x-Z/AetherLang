@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <immintrin.h>  /* SSE/AVX */
+#include <string.h>
 
 /* AetherLang Runtime */
 static void aether_print(const char* s) { printf("%s", s); }
@@ -13,6 +13,7 @@ static void aether_println_i64(int64_t n) { printf("%lld\n", (long long)n); }
 static void aether_assert(bool c) { if(!c) { fprintf(stderr, "Assertion failed\n"); exit(1); } }
 
 /* Struct Definitions */
+/* Enum Definitions (Tagged Unions) */
 void print_help(void);
 void print_version(void);
 int32_t cmd_init(void);
@@ -22,29 +23,31 @@ int32_t cmd_test(void);
 int32_t cmd_add(uint8_t*);
 int32_t cmd_remove(uint8_t*);
 int32_t cmd_update(void);
-int32_t main(int32_t, uint8_t**);
+int32_t install_package(uint8_t*, uint8_t*);
+int32_t main(int, char**);
 
 void print_help(void) {
-    int64_t _t11;
-    int64_t _t13;
-    int64_t _t15;
-    int64_t _t17;
-    int64_t _t19;
-    int64_t _t1;
-    int64_t _t21;
-    int64_t _t23;
-    int64_t _t25;
-    int64_t _t27;
-    int64_t _t29;
-    int64_t _t31;
-    int64_t _t33;
-    int64_t _t35;
-    int64_t _t37;
-    int64_t _t39;
-    int64_t _t3;
-    int64_t _t5;
-    int64_t _t7;
-    int64_t _t9;
+    int32_t _t11;
+    int32_t _t13;
+    int32_t _t15;
+    int32_t _t17;
+    int32_t _t19;
+    int32_t _t1;
+    int32_t _t21;
+    int32_t _t23;
+    int32_t _t25;
+    int32_t _t27;
+    int32_t _t29;
+    int32_t _t31;
+    int32_t _t33;
+    int32_t _t35;
+    int32_t _t37;
+    int32_t _t39;
+    int32_t _t3;
+    int32_t _t41;
+    int32_t _t5;
+    int32_t _t7;
+    int32_t _t9;
     uint8_t* _t0;
     uint8_t* _t10;
     uint8_t* _t12;
@@ -62,245 +65,542 @@ void print_help(void) {
     uint8_t* _t34;
     uint8_t* _t36;
     uint8_t* _t38;
+    uint8_t* _t40;
     uint8_t* _t4;
     uint8_t* _t6;
     uint8_t* _t8;
     
-    _t0 = (uint8_t*)"JXZ - AetherLang Package Manager\u{0}";
-    puts(_t0);
-    _t2 = (uint8_t*)"\u{0}";
-    puts(_t2);
-    _t4 = (uint8_t*)"USAGE:\u{0}";
-    puts(_t4);
-    _t6 = (uint8_t*)"    jxz <COMMAND> [OPTIONS]\u{0}";
-    puts(_t6);
-    _t8 = (uint8_t*)"\u{0}";
-    puts(_t8);
-    _t10 = (uint8_t*)"COMMANDS:\u{0}";
-    puts(_t10);
-    _t12 = (uint8_t*)"    init        Create a new project\u{0}";
-    puts(_t12);
-    _t14 = (uint8_t*)"    build       Build the project\u{0}";
-    puts(_t14);
-    _t16 = (uint8_t*)"    run         Run the project\u{0}";
-    puts(_t16);
-    _t18 = (uint8_t*)"    test        Run tests\u{0}";
-    puts(_t18);
-    _t20 = (uint8_t*)"    add         Add a dependency\u{0}";
-    puts(_t20);
-    _t22 = (uint8_t*)"    remove      Remove a dependency\u{0}";
-    puts(_t22);
-    _t24 = (uint8_t*)"    update      Update dependencies\u{0}";
-    puts(_t24);
-    _t26 = (uint8_t*)"    help        Show this help message\u{0}";
-    puts(_t26);
-    _t28 = (uint8_t*)"    version     Show version\u{0}";
-    puts(_t28);
-    _t30 = (uint8_t*)"\u{0}";
-    puts(_t30);
-    _t32 = (uint8_t*)"OPTIONS:\u{0}";
-    puts(_t32);
-    _t34 = (uint8_t*)"    -h, --help      Show help\u{0}";
-    puts(_t34);
-    _t36 = (uint8_t*)"    -V, --version   Show version\u{0}";
-    puts(_t36);
-    _t38 = (uint8_t*)"    -v, --verbose   Verbose output\u{0}";
-    puts(_t38);
+    _t0 = (uint8_t*)"JXZ - AetherLang Package Manager\0";
+    _t1 = puts(_t0);
+    _t2 = (uint8_t*)"\0";
+    _t3 = puts(_t2);
+    _t4 = (uint8_t*)"USAGE:\0";
+    _t5 = puts(_t4);
+    _t6 = (uint8_t*)"    jxz <COMMAND> [OPTIONS]\0";
+    _t7 = puts(_t6);
+    _t8 = (uint8_t*)"\0";
+    _t9 = puts(_t8);
+    _t10 = (uint8_t*)"COMMANDS:\0";
+    _t11 = puts(_t10);
+    _t12 = (uint8_t*)"    init        Create a new project\0";
+    _t13 = puts(_t12);
+    _t14 = (uint8_t*)"    build       Build the project\0";
+    _t15 = puts(_t14);
+    _t16 = (uint8_t*)"    run         Run the project\0";
+    _t17 = puts(_t16);
+    _t18 = (uint8_t*)"    test        Run tests\0";
+    _t19 = puts(_t18);
+    _t20 = (uint8_t*)"    install     Install a package from registry\0";
+    _t21 = puts(_t20);
+    _t22 = (uint8_t*)"    add         Add a dependency\0";
+    _t23 = puts(_t22);
+    _t24 = (uint8_t*)"    remove      Remove a dependency\0";
+    _t25 = puts(_t24);
+    _t26 = (uint8_t*)"    update      Update dependencies\0";
+    _t27 = puts(_t26);
+    _t28 = (uint8_t*)"    help        Show this help message\0";
+    _t29 = puts(_t28);
+    _t30 = (uint8_t*)"    version     Show version\0";
+    _t31 = puts(_t30);
+    _t32 = (uint8_t*)"\0";
+    _t33 = puts(_t32);
+    _t34 = (uint8_t*)"OPTIONS:\0";
+    _t35 = puts(_t34);
+    _t36 = (uint8_t*)"    -h, --help      Show help\0";
+    _t37 = puts(_t36);
+    _t38 = (uint8_t*)"    -V, --version   Show version\0";
+    _t39 = puts(_t38);
+    _t40 = (uint8_t*)"    -v, --verbose   Verbose output\0";
+    _t41 = puts(_t40);
     return;
 }
 
 void print_version(void) {
-    int64_t _t1;
+    int32_t _t1;
     uint8_t* _t0;
     
-    _t0 = (uint8_t*)"jxz 0.1.0\u{0}";
-    puts(_t0);
+    _t0 = (uint8_t*)"jxz 0.1.0\0";
+    _t1 = puts(_t0);
     return;
 }
 
 int32_t cmd_init(void) {
     int32_t _t10;
-    int64_t _t1;
-    int64_t _t3;
-    int64_t _t5;
-    int64_t _t7;
-    int64_t _t9;
+    int32_t _t1;
+    int32_t _t3;
+    int32_t _t5;
+    int32_t _t7;
+    int32_t _t9;
     uint8_t* _t0;
     uint8_t* _t2;
     uint8_t* _t4;
     uint8_t* _t6;
     uint8_t* _t8;
     
-    _t0 = (uint8_t*)"Creating new AetherLang project...\u{0}";
-    puts(_t0);
-    _t2 = (uint8_t*)"  Created Jxz.toml\u{0}";
-    puts(_t2);
-    _t4 = (uint8_t*)"  Created src/main.aeth\u{0}";
-    puts(_t4);
-    _t6 = (uint8_t*)"\u{0}";
-    puts(_t6);
-    _t8 = (uint8_t*)"Project initialized successfully!\u{0}";
-    puts(_t8);
+    _t0 = (uint8_t*)"Creating new AetherLang project...\0";
+    _t1 = puts(_t0);
+    _t2 = (uint8_t*)"  Created Jxz.toml\0";
+    _t3 = puts(_t2);
+    _t4 = (uint8_t*)"  Created src/main.aeth\0";
+    _t5 = puts(_t4);
+    _t6 = (uint8_t*)"\0";
+    _t7 = puts(_t6);
+    _t8 = (uint8_t*)"Project initialized successfully!\0";
+    _t9 = puts(_t8);
     _t10 = (int32_t)0LL;
     return _t10;
 }
 
 int32_t cmd_build(void) {
+    int32_t _t1;
+    int32_t _t3;
+    int32_t _t5;
     int32_t _t6;
-    int64_t _t1;
-    int64_t _t3;
-    int64_t _t5;
     uint8_t* _t0;
     uint8_t* _t2;
     uint8_t* _t4;
     
-    _t0 = (uint8_t*)"Building project...\u{0}";
-    puts(_t0);
-    _t2 = (uint8_t*)"  Compiling src/main.aeth\u{0}";
-    puts(_t2);
-    _t4 = (uint8_t*)"  Finished release build\u{0}";
-    puts(_t4);
+    _t0 = (uint8_t*)"Building project...\0";
+    _t1 = puts(_t0);
+    _t2 = (uint8_t*)"  Compiling src/main.aeth\0";
+    _t3 = puts(_t2);
+    _t4 = (uint8_t*)"  Finished release build\0";
+    _t5 = puts(_t4);
     _t6 = (int32_t)0LL;
     return _t6;
 }
 
 int32_t cmd_run(void) {
+    int32_t _t1;
     int32_t _t2;
+    int32_t _t4;
     int32_t _t5;
-    int64_t _t1;
-    int64_t _t4;
     uint8_t* _t0;
     uint8_t* _t3;
     
-    _t0 = (uint8_t*)"Building and running project...\u{0}";
-    puts(_t0);
+    _t0 = (uint8_t*)"Building and running project...\0";
+    _t1 = puts(_t0);
     _t2 = cmd_build();
-    _t3 = (uint8_t*)"Running ./target/main\u{0}";
-    puts(_t3);
+    _t3 = (uint8_t*)"Running ./target/main\0";
+    _t4 = puts(_t3);
     _t5 = (int32_t)0LL;
     return _t5;
 }
 
 int32_t cmd_test(void) {
+    int32_t _t1;
+    int32_t _t3;
     int32_t _t4;
-    int64_t _t1;
-    int64_t _t3;
     uint8_t* _t0;
     uint8_t* _t2;
     
-    _t0 = (uint8_t*)"Running tests...\u{0}";
-    puts(_t0);
-    _t2 = (uint8_t*)"  0 tests passed, 0 failed\u{0}";
-    puts(_t2);
+    _t0 = (uint8_t*)"Running tests...\0";
+    _t1 = puts(_t0);
+    _t2 = (uint8_t*)"  0 tests passed, 0 failed\0";
+    _t3 = puts(_t2);
     _t4 = (int32_t)0LL;
     return _t4;
 }
 
 int32_t cmd_add(uint8_t* _arg0) {
+    int32_t _t2;
     int32_t _t3;
-    int64_t _t2;
     uint8_t* _t0;
     uint8_t* _t1;
     
     _t0 = _arg0;
-    _t1 = (uint8_t*)"Adding dependency...\u{0}";
-    puts(_t1);
+    _t1 = (uint8_t*)"Adding dependency...\0";
+    _t2 = puts(_t1);
     _t3 = (int32_t)0LL;
     return _t3;
 }
 
 int32_t cmd_remove(uint8_t* _arg0) {
+    int32_t _t2;
     int32_t _t3;
-    int64_t _t2;
     uint8_t* _t0;
     uint8_t* _t1;
     
     _t0 = _arg0;
-    _t1 = (uint8_t*)"Removing dependency...\u{0}";
-    puts(_t1);
+    _t1 = (uint8_t*)"Removing dependency...\0";
+    _t2 = puts(_t1);
     _t3 = (int32_t)0LL;
     return _t3;
 }
 
 int32_t cmd_update(void) {
+    int32_t _t1;
     int32_t _t2;
-    int64_t _t1;
     uint8_t* _t0;
     
-    _t0 = (uint8_t*)"Updating dependencies...\u{0}";
-    puts(_t0);
+    _t0 = (uint8_t*)"Updating dependencies...\0";
+    _t1 = puts(_t0);
     _t2 = (int32_t)0LL;
     return _t2;
 }
 
-int32_t main(int32_t _arg0, uint8_t** _arg1) {
+int32_t install_package(uint8_t* _arg0, uint8_t* _arg1) {
+    int32_t _t116;
+    int32_t _t119;
+    int32_t _t11;
+    int32_t _t120;
+    int32_t _t122;
+    int32_t _t124;
+    int32_t _t126;
+    int32_t _t127;
+    int32_t _t129;
+    int32_t _t130;
+    int32_t _t13;
+    int32_t _t15;
+    int32_t _t16;
+    int32_t _t18;
+    int32_t _t19;
+    int32_t _t3;
+    int32_t _t46;
+    int32_t _t47;
+    int32_t _t49;
+    int32_t _t4;
+    int32_t _t52;
+    int32_t _t53;
+    int32_t _t55;
+    int32_t _t6;
+    int32_t _t7;
+    int32_t _t89;
+    int32_t _t90;
+    int32_t _t92;
+    int32_t _t95;
+    int32_t _t96;
+    int32_t _t98;
+    int32_t _t9;
+    int64_t _t101;
+    int64_t _t103;
+    int64_t _t104;
+    int64_t _t22;
+    int64_t _t24;
+    int64_t _t25;
+    int64_t _t50;
+    int64_t _t58;
+    int64_t _t61;
+    int64_t _t62;
+    int64_t _t64;
+    int64_t _t65;
+    int64_t _t93;
+    uint64_t _t100;
+    uint64_t _t102;
+    uint64_t _t14;
+    uint64_t _t17;
+    uint64_t _t20;
+    uint64_t _t21;
+    uint64_t _t23;
+    uint64_t _t56;
+    uint64_t _t57;
+    uint64_t _t59;
+    uint64_t _t60;
+    uint64_t _t63;
+    uint64_t _t99;
+    uint8_t* _t0;
+    uint8_t* _t106;
+    uint8_t* _t107;
+    uint8_t* _t108;
+    uint8_t* _t109;
+    uint8_t* _t10;
+    uint8_t* _t110;
+    uint8_t* _t111;
+    uint8_t* _t112;
+    uint8_t* _t113;
+    uint8_t* _t114;
+    uint8_t* _t115;
+    uint8_t* _t118;
+    uint8_t* _t121;
+    uint8_t* _t123;
+    uint8_t* _t125;
+    uint8_t* _t128;
+    uint8_t* _t12;
+    uint8_t* _t1;
+    uint8_t* _t27;
+    uint8_t* _t28;
+    uint8_t* _t29;
+    uint8_t* _t2;
+    uint8_t* _t30;
+    uint8_t* _t31;
+    uint8_t* _t32;
+    uint8_t* _t33;
+    uint8_t* _t34;
+    uint8_t* _t35;
+    uint8_t* _t36;
+    uint8_t* _t37;
+    uint8_t* _t38;
+    uint8_t* _t39;
+    uint8_t* _t40;
+    uint8_t* _t41;
+    uint8_t* _t42;
+    uint8_t* _t43;
+    uint8_t* _t44;
+    uint8_t* _t45;
+    uint8_t* _t51;
+    uint8_t* _t54;
+    uint8_t* _t5;
+    uint8_t* _t67;
+    uint8_t* _t68;
+    uint8_t* _t69;
+    uint8_t* _t70;
+    uint8_t* _t71;
+    uint8_t* _t72;
+    uint8_t* _t73;
+    uint8_t* _t74;
+    uint8_t* _t75;
+    uint8_t* _t76;
+    uint8_t* _t77;
+    uint8_t* _t78;
+    uint8_t* _t79;
+    uint8_t* _t80;
+    uint8_t* _t81;
+    uint8_t* _t82;
+    uint8_t* _t83;
+    uint8_t* _t84;
+    uint8_t* _t85;
+    uint8_t* _t86;
+    uint8_t* _t87;
+    uint8_t* _t88;
+    uint8_t* _t8;
+    uint8_t* _t94;
+    uint8_t* _t97;
+    void* _t105;
+    void* _t117;
+    void* _t26;
+    void* _t48;
+    void* _t66;
+    void* _t91;
+    
+    _t0 = _arg0;
+    _t1 = _arg1;
+    _t2 = (uint8_t*)"==> Installing \0";
+    _t3 = puts(_t2);
+    _t4 = puts(_t0);
+    _t5 = (uint8_t*)" v\0";
+    _t6 = puts(_t5);
+    _t7 = puts(_t1);
+    _t8 = (uint8_t*)"\0";
+    _t9 = puts(_t8);
+    _t10 = (uint8_t*)"mkdir -p ~/.jxz/cache ~/.jxz/Cellar ~/.jxz/bin ~/.jxz/db\0";
+    _t11 = system(_t10);
+    _t12 = (uint8_t*)"==> Downloading...\0";
+    _t13 = puts(_t12);
+    _t14 = strlen(_t0);
+    _t15 = (int32_t)_t14;
+    _t16 = _t15;
+    _t17 = strlen(_t1);
+    _t18 = (int32_t)_t17;
+    _t19 = _t18;
+    _t20 = (uint64_t)_t16;
+    _t21 = (uint64_t)_t19;
+    _t22 = _t20 + _t21;
+    _t23 = (uint64_t)250LL;
+    _t24 = _t22 + _t23;
+    _t25 = (int64_t)_t24;
+    _t26 = malloc(_t25);
+    _t27 = (uint8_t*)_t26;
+    _t28 = _t27;
+    _t29 = (uint8_t*)"curl -sL -o ~/.jxz/cache/\0";
+    _t30 = strcpy(_t28, _t29);
+    _t31 = strcat(_t28, _t0);
+    _t32 = (uint8_t*)"-\0";
+    _t33 = strcat(_t28, _t32);
+    _t34 = strcat(_t28, _t1);
+    _t35 = (uint8_t*)".tar.gz https://github.com/J-x-Z/aether-packages/releases/download/v\0";
+    _t36 = strcat(_t28, _t35);
+    _t37 = strcat(_t28, _t1);
+    _t38 = (uint8_t*)"/\0";
+    _t39 = strcat(_t28, _t38);
+    _t40 = strcat(_t28, _t0);
+    _t41 = (uint8_t*)"-\0";
+    _t42 = strcat(_t28, _t41);
+    _t43 = strcat(_t28, _t1);
+    _t44 = (uint8_t*)".tar.gz\0";
+    _t45 = strcat(_t28, _t44);
+    _t46 = system(_t28);
+    _t47 = _t46;
+    _t48 = (void*)_t28;
+    free(_t48);
+    _t49 = (int32_t)0LL;
+    _t50 = _t47 != _t49;
+    if (_t50) goto L_then_1; else goto L_else_2;
+L_then_1:
+    _t51 = (uint8_t*)"Error: Download failed\0";
+    _t52 = puts(_t51);
+    _t53 = (int32_t)1LL;
+    return _t53;
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
+    _t54 = (uint8_t*)"==> Extracting...\0";
+    _t55 = puts(_t54);
+    _t56 = (uint64_t)_t16;
+    _t57 = (uint64_t)2LL;
+    _t58 = _t56 * _t57;
+    _t59 = (uint64_t)_t19;
+    _t60 = (uint64_t)2LL;
+    _t61 = _t59 * _t60;
+    _t62 = _t58 + _t61;
+    _t63 = (uint64_t)200LL;
+    _t64 = _t62 + _t63;
+    _t65 = (int64_t)_t64;
+    _t66 = malloc(_t65);
+    _t67 = (uint8_t*)_t66;
+    _t68 = _t67;
+    _t69 = (uint8_t*)"mkdir -p ~/.jxz/Cellar/\0";
+    _t70 = strcpy(_t68, _t69);
+    _t71 = strcat(_t68, _t0);
+    _t72 = (uint8_t*)"/\0";
+    _t73 = strcat(_t68, _t72);
+    _t74 = strcat(_t68, _t1);
+    _t75 = (uint8_t*)" && tar -xzf ~/.jxz/cache/\0";
+    _t76 = strcat(_t68, _t75);
+    _t77 = strcat(_t68, _t0);
+    _t78 = (uint8_t*)"-\0";
+    _t79 = strcat(_t68, _t78);
+    _t80 = strcat(_t68, _t1);
+    _t81 = (uint8_t*)".tar.gz -C ~/.jxz/Cellar/\0";
+    _t82 = strcat(_t68, _t81);
+    _t83 = strcat(_t68, _t0);
+    _t84 = (uint8_t*)"/\0";
+    _t85 = strcat(_t68, _t84);
+    _t86 = strcat(_t68, _t1);
+    _t87 = (uint8_t*)" --strip-components=1\0";
+    _t88 = strcat(_t68, _t87);
+    _t89 = system(_t68);
+    _t90 = _t89;
+    _t91 = (void*)_t68;
+    free(_t91);
+    _t92 = (int32_t)0LL;
+    _t93 = _t90 != _t92;
+    if (_t93) goto L_then_4; else goto L_else_5;
+L_then_4:
+    _t94 = (uint8_t*)"Error: Extraction failed\0";
+    _t95 = puts(_t94);
+    _t96 = (int32_t)1LL;
+    return _t96;
+L_else_5:
+    goto L_merge_6;
+L_merge_6:
+    _t97 = (uint8_t*)"==> Linking...\0";
+    _t98 = puts(_t97);
+    _t99 = (uint64_t)_t16;
+    _t100 = (uint64_t)_t19;
+    _t101 = _t99 + _t100;
+    _t102 = (uint64_t)100LL;
+    _t103 = _t101 + _t102;
+    _t104 = (int64_t)_t103;
+    _t105 = malloc(_t104);
+    _t106 = (uint8_t*)_t105;
+    _t107 = _t106;
+    _t108 = (uint8_t*)"ln -sf ~/.jxz/Cellar/\0";
+    _t109 = strcpy(_t107, _t108);
+    _t110 = strcat(_t107, _t0);
+    _t111 = (uint8_t*)"/\0";
+    _t112 = strcat(_t107, _t111);
+    _t113 = strcat(_t107, _t1);
+    _t114 = (uint8_t*)"/bin/* ~/.jxz/bin/ 2>/dev/null\0";
+    _t115 = strcat(_t107, _t114);
+    _t116 = system(_t107);
+    _t117 = (void*)_t107;
+    free(_t117);
+    _t118 = (uint8_t*)"==> \0";
+    _t119 = puts(_t118);
+    _t120 = puts(_t0);
+    _t121 = (uint8_t*)" installed successfully!\0";
+    _t122 = puts(_t121);
+    _t123 = (uint8_t*)"\0";
+    _t124 = puts(_t123);
+    _t125 = (uint8_t*)"Run: ~/.jxz/bin/\0";
+    _t126 = puts(_t125);
+    _t127 = puts(_t0);
+    _t128 = (uint8_t*)"\0";
+    _t129 = puts(_t128);
+    _t130 = (int32_t)0LL;
+    return _t130;
+}
+
+int32_t main(int argc, char** argv) {
     int32_t _t0;
+    int32_t _t101;
+    int32_t _t102;
+    int32_t _t107;
     int32_t _t10;
+    int32_t _t13;
     int32_t _t14;
+    int32_t _t18;
     int32_t _t19;
     int32_t _t22;
+    int32_t _t24;
     int32_t _t25;
+    int32_t _t28;
     int32_t _t29;
     int32_t _t2;
+    int32_t _t33;
     int32_t _t34;
     int32_t _t37;
+    int32_t _t39;
     int32_t _t40;
     int32_t _t42;
+    int32_t _t44;
     int32_t _t45;
     int32_t _t47;
+    int32_t _t49;
     int32_t _t4;
     int32_t _t50;
     int32_t _t52;
+    int32_t _t54;
     int32_t _t55;
     int32_t _t57;
+    int32_t _t59;
     int32_t _t60;
     int32_t _t62;
+    int32_t _t65;
     int32_t _t66;
+    int32_t _t69;
     int32_t _t70;
     int32_t _t73;
     int32_t _t74;
+    int32_t _t77;
     int32_t _t78;
+    int32_t _t81;
     int32_t _t82;
     int32_t _t85;
     int32_t _t86;
+    int32_t _t88;
+    int32_t _t89;
     int32_t _t91;
+    int32_t _t94;
+    int32_t _t96;
+    int32_t _t97;
+    int32_t _t99;
+    int32_t _t9;
     int64_t _t11;
-    int64_t _t13;
     int64_t _t15;
     int64_t _t16;
-    int64_t _t18;
     int64_t _t20;
     int64_t _t21;
-    int64_t _t24;
     int64_t _t26;
-    int64_t _t28;
     int64_t _t30;
     int64_t _t31;
-    int64_t _t33;
     int64_t _t35;
     int64_t _t36;
-    int64_t _t39;
     int64_t _t3;
     int64_t _t41;
-    int64_t _t44;
     int64_t _t46;
-    int64_t _t49;
     int64_t _t51;
-    int64_t _t54;
     int64_t _t56;
-    int64_t _t59;
     int64_t _t61;
     int64_t _t63;
-    int64_t _t65;
     int64_t _t67;
-    int64_t _t69;
     int64_t _t75;
-    int64_t _t77;
     int64_t _t79;
-    int64_t _t81;
-    int64_t _t88;
     int64_t _t90;
-    int64_t _t9;
+    int64_t _t92;
+    uint8_t* _t100;
+    uint8_t* _t104;
+    uint8_t* _t106;
     uint8_t* _t12;
     uint8_t* _t17;
     uint8_t* _t23;
@@ -320,180 +620,212 @@ int32_t main(int32_t _arg0, uint8_t** _arg1) {
     uint8_t* _t80;
     uint8_t* _t84;
     uint8_t* _t87;
-    uint8_t* _t89;
     uint8_t* _t8;
+    uint8_t* _t93;
+    uint8_t* _t95;
+    uint8_t* _t98;
+    uint8_t** _t103;
+    uint8_t** _t105;
     uint8_t** _t1;
     uint8_t** _t5;
     uint8_t** _t71;
     uint8_t** _t83;
     
-    _t0 = _arg0;
-    _t1 = _arg1;
+    _t0 = argc;
+    _t1 = argv;
     _t2 = (int32_t)2LL;
     _t3 = _t0 < _t2;
-    if (_t3) goto L_then; else goto L_else;
-L_then:
+    if (_t3) goto L_then_1; else goto L_else_2;
+L_then_1:
     print_help();
     _t4 = (int32_t)0LL;
     return _t4;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_2:
+    goto L_merge_3;
+L_merge_3:
     _t5 = &_t1[1LL];
     _t6 = *_t5;
     _t7 = _t6;
-    _t8 = (uint8_t*)"-h\u{0}";
-    strcmp(_t7, _t8);
+    _t8 = (uint8_t*)"-h\0";
+    _t9 = strcmp(_t7, _t8);
     _t10 = (int32_t)0LL;
     _t11 = _t9 == _t10;
-    _t12 = (uint8_t*)"--help\u{0}";
-    strcmp(_t7, _t12);
+    _t12 = (uint8_t*)"--help\0";
+    _t13 = strcmp(_t7, _t12);
     _t14 = (int32_t)0LL;
     _t15 = _t13 == _t14;
     _t16 = _t11 || _t15;
-    _t17 = (uint8_t*)"help\u{0}";
-    strcmp(_t7, _t17);
+    _t17 = (uint8_t*)"help\0";
+    _t18 = strcmp(_t7, _t17);
     _t19 = (int32_t)0LL;
     _t20 = _t18 == _t19;
     _t21 = _t16 || _t20;
-    if (_t21) goto L_then; else goto L_else;
-L_then:
+    if (_t21) goto L_then_4; else goto L_else_5;
+L_then_4:
     print_help();
     _t22 = (int32_t)0LL;
     return _t22;
-L_else:
-    goto L_merge;
-L_merge:
-    _t23 = (uint8_t*)"-V\u{0}";
-    strcmp(_t7, _t23);
+L_else_5:
+    goto L_merge_6;
+L_merge_6:
+    _t23 = (uint8_t*)"-V\0";
+    _t24 = strcmp(_t7, _t23);
     _t25 = (int32_t)0LL;
     _t26 = _t24 == _t25;
-    _t27 = (uint8_t*)"--version\u{0}";
-    strcmp(_t7, _t27);
+    _t27 = (uint8_t*)"--version\0";
+    _t28 = strcmp(_t7, _t27);
     _t29 = (int32_t)0LL;
     _t30 = _t28 == _t29;
     _t31 = _t26 || _t30;
-    _t32 = (uint8_t*)"version\u{0}";
-    strcmp(_t7, _t32);
+    _t32 = (uint8_t*)"version\0";
+    _t33 = strcmp(_t7, _t32);
     _t34 = (int32_t)0LL;
     _t35 = _t33 == _t34;
     _t36 = _t31 || _t35;
-    if (_t36) goto L_then; else goto L_else;
-L_then:
+    if (_t36) goto L_then_7; else goto L_else_8;
+L_then_7:
     print_version();
     _t37 = (int32_t)0LL;
     return _t37;
-L_else:
-    goto L_merge;
-L_merge:
-    _t38 = (uint8_t*)"init\u{0}";
-    strcmp(_t7, _t38);
+L_else_8:
+    goto L_merge_9;
+L_merge_9:
+    _t38 = (uint8_t*)"init\0";
+    _t39 = strcmp(_t7, _t38);
     _t40 = (int32_t)0LL;
     _t41 = _t39 == _t40;
-    if (_t41) goto L_then; else goto L_else;
-L_then:
+    if (_t41) goto L_then_10; else goto L_else_11;
+L_then_10:
     _t42 = cmd_init();
     return _t42;
-L_else:
-    goto L_merge;
-L_merge:
-    _t43 = (uint8_t*)"build\u{0}";
-    strcmp(_t7, _t43);
+L_else_11:
+    goto L_merge_12;
+L_merge_12:
+    _t43 = (uint8_t*)"build\0";
+    _t44 = strcmp(_t7, _t43);
     _t45 = (int32_t)0LL;
     _t46 = _t44 == _t45;
-    if (_t46) goto L_then; else goto L_else;
-L_then:
+    if (_t46) goto L_then_13; else goto L_else_14;
+L_then_13:
     _t47 = cmd_build();
     return _t47;
-L_else:
-    goto L_merge;
-L_merge:
-    _t48 = (uint8_t*)"run\u{0}";
-    strcmp(_t7, _t48);
+L_else_14:
+    goto L_merge_15;
+L_merge_15:
+    _t48 = (uint8_t*)"run\0";
+    _t49 = strcmp(_t7, _t48);
     _t50 = (int32_t)0LL;
     _t51 = _t49 == _t50;
-    if (_t51) goto L_then; else goto L_else;
-L_then:
+    if (_t51) goto L_then_16; else goto L_else_17;
+L_then_16:
     _t52 = cmd_run();
     return _t52;
-L_else:
-    goto L_merge;
-L_merge:
-    _t53 = (uint8_t*)"test\u{0}";
-    strcmp(_t7, _t53);
+L_else_17:
+    goto L_merge_18;
+L_merge_18:
+    _t53 = (uint8_t*)"test\0";
+    _t54 = strcmp(_t7, _t53);
     _t55 = (int32_t)0LL;
     _t56 = _t54 == _t55;
-    if (_t56) goto L_then; else goto L_else;
-L_then:
+    if (_t56) goto L_then_19; else goto L_else_20;
+L_then_19:
     _t57 = cmd_test();
     return _t57;
-L_else:
-    goto L_merge;
-L_merge:
-    _t58 = (uint8_t*)"add\u{0}";
-    strcmp(_t7, _t58);
+L_else_20:
+    goto L_merge_21;
+L_merge_21:
+    _t58 = (uint8_t*)"add\0";
+    _t59 = strcmp(_t7, _t58);
     _t60 = (int32_t)0LL;
     _t61 = _t59 == _t60;
-    if (_t61) goto L_then; else goto L_else;
-L_then:
+    if (_t61) goto L_then_22; else goto L_else_23;
+L_then_22:
     _t62 = (int32_t)3LL;
     _t63 = _t0 < _t62;
-    if (_t63) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t64 = (uint8_t*)"remove\u{0}";
-    strcmp(_t7, _t64);
+    if (_t63) goto L_then_25; else goto L_else_26;
+L_else_23:
+    goto L_merge_24;
+L_merge_24:
+    _t64 = (uint8_t*)"remove\0";
+    _t65 = strcmp(_t7, _t64);
     _t66 = (int32_t)0LL;
     _t67 = _t65 == _t66;
-    if (_t67) goto L_then; else goto L_else;
-L_then:
-    _t68 = (uint8_t*)"Error: missing package name\u{0}";
-    puts(_t68);
+    if (_t67) goto L_then_28; else goto L_else_29;
+L_then_25:
+    _t68 = (uint8_t*)"Error: missing package name\0";
+    _t69 = puts(_t68);
     _t70 = (int32_t)1LL;
     return _t70;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_26:
+    goto L_merge_27;
+L_merge_27:
     _t71 = &_t1[2LL];
     _t72 = *_t71;
     _t73 = cmd_add(_t72);
     return _t73;
-L_then:
+L_then_28:
     _t74 = (int32_t)3LL;
     _t75 = _t0 < _t74;
-    if (_t75) goto L_then; else goto L_else;
-L_else:
-    goto L_merge;
-L_merge:
-    _t76 = (uint8_t*)"update\u{0}";
-    strcmp(_t7, _t76);
+    if (_t75) goto L_then_31; else goto L_else_32;
+L_else_29:
+    goto L_merge_30;
+L_merge_30:
+    _t76 = (uint8_t*)"update\0";
+    _t77 = strcmp(_t7, _t76);
     _t78 = (int32_t)0LL;
     _t79 = _t77 == _t78;
-    if (_t79) goto L_then; else goto L_else;
-L_then:
-    _t80 = (uint8_t*)"Error: missing package name\u{0}";
-    puts(_t80);
+    if (_t79) goto L_then_34; else goto L_else_35;
+L_then_31:
+    _t80 = (uint8_t*)"Error: missing package name\0";
+    _t81 = puts(_t80);
     _t82 = (int32_t)1LL;
     return _t82;
-L_else:
-    goto L_merge;
-L_merge:
+L_else_32:
+    goto L_merge_33;
+L_merge_33:
     _t83 = &_t1[2LL];
     _t84 = *_t83;
     _t85 = cmd_remove(_t84);
     return _t85;
-L_then:
+L_then_34:
     _t86 = cmd_update();
     return _t86;
-L_else:
-    goto L_merge;
-L_merge:
-    _t87 = (uint8_t*)"Error: unknown command\u{0}";
-    puts(_t87);
-    _t89 = (uint8_t*)"Run \'jxz help\' for usage\u{0}";
-    puts(_t89);
-    _t91 = (int32_t)1LL;
-    return _t91;
+L_else_35:
+    goto L_merge_36;
+L_merge_36:
+    _t87 = (uint8_t*)"install\0";
+    _t88 = strcmp(_t7, _t87);
+    _t89 = (int32_t)0LL;
+    _t90 = _t88 == _t89;
+    if (_t90) goto L_then_37; else goto L_else_38;
+L_then_37:
+    _t91 = (int32_t)4LL;
+    _t92 = _t0 < _t91;
+    if (_t92) goto L_then_40; else goto L_else_41;
+L_else_38:
+    goto L_merge_39;
+L_merge_39:
+    _t93 = (uint8_t*)"Error: unknown command\0";
+    _t94 = puts(_t93);
+    _t95 = (uint8_t*)"Run 'jxz help' for usage\0";
+    _t96 = puts(_t95);
+    _t97 = (int32_t)1LL;
+    return _t97;
+L_then_40:
+    _t98 = (uint8_t*)"Error: usage: jxz install <package> <version>\0";
+    _t99 = puts(_t98);
+    _t100 = (uint8_t*)"Example: jxz install hello 1.0.0\0";
+    _t101 = puts(_t100);
+    _t102 = (int32_t)1LL;
+    return _t102;
+L_else_41:
+    goto L_merge_42;
+L_merge_42:
+    _t103 = &_t1[2LL];
+    _t104 = *_t103;
+    _t105 = &_t1[3LL];
+    _t106 = *_t105;
+    _t107 = install_package(_t104, _t106);
+    return _t107;
 }
 

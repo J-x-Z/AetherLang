@@ -85,10 +85,10 @@ impl Parser {
         }
 
         // Check for integer literal: 3, 42
-        if let TokenKind::IntLiteral(n) = self.current_kind().clone() {
+        if let TokenKind::IntLit(n) = self.current_kind().clone() {
             let span = self.current().span;
             self.advance();
-            return Ok(GenericArg::Const(Expr::IntLiteral(n, span)));
+            return Ok(GenericArg::Const(Expr::Literal(Literal::Int(n, span))));
         }
 
         // Check for identifier - could be type or const param
@@ -111,7 +111,7 @@ impl Parser {
                             // Likely a const param name like SIZE, N, M
                             let span = self.current().span;
                             self.advance();
-                            return Ok(GenericArg::Const(Expr::Ident(Ident { name: name.clone(), span }, span)));
+                            return Ok(GenericArg::Const(Expr::Ident(Ident { name: name.clone(), span })));
                         }
                         // Treat as type
                         let ty = self.parse_type()?;
@@ -338,7 +338,14 @@ impl Parser {
         let name = self.parse_ident()?;
 
         let type_params = if self.check(&TokenKind::Lt) {
+            // parse_generic_params returns Vec<GenericParam>, extract only Type params as Ident
             self.parse_generic_params()?
+                .into_iter()
+                .filter_map(|p| match p {
+                    GenericParam::Type(ident) => Some(ident),
+                    GenericParam::Const { .. } => None,
+                })
+                .collect()
         } else {
             Vec::new()
         };

@@ -1,0 +1,21 @@
+// Test match expression
+extern "C" {
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+fn test_match(x: i64) -> i64 {
+    match x {
+        0 => 100,
+        1 => 200,
+        2 => 300,
+        _ => 999,
+    }
+}
+
+fn main() -> i32 {
+    printf("match 0 = %lld\n\0" as *u8, test_match(0));
+    printf("match 1 = %lld\n\0" as *u8, test_match(1));
+    printf("match 2 = %lld\n\0" as *u8, test_match(2));
+    printf("match 5 = %lld\n\0" as *u8, test_match(5));
+    return 0;
+}

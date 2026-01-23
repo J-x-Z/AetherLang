@@ -1,0 +1,14 @@
+// Helper module - provides utility functions
+// File: stdlib/helper.aeth
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+}
+
+pub fn greet() {
+    puts("Hello from helper module!\0" as *u8);
+}
+
+pub fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}

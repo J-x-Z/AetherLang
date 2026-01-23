@@ -1,0 +1,43 @@
+// Test standard library modules
+use io;
+use string;
+
+extern "C" {
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+fn main() -> i32 {
+    // Test io module
+    io::println("=== Testing Standard Library ===\0" as *u8);
+    
+    io::print("Hello \0" as *u8);
+    io::println("World!\0" as *u8);
+    
+    io::print("Number: \0" as *u8);
+    io::println_int(42);
+    
+    // Test string module
+    let s1 = "Hello\0" as *u8;
+    let s2 = "Hello\0" as *u8;
+    let s3 = "World\0" as *u8;
+    
+    let len = string::len(s1);
+    printf("Length of 'Hello': %lld\n\0" as *u8, len);
+    
+    if string::equals(s1, s2) {
+        io::println("'Hello' == 'Hello': true\0" as *u8);
+    }
+    
+    if !string::equals(s1, s3) {
+        io::println("'Hello' != 'World': true\0" as *u8);
+    }
+    
+    // Test string duplication
+    let dup = string::dup(s1);
+    io::print("Duplicated: \0" as *u8);
+    io::println(dup);
+    string::dealloc(dup);
+    
+    io::println("=== All tests passed! ===\0" as *u8);
+    return 0;
+}

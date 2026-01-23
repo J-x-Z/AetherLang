@@ -1985,11 +1985,11 @@ impl IRGenerator {
                     _ => return None,
                 })
             }
-            ast::Expr::Unary { op, operand, .. } => {
-                let v = self.try_eval_const_expr(operand)?;
+            ast::Expr::Unary { op, expr, .. } => {
+                let v = self.try_eval_const_expr(expr)?;
                 Some(match op {
-                    ast::UnaryOp::Neg => -v,
-                    ast::UnaryOp::Not => if v == 0 { 1 } else { 0 },
+                    ast::UnOp::Neg => -v,
+                    ast::UnOp::Not => if v == 0 { 1 } else { 0 },
                     _ => return None,
                 })
             }

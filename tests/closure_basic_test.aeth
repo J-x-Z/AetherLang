@@ -1,0 +1,18 @@
+// Test closure - simple direct call
+extern "C" {
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+fn main() -> i32 {
+    // Define a simple closure and call it directly
+    let add_one = |x: i64| -> i64 { x + 1 };
+    let mul_two = |x: i64| -> i64 { x * 2 };
+    
+    // Calling closures (if supported)
+    printf("Closure defined!\n\0" as *u8);
+    
+    // For now just test that closures compile
+    // Direct call syntax may not be supported yet
+    
+    return 0;
+}

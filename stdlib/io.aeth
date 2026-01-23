@@ -1,0 +1,60 @@
+// AetherLang Standard Library - IO Module
+// stdlib/io.aeth
+
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn printf(fmt: *u8, ...) -> i32;
+    fn getchar() -> i32;
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(file: *void) -> i32;
+    fn fread(buf: *u8, size: u64, count: u64, file: *void) -> u64;
+    fn fwrite(buf: *u8, size: u64, count: u64, file: *void) -> u64;
+    fn fgets(buf: *u8, size: i32, file: *void) -> *u8;
+}
+
+// Print a string without newline
+pub fn print(s: *u8) {
+    printf("%s\0" as *u8, s);
+}
+
+// Print a string with newline
+pub fn println(s: *u8) {
+    puts(s);
+}
+
+// Print an integer
+pub fn print_int(n: i64) {
+    printf("%lld\0" as *u8, n);
+}
+
+// Print an integer with newline
+pub fn println_int(n: i64) {
+    printf("%lld\n\0" as *u8, n);
+}
+
+// Simple file handle wrapper
+pub struct File {
+    handle: *void,
+}
+
+// Open a file for reading
+pub fn open_read(path: *u8) -> File {
+    let handle = fopen(path, "r\0" as *u8);
+    return File { handle: handle };
+}
+
+// Open a file for writing
+pub fn open_write(path: *u8) -> File {
+    let handle = fopen(path, "w\0" as *u8);
+    return File { handle: handle };
+}
+
+// Close a file
+pub fn close(file: *File) -> i32 {
+    return fclose((*file).handle);
+}
+
+// Check if file is valid
+pub fn is_valid(file: *File) -> bool {
+    return (*file).handle != 0 as *void;
+}

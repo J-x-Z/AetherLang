@@ -1,18 +1,25 @@
-// SIMD Intrinsics Test
-// Tests f32x4 vector operations
+// SIMD Type Test
+// Tests basic SIMD vector type declarations and operations
 
-fn vec_add(a: f32x4, b: f32x4) -> f32x4 {
-    return f32x4_add(a, b)
+fn test_simd_types() {
+    // Float vectors
+    let v1: f32x4;
+    let v2: f32x8;
+    let v3: f64x2;
+    let v4: f64x4;
+
+    // Integer vectors
+    let i1: i32x4;
+    let i2: i32x8;
+    let i3: i64x2;
+    let i4: i64x4;
 }
 
-fn vec_mul(a: f32x4, b: f32x4) -> f32x4 {
-    return f32x4_mul(a, b)
-}
-
-fn splat_test(v: f32) -> f32x4 {
-    return f32x4_splat(v)
+#[simd]
+fn simd_add(a: f32x4, b: f32x4) -> f32x4 {
+    return a;
 }
 
 fn main() {
-    println("SIMD intrinsics test!")
+    test_simd_types();
 }

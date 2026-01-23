@@ -397,6 +397,15 @@ impl ModuleResolver {
                     "f64" => ResolvedType::Primitive(PrimitiveType::F64),
                     "bool" => ResolvedType::Primitive(PrimitiveType::Bool),
                     "void" => ResolvedType::UNIT,
+                    // SIMD vector types
+                    "f32x4" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 4),
+                    "f32x8" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 8),
+                    "f64x2" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 2),
+                    "f64x4" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 4),
+                    "i32x4" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 4),
+                    "i32x8" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 8),
+                    "i64x2" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I64)), 2),
+                    "i64x4" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I64)), 4),
                     _ => ResolvedType::Struct { name: name.clone(), fields: vec![] },
                 }
             }
@@ -849,13 +858,14 @@ impl SemanticAnalyzer {
                 // Register Span struct
                 self.symbols.define(Symbol {
                     name: "Span".to_string(),
-                    kind: SymbolKind::Struct { 
+                    kind: SymbolKind::Struct {
                         fields: vec![
                             ("file_id".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
                             ("start".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
                             ("end".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
                         ],
                         type_params: vec![],
+                        const_params: vec![],
                     },
                     ty: ResolvedType::Struct {
                         name: "Span".to_string(),
@@ -873,13 +883,14 @@ impl SemanticAnalyzer {
                 // Register String struct
                 self.symbols.define(Symbol {
                     name: "String".to_string(),
-                    kind: SymbolKind::Struct { 
+                    kind: SymbolKind::Struct {
                         fields: vec![
                             ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
                             ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
                             ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
                         ],
                         type_params: vec![],
+                        const_params: vec![],
                     },
                     ty: ResolvedType::Struct {
                         name: "String".to_string(),
@@ -897,13 +908,14 @@ impl SemanticAnalyzer {
                 // Register Vec struct as placeholder
                 self.symbols.define(Symbol {
                     name: "Vec".to_string(),
-                    kind: SymbolKind::Struct { 
+                    kind: SymbolKind::Struct {
                         fields: vec![
                             ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
                             ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
                             ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
                         ],
                         type_params: vec!["T".to_string()],
+                        const_params: vec![],
                     },
                     ty: ResolvedType::Struct {
                         name: "Vec".to_string(),
@@ -921,7 +933,7 @@ impl SemanticAnalyzer {
                 // Register Token and TokenKind as placeholders
                 self.symbols.define(Symbol {
                     name: "Token".to_string(),
-                    kind: SymbolKind::Struct { 
+                    kind: SymbolKind::Struct {
                         fields: vec![
                             ("kind".to_string(), ResolvedType::Enum { name: "TokenKind".to_string() }),
                             ("span".to_string(), ResolvedType::Struct { name: "Span".to_string(), fields: vec![
@@ -931,6 +943,7 @@ impl SemanticAnalyzer {
                             ] }),
                         ],
                         type_params: vec![],
+                        const_params: vec![],
                     },
                     ty: ResolvedType::Struct {
                         name: "Token".to_string(),
@@ -1945,7 +1958,7 @@ impl SemanticAnalyzer {
                 match lit {
                     Literal::Int(n, _) => Ok(ConstValue::Int(*n)),
                     Literal::Bool(b, _) => Ok(ConstValue::Bool(*b)),
-                    _ => Err(Error::TypeError {
+                    _ => Err(Error::TypeMismatch {
                         expected: "integer or boolean constant".to_string(),
                         got: format!("{:?}", lit),
                         span: lit.span(),
@@ -1958,7 +1971,7 @@ impl SemanticAnalyzer {
                     if let SymbolKind::ConstParam { .. } = &sym.kind {
                         Ok(ConstValue::Param(ident.name.clone()))
                     } else {
-                        Err(Error::TypeError {
+                        Err(Error::TypeMismatch {
                             expected: "const parameter".to_string(),
                             got: format!("{:?}", sym.kind),
                             span: ident.span,
@@ -1978,7 +1991,7 @@ impl SemanticAnalyzer {
                     BinOp::Mul => ConstBinOp::Mul,
                     BinOp::Div => ConstBinOp::Div,
                     BinOp::Mod => ConstBinOp::Mod,
-                    _ => return Err(Error::TypeError {
+                    _ => return Err(Error::TypeMismatch {
                         expected: "arithmetic operator".to_string(),
                         got: format!("{:?}", op),
                         span: expr.span(),
@@ -1990,7 +2003,7 @@ impl SemanticAnalyzer {
                     rhs: Box::new(rhs),
                 })
             }
-            _ => Err(Error::TypeError {
+            _ => Err(Error::TypeMismatch {
                 expected: "const expression".to_string(),
                 got: format!("{:?}", expr),
                 span: expr.span(),

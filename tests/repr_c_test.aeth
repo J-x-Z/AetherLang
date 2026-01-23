@@ -1,0 +1,29 @@
+// Test #[repr(C)] attribute parsing
+
+#[repr(C)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[repr(C)]
+struct Color {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+#[naked]
+pub fn test_naked() {
+    return;
+}
+
+pub struct Normal {
+    value: i64,
+}
+
+fn main() {
+    let p: Point = Point { x: 10, y: 20 };
+    let c: Color = Color { r: 255, g: 0, b: 0, a: 255 };
+}

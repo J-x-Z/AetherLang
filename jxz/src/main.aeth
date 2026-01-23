@@ -7,6 +7,10 @@ extern "C" {
     fn strcmp(s1: *u8, s2: *u8) -> i32;
 }
 
+// Import build module
+use build::{build_project, run_project, clean_project};
+use init::{init_project};
+
 // ==================== Version Info ====================
 
 const VERSION: *u8 = "0.1.0\0" as *u8
@@ -25,11 +29,13 @@ fn print_help() {
     puts("    build       Build the project\0" as *u8)
     puts("    run         Run the project\0" as *u8)
     puts("    test        Run tests\0" as *u8)
+    puts("    install     Install a package from registry\0" as *u8)
     puts("    add         Add a dependency\0" as *u8)
     puts("    remove      Remove a dependency\0" as *u8)
     puts("    update      Update dependencies\0" as *u8)
     puts("    help        Show this help message\0" as *u8)
     puts("    version     Show version\0" as *u8)
+
     puts("\0" as *u8)
     puts("OPTIONS:\0" as *u8)
     puts("    -h, --help      Show help\0" as *u8)
@@ -44,26 +50,18 @@ fn print_version() {
 // ==================== Commands ====================
 
 fn cmd_init() -> i32 {
-    puts("Creating new AetherLang project...\0" as *u8)
-    puts("  Created Jxz.toml\0" as *u8)
-    puts("  Created src/main.aeth\0" as *u8)
-    puts("\0" as *u8)
-    puts("Project initialized successfully!\0" as *u8)
-    return 0
+    // Call real init implementation with default name
+    return init_project("my_project\0" as *u8);
 }
 
 fn cmd_build() -> i32 {
-    puts("Building project...\0" as *u8)
-    puts("  Compiling src/main.aeth\0" as *u8)
-    puts("  Finished release build\0" as *u8)
-    return 0
+    // Call real build implementation
+    return build_project(true);  // release build
 }
 
 fn cmd_run() -> i32 {
-    puts("Building and running project...\0" as *u8)
-    cmd_build()
-    puts("Running ./target/main\0" as *u8)
-    return 0
+    // Call real run implementation
+    return run_project(0 as *u8);
 }
 
 fn cmd_test() -> i32 {
@@ -87,7 +85,103 @@ fn cmd_update() -> i32 {
     return 0
 }
 
+// ==================== Install Package ====================
+
+extern "C" {
+    fn system(cmd: *u8) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+}
+
+fn install_package(name: *u8, version: *u8) -> i32 {
+    puts("==> Installing \0" as *u8)
+    puts(name)
+    puts(" v\0" as *u8)
+    puts(version)
+    puts("\0" as *u8)
+    
+    // Step 1: Create directories
+    system("mkdir -p ~/.jxz/cache ~/.jxz/Cellar ~/.jxz/bin ~/.jxz/db\0" as *u8)
+    
+    // Step 2: Download from GitHub Releases
+    puts("==> Downloading...\0" as *u8)
+    let name_len = strlen(name) as i32
+    let ver_len = strlen(version) as i32
+    
+    // URL: https://github.com/J-x-Z/aether-packages/releases/download/v{version}/{name}-{version}.tar.gz
+    let cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 250) as *u8
+    strcpy(cmd, "curl -sL -o ~/.jxz/cache/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "-\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, ".tar.gz https://github.com/J-x-Z/aether-packages/releases/download/v\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, "/\0" as *u8)
+    strcat(cmd, name)
+    strcat(cmd, "-\0" as *u8)
+    strcat(cmd, version)
+    strcat(cmd, ".tar.gz\0" as *u8)
+    
+    let download_result = system(cmd)
+    free(cmd as *void)
+    
+    if download_result != 0 {
+        puts("Error: Download failed\0" as *u8)
+        return 1
+    }
+    
+    // Step 3: Extract to Cellar
+    puts("==> Extracting...\0" as *u8)
+    let extract_cmd: *u8 = malloc(name_len as u64 * 2 + ver_len as u64 * 2 + 200) as *u8
+    strcpy(extract_cmd, "mkdir -p ~/.jxz/Cellar/\0" as *u8)
+    strcat(extract_cmd, name)
+    strcat(extract_cmd, "/\0" as *u8)
+    strcat(extract_cmd, version)
+    strcat(extract_cmd, " && tar -xzf ~/.jxz/cache/\0" as *u8)
+    strcat(extract_cmd, name)
+    strcat(extract_cmd, "-\0" as *u8)
+    strcat(extract_cmd, version)
+    strcat(extract_cmd, ".tar.gz -C ~/.jxz/Cellar/\0" as *u8)
+    strcat(extract_cmd, name)
+    strcat(extract_cmd, "/\0" as *u8)
+    strcat(extract_cmd, version)
+    strcat(extract_cmd, " --strip-components=1\0" as *u8)
+    
+    let extract_result = system(extract_cmd)
+    free(extract_cmd as *void)
+    
+    if extract_result != 0 {
+        puts("Error: Extraction failed\0" as *u8)
+        return 1
+    }
+    
+    // Step 4: Link binaries
+    puts("==> Linking...\0" as *u8)
+    let link_cmd: *u8 = malloc(name_len as u64 + ver_len as u64 + 100) as *u8
+    strcpy(link_cmd, "ln -sf ~/.jxz/Cellar/\0" as *u8)
+    strcat(link_cmd, name)
+    strcat(link_cmd, "/\0" as *u8)
+    strcat(link_cmd, version)
+    strcat(link_cmd, "/bin/* ~/.jxz/bin/ 2>/dev/null\0" as *u8)
+    system(link_cmd)
+    free(link_cmd as *void)
+    
+    puts("==> \0" as *u8)
+    puts(name)
+    puts(" installed successfully!\0" as *u8)
+    puts("\0" as *u8)
+    puts("Run: ~/.jxz/bin/\0" as *u8)
+    puts(name)
+    puts("\0" as *u8)
+    
+    return 0
+}
+
 // ==================== Main Entry ====================
+
 
 pub fn main(argc: i32, argv: **u8) -> i32 {
     // No arguments - show help
@@ -146,8 +240,18 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
         return cmd_update()
     }
     
+    if strcmp(cmd, "install\0" as *u8) == 0 {
+        if argc < 4 {
+            puts("Error: usage: jxz install <package> <version>\0" as *u8)
+            puts("Example: jxz install hello 1.0.0\0" as *u8)
+            return 1
+        }
+        return install_package(argv[2], argv[3])
+    }
+    
     // Unknown command
     puts("Error: unknown command\0" as *u8)
     puts("Run 'jxz help' for usage\0" as *u8)
     return 1
+
 }
