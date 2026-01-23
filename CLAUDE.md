@@ -122,8 +122,13 @@ Native Binary
   - [x] `#[simd]` 函数标注 (AVX2/SSE4.2 + fast-math)
   - [x] 升级 llvm-sys 到 v211 (LLVM 21)
 
-- [ ] **3. BLAS FFI**
-  - [ ] OpenBLAS/MKL 绑定生成
+- [x] **3. BLAS FFI** ✅
+  - [x] Level 1: axpy, dot, nrm2, scal, copy, swap, asum, iamax, rot, rotg (20函数)
+  - [x] Level 2: gemv, ger, trmv, trsv, symv, syr, syr2 (14函数)
+  - [x] Level 3: gemm, symm, trmm, trsm, syrk, syr2k (12函数)
+  - [x] 常量: CBLAS_ROW_MAJOR, UPPER, LEFT 等
+  - [x] 高级封装: blas_matmul, blas_dot, blas_norm 等 (15函数)
+  - [x] 测试: tests/blas_test.aeth
 
 ---
 

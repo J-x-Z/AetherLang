@@ -26,3 +26,7 @@ ir_output.txt
 # Project internal docs (not for public)
 项目书.txt
 *.exe
+
+# Distribution binaries (too large for GitHub)
+/dist/*.aarch64
+/dist/*.x86_64

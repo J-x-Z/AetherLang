@@ -1,35 +1,147 @@
 // BLAS FFI Bindings for AetherLang
 // Foreign Function Interface to CBLAS for high-performance linear algebra
+//
+// Linking: -lopenblas or -lblas (system) or Accelerate.framework (macOS)
+//
+// Complete CBLAS API coverage:
+// - Level 1: Vector operations (axpy, dot, nrm2, scal, copy, swap, asum, iamax)
+// - Level 2: Matrix-vector operations (gemv, ger, trmv, symv)
+// - Level 3: Matrix-matrix operations (gemm, symm, trmm, trsm, syrk)
 
 // ==================== BLAS Level 1 (Vector Operations) ====================
 
-// SAXPY: y = alpha * x + y (single precision)
+// --- AXPY: y = alpha * x + y ---
 extern "C" fn cblas_saxpy(n: i32, alpha: f32, x: *f32, incx: i32, y: *f32, incy: i32)
-
-// DAXPY: y = alpha * x + y (double precision)
 extern "C" fn cblas_daxpy(n: i32, alpha: f64, x: *f64, incx: i32, y: *f64, incy: i32)
 
-// SDOT: dot product (single precision)
+// --- DOT: dot product ---
 extern "C" fn cblas_sdot(n: i32, x: *f32, incx: i32, y: *f32, incy: i32) -> f32
-
-// DDOT: dot product (double precision)
 extern "C" fn cblas_ddot(n: i32, x: *f64, incx: i32, y: *f64, incy: i32) -> f64
 
-// SNRM2: Euclidean norm (single precision)
+// --- NRM2: Euclidean norm (L2 norm) ---
 extern "C" fn cblas_snrm2(n: i32, x: *f32, incx: i32) -> f32
+extern "C" fn cblas_dnrm2(n: i32, x: *f64, incx: i32) -> f64
 
-// SSCAL: x = alpha * x (scale vector)
+// --- SCAL: x = alpha * x (scale vector) ---
 extern "C" fn cblas_sscal(n: i32, alpha: f32, x: *f32, incx: i32)
+extern "C" fn cblas_dscal(n: i32, alpha: f64, x: *f64, incx: i32)
+
+// --- COPY: y = x (copy vector) ---
+extern "C" fn cblas_scopy(n: i32, x: *f32, incx: i32, y: *f32, incy: i32)
+extern "C" fn cblas_dcopy(n: i32, x: *f64, incx: i32, y: *f64, incy: i32)
+
+// --- SWAP: swap x and y ---
+extern "C" fn cblas_sswap(n: i32, x: *f32, incx: i32, y: *f32, incy: i32)
+extern "C" fn cblas_dswap(n: i32, x: *f64, incx: i32, y: *f64, incy: i32)
+
+// --- ASUM: sum of absolute values ---
+extern "C" fn cblas_sasum(n: i32, x: *f32, incx: i32) -> f32
+extern "C" fn cblas_dasum(n: i32, x: *f64, incx: i32) -> f64
+
+// --- IAMAX: index of max absolute value ---
+extern "C" fn cblas_isamax(n: i32, x: *f32, incx: i32) -> i32
+extern "C" fn cblas_idamax(n: i32, x: *f64, incx: i32) -> i32
+
+// --- ROT: apply Givens rotation ---
+extern "C" fn cblas_srot(n: i32, x: *f32, incx: i32, y: *f32, incy: i32, c: f32, s: f32)
+extern "C" fn cblas_drot(n: i32, x: *f64, incx: i32, y: *f64, incy: i32, c: f64, s: f64)
+
+// --- ROTG: generate Givens rotation ---
+extern "C" fn cblas_srotg(a: *f32, b: *f32, c: *f32, s: *f32)
+extern "C" fn cblas_drotg(a: *f64, b: *f64, c: *f64, s: *f64)
 
 // ==================== BLAS Level 2 (Matrix-Vector Operations) ====================
 
-// SGEMV: y = alpha * A * x + beta * y (single precision)
+// --- GEMV: y = alpha * A * x + beta * y (general matrix-vector) ---
 extern "C" fn cblas_sgemv(
     order: i32, trans: i32,
     m: i32, n: i32,
     alpha: f32, a: *f32, lda: i32,
     x: *f32, incx: i32,
     beta: f32, y: *f32, incy: i32
+)
+extern "C" fn cblas_dgemv(
+    order: i32, trans: i32,
+    m: i32, n: i32,
+    alpha: f64, a: *f64, lda: i32,
+    x: *f64, incx: i32,
+    beta: f64, y: *f64, incy: i32
+)
+
+// --- GER: A = alpha * x * y' + A (rank-1 update) ---
+extern "C" fn cblas_sger(
+    order: i32, m: i32, n: i32,
+    alpha: f32, x: *f32, incx: i32,
+    y: *f32, incy: i32,
+    a: *f32, lda: i32
+)
+extern "C" fn cblas_dger(
+    order: i32, m: i32, n: i32,
+    alpha: f64, x: *f64, incx: i32,
+    y: *f64, incy: i32,
+    a: *f64, lda: i32
+)
+
+// --- TRMV: x = A * x (triangular matrix-vector) ---
+extern "C" fn cblas_strmv(
+    order: i32, uplo: i32, trans: i32, diag: i32,
+    n: i32, a: *f32, lda: i32,
+    x: *f32, incx: i32
+)
+extern "C" fn cblas_dtrmv(
+    order: i32, uplo: i32, trans: i32, diag: i32,
+    n: i32, a: *f64, lda: i32,
+    x: *f64, incx: i32
+)
+
+// --- TRSV: solve A * x = b (triangular solve) ---
+extern "C" fn cblas_strsv(
+    order: i32, uplo: i32, trans: i32, diag: i32,
+    n: i32, a: *f32, lda: i32,
+    x: *f32, incx: i32
+)
+extern "C" fn cblas_dtrsv(
+    order: i32, uplo: i32, trans: i32, diag: i32,
+    n: i32, a: *f64, lda: i32,
+    x: *f64, incx: i32
+)
+
+// --- SYMV: y = alpha * A * x + beta * y (symmetric matrix-vector) ---
+extern "C" fn cblas_ssymv(
+    order: i32, uplo: i32,
+    n: i32, alpha: f32, a: *f32, lda: i32,
+    x: *f32, incx: i32,
+    beta: f32, y: *f32, incy: i32
+)
+extern "C" fn cblas_dsymv(
+    order: i32, uplo: i32,
+    n: i32, alpha: f64, a: *f64, lda: i32,
+    x: *f64, incx: i32,
+    beta: f64, y: *f64, incy: i32
+)
+
+// --- SYR: A = alpha * x * x' + A (symmetric rank-1 update) ---
+extern "C" fn cblas_ssyr(
+    order: i32, uplo: i32,
+    n: i32, alpha: f32, x: *f32, incx: i32,
+    a: *f32, lda: i32
+)
+extern "C" fn cblas_dsyr(
+    order: i32, uplo: i32,
+    n: i32, alpha: f64, x: *f64, incx: i32,
+    a: *f64, lda: i32
+)
+
+// --- SYR2: A = alpha * x * y' + alpha * y * x' + A ---
+extern "C" fn cblas_ssyr2(
+    order: i32, uplo: i32,
+    n: i32, alpha: f32, x: *f32, incx: i32,
+    y: *f32, incy: i32, a: *f32, lda: i32
+)
+extern "C" fn cblas_dsyr2(
+    order: i32, uplo: i32,
+    n: i32, alpha: f64, x: *f64, incx: i32,
+    y: *f64, incy: i32, a: *f64, lda: i32
 )
 
 // ==================== BLAS Level 3 (Matrix-Matrix Operations) ====================
@@ -52,20 +164,109 @@ extern "C" fn cblas_dgemm(
     beta: f64, c: *f64, ldc: i32
 )
 
+// --- SYMM: C = alpha * A * B + beta * C (symmetric matrix multiply) ---
+extern "C" fn cblas_ssymm(
+    order: i32, side: i32, uplo: i32,
+    m: i32, n: i32,
+    alpha: f32, a: *f32, lda: i32,
+    b: *f32, ldb: i32,
+    beta: f32, c: *f32, ldc: i32
+)
+extern "C" fn cblas_dsymm(
+    order: i32, side: i32, uplo: i32,
+    m: i32, n: i32,
+    alpha: f64, a: *f64, lda: i32,
+    b: *f64, ldb: i32,
+    beta: f64, c: *f64, ldc: i32
+)
+
+// --- TRMM: B = alpha * A * B (triangular matrix multiply) ---
+extern "C" fn cblas_strmm(
+    order: i32, side: i32, uplo: i32, trans: i32, diag: i32,
+    m: i32, n: i32,
+    alpha: f32, a: *f32, lda: i32,
+    b: *f32, ldb: i32
+)
+extern "C" fn cblas_dtrmm(
+    order: i32, side: i32, uplo: i32, trans: i32, diag: i32,
+    m: i32, n: i32,
+    alpha: f64, a: *f64, lda: i32,
+    b: *f64, ldb: i32
+)
+
+// --- TRSM: solve A * X = alpha * B (triangular solve) ---
+extern "C" fn cblas_strsm(
+    order: i32, side: i32, uplo: i32, trans: i32, diag: i32,
+    m: i32, n: i32,
+    alpha: f32, a: *f32, lda: i32,
+    b: *f32, ldb: i32
+)
+extern "C" fn cblas_dtrsm(
+    order: i32, side: i32, uplo: i32, trans: i32, diag: i32,
+    m: i32, n: i32,
+    alpha: f64, a: *f64, lda: i32,
+    b: *f64, ldb: i32
+)
+
+// --- SYRK: C = alpha * A * A' + beta * C (symmetric rank-k update) ---
+extern "C" fn cblas_ssyrk(
+    order: i32, uplo: i32, trans: i32,
+    n: i32, k: i32,
+    alpha: f32, a: *f32, lda: i32,
+    beta: f32, c: *f32, ldc: i32
+)
+extern "C" fn cblas_dsyrk(
+    order: i32, uplo: i32, trans: i32,
+    n: i32, k: i32,
+    alpha: f64, a: *f64, lda: i32,
+    beta: f64, c: *f64, ldc: i32
+)
+
+// --- SYR2K: C = alpha * A * B' + alpha * B * A' + beta * C ---
+extern "C" fn cblas_ssyr2k(
+    order: i32, uplo: i32, trans: i32,
+    n: i32, k: i32,
+    alpha: f32, a: *f32, lda: i32,
+    b: *f32, ldb: i32,
+    beta: f32, c: *f32, ldc: i32
+)
+extern "C" fn cblas_dsyr2k(
+    order: i32, uplo: i32, trans: i32,
+    n: i32, k: i32,
+    alpha: f64, a: *f64, lda: i32,
+    b: *f64, ldb: i32,
+    beta: f64, c: *f64, ldc: i32
+)
+
 // ==================== Constants ====================
 
-const CBLAS_ROW_MAJOR: i32 = 101
-const CBLAS_COL_MAJOR: i32 = 102
-const CBLAS_NO_TRANS: i32 = 111
-const CBLAS_TRANS: i32 = 112
+// Matrix layout
+pub const CBLAS_ROW_MAJOR: i32 = 101
+pub const CBLAS_COL_MAJOR: i32 = 102
+
+// Transpose operations
+pub const CBLAS_NO_TRANS: i32 = 111
+pub const CBLAS_TRANS: i32 = 112
+pub const CBLAS_CONJ_TRANS: i32 = 113
+
+// Triangle selection
+pub const CBLAS_UPPER: i32 = 121
+pub const CBLAS_LOWER: i32 = 122
+
+// Diagonal type
+pub const CBLAS_NON_UNIT: i32 = 131
+pub const CBLAS_UNIT: i32 = 132
+
+// Side selection (for SYMM, TRMM, TRSM)
+pub const CBLAS_LEFT: i32 = 141
+pub const CBLAS_RIGHT: i32 = 142
 
 // ==================== High-Level Wrappers ====================
 
-// Matrix multiplication using BLAS (single precision)
-pub fn blas_matmul(
-    m: i32, n: i32, k: i32,
-    a: *f32, b: *f32, c: *f32
-) {
+// --- Level 1 Wrappers ---
+
+// Matrix multiplication: C = A * B (single precision, row-major)
+pub fn blas_matmul(m: i32, n: i32, k: i32, a: *f32, b: *f32, c: *f32) {
     cblas_sgemm(
         CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS,
         m, n, k,
@@ -75,9 +276,25 @@ pub fn blas_matmul(
     )
 }
 
-// Vector dot product wrapper
+// Matrix multiplication: C = A * B (double precision)
+pub fn blas_dmatmul(m: i32, n: i32, k: i32, a: *f64, b: *f64, c: *f64) {
+    cblas_dgemm(
+        CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS,
+        m, n, k,
+        1.0, a, k,
+        b, n,
+        0.0, c, n
+    )
+}
+
+// Vector dot product (single precision)
 pub fn blas_dot(n: i32, x: *f32, y: *f32) -> f32 {
     return cblas_sdot(n, x, 1, y, 1)
+}
+
+// Vector dot product (double precision)
+pub fn blas_ddot(n: i32, x: *f64, y: *f64) -> f64 {
+    return cblas_ddot(n, x, 1, y, 1)
 }
 
 // Vector scaling: x = alpha * x
@@ -88,4 +305,75 @@ pub fn blas_scale(n: i32, alpha: f32, x: *f32) {
 // Vector addition: y = alpha * x + y
 pub fn blas_axpy(n: i32, alpha: f32, x: *f32, y: *f32) {
     cblas_saxpy(n, alpha, x, 1, y, 1)
+}
+
+// Vector copy: y = x
+pub fn blas_copy(n: i32, x: *f32, y: *f32) {
+    cblas_scopy(n, x, 1, y, 1)
+}
+
+// Vector swap: swap x and y
+pub fn blas_swap(n: i32, x: *f32, y: *f32) {
+    cblas_sswap(n, x, 1, y, 1)
+}
+
+// Vector L2 norm: ||x||_2
+pub fn blas_norm(n: i32, x: *f32) -> f32 {
+    return cblas_snrm2(n, x, 1)
+}
+
+// Vector L1 norm (sum of absolute values)
+pub fn blas_asum(n: i32, x: *f32) -> f32 {
+    return cblas_sasum(n, x, 1)
+}
+
+// Index of max absolute value
+pub fn blas_iamax(n: i32, x: *f32) -> i32 {
+    return cblas_isamax(n, x, 1)
+}
+
+// --- Level 2 Wrappers ---
+
+// Matrix-vector multiply: y = A * x (single precision)
+pub fn blas_gemv(m: i32, n: i32, a: *f32, x: *f32, y: *f32) {
+    cblas_sgemv(
+        CBLAS_ROW_MAJOR, CBLAS_NO_TRANS,
+        m, n,
+        1.0, a, n,
+        x, 1,
+        0.0, y, 1
+    )
+}
+
+// Rank-1 update: A = alpha * x * y' + A
+pub fn blas_ger(m: i32, n: i32, alpha: f32, x: *f32, y: *f32, a: *f32) {
+    cblas_sger(
+        CBLAS_ROW_MAJOR, m, n,
+        alpha, x, 1,
+        y, 1,
+        a, n
+    )
+}
+
+// --- Level 3 Wrappers ---
+
+// Symmetric matrix multiply: C = A * B (A is symmetric)
+pub fn blas_symm(m: i32, n: i32, a: *f32, b: *f32, c: *f32) {
+    cblas_ssymm(
+        CBLAS_ROW_MAJOR, CBLAS_LEFT, CBLAS_UPPER,
+        m, n,
+        1.0, a, m,
+        b, n,
+        0.0, c, n
+    )
+}
+
+// Triangular solve: solve A * X = B
+pub fn blas_trsm(m: i32, n: i32, a: *f32, b: *f32) {
+    cblas_strsm(
+        CBLAS_ROW_MAJOR, CBLAS_LEFT, CBLAS_UPPER, CBLAS_NO_TRANS, CBLAS_NON_UNIT,
+        m, n,
+        1.0, a, m,
+        b, n
+    )
 }
