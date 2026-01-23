@@ -827,10 +827,13 @@ impl SemanticAnalyzer {
                 Ok(symbols) => {
                     // Store in imported_modules for qualified name lookup
                     self.imported_modules.insert(module_name.clone(), symbols.clone());
-                    
-                    // Also register symbols directly for simple imports
+
+                    // Register symbols for both qualified and simple name lookup
                     for (name, symbol) in &symbols {
-                        // Create qualified name: module::symbol
+                        // Register simple name (e.g., "Span") for direct use
+                        let _ = self.symbols.define(symbol.clone());
+
+                        // Also register qualified name (e.g., "span::Span")
                         let qualified_name = format!("{}::{}", module_name, name);
                         let mut qualified_symbol = symbol.clone();
                         qualified_symbol.name = qualified_name;
