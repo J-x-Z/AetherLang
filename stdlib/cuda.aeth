@@ -1,120 +1,162 @@
-// AetherLang CUDA FFI Bindings
-// Foreign Function Interface to CUDA for GPU computing
+// CUDA FFI Bindings for AetherLang
+// Foreign Function Interface to CUDA Runtime API for GPU computing
+//
+// Linking: -lcudart (CUDA Runtime) or -lcuda (CUDA Driver API)
 
-// ==================== CUDA Runtime Types ====================
+// ==================== CUDA Types ====================
 
-// CUDA device pointer (opaque)
-type CudaDevicePtr = *u8
+pub type CudaError = i32
+pub type CudaStream = *u8
+pub type CudaEvent = *u8
+pub type CudaDevicePtr = *u8
 
-// CUDA stream
-type CudaStream = *void
+// ==================== Error Codes ====================
 
-// CUDA event
-type CudaEvent = *void
+pub const CUDA_SUCCESS: i32 = 0
+pub const CUDA_ERROR_INVALID_VALUE: i32 = 1
+pub const CUDA_ERROR_OUT_OF_MEMORY: i32 = 2
+pub const CUDA_ERROR_NOT_INITIALIZED: i32 = 3
 
-// CUDA error codes
-const CUDA_SUCCESS: i32 = 0
-const CUDA_ERROR_INVALID_VALUE: i32 = 1
-const CUDA_ERROR_OUT_OF_MEMORY: i32 = 2
+// ==================== Memory Copy Kinds ====================
+
+pub const CUDA_MEMCPY_HOST_TO_HOST: i32 = 0
+pub const CUDA_MEMCPY_HOST_TO_DEVICE: i32 = 1
+pub const CUDA_MEMCPY_DEVICE_TO_HOST: i32 = 2
+pub const CUDA_MEMCPY_DEVICE_TO_DEVICE: i32 = 3
 
 // ==================== Device Management ====================
 
-// Get number of CUDA devices
-extern "C" fn cudaGetDeviceCount(count: *i32) -> i32
-
-// Set current CUDA device
-extern "C" fn cudaSetDevice(device: i32) -> i32
-
-// Get current device
-extern "C" fn cudaGetDevice(device: *i32) -> i32
-
-// Synchronize device
-extern "C" fn cudaDeviceSynchronize() -> i32
-
-// Reset device
-extern "C" fn cudaDeviceReset() -> i32
+extern "C" fn cudaGetDeviceCount(count: *i32) -> CudaError
+extern "C" fn cudaSetDevice(device: i32) -> CudaError
+extern "C" fn cudaGetDevice(device: *i32) -> CudaError
+extern "C" fn cudaDeviceSynchronize() -> CudaError
+extern "C" fn cudaDeviceReset() -> CudaError
 
 // ==================== Memory Management ====================
 
-// Allocate device memory
-extern "C" fn cudaMalloc(devPtr: *CudaDevicePtr, size: u64) -> i32
-
-// Free device memory
-extern "C" fn cudaFree(devPtr: CudaDevicePtr) -> i32
-
-// Copy memory: host to device
-extern "C" fn cudaMemcpyHtoD(dst: CudaDevicePtr, src: *void, count: u64) -> i32
-
-// Copy memory: device to host
-extern "C" fn cudaMemcpyDtoH(dst: *void, src: CudaDevicePtr, count: u64) -> i32
-
-// Copy memory: device to device
-extern "C" fn cudaMemcpyDtoD(dst: CudaDevicePtr, src: CudaDevicePtr, count: u64) -> i32
-
-// Memset device memory
-extern "C" fn cudaMemset(devPtr: CudaDevicePtr, value: i32, count: u64) -> i32
+extern "C" fn cudaMalloc(devPtr: *CudaDevicePtr, size: u64) -> CudaError
+extern "C" fn cudaFree(devPtr: CudaDevicePtr) -> CudaError
+extern "C" fn cudaMemcpy(dst: *u8, src: *u8, count: u64, kind: i32) -> CudaError
+extern "C" fn cudaMemcpyAsync(dst: *u8, src: *u8, count: u64, kind: i32, stream: CudaStream) -> CudaError
+extern "C" fn cudaMemset(devPtr: CudaDevicePtr, value: i32, count: u64) -> CudaError
+extern "C" fn cudaMallocHost(ptr: **u8, size: u64) -> CudaError
+extern "C" fn cudaFreeHost(ptr: *u8) -> CudaError
 
 // ==================== Stream Management ====================
 
-// Create stream
-extern "C" fn cudaStreamCreate(stream: *CudaStream) -> i32
-
-// Destroy stream
-extern "C" fn cudaStreamDestroy(stream: CudaStream) -> i32
-
-// Synchronize stream
-extern "C" fn cudaStreamSynchronize(stream: CudaStream) -> i32
+extern "C" fn cudaStreamCreate(stream: *CudaStream) -> CudaError
+extern "C" fn cudaStreamDestroy(stream: CudaStream) -> CudaError
+extern "C" fn cudaStreamSynchronize(stream: CudaStream) -> CudaError
 
 // ==================== Event Management ====================
 
-// Create event
-extern "C" fn cudaEventCreate(event: *CudaEvent) -> i32
+extern "C" fn cudaEventCreate(event: *CudaEvent) -> CudaError
+extern "C" fn cudaEventDestroy(event: CudaEvent) -> CudaError
+extern "C" fn cudaEventRecord(event: CudaEvent, stream: CudaStream) -> CudaError
+extern "C" fn cudaEventSynchronize(event: CudaEvent) -> CudaError
+extern "C" fn cudaEventElapsedTime(ms: *f32, start: CudaEvent, end: CudaEvent) -> CudaError
 
-// Destroy event
-extern "C" fn cudaEventDestroy(event: CudaEvent) -> i32
+// ==================== Error Handling ====================
 
-// Record event
-extern "C" fn cudaEventRecord(event: CudaEvent, stream: CudaStream) -> i32
-
-// Synchronize event
-extern "C" fn cudaEventSynchronize(event: CudaEvent) -> i32
-
-// Elapsed time between events (milliseconds)
-extern "C" fn cudaEventElapsedTime(ms: *f32, start: CudaEvent, end: CudaEvent) -> i32
+extern "C" fn cudaGetLastError() -> CudaError
+extern "C" fn cudaGetErrorString(error: CudaError) -> *u8
 
 // ==================== High-Level Wrappers ====================
 
-// Check CUDA error and panic on failure
-pub fn cuda_check(err: i32) {
-    if err != CUDA_SUCCESS {
-        // TODO: proper error handling
-        println("CUDA Error!")
+pub fn cuda_device_count() -> i32 {
+    let count: i32 = 0;
+    cudaGetDeviceCount(&count);
+    return count;
+}
+
+pub fn cuda_set_device(device: i32) -> bool {
+    return cudaSetDevice(device) == CUDA_SUCCESS;
+}
+
+pub fn cuda_sync() -> bool {
+    return cudaDeviceSynchronize() == CUDA_SUCCESS;
+}
+
+pub fn cuda_malloc(size: u64) -> CudaDevicePtr {
+    let ptr: CudaDevicePtr = 0 as CudaDevicePtr;
+    cudaMalloc(&ptr, size);
+    return ptr;
+}
+
+pub fn cuda_free(ptr: CudaDevicePtr) -> bool {
+    return cudaFree(ptr) == CUDA_SUCCESS;
+}
+
+pub fn cuda_copy_to_device(dst: CudaDevicePtr, src: *u8, size: u64) -> bool {
+    return cudaMemcpy(dst, src, size, CUDA_MEMCPY_HOST_TO_DEVICE) == CUDA_SUCCESS;
+}
+
+pub fn cuda_copy_to_host(dst: *u8, src: CudaDevicePtr, size: u64) -> bool {
+    return cudaMemcpy(dst, src, size, CUDA_MEMCPY_DEVICE_TO_HOST) == CUDA_SUCCESS;
+}
+
+pub fn cuda_memset(ptr: CudaDevicePtr, value: i32, size: u64) -> bool {
+    return cudaMemset(ptr, value, size) == CUDA_SUCCESS;
+}
+
+pub fn cuda_stream_create() -> CudaStream {
+    let stream: CudaStream = 0 as CudaStream;
+    cudaStreamCreate(&stream);
+    return stream;
+}
+
+pub fn cuda_stream_destroy(stream: CudaStream) -> bool {
+    return cudaStreamDestroy(stream) == CUDA_SUCCESS;
+}
+
+pub fn cuda_last_error() -> *u8 {
+    return cudaGetErrorString(cudaGetLastError());
+}
+
+// ==================== Dim3 for Kernel Launch ====================
+
+#[repr(C)]
+pub struct Dim3 {
+    pub x: u32,
+    pub y: u32,
+    pub z: u32,
+}
+
+impl Dim3 {
+    pub fn new(x: u32, y: u32, z: u32) -> Dim3 {
+        return Dim3 { x: x, y: y, z: z };
+    }
+
+    pub fn d1(x: u32) -> Dim3 {
+        return Dim3 { x: x, y: 1, z: 1 };
     }
 }
 
-// Allocate device buffer
-pub fn cuda_alloc(size: u64) -> CudaDevicePtr {
-    let ptr: CudaDevicePtr = null
-    cuda_check(cudaMalloc(&ptr, size))
-    return ptr
+// ==================== cuBLAS FFI ====================
+
+pub type CublasHandle = *u8
+
+extern "C" fn cublasCreate_v2(handle: *CublasHandle) -> i32
+extern "C" fn cublasDestroy_v2(handle: CublasHandle) -> i32
+
+extern "C" fn cublasSgemm_v2(
+    handle: CublasHandle,
+    transa: i32, transb: i32,
+    m: i32, n: i32, k: i32,
+    alpha: *f32, a: *f32, lda: i32,
+    b: *f32, ldb: i32,
+    beta: *f32, c: *f32, ldc: i32
+) -> i32
+
+pub const CUBLAS_OP_N: i32 = 0
+pub const CUBLAS_OP_T: i32 = 1
+
+pub fn cublas_create() -> CublasHandle {
+    let handle: CublasHandle = 0 as CublasHandle;
+    cublasCreate_v2(&handle);
+    return handle;
 }
 
-// Free device buffer
-pub fn cuda_free(ptr: CudaDevicePtr) {
-    cuda_check(cudaFree(ptr))
-}
-
-// Copy array to device
-pub fn cuda_copy_to_device(device: CudaDevicePtr, host: *void, size: u64) {
-    cuda_check(cudaMemcpyHtoD(device, host, size))
-}
-
-// Copy array from device
-pub fn cuda_copy_from_device(host: *void, device: CudaDevicePtr, size: u64) {
-    cuda_check(cudaMemcpyDtoH(host, device, size))
-}
-
-// Synchronize GPU
-pub fn cuda_sync() {
-    cuda_check(cudaDeviceSynchronize())
+pub fn cublas_destroy(handle: CublasHandle) -> bool {
+    return cublasDestroy_v2(handle) == 0;
 }

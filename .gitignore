@@ -30,3 +30,4 @@ ir_output.txt
 # Distribution binaries (too large for GitHub)
 /dist/*.aarch64
 /dist/*.x86_64
+CLAUDE.md
