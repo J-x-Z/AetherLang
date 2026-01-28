@@ -31,3 +31,4 @@ ir_output.txt
 /dist/*.aarch64
 /dist/*.x86_64
 CLAUDE.md
+.claude/
