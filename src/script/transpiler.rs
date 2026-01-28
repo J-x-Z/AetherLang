@@ -69,6 +69,8 @@ impl Transpiler {
         match stmt {
             Stmt::FunctionDef(f) => self.transpile_function(f),
             Stmt::If(i) => self.transpile_if(i),
+            Stmt::While(w) => self.transpile_while(w),
+            Stmt::For(f) => self.transpile_for(f),
             Stmt::Return(r) => self.transpile_return(r),
             Stmt::Assign(a) => self.transpile_assign(a),
             Stmt::Expr(e) => {
@@ -171,6 +173,43 @@ impl Transpiler {
         self.emit("\n");
     }
 
+    fn transpile_while(&mut self, w: &WhileStmt) {
+        self.emit_indent();
+        self.emit("while ");
+        self.emit(&self.transpile_expr(&w.condition));
+        self.emit(" {\n");
+
+        self.indent_level += 1;
+        for stmt in &w.body {
+            self.transpile_stmt(stmt);
+        }
+        self.indent_level -= 1;
+
+        self.emit_indent();
+        self.emit_line("}");
+    }
+
+    fn transpile_for(&mut self, f: &ForStmt) {
+        self.emit_indent();
+        // Transpile: for x in iterable -> for x in iterable
+        self.emit("for ");
+        self.emit(&f.var);
+        // P5.1: Add type annotation for loop variable (infer from iterable if possible)
+        self.emit(": _");  // Use placeholder, Core compiler will infer
+        self.emit(" in ");
+        self.emit(&self.transpile_expr(&f.iterable));
+        self.emit(" {\n");
+
+        self.indent_level += 1;
+        for stmt in &f.body {
+            self.transpile_stmt(stmt);
+        }
+        self.indent_level -= 1;
+
+        self.emit_indent();
+        self.emit_line("}");
+    }
+
     fn transpile_return(&mut self, r: &ReturnStmt) {
         self.emit_indent();
         self.emit("return");
@@ -183,12 +222,56 @@ impl Transpiler {
 
     fn transpile_assign(&mut self, a: &AssignStmt) {
         self.emit_indent();
-        // No 'mut' keyword in .aeth
+        // P5.1: AetherLang requires explicit type annotations
         self.emit("let ");
         self.emit(&self.transpile_expr(&a.target));
+
+        // Infer type from value expression
+        let inferred_type = self.infer_type(&a.value);
+        self.emit(": ");
+        self.emit(&inferred_type);
+
         self.emit(" = ");
         self.emit(&self.transpile_expr(&a.value));
         self.emit(";\n");
+    }
+
+    /// Infer type from expression for P5.1 compliance
+    fn infer_type(&self, expr: &Expr) -> String {
+        match expr {
+            Expr::Integer { .. } => "i64".to_string(),
+            Expr::Float { .. } => "f64".to_string(),
+            Expr::String { .. } => "*u8".to_string(),
+            Expr::Identifier { .. } => "_".to_string(), // Cannot infer, use placeholder
+            Expr::Binary { left, op, .. } => {
+                // Binary ops preserve type of operands
+                match op {
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt |
+                    BinOp::Le | BinOp::Ge | BinOp::And | BinOp::Or => "bool".to_string(),
+                    _ => self.infer_type(left),
+                }
+            }
+            Expr::Call { func, .. } => {
+                // Try to infer from known functions
+                if let Expr::Identifier { name, .. } = func.as_ref() {
+                    match name.as_str() {
+                        "len" => "u64".to_string(),
+                        "malloc" => "*void".to_string(),
+                        _ => "_".to_string(),
+                    }
+                } else {
+                    "_".to_string()
+                }
+            }
+            Expr::List { elements, .. } => {
+                if let Some(first) = elements.first() {
+                    format!("*{}", self.infer_type(first))
+                } else {
+                    "*void".to_string()
+                }
+            }
+            Expr::FieldAccess { .. } => "_".to_string(),
+        }
     }
 
     fn transpile_expr(&self, expr: &Expr) -> String {

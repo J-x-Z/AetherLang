@@ -449,9 +449,9 @@ impl CCodeGen {
                 self.generate_instruction(inst)?;
             }
 
-            // Terminator
+            // Terminator (with phi assignments for correct SSA semantics)
             if let Some(ref term) = block.terminator {
-                self.generate_terminator(term)?;
+                self.generate_terminator_with_phis(term, i, func)?;
             }
         }
 
@@ -468,6 +468,22 @@ impl CCodeGen {
             Value::Register(reg) => self.reg_types.get(reg).cloned(),
             Value::Parameter(idx) => self.param_types.get(idx).cloned(),
             _ => None,
+        }
+    }
+
+    /// Check if a type is volatile (for MMIO/hardware register access)
+    fn is_volatile_type(&self, ty: &IRType) -> bool {
+        match ty {
+            IRType::Ptr(inner) => {
+                // Check if the inner type name contains "volatile"
+                if let IRType::Struct(name) = &**inner {
+                    name.to_lowercase().contains("volatile")
+                } else {
+                    self.is_volatile_type(inner)
+                }
+            }
+            IRType::Struct(name) => name.to_lowercase().contains("volatile"),
+            _ => false,
         }
     }
 
@@ -590,37 +606,55 @@ impl CCodeGen {
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty.clone())));
             }
             
-            Instruction::Load { dest, ptr, ty: _ } => {
+            Instruction::Load { dest, ptr, ty } => {
                 let var = self.get_var(*dest);
                 let p = self.value_to_c(ptr);
-                self.writeln(&format!("{} = *{};", var, p));
-                
+
+                // Check if loading from volatile pointer
+                let is_volatile = matches!(ty, IRType::Ptr(inner) if matches!(**inner, IRType::Struct(ref name) if name.contains("volatile")))
+                    || self.is_volatile_type(ty);
+
+                if is_volatile {
+                    self.writeln(&format!("{} = *(volatile typeof({})*){}; /* volatile load */", var, p, p));
+                } else {
+                    self.writeln(&format!("{} = *{};", var, p));
+                }
+
                 if let Some(IRType::Ptr(inner)) = self.get_value_type(ptr) {
                     self.reg_types.insert(*dest, *inner);
                 }
             }
-            
+
             Instruction::Store { ptr, value } => {
                 let p = self.value_to_c(ptr);
                 let val = self.value_to_c(value);
-                
-                // Check if we're storing a struct pointer to a struct field
-                // In that case, we need to dereference the value
+
+                // Check if storing to volatile pointer
                 let ptr_ty = self.get_value_type(ptr);
                 let val_ty = self.get_value_type(value);
-                
+
+                let is_volatile = ptr_ty.as_ref().map(|t| self.is_volatile_type(t)).unwrap_or(false);
+
                 if let (Some(IRType::Ptr(ptr_inner)), Some(IRType::Ptr(val_inner))) = (&ptr_ty, &val_ty) {
                     // Both are pointers - check if storing struct* to struct field
                     if let IRType::Struct(_) = &**ptr_inner {
                         if let IRType::Struct(_) = &**val_inner {
                             // Dereference the value: *ptr = *val
-                            self.writeln(&format!("*{} = *{};", p, val));
+                            if is_volatile {
+                                self.writeln(&format!("*(volatile typeof(*{})*)({}) = *{}; /* volatile store */", p, p, val));
+                            } else {
+                                self.writeln(&format!("*{} = *{};", p, val));
+                            }
                             return Ok(());
                         }
                     }
                 }
-                
-                self.writeln(&format!("*{} = {};", p, val));
+
+                if is_volatile {
+                    self.writeln(&format!("*(volatile typeof(*{})*)({}) = {}; /* volatile store */", p, p, val));
+                } else {
+                    self.writeln(&format!("*{} = {};", p, val));
+                }
             }
             
             Instruction::GetElementPtr { dest, ptr, index, elem_ty: _ } => {
@@ -725,22 +759,94 @@ impl CCodeGen {
             }
             
             Instruction::Phi { dest, incoming } => {
-                // Phi nodes are handled by predecessor blocks in structured C
-                // For now, just use the first incoming value as a placeholder
+                // Phi nodes in C: we declare the variable and let predecessor blocks assign to it.
+                // The actual assignments are inserted by generate_phi_assignments() before terminators.
+                // Here we just ensure the variable exists and track its type.
+                let var = self.get_var(*dest);
+
+                // Track type from the first incoming value
                 if let Some((val, _)) = incoming.first() {
-                    let var = self.get_var(*dest);
-                    let v = self.value_to_c(val);
-                    self.writeln(&format!("{} = {};", var, v));
-                    
                     if let Some(ty) = self.get_value_type(val) {
                         self.reg_types.insert(*dest, ty);
                     }
                 }
+
+                // Add a comment for debugging
+                let incoming_str: Vec<String> = incoming.iter()
+                    .map(|(v, b)| format!("({}, block{})", self.value_to_c(v), b.0))
+                    .collect();
+                self.writeln(&format!("/* phi {} = [{}] */", var, incoming_str.join(", ")));
             }
         }
         Ok(())
     }
 
+
+    /// Generate phi assignments for a jump to target block.
+    /// This inserts assignments like `phi_var = value;` before the jump.
+    fn generate_phi_assignments(&mut self, current_block_id: usize, target_block_id: usize, func: &IRFunction) {
+        // Find all phi instructions in the target block
+        if let Some(target_block) = func.blocks.get(target_block_id) {
+            for inst in &target_block.instructions {
+                if let Instruction::Phi { dest, incoming } = inst {
+                    // Find the value for the current block
+                    for (val, from_block) in incoming {
+                        if from_block.0 == current_block_id {
+                            let var = self.get_var(*dest);
+                            let v = self.value_to_c(val);
+                            self.writeln(&format!("{} = {};  /* phi from block {} */", var, v, current_block_id));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Generate C code for a terminator (with phi assignments)
+    fn generate_terminator_with_phis(&mut self, term: &Terminator, current_block_id: usize, func: &IRFunction) -> Result<()> {
+        match term {
+            Terminator::Return { value } => {
+                if let Some(val) = value {
+                    let v = self.value_to_c(val);
+                    self.writeln(&format!("return {};", v));
+                } else {
+                    self.writeln("return;");
+                }
+            }
+
+            Terminator::Jump { target } => {
+                // Generate phi assignments before jump
+                self.generate_phi_assignments(current_block_id, target.0, func);
+                let label = &self.block_labels[&target.0];
+                self.writeln(&format!("goto {};", label));
+            }
+
+            Terminator::Branch { cond, then_target, else_target } => {
+                let c = self.value_to_c(cond);
+                let then_label = self.block_labels[&then_target.0].clone();
+                let else_label = self.block_labels[&else_target.0].clone();
+
+                // For branches, we need to generate phi assignments in each branch
+                self.writeln(&format!("if ({}) {{", c));
+                self.indent += 1;
+                self.generate_phi_assignments(current_block_id, then_target.0, func);
+                self.writeln(&format!("goto {};", then_label));
+                self.indent -= 1;
+                self.writeln("} else {");
+                self.indent += 1;
+                self.generate_phi_assignments(current_block_id, else_target.0, func);
+                self.writeln(&format!("goto {};", else_label));
+                self.indent -= 1;
+                self.writeln("}");
+            }
+
+            Terminator::Unreachable => {
+                self.writeln("__builtin_unreachable();");
+            }
+        }
+        Ok(())
+    }
 
     /// Generate C code for a terminator
     fn generate_terminator(&mut self, term: &Terminator) -> Result<()> {

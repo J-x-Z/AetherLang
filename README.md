@@ -27,26 +27,61 @@ AetherLang is an **AI-Native Programming Language** built from the ground up to:
 | **Codegen** | ✅ 100% | 40 | Native object file output |
 | **Total** | ✅ | **259** | All modules compile to native code |
 
-## ✨ Key Features (P1 Complete)
+## ✨ AI-Native Features (P5 Complete)
 
-### Language Features
-- **Type System**: `i8`-`i64`, `u8`-`u64`, `f32`, `f64`, `bool`, `char`, `*T`, `&T`, `&mut T`
-- **Generics**: Type erasure with `Vec<T>`, `Option<T>` style syntax
-- **Traits**: `trait Display { fn display(&self); }`
-- **Lifetimes**: `&'a T`, `&'static T` annotations
-- **Type Aliases**: `type Int = i64;`
-- **Closures**: `|x, y| x + y` lambda syntax
+AetherLang enforces **"Radical Explicitness"** to reduce AI hallucinations:
 
-### Module System
-- **Use Imports**: `use module::{Item1, Item2}`
-- **Dynamic Loading**: Auto-search in `.`, `src_aether/`, `stdlib/`
-- **Public Exports**: `pub struct`, `pub fn`
+### 1. Mandatory Type Annotations
+```aether
+// ❌ Forbidden - type inference
+let x = 10;
 
-### System Features
-- **FFI**: `extern "C" { fn puts(s: *u8) -> i32; }`
-- **Unions**: Memory-overlapping types
-- **Volatile**: `*volatile T` for memory-mapped I/O
-- **Inline ASM**: `asm!("mov eax, 1")` (planned)
+// ✅ Required - explicit types
+let x: i32 = 10;
+let name: *u8 = "hello\0" as *u8;
+```
+
+### 2. Effect System (Hard Errors)
+```aether
+// ❌ Compile error - calling effect[io] without declaring it
+fn bad_caller() {
+    puts("hello\0" as *u8);
+}
+
+// ✅ Correct - effect declared
+fn good_caller() effect[io] {
+    puts("hello\0" as *u8);
+}
+```
+
+| Effect | Description |
+|--------|-------------|
+| `io` | Input/Output |
+| `alloc` | Memory allocation |
+| `read` | Read global state |
+| `write` | Write global state |
+| `panic` | May panic |
+
+### 3. No `unwrap()` on Option/Result
+```aether
+// ❌ Does not exist - unwrap() is not defined
+let value: i32 = maybe_value.unwrap();
+
+// ✅ Use match or unwrap_or
+let value: i32 = maybe_value.unwrap_or(0);
+```
+
+### 4. Explicit Allocators
+```aether
+use alloc::{Allocator, GlobalAllocator, ArenaAllocator}
+
+// Vec requires allocator parameter
+let v: Vec<i32, GlobalAllocator> = Vec::new_in(GlobalAllocator::new());
+
+// Use Arena for batch deallocation
+let arena: ArenaAllocator = ArenaAllocator::new(1024);
+let v: Vec<i32, ArenaAllocator> = Vec::new_in(arena);
+```
 
 ## ✨ Dual-Layer Architecture
 
@@ -54,13 +89,27 @@ AetherLang introduces a novel **Dual-Layer Architecture** to balance high-level 
 
 ### Layer 1: Aether Script (`.ath`)
 The high-level logic layer. Used for rapid development, scripting, and business logic.
+```python
+# hello.ath - Python-like syntax
+def main():
+    print("Hello from Script!")
+    return 0
+```
 - **Indentation-based syntax** for readability
 - **Mutable-by-default** to align with algorithmic pseudocode
-- **Implicit Context** management (Anti-Leak System)
 - **Transpiles directly** to Layer 0 (Aether Core)
 
 ### Layer 0: Aether Core (`.aeth`)
 The low-level system layer. Used for kernel, drivers, and performance-critical paths.
+```aether
+// hello.aeth - Rust-like syntax
+extern "C" { fn puts(s: *u8) -> i32; }
+
+fn main() -> i32 {
+    puts("Hello, AetherLang!\0" as *u8);
+    return 0;
+}
+```
 - **Explicit Ownership & Lifetimes**
 - **Effect System** (`pure`, `effect[io]`) tracking side-effects
 - **Contract Programming** (`requires`/`ensures`) for formal verification
@@ -70,17 +119,12 @@ The low-level system layer. Used for kernel, drivers, and performance-critical p
 ```
 src/
 ├── frontend/     # Lexer, Parser, Semantic Analysis, Module System
-│   ├── lexer.rs      # 80+ tokens, unicode support
-│   ├── parser.rs     # Full expression/statement parsing
-│   ├── semantic.rs   # Type inference, ownership, traits
-│   └── module.rs     # ModuleLoader for use statements
-├── script/       # Aether Script Frontend & Transpiler (Layer 1)
+├── script/       # Aether Script Transpiler (Layer 1 → Layer 0)
 ├── middle/       # IR Generation and Optimization
-│   ├── ir.rs         # Three-address code IR
-│   └── ir_gen.rs     # AST to IR translation
-├── backend/      # ELF Linker, C / LLVM Code Generation
-│   └── llvm/         # LLVM backend integration
-├── ai_ir/        # 🆕 AI-Readable IR Layer
+├── backend/      # C / LLVM Code Generation
+│   ├── c/            # C backend (portable)
+│   └── llvm/         # LLVM backend (optimized)
+├── ai_ir/        # AI-Readable IR Layer
 └── types/        # Type System & Resolution
 ```
 
@@ -94,44 +138,13 @@ cargo build --release --features llvm
 cargo run --features llvm -- build examples/hello.aeth
 ./hello
 
+# Or use C backend (no LLVM required)
+cargo build --release --no-default-features
+./target/release/aethc --emit-c examples/hello.aeth
+cc -o hello examples/hello.c && ./hello
+
 # Run all tests
 cargo test
-```
-
-### Example: Hello World
-```rust
-// hello.aeth
-extern "C" {
-    fn puts(s: *u8) -> i32;
-}
-
-fn main() -> i32 {
-    puts("Hello, AetherLang!" as *u8);
-    return 0;
-}
-```
-
-### Example: Generic Function
-```rust
-fn identity<T>(x: T) -> T {
-    return x;
-}
-
-fn main() -> i32 {
-    let a: i64 = identity(42);
-    return a as i32;
-}
-```
-
-### Example: Module Import
-```rust
-// point.aeth
-pub struct Point { x: i64, y: i64 }
-pub fn create_point(x: i64, y: i64) -> Point { Point { x: x, y: y } }
-
-// main.aeth
-use point::{Point, create_point}
-fn main() -> i32 { ... }
 ```
 
 ## 📊 Development Status
@@ -143,48 +156,43 @@ fn main() -> i32 { ... }
 | **P2: Platforms** | ✅ | Linux, macOS, Windows CI passing |
 | **P3: SIMD/Matrix** | ✅ | Vector types `f32x4`, BLAS FFI, Matrix4x4 |
 | **P4: Kernel Dev** | ✅ | Inline ASM, naked functions, atomic, MMIO |
-| **P5: AI/GPU** | ✅ | CUDA, Metal, Tensor, Autograd |
+| **P5: AI-Native** | ✅ | Mandatory types, effect system, no unwrap, explicit allocators |
+| **P6: Engineering** | ✅ | CI/CD, .ath transpiler, jxz config, C backend fixes |
 
 ## 📦 JXZ Package Manager
 
-AetherLang includes **JXZ** - a cross-platform package manager (like Homebrew/Cargo):
+AetherLang includes **JXZ** - a cross-platform package manager written in AetherLang:
 
 ```bash
 # Project management
-jxz init          # Create new project
-jxz build         # Build project
+jxz init          # Create new project with Jxz.toml
+jxz build         # Build project (reads config from Jxz.toml)
 jxz run           # Build and run
 jxz test          # Run tests
+jxz clean         # Remove build artifacts
 
 # Dependency management
-jxz add <pkg>     # Add dependency
+jxz add <pkg>     # Add dependency to Jxz.toml
+jxz remove <pkg>  # Remove dependency
 jxz install       # Install from Jxz.lock
-jxz update        # Update dependencies
-
-# System packages (Homebrew-style)
-jxz install <pkg> # Install to ~/.jxz/Cellar
-jxz search <q>    # Search registry
-jxz list          # List installed
-jxz doctor        # Check for issues
 ```
 
 **161 functions** written entirely in AetherLang (self-hosting!)
 
-
 ## 📚 Documentation
 
 ### Language Reference
-- [Language Guide](docs/LANGUAGE.md) - Complete language reference
+- [Language Guide](docs/LANGUAGE.md) - Complete language reference with P5 rules
 - [Grammar Spec](docs/grammar.ebnf) - Formal EBNF grammar
-- [Type System](docs/type_system.rules) - Type inference rules
 
 ### Design Documents
 - [AI-IR Design](docs/design/ai_ir_design.md) - AI-Native Interface
+- [Dual-Layer Architecture](docs/design/DUAL_LAYER_ARCHITECTURE.md) - .ath/.aeth layers
 - [Aether Script Spec](docs/AETHER_SCRIPT_SPEC.md) - Layer 1 syntax
+- [Context Pattern](docs/context-pattern.md) - Explicit context passing
 
 ### Tutorials
 - [Quick Start Guide](docs/GUIDE.md) - Getting started
-- [Migration Guide](docs/MIGRATION.md) - From Rust/C
 
 ## 🔬 For AI Models
 
@@ -194,6 +202,7 @@ AetherLang is designed to be **AI-friendly**:
 2. **Explicit Semantics** - Ownership, effects, contracts all visible
 3. **Structured Errors** - Machine-readable output with fix suggestions
 4. **AI-IR Layer** - Semantic graph + intent annotations for AI understanding
+5. **No Hidden Magic** - Every operation is explicit and traceable
 
 ## 🤝 Contributing
 

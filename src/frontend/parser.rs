@@ -2145,7 +2145,8 @@ mod tests {
 
     #[test]
     fn test_let_statement() {
-        let program = parse("fn main() { let x = 42 }").unwrap();
+        // P5.1: AetherLang requires explicit type annotations
+        let program = parse("fn main() { let x: i32 = 42 }").unwrap();
         assert_eq!(program.items.len(), 1);
     }
 

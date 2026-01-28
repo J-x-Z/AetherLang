@@ -2140,7 +2140,8 @@ mod tests {
 
     #[test]
     fn test_variable_definition() {
-        let result = analyze("fn main() { let x = 42 }");
+        // P5.1: AetherLang requires explicit type annotations
+        let result = analyze("fn main() { let x: i32 = 42 }");
         assert!(result.is_ok());
     }
 

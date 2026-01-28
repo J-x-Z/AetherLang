@@ -137,11 +137,29 @@ pub fn main() {}
 ### 2.5 语句
 
 ```bnf
-<stmt> ::= "let" "mut"? <ident> (":" <type>)? ("=" <expr>)?
+<stmt> ::= "let" "mut"? <ident> ":" <type> ("=" <expr>)?   # P5.1: 类型标注必须
          | <expr>
          | "return" <expr>?
          | "break"
          | "continue"
+```
+
+> ⚠️ **P5.1 强制类型标注**: AetherLang 要求所有 `let` 语句必须显式标注类型。
+> 这是为了减少 AI 幻觉，确保代码语义完全显式。
+
+```aether
+// ❌ 禁止 - 类型推断
+let x = 10;
+
+// ✅ 必须 - 显式类型
+let x: i32 = 10;
+let name: *u8 = "hello\0" as *u8;
+
+// ❌ 禁止 - 闭包参数无类型
+let f = |x| x + 1;
+
+// ✅ 必须 - 闭包参数显式类型
+let f: fn(i32) -> i32 = |x: i32| -> i32 { x + 1 };
 ```
 
 ### 2.6 表达式
@@ -230,6 +248,21 @@ fn write_file(path: str) effect[io, alloc] {
 }
 ```
 
+> ⚠️ **P5.2 效果系统强制执行**: 调用有副作用的函数时，调用者必须声明相同或更大的效果集。
+> 违反此规则会导致编译错误（硬错误），而非警告。
+
+```aether
+// ❌ 编译错误 - 调用 effect[io] 但未声明
+fn bad_caller() {
+    println("hello");  // Error: calling effect[io] without declaring it
+}
+
+// ✅ 正确 - 声明了 effect[io]
+fn good_caller() effect[io] {
+    println("hello");
+}
+```
+
 **规则**: 纯函数不能调用产生副作用的函数。
 
 | 效果 | 描述 |
@@ -240,7 +273,54 @@ fn write_file(path: str) effect[io, alloc] {
 | `write` | 写入全局状态 |
 | `panic` | 可能 panic |
 
-### 4.3 渐进式严格性
+### 4.3 Result/Option 类型 (P5.3)
+
+AetherLang 的 `Option<T>` 和 `Result<T, E>` 类型**故意不提供 `unwrap()` 方法**。
+这是为了强制安全的错误处理，减少运行时 panic。
+
+```aether
+use result::{Option, Result}
+
+// ❌ 不存在 - unwrap() 方法未定义
+let value: i32 = maybe_value.unwrap();
+
+// ✅ 使用 match
+let value: i32 = match maybe_value {
+    Option::Some(v) => v,
+    Option::None => 0,  // 提供默认值
+};
+
+// ✅ 使用 unwrap_or
+let value: i32 = maybe_value.unwrap_or(0);
+
+// ✅ 使用 ? 操作符 (在返回 Result 的函数中)
+let value: i32 = maybe_value?;
+```
+
+### 4.4 显式分配器 (P5.4)
+
+AetherLang 容器类型使用显式分配器泛型参数：
+
+```aether
+use alloc::{Allocator, GlobalAllocator, ArenaAllocator}
+
+// Vec 需要分配器参数
+pub struct Vec<T, A: Allocator> {
+    data: *T,
+    len: u64,
+    capacity: u64,
+    alloc: A,
+}
+
+// 使用全局分配器
+let v: Vec<i32, GlobalAllocator> = Vec::new_in(GlobalAllocator::new());
+
+// 使用 Arena 分配器 (批量释放)
+let arena: ArenaAllocator = ArenaAllocator::new(1024);
+let v: Vec<i32, ArenaAllocator> = Vec::new_in(arena);
+```
+
+### 4.5 渐进式严格性
 
 ```aether
 @prototype  // 宽松模式 - 允许警告
@@ -266,9 +346,11 @@ fn critical() {}
 
 ## 5. 相关设计文档
 
-- [AI-IR 设计 (English)](design/ai_ir_design.md) | [(中文)](design/ai_ir_design_zh_CN.md)
-- [AI-IR API (English)](design/ai_ir_api.md) | [(中文)](design/ai_ir_api_zh_CN.md)
-- [架构概览 (English)](design/architecture_overview.md) | [(中文)](design/architecture_overview_zh_CN.md)
+- [AI-IR 设计](design/ai_ir_design.md)
+- [AI-IR API](design/ai_ir_api.md)
+- [架构概览](design/architecture_overview.md)
+- [上下文参数模式](context-pattern.md) (P5.5)
+- [双层架构](design/DUAL_LAYER_ARCHITECTURE.md)
 
 ---
 

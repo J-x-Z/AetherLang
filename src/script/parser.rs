@@ -89,6 +89,8 @@ impl Parser {
         match self.peek().kind {
             TokenKind::Def | TokenKind::Comptime => self.parse_function_def(),
             TokenKind::If => self.parse_if(),
+            TokenKind::While => self.parse_while(),
+            TokenKind::For => self.parse_for(),
             TokenKind::Return => self.parse_return(),
             TokenKind::Pass => {
                 self.advance();
@@ -272,7 +274,47 @@ impl Parser {
             span: start_span,
         }))
     }
-    
+
+    fn parse_while(&mut self) -> Result<Stmt, String> {
+        let start_span = self.peek().span;
+        self.consume(TokenKind::While, "Expected 'while'")?;
+        let condition = self.parse_expr()?;
+        self.consume(TokenKind::Colon, "Expected ':'")?;
+        self.consume(TokenKind::Newline, "Expected Newline")?;
+        let body = self.parse_block()?;
+
+        Ok(Stmt::While(WhileStmt {
+            condition,
+            body,
+            span: start_span,
+        }))
+    }
+
+    fn parse_for(&mut self) -> Result<Stmt, String> {
+        let start_span = self.peek().span;
+        self.consume(TokenKind::For, "Expected 'for'")?;
+
+        // Get loop variable name
+        let var_token = self.peek().clone();
+        let var = match var_token.kind {
+            TokenKind::Identifier(s) => { self.advance(); s },
+            _ => return Err("Expected loop variable name".to_string()),
+        };
+
+        self.consume(TokenKind::In, "Expected 'in'")?;
+        let iterable = self.parse_expr()?;
+        self.consume(TokenKind::Colon, "Expected ':'")?;
+        self.consume(TokenKind::Newline, "Expected Newline")?;
+        let body = self.parse_block()?;
+
+        Ok(Stmt::For(ForStmt {
+            var,
+            iterable,
+            body,
+            span: start_span,
+        }))
+    }
+
     fn parse_return(&mut self) -> Result<Stmt, String> {
         let span = self.peek().span;
         self.consume(TokenKind::Return, "Expected 'return'")?;

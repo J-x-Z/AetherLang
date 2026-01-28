@@ -9,6 +9,8 @@ pub struct ScriptModule {
 pub enum Stmt {
     FunctionDef(FunctionDef),
     If(IfStmt),
+    While(WhileStmt),
+    For(ForStmt),
     Return(ReturnStmt),
     Expr(Expr),
     Assign(AssignStmt),
@@ -45,6 +47,21 @@ pub struct IfStmt {
     pub condition: Expr,
     pub then_block: Vec<Stmt>,
     pub else_block: Option<Vec<Stmt>>, // For elif/else
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct WhileStmt {
+    pub condition: Expr,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForStmt {
+    pub var: String,
+    pub iterable: Expr,
+    pub body: Vec<Stmt>,
     pub span: Span,
 }
 
