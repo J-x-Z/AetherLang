@@ -56,13 +56,13 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Install LLVM 18
+    - name: Install LLVM 19
       run: |
         wget https://apt.llvm.org/llvm.sh
         chmod +x llvm.sh
-        sudo ./llvm.sh 18
-        sudo apt-get install -y llvm-18-dev libpolly-18-dev
-        echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+        sudo ./llvm.sh 19
+        sudo apt-get install -y llvm-19-dev libpolly-19-dev
+        echo "LLVM_SYS_191_PREFIX=/usr/lib/llvm-19" >> $GITHUB_ENV
 
     - name: Cache cargo
       uses: Swatinem/rust-cache@v2

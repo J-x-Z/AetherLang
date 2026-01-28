@@ -3,6 +3,7 @@ extern "C" {
     fn printf(fmt: *u8) -> i32;
 }
 
-fn main() {
+fn main() -> i32 {
     printf("Hello from Aether!\n");
+    return 0;
 }
