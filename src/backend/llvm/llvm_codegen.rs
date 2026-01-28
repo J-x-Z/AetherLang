@@ -1263,7 +1263,7 @@ mod tests {
     #[test]
     fn test_empty_function() {
         let ir_module = compile_to_ir("fn main() {}");
-        let mut codegen = LLVMCodeGen::new("x86_64-pc-windows-gnu");
+        let mut codegen = LLVMCodeGen::new("x86_64-unknown-linux-gnu");
         
         // Should not panic
         let result = codegen.generate(&ir_module);
@@ -1274,7 +1274,7 @@ mod tests {
     #[test]
     fn test_return_constant() {
         let ir_module = compile_to_ir("fn answer() -> i64 { return 42 }");
-        let mut codegen = LLVMCodeGen::new("x86_64-pc-windows-gnu");
+        let mut codegen = LLVMCodeGen::new("x86_64-unknown-linux-gnu");
         
         let result = codegen.generate(&ir_module);
         println!("LLVM IR:\n{}", codegen.print_ir());
@@ -1284,7 +1284,7 @@ mod tests {
     #[test]
     fn test_binary_expression() {
         let ir_module = compile_to_ir("fn add() -> i64 { return 1 + 2 }");
-        let mut codegen = LLVMCodeGen::new("x86_64-pc-windows-gnu");
+        let mut codegen = LLVMCodeGen::new("x86_64-unknown-linux-gnu");
         
         let result = codegen.generate(&ir_module);
         println!("LLVM IR:\n{}", codegen.print_ir());
