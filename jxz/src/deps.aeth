@@ -64,24 +64,125 @@ pub fn load_project() -> Project {
 
 // ==================== Dependency Commands ====================
 
+extern "C" {
+    fn fwrite(buf: *void, size: u64, count: u64, fp: *void) -> u64;
+    fn strlen(s: *u8) -> u64;
+    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn strcat(dest: *u8, src: *u8) -> *u8;
+    fn strstr(haystack: *u8, needle: *u8) -> *u8;
+    fn sprintf(buf: *u8, fmt: *u8, ...) -> i32;
+}
+
 pub fn add_dependency(name: *u8, version: *u8) -> i32 {
     puts("Adding dependency:\0" as *u8)
     puts(name)
-    
-    // TODO: Modify Jxz.toml to add dependency
-    // TODO: Download/fetch dependency
-    
+    puts(" @ \0" as *u8)
+    puts(version)
+    puts("\0" as *u8)
+
+    // Check if Jxz.toml exists
+    if access("Jxz.toml\0" as *u8, F_OK) != 0 {
+        puts("Error: No Jxz.toml found. Run 'jxz init' first.\0" as *u8)
+        return 1
+    }
+
+    // Read existing Jxz.toml
+    let fp: *void = fopen("Jxz.toml\0" as *u8, "r\0" as *u8)
+    if fp == (0 as *void) {
+        puts("Error: Cannot read Jxz.toml\0" as *u8)
+        return 1
+    }
+
+    fseek(fp, 0, SEEK_END)
+    let size: i64 = ftell(fp)
+    fseek(fp, 0, SEEK_SET)
+
+    let buf: *u8 = malloc(size as u64 + 512) as *u8
+    fread(buf as *void, 1, size as u64, fp)
+    buf[size as i32] = 0
+    fclose(fp)
+
+    // Check if [dependencies] section exists
+    let deps_section: *u8 = strstr(buf, "[dependencies]\0" as *u8)
+
+    // Prepare new dependency line
+    let dep_line: *u8 = malloc(256) as *u8
+    strcpy(dep_line, name)
+    strcat(dep_line, " = \"\0" as *u8)
+    strcat(dep_line, version)
+    strcat(dep_line, "\"\n\0" as *u8)
+
+    // Write back to file
+    let out: *void = fopen("Jxz.toml\0" as *u8, "a\0" as *u8)
+    if out == (0 as *void) {
+        puts("Error: Cannot write to Jxz.toml\0" as *u8)
+        free(buf as *void)
+        free(dep_line as *void)
+        return 1
+    }
+
+    if deps_section == (0 as *u8) {
+        // Add [dependencies] section
+        fwrite("\n[dependencies]\n\0" as *void, 1, 16, out)
+    }
+
+    fwrite(dep_line as *void, 1, strlen(dep_line), out)
+    fclose(out)
+
+    free(buf as *void)
+    free(dep_line as *void)
+
     puts("  Added to Jxz.toml\0" as *u8)
+    puts("  Run 'jxz install' to fetch dependencies\0" as *u8)
     return 0
 }
 
 pub fn remove_dependency(name: *u8) -> i32 {
-    puts("Removing dependency:\0" as *u8)
+    puts("Removing dependency: \0" as *u8)
     puts(name)
-    
-    // TODO: Modify Jxz.toml to remove dependency
-    
-    puts("  Removed from Jxz.toml\0" as *u8)
+    puts("\0" as *u8)
+
+    // Check if Jxz.toml exists
+    if access("Jxz.toml\0" as *u8, F_OK) != 0 {
+        puts("Error: No Jxz.toml found\0" as *u8)
+        return 1
+    }
+
+    // Read Jxz.toml
+    let fp: *void = fopen("Jxz.toml\0" as *u8, "r\0" as *u8)
+    if fp == (0 as *void) {
+        puts("Error: Cannot read Jxz.toml\0" as *u8)
+        return 1
+    }
+
+    fseek(fp, 0, SEEK_END)
+    let size: i64 = ftell(fp)
+    fseek(fp, 0, SEEK_SET)
+
+    let buf: *u8 = malloc(size as u64 + 1) as *u8
+    fread(buf as *void, 1, size as u64, fp)
+    buf[size as i32] = 0
+    fclose(fp)
+
+    // Find and remove the dependency line using sed
+    let cmd: *u8 = malloc(256) as *u8
+    strcpy(cmd, "sed -i '' '/^")
+    strcat(cmd, name)
+    strcat(cmd, " *=/d' Jxz.toml 2>/dev/null || sed -i '/^")
+    strcat(cmd, name)
+    strcat(cmd, " *=/d' Jxz.toml\0" as *u8)
+
+    let result: i32 = system(cmd)
+
+    free(buf as *void)
+    free(cmd as *void)
+
+    if result == 0 {
+        puts("  Removed from Jxz.toml\0" as *u8)
+    } else {
+        puts("  Warning: Could not remove (may not exist)\0" as *u8)
+    }
+
     return 0
 }
 

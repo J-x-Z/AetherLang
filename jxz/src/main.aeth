@@ -10,6 +10,8 @@ extern "C" {
 // Import build module
 use build::{build_project, run_project, clean_project};
 use init::{init_project};
+use test::{run_tests};
+use deps::{add_dependency, remove_dependency};
 
 // ==================== Version Info ====================
 
@@ -66,18 +68,16 @@ fn cmd_run() -> i32 {
 
 fn cmd_test() -> i32 {
     puts("Running tests...\0" as *u8)
-    puts("  0 tests passed, 0 failed\0" as *u8)
-    return 0
+    return run_tests()
 }
 
 fn cmd_add(pkg: *u8) -> i32 {
-    puts("Adding dependency...\0" as *u8)
-    return 0
+    // Parse package@version format or just package name
+    return add_dependency(pkg, "latest\0" as *u8)
 }
 
 fn cmd_remove(pkg: *u8) -> i32 {
-    puts("Removing dependency...\0" as *u8)
-    return 0
+    return remove_dependency(pkg)
 }
 
 fn cmd_update() -> i32 {
