@@ -803,6 +803,235 @@ impl IRToLLVM {
         // Load element
         return (*self).gen_load(i64_ty, elem_ptr, "val\0" as *u8);
     }
+
+    // ==================== IR Module Conversion ====================
+
+    /// Convert an entire IR module to LLVM IR
+    pub fn convert_module(self: *IRToLLVM, ir_module: *ir_gen::IRModule) {
+        if ir_module == (0 as *ir_gen::IRModule) {
+            return;
+        }
+
+        let func_count: u64 = (*ir_module).func_count;
+        let mut i: u64 = 0;
+
+        while i < func_count {
+            let ir_func: *ir_gen::IRFunction = (*ir_module).get_function(i);
+            if ir_func != (0 as *ir_gen::IRFunction) {
+                (*self).convert_function(ir_func);
+            }
+            i = i + 1;
+        }
+    }
+
+    /// Convert an IR function to LLVM
+    pub fn convert_function(self: *IRToLLVM, ir_func: *ir_gen::IRFunction) {
+        if ir_func == (0 as *ir_gen::IRFunction) {
+            return;
+        }
+
+        // Clear function state
+        (*self).clear_function_state();
+
+        // Get function info
+        let name: *u8 = (*ir_func).name;
+        let ret_type: *void = (*self).ir_type_to_llvm((*ir_func).return_type as u8);
+
+        // Create LLVM function (no params for now)
+        let func: *void = (*self).add_function(name, ret_type, 0 as **void, 0);
+        (*self).current_func = func;
+
+        // Create all basic blocks first (for forward references)
+        let block_count: u64 = (*ir_func).block_count;
+        let mut i: u64 = 0;
+        while i < block_count {
+            let ir_block: *ir_gen::BasicBlock = (*ir_func).get_block(i);
+            if ir_block != (0 as *ir_gen::BasicBlock) {
+                let label: *u8 = (*ir_block).label;
+                let llvm_bb: *void = (*self).create_and_register_block(i, label);
+            }
+            i = i + 1;
+        }
+
+        // Generate code for each block
+        i = 0;
+        while i < block_count {
+            let ir_block: *ir_gen::BasicBlock = (*ir_func).get_block(i);
+            if ir_block != (0 as *ir_gen::BasicBlock) {
+                (*self).convert_block(ir_block);
+            }
+            i = i + 1;
+        }
+    }
+
+    /// Convert an IR basic block to LLVM
+    pub fn convert_block(self: *IRToLLVM, ir_block: *ir_gen::BasicBlock) {
+        if ir_block == (0 as *ir_gen::BasicBlock) {
+            return;
+        }
+
+        // Position builder at this block
+        let block_id: u64 = (*ir_block).id;
+        let llvm_bb: *void = (*self).get_block(block_id);
+        if llvm_bb == (0 as *void) {
+            return;
+        }
+        (*self).position_at_end(llvm_bb);
+
+        // Convert all instructions
+        let instr_count: u64 = (*ir_block).instructions.len;
+        let mut i: u64 = 0;
+        while i < instr_count {
+            let instr: *ir_gen::Instruction = (*ir_block).instructions.get(i);
+            if instr != (0 as *ir_gen::Instruction) {
+                (*self).convert_instruction(instr);
+            }
+            i = i + 1;
+        }
+
+        // Convert terminator
+        if (*ir_block).has_terminator {
+            (*self).convert_terminator(&(*ir_block).terminator);
+        }
+    }
+
+    /// Convert an IR instruction to LLVM
+    pub fn convert_instruction(self: *IRToLLVM, instr: *ir_gen::Instruction) {
+        if instr == (0 as *ir_gen::Instruction) {
+            return;
+        }
+
+        let kind: ir_gen::InstrKind = (*instr).kind;
+        let dest: u64 = (*instr).dest;
+
+        if kind == ir_gen::InstrKind::BinOp {
+            // Binary operation
+            let lhs: *void = (*self).convert_value(&(*instr).src1);
+            let rhs: *void = (*self).convert_value(&(*instr).src2);
+            let op: u8 = (*self).convert_binop((*instr).op);
+            let result: *void = (*self).gen_binop(op, lhs, rhs, "binop\0" as *u8);
+            (*self).set_value(dest, result);
+
+        } else if kind == ir_gen::InstrKind::Alloca {
+            // Stack allocation
+            let i64_ty: *void = (*self).i64_type();
+            let result: *void = (*self).gen_alloca(i64_ty, "alloca\0" as *u8);
+            (*self).set_value(dest, result);
+
+        } else if kind == ir_gen::InstrKind::Load {
+            // Load from pointer
+            let ptr: *void = (*self).convert_value(&(*instr).src1);
+            let i64_ty: *void = (*self).i64_type();
+            let result: *void = (*self).gen_load(i64_ty, ptr, "load\0" as *u8);
+            (*self).set_value(dest, result);
+
+        } else if kind == ir_gen::InstrKind::Store {
+            // Store to pointer
+            let ptr: *void = (*self).convert_value(&(*instr).src1);
+            let val: *void = (*self).convert_value(&(*instr).src2);
+            (*self).gen_store(val, ptr);
+        }
+        // Other instruction kinds can be added as needed
+    }
+
+    /// Convert an IR value to LLVM value
+    pub fn convert_value(self: *IRToLLVM, val: *ir_gen::Value) -> *void {
+        if val == (0 as *ir_gen::Value) {
+            return (*self).const_i64(0);
+        }
+
+        let kind: ir_gen::ValueKind = (*val).kind;
+
+        if kind == ir_gen::ValueKind::Constant {
+            return (*self).const_i64((*val).int_val);
+        } else if kind == ir_gen::ValueKind::Register {
+            let llvm_val: *void = (*self).get_value((*val).reg);
+            if llvm_val != (0 as *void) {
+                return llvm_val;
+            }
+            // Fallback: return 0
+            return (*self).const_i64(0);
+        } else if kind == ir_gen::ValueKind::Global {
+            // Would lookup global by name
+            return (*self).const_i64(0);
+        }
+
+        return (*self).const_i64(0);
+    }
+
+    /// Convert IR terminator to LLVM
+    pub fn convert_terminator(self: *IRToLLVM, term: *ir_gen::Terminator) {
+        if term == (0 as *ir_gen::Terminator) {
+            return;
+        }
+
+        let kind: ir_gen::TerminatorKind = (*term).kind;
+
+        if kind == ir_gen::TerminatorKind::Return {
+            let ret_val: *void = (*self).convert_value(&(*term).value);
+            (*self).gen_ret(ret_val);
+
+        } else if kind == ir_gen::TerminatorKind::Branch {
+            let target_bb: *void = (*self).get_block((*term).target);
+            if target_bb != (0 as *void) {
+                (*self).gen_br(target_bb);
+            }
+
+        } else if kind == ir_gen::TerminatorKind::CondBranch {
+            let cond: *void = (*self).convert_value(&(*term).cond);
+            let then_bb: *void = (*self).get_block((*term).then_target);
+            let else_bb: *void = (*self).get_block((*term).else_target);
+            if then_bb != (0 as *void) && else_bb != (0 as *void) {
+                (*self).gen_cond_br(cond, then_bb, else_bb);
+            }
+
+        } else if kind == ir_gen::TerminatorKind::Unreachable {
+            // Generate unreachable (or just return void)
+            (*self).gen_ret_void();
+        }
+    }
+
+    /// Convert IR BinOp to LLVM op code
+    pub fn convert_binop(self: *IRToLLVM, op: ir_gen::BinOp) -> u8 {
+        if op == ir_gen::BinOp::Add { return 0; }
+        else if op == ir_gen::BinOp::Sub { return 1; }
+        else if op == ir_gen::BinOp::Mul { return 2; }
+        else if op == ir_gen::BinOp::Div { return 3; }
+        else if op == ir_gen::BinOp::Rem { return 4; }
+        else if op == ir_gen::BinOp::And { return 5; }
+        else if op == ir_gen::BinOp::Or { return 6; }
+        else if op == ir_gen::BinOp::Xor { return 7; }
+        else if op == ir_gen::BinOp::Shl { return 8; }
+        else if op == ir_gen::BinOp::Shr { return 9; }
+        else if op == ir_gen::BinOp::Eq { return 10; }
+        else if op == ir_gen::BinOp::Ne { return 11; }
+        else if op == ir_gen::BinOp::Lt { return 12; }
+        else if op == ir_gen::BinOp::Le { return 13; }
+        else if op == ir_gen::BinOp::Gt { return 14; }
+        else if op == ir_gen::BinOp::Ge { return 15; }
+        return 0; // Default: Add
+    }
+
+    /// Convert IR type to LLVM type ID
+    pub fn ir_type_to_llvm(self: *IRToLLVM, ty: u8) -> *void {
+        let ctx = (*self).context;
+
+        if ty == 0 { return LLVMInt8TypeInContext(ctx); }      // I8
+        else if ty == 1 { return LLVMInt16TypeInContext(ctx); } // I16
+        else if ty == 2 { return LLVMInt32TypeInContext(ctx); } // I32
+        else if ty == 3 { return LLVMInt64TypeInContext(ctx); } // I64
+        else if ty == 9 { return LLVMVoidTypeInContext(ctx); }  // Void
+
+        // Default to i64
+        return LLVMInt64TypeInContext(ctx);
+    }
+}
+
+// ==================== Import IR types ====================
+
+use ir_gen::{
+    IRModule, IRFunction, BasicBlock, Instruction, InstrKind,
+    Terminator, TerminatorKind, Value, ValueKind, BinOp, IRType,
 }
 
 // ==================== Test ====================

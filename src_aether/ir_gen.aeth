@@ -5,15 +5,8 @@ extern "C" {
     fn puts(s: *u8) -> i32;
 }
 
-// Import AST types
-use ast::{
-    Program, Item, ItemKind,
-    Function, Block, Stmt, StmtKind, StmtList,
-    Expr, ExprKind, ExprList,
-    Literal, LitKind,
-    BinOp as AstBinOp, UnOp,
-    Ident, Type, TypeKind,
-};
+// Note: AST types would be imported in a full build
+// For now, this file is self-contained for bootstrap testing
 
 // ==================== IR Types ====================
 
@@ -96,7 +89,7 @@ impl Value {
 
 // ==================== Binary Operations ====================
 
-pub enum BinOp {
+pub enum IRBinOp {
     Add,
     Sub,
     Mul,
@@ -132,13 +125,13 @@ pub enum InstrKind {
 pub struct Instruction {
     pub kind: InstrKind,
     pub dest: u64,      // Destination register
-    pub op: BinOp,      // For BinOp
+    pub op: IRBinOp,      // For BinOp
     pub src1: Value,    // First operand
     pub src2: Value,    // Second operand
 }
 
 impl Instruction {
-    pub fn binop(dest: u64, op: BinOp, src1: Value, src2: Value) -> Instruction {
+    pub fn binop(dest: u64, op: IRBinOp, src1: Value, src2: Value) -> Instruction {
         return Instruction {
             kind: InstrKind::BinOp,
             dest: dest,
@@ -152,7 +145,7 @@ impl Instruction {
         return Instruction {
             kind: InstrKind::Load,
             dest: dest,
-            op: BinOp::Add, // unused
+            op: IRBinOp::Add, // unused
             src1: ptr,
             src2: Value::from_const(0),
         };
@@ -162,7 +155,7 @@ impl Instruction {
         return Instruction {
             kind: InstrKind::Store,
             dest: 0,
-            op: BinOp::Add, // unused
+            op: IRBinOp::Add, // unused
             src1: ptr,
             src2: val,
         };
@@ -172,7 +165,7 @@ impl Instruction {
         return Instruction {
             kind: InstrKind::Alloca,
             dest: dest,
-            op: BinOp::Add, // unused
+            op: IRBinOp::Add, // unused
             src1: Value::from_const(0),
             src2: Value::from_const(0),
         };
@@ -232,12 +225,54 @@ impl Terminator {
     }
 }
 
+// ==================== Instruction Storage ====================
+
+const MAX_INSTRUCTIONS: u64 = 1024
+const MAX_BLOCKS: u64 = 256
+const MAX_FUNCTIONS: u64 = 128
+
+pub struct InstructionList {
+    pub data: [Instruction; 1024],
+    pub len: u64,
+}
+
+impl InstructionList {
+    pub fn new() -> InstructionList {
+        // Initialize with dummy instructions
+        return InstructionList {
+            data: [Instruction {
+                kind: InstrKind::BinOp,
+                dest: 0,
+                op: IRBinOp::Add,
+                src1: Value::from_const(0),
+                src2: Value::from_const(0),
+            }; 1024],
+            len: 0,
+        };
+    }
+
+    pub fn push(self: *InstructionList, instr: Instruction) {
+        if (*self).len < MAX_INSTRUCTIONS {
+            (*self).data[(*self).len] = instr;
+            (*self).len = (*self).len + 1;
+        }
+    }
+
+    pub fn get(self: *InstructionList, idx: u64) -> *Instruction {
+        if idx < (*self).len {
+            return &(*self).data[idx];
+        }
+        return 0 as *Instruction;
+    }
+}
+
 // ==================== Basic Block ====================
 
 pub struct BasicBlock {
     pub id: u64,
     pub label: *u8,
-    pub instr_count: u64,
+    pub instructions: InstructionList,
+    pub terminator: Terminator,
     pub has_terminator: bool,
 }
 
@@ -246,9 +281,23 @@ impl BasicBlock {
         return BasicBlock {
             id: id,
             label: label,
-            instr_count: 0,
+            instructions: InstructionList::new(),
+            terminator: Terminator::ret(Value::from_const(0)),
             has_terminator: false,
         };
+    }
+
+    pub fn add_instruction(self: *BasicBlock, instr: Instruction) {
+        (*self).instructions.push(instr);
+    }
+
+    pub fn set_terminator(self: *BasicBlock, term: Terminator) {
+        (*self).terminator = term;
+        (*self).has_terminator = true;
+    }
+
+    pub fn instr_count(self: *BasicBlock) -> u64 {
+        return (*self).instructions.len;
     }
 }
 
@@ -257,9 +306,10 @@ impl BasicBlock {
 pub struct IRFunction {
     pub name: *u8,
     pub param_count: u64,
-    pub block_count: u64,
     pub next_reg: u64,
     pub return_type: IRType,
+    pub blocks: [BasicBlock; 256],
+    pub block_count: u64,
 }
 
 impl IRFunction {
@@ -267,22 +317,33 @@ impl IRFunction {
         return IRFunction {
             name: name,
             param_count: 0,
-            block_count: 0,
             next_reg: 0,
             return_type: ret,
+            blocks: [BasicBlock::new(0, "entry\0" as *u8); 256],
+            block_count: 0,
         };
     }
-    
+
     pub fn alloc_reg(self: &mut IRFunction) -> u64 {
         let r: u64 = self.next_reg;
         self.next_reg = self.next_reg + 1;
         return r;
     }
-    
-    pub fn add_block(self: &mut IRFunction) -> u64 {
-        let b: u64 = self.block_count;
-        self.block_count = self.block_count + 1;
-        return b;
+
+    pub fn add_block(self: *IRFunction, label: *u8) -> u64 {
+        let id: u64 = (*self).block_count;
+        if id < MAX_BLOCKS {
+            (*self).blocks[id] = BasicBlock::new(id, label);
+            (*self).block_count = id + 1;
+        }
+        return id;
+    }
+
+    pub fn get_block(self: *IRFunction, id: u64) -> *BasicBlock {
+        if id < (*self).block_count {
+            return &(*self).blocks[id];
+        }
+        return 0 as *BasicBlock;
     }
 }
 
@@ -290,6 +351,7 @@ impl IRFunction {
 
 pub struct IRModule {
     pub name: *u8,
+    pub functions: [IRFunction; 128],
     pub func_count: u64,
     pub global_count: u64,
 }
@@ -298,15 +360,26 @@ impl IRModule {
     pub fn new(name: *u8) -> IRModule {
         return IRModule {
             name: name,
+            functions: [IRFunction::new("dummy\0" as *u8, IRType::Void); 128],
             func_count: 0,
             global_count: 0,
         };
     }
-    
-    pub fn add_function(self: &mut IRModule) -> u64 {
-        let f: u64 = self.func_count;
-        self.func_count = self.func_count + 1;
-        return f;
+
+    pub fn add_function(self: *IRModule, name: *u8, ret: IRType) -> u64 {
+        let id: u64 = (*self).func_count;
+        if id < MAX_FUNCTIONS {
+            (*self).functions[id] = IRFunction::new(name, ret);
+            (*self).func_count = id + 1;
+        }
+        return id;
+    }
+
+    pub fn get_function(self: *IRModule, id: u64) -> *IRFunction {
+        if id < (*self).func_count {
+            return &(*self).functions[id];
+        }
+        return 0 as *IRFunction;
     }
 }
 
@@ -606,13 +679,13 @@ impl IRGenerator {
             // Binary operation
             let left: *Expr = (*expr).left;
             let right: *Expr = (*expr).right;
-            let op: AstBinOp = (*expr).bin_op;
+            let op: ast::BinOp = (*expr).bin_op;
 
             let left_val: Value = self.generate_expr_from_ast(left);
             let right_val: Value = self.generate_expr_from_ast(right);
 
             let dest: u64 = self.alloc_reg();
-            let ir_op: BinOp = self.convert_binop(op);
+            let ir_op: IRBinOp = self.convert_binop(op);
             let inst: Instruction = Instruction::binop(dest, ir_op, left_val, right_val);
             self.emit(inst);
 
@@ -730,21 +803,21 @@ impl IRGenerator {
     }
 
     /// Convert AST BinOp to IR BinOp
-    pub fn convert_binop(self: &IRGenerator, op: AstBinOp) -> BinOp {
-        if op == AstBinOp::Add { return BinOp::Add; }
-        else if op == AstBinOp::Sub { return BinOp::Sub; }
-        else if op == AstBinOp::Mul { return BinOp::Mul; }
-        else if op == AstBinOp::Div { return BinOp::Div; }
-        else if op == AstBinOp::Mod { return BinOp::Rem; }
-        else if op == AstBinOp::And { return BinOp::And; }
-        else if op == AstBinOp::Or { return BinOp::Or; }
-        else if op == AstBinOp::Eq { return BinOp::Eq; }
-        else if op == AstBinOp::Ne { return BinOp::Ne; }
-        else if op == AstBinOp::Lt { return BinOp::Lt; }
-        else if op == AstBinOp::Le { return BinOp::Le; }
-        else if op == AstBinOp::Gt { return BinOp::Gt; }
-        else if op == AstBinOp::Ge { return BinOp::Ge; }
-        return BinOp::Add;
+    pub fn convert_binop(self: &IRGenerator, op: ast::BinOp) -> BinOp {
+        if op == BinOp::Add { return IRBinOp::Add; }
+        else if op == BinOp::Sub { return IRBinOp::Sub; }
+        else if op == BinOp::Mul { return IRBinOp::Mul; }
+        else if op == BinOp::Div { return IRBinOp::Div; }
+        else if op == BinOp::Mod { return IRBinOp::Rem; }
+        else if op == BinOp::And { return IRBinOp::And; }
+        else if op == BinOp::Or { return IRBinOp::Or; }
+        else if op == BinOp::Eq { return IRBinOp::Eq; }
+        else if op == BinOp::Ne { return IRBinOp::Ne; }
+        else if op == BinOp::Lt { return IRBinOp::Lt; }
+        else if op == BinOp::Le { return IRBinOp::Le; }
+        else if op == BinOp::Gt { return IRBinOp::Gt; }
+        else if op == BinOp::Ge { return IRBinOp::Ge; }
+        return IRBinOp::Add;
     }
 
     /// Generate IR for a statement by kind
@@ -854,7 +927,7 @@ impl IRGenerator {
         let dest: u64 = self.alloc_reg();
         
         // Convert AST op to IR op
-        let ir_op: BinOp = IRGenerator::ast_binop_to_ir(op);
+        let ir_op: IRBinOp = IRGenerator::ast_binop_to_ir(op);
         
         // Create and emit instruction
         let left: Value = Value::from_reg(0);  // Would get from context
@@ -1047,7 +1120,7 @@ impl IRGenerator {
         let current_val: Value = Value::from_reg(load_dest);
         let end_val: Value = Value::from_const(10); // placeholder end value
         let cmp_dest: u64 = self.alloc_reg();
-        let cmp_inst: Instruction = Instruction::binop(cmp_dest, BinOp::Lt, current_val, end_val);
+        let cmp_inst: Instruction = Instruction::binop(cmp_dest, IRBinOp::Lt, current_val, end_val);
         self.emit(cmp_inst);
         let cond: Value = Value::from_reg(cmp_dest);
         self.set_terminator(Terminator::cond_branch(cond, body_block, exit_block));
@@ -1067,7 +1140,7 @@ impl IRGenerator {
         self.emit(load_inst2);
         let incr_dest: u64 = self.alloc_reg();
         let one: Value = Value::from_const(1);
-        let incr_inst: Instruction = Instruction::binop(incr_dest, BinOp::Add, Value::from_reg(load_dest2), one);
+        let incr_inst: Instruction = Instruction::binop(incr_dest, IRBinOp::Add, Value::from_reg(load_dest2), one);
         self.emit(incr_inst);
         let store_inst2: Instruction = Instruction::store(loop_var_ptr, Value::from_reg(incr_dest));
         self.emit(store_inst2);
@@ -1212,7 +1285,7 @@ impl IRGenerator {
             let cmp_dest: u64 = self.alloc_reg();
             let cmp_left: Value = scrutinee;
             let cmp_right: Value = pattern_val;
-            let cmp_inst: Instruction = Instruction::binop(cmp_dest, BinOp::Eq, cmp_left, cmp_right);
+            let cmp_inst: Instruction = Instruction::binop(cmp_dest, IRBinOp::Eq, cmp_left, cmp_right);
             self.emit(cmp_inst);
 
             let cmp_result: Value = Value::from_reg(cmp_dest);
@@ -1286,40 +1359,95 @@ impl IRGenerator {
     }
     
     // ==================== Helper Methods ====================
-    
+
     /// Allocate a new register
     pub fn alloc_reg(self: &mut IRGenerator) -> u64 {
         let r: u64 = self.next_reg;
         self.next_reg = self.next_reg + 1;
         return r;
     }
-    
-    /// Allocate a new block
+
+    /// Allocate a new block in current function
     pub fn alloc_block(self: &mut IRGenerator) -> u64 {
+        let func: *IRFunction = self.module.get_function(self.current_function);
+        if func != (0 as *IRFunction) {
+            let block_id: u64 = (*func).add_block("bb\0" as *u8);
+            return block_id;
+        }
+        // Fallback: just increment counter
         let b: u64 = self.next_block;
         self.next_block = self.next_block + 1;
         return b;
     }
-    
+
     /// Emit an instruction to current block
-    pub fn emit(self: &mut IRGenerator, _inst: Instruction) {
-        // Would add to current block's instruction list
+    pub fn emit(self: &mut IRGenerator, inst: Instruction) {
+        let func: *IRFunction = self.module.get_function(self.current_function);
+        if func != (0 as *IRFunction) {
+            let block: *BasicBlock = (*func).get_block(self.current_block);
+            if block != (0 as *BasicBlock) {
+                (*block).add_instruction(inst);
+            }
+        }
     }
-    
+
     /// Set terminator for current block
-    pub fn set_terminator(self: &mut IRGenerator, _term: Terminator) {
-        // Would set current block's terminator
+    pub fn set_terminator(self: &mut IRGenerator, term: Terminator) {
+        let func: *IRFunction = self.module.get_function(self.current_function);
+        if func != (0 as *IRFunction) {
+            let block: *BasicBlock = (*func).get_block(self.current_block);
+            if block != (0 as *BasicBlock) {
+                (*block).set_terminator(term);
+            }
+        }
     }
-    
+
     /// Check if current block has terminator
     pub fn has_terminator(self: &IRGenerator) -> bool {
+        let func: *IRFunction = self.module.get_function(self.current_function);
+        if func != (0 as *IRFunction) {
+            let block: *BasicBlock = (*func).get_block(self.current_block);
+            if block != (0 as *BasicBlock) {
+                return (*block).has_terminator;
+            }
+        }
         return false;
+    }
+
+    /// Get the generated IR module
+    pub fn get_module(self: &IRGenerator) -> *IRModule {
+        return &self.module;
+    }
+
+    /// Start a new function
+    pub fn begin_function(self: &mut IRGenerator, name: *u8, ret: IRType) -> u64 {
+        let func_id: u64 = self.module.add_function(name, ret);
+        self.current_function = func_id;
+        self.next_reg = 0;
+        self.scope.clear(&self.scope);
+
+        // Create entry block
+        let func: *IRFunction = self.module.get_function(func_id);
+        if func != (0 as *IRFunction) {
+            let entry_id: u64 = (*func).add_block("entry\0" as *u8);
+            self.current_block = entry_id;
+        }
+
+        return func_id;
+    }
+
+    /// End current function
+    pub fn end_function(self: &mut IRGenerator) {
+        // Ensure function has a terminator
+        if !self.has_terminator() {
+            self.set_terminator(Terminator::ret(Value::from_const(0)));
+        }
     }
     
     /// Convert AST BinOp to IR BinOp
     pub fn ast_binop_to_ir(op: u8) -> BinOp {
         // Map AST operators to IR operators
-        return BinOp::Add;
+        return IRBinOp::Add;
     }
     
     /// Convert AST Type to IR Type
@@ -1358,7 +1486,7 @@ fn main() {
     // Test instruction creation
     let val1: Value = Value::from_const(10);
     let val2: Value = Value::from_const(20);
-    let inst: Instruction = Instruction::binop(0, BinOp::Add, val1, val2);
+    let inst: Instruction = Instruction::binop(0, IRBinOp::Add, val1, val2);
     
     // Test terminator
     let ret_val: Value = Value::from_reg(reg);

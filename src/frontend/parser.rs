@@ -1217,17 +1217,53 @@ impl Parser {
                 }
             }
 
-            // Array literal
+            // Array literal: [a, b, c] or [expr; N]
             TokenKind::LBracket => {
                 self.advance();
                 let mut elements = Vec::new();
-                while !self.check(&TokenKind::RBracket) && !self.is_at_end() {
-                    elements.push(self.parse_expr()?);
-                    if !self.consume(&TokenKind::Comma) {
-                        break;
-                    }
+
+                // Check for empty array
+                if self.check(&TokenKind::RBracket) {
+                    self.advance();
+                    return Ok(Expr::Array {
+                        elements,
+                        span: token.span.merge(&self.tokens[self.pos.saturating_sub(1)].span),
+                    });
                 }
-                self.expect(TokenKind::RBracket)?;
+
+                // Parse first element
+                let first = self.parse_expr()?;
+
+                // Check for repeat syntax: [expr; N]
+                if self.consume(&TokenKind::Semicolon) {
+                    let count = match self.current_kind() {
+                        TokenKind::IntLit(n) => {
+                            let n = *n as usize;
+                            self.advance();
+                            n
+                        }
+                        _ => return Err(Error::Expected(
+                            "integer literal for array repeat count".into(),
+                            self.current().span
+                        )),
+                    };
+                    self.expect(TokenKind::RBracket)?;
+                    // Repeat the expression N times
+                    for _ in 0..count {
+                        elements.push(first.clone());
+                    }
+                } else {
+                    // Normal array literal: [a, b, c]
+                    elements.push(first);
+                    while self.consume(&TokenKind::Comma) {
+                        if self.check(&TokenKind::RBracket) {
+                            break; // trailing comma
+                        }
+                        elements.push(self.parse_expr()?);
+                    }
+                    self.expect(TokenKind::RBracket)?;
+                }
+
                 Expr::Array {
                     elements,
                     span: token.span.merge(&self.tokens[self.pos.saturating_sub(1)].span),

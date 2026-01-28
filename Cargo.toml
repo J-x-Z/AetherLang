@@ -17,9 +17,9 @@ c-only = []  # C backend fallback for environments without LLVM
 anyhow = "1.0"
 thiserror = "1.0"
 
-# LLVM bindings - requires LLVM 19
+# LLVM bindings - requires LLVM 21
 # Enabled by default for LLVM backend
-llvm-sys = { version = "191", optional = true }
+llvm-sys = { version = "211", optional = true }
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }

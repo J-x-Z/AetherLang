@@ -1189,30 +1189,39 @@ impl IRGenerator {
             }
 
             Expr::Field { expr: base, field, .. } => {
-                let mut base_val = self.generate_expr(base)?;
-                let base_ty = self.get_value_type(&base_val);
-                
-                // Handle Ptr(Ptr(Struct)) case - &mut self where self is a reference
-                let effective_ty = if let Some(IRType::Ptr(inner)) = &base_ty {
-                    if let IRType::Ptr(inner2) = inner.as_ref() {
-                        if let IRType::Struct(_) = inner2.as_ref() {
-                            // Load the inner pointer to get Ptr(Struct)
-                            let deref_dest = self.alloc_register();
-                            self.emit_current_with_type(Instruction::Load {
-                                dest: deref_dest,
-                                ptr: base_val.clone(),
-                                ty: (**inner).clone(),
-                            }, (**inner).clone());
-                            base_val = Value::Register(deref_dest);
-                            Some((**inner).clone())
+                // Special case: (*ptr).field - use ptr directly for GEP
+                let (base_val, effective_ty) = if let Expr::Deref { expr: inner_ptr, .. } = base.as_ref() {
+                    // For (*ptr).field, use ptr directly (don't load the struct)
+                    let ptr_val = self.generate_expr(inner_ptr)?;
+                    let ptr_ty = self.get_value_type(&ptr_val);
+                    (ptr_val, ptr_ty)
+                } else {
+                    let mut base_val = self.generate_expr(base)?;
+                    let base_ty = self.get_value_type(&base_val);
+
+                    // Handle Ptr(Ptr(Struct)) case - &mut self where self is a reference
+                    let effective_ty = if let Some(IRType::Ptr(inner)) = &base_ty {
+                        if let IRType::Ptr(inner2) = inner.as_ref() {
+                            if let IRType::Struct(_) = inner2.as_ref() {
+                                // Load the inner pointer to get Ptr(Struct)
+                                let deref_dest = self.alloc_register();
+                                self.emit_current_with_type(Instruction::Load {
+                                    dest: deref_dest,
+                                    ptr: base_val.clone(),
+                                    ty: (**inner).clone(),
+                                }, (**inner).clone());
+                                base_val = Value::Register(deref_dest);
+                                Some((**inner).clone())
+                            } else {
+                                base_ty.clone()
+                            }
                         } else {
                             base_ty.clone()
                         }
                     } else {
                         base_ty.clone()
-                    }
-                } else {
-                    base_ty.clone()
+                    };
+                    (base_val, effective_ty)
                 };
                 
                 if let Some(IRType::Ptr(inner)) = effective_ty {
@@ -1663,7 +1672,19 @@ impl IRGenerator {
                 
                 Ok(Value::Register(dest))
             },
-            Expr::Ref { .. } => Ok(Value::Unit),
+            Expr::Ref { expr: inner, .. } => {
+                // Get the address of the inner expression
+                // If inner is an Ident, look up its alloca pointer
+                if let Expr::Ident(ident) = inner.as_ref() {
+                    if let Some((ptr_val, _)) = self.locals.get(&ident.name) {
+                        // Return the pointer to the local variable
+                        return Ok(ptr_val.clone());
+                    }
+                }
+                // For other cases, generate the expression and hope it's a pointer
+                let val = self.generate_expr(inner)?;
+                Ok(val)
+            },
             Expr::Deref { expr: ptr_expr, .. } => {
                 // Generate the pointer value
                 let ptr_val = self.generate_expr(ptr_expr)?;
@@ -2022,14 +2043,16 @@ impl IRGenerator {
                     "i64x2" => IRType::Vector(Box::new(IRType::I64), 2),
                     "i64x4" => IRType::Vector(Box::new(IRType::I64), 4),
                     "void" | "()" => IRType::Void,
-                    // Structs are passed by pointer in our IR
+                    // Structs are NOT automatically wrapped as pointers
+                    // The pointer wrapping happens at usage sites (function calls, etc.)
                     // But single uppercase letters are generic type params - use i64 (type erasure)
                     s => {
                         if s.len() == 1 && s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                             // Generic type parameter like T, U, V - use i64 as type erasure
                             IRType::I64
                         } else {
-                            IRType::Ptr(Box::new(IRType::Struct(s.to_string())))
+                            // Struct type - NOT a pointer, just the struct itself
+                            IRType::Struct(s.to_string())
                         }
                     }
                 }
