@@ -1,115 +1,269 @@
-// AetherLang Standard Library: Vec Module
-// Provides a heap-allocated, growable array type
+//! AetherLang Standard Library: Vec Module
+//! Provides a heap-allocated, growable array type with explicit allocator support
 
 use core::{malloc, free, realloc, memcpy}
+use alloc::{Allocator, GlobalAllocator, GLOBAL}
 
-/// A heap-allocated, growable array
-pub struct Vec<T> {
+// =============================================================================
+// Vec<T, A> - Growable array with explicit allocator
+// =============================================================================
+
+/// A heap-allocated, growable array with explicit allocator
+///
+/// # Type Parameters
+/// - `T`: Element type
+/// - `A`: Allocator type (defaults to GlobalAllocator in convenience functions)
+pub struct Vec<T, A: Allocator> {
     /// Pointer to the array data
     data: *T,
     /// Number of elements
     len: u64,
     /// Allocated capacity (in elements)
     capacity: u64,
+    /// The allocator used for this vector
+    alloc: A,
 }
 
-impl<T> Vec<T> {
-    /// Create a new empty vector
-    pub fn new() -> Vec<T> {
+impl<T, A: Allocator> Vec<T, A> {
+    /// Create a new empty vector with a given allocator
+    pub fn new_in(alloc: A) -> Vec<T, A> {
         Vec {
-            data: 0 as *T,  // null pointer
+            data: 0 as *T,
             len: 0,
             capacity: 0,
+            alloc: alloc,
         }
     }
-    
-    /// Create a vector with pre-allocated capacity
-    pub fn with_capacity(cap: u64) -> Vec<T> {
+
+    /// Create a vector with pre-allocated capacity using a given allocator
+    pub fn with_capacity_in(cap: u64, alloc: A) -> Vec<T, A> effect[alloc] {
         let elem_size: u64 = 8;  // TODO: sizeof<T>
-        let data: *T = malloc(cap * elem_size) as *T;
-        
+        let data: *T = alloc.allocate(cap * elem_size, 8) as *T;
+
         Vec {
             data: data,
             len: 0,
             capacity: cap,
+            alloc: alloc,
         }
     }
-    
+
     /// Get the number of elements
-    pub fn len(self: &Vec<T>) -> u64 {
+    pub fn len(self: &Vec<T, A>) -> u64 {
         self.len
     }
-    
+
     /// Check if empty
-    pub fn is_empty(self: &Vec<T>) -> bool {
+    pub fn is_empty(self: &Vec<T, A>) -> bool {
         self.len == 0
     }
-    
+
     /// Get the capacity
-    pub fn capacity(self: &Vec<T>) -> u64 {
+    pub fn capacity(self: &Vec<T, A>) -> u64 {
         self.capacity
     }
-    
+
+    /// Get a reference to the allocator
+    pub fn allocator(self: &Vec<T, A>) -> &A {
+        &self.alloc
+    }
+
     /// Ensure capacity for n more elements
-    fn ensure_capacity(self: &mut Vec<T>, additional: u64) {
+    fn ensure_capacity(self: &mut Vec<T, A>, additional: u64) effect[alloc] {
         let required: u64 = self.len + additional;
         if required > self.capacity {
-            let new_cap: u64 = if self.capacity == 0 { 8 as u64 } else { self.capacity * (2 as u64) };
+            let new_cap: u64 = if self.capacity == 0 { 8 } else { self.capacity * 2 };
             let final_cap: u64 = if new_cap < required { required } else { new_cap };
-            
+
             let elem_size: u64 = 8;  // TODO: sizeof<T>
-            let new_data: *T = malloc(final_cap * elem_size) as *T;
-            
+            let new_data: *T = self.alloc.allocate(final_cap * elem_size, 8) as *T;
+
             if self.len > 0 {
                 memcpy(new_data as *u8, self.data as *u8, self.len * elem_size);
             }
-            
+
             if self.capacity > 0 {
-                free(self.data as *u8);
+                self.alloc.deallocate(self.data as *u8, self.capacity * elem_size, 8);
             }
-            
+
             self.data = new_data;
             self.capacity = final_cap;
         }
     }
-    
+
     /// Push an element to the end
-    pub fn push(self: &mut Vec<T>, value: T) {
+    pub fn push(self: &mut Vec<T, A>, value: T) effect[alloc] {
         self.ensure_capacity(1);
         let ptr: *T = self.data + self.len;
         *ptr = value;
         self.len = self.len + 1;
     }
-    
+
     /// Pop the last element
-    pub fn pop(self: &mut Vec<T>) -> T {
-        // TODO: Return Option<T>
+    pub fn pop(self: &mut Vec<T, A>) -> Option<T> {
+        if self.len == 0 {
+            return Option::None;
+        }
+        self.len = self.len - 1;
+        let ptr: *T = self.data + self.len;
+        Option::Some(*ptr)
+    }
+
+    /// Get element at index (no bounds checking)
+    pub fn get_unchecked(self: &Vec<T, A>, idx: u64) -> &T {
+        let ptr: *T = self.data + idx;
+        &(*ptr)
+    }
+
+    /// Get element at index with bounds checking
+    pub fn get(self: &Vec<T, A>, idx: u64) -> Option<&T> {
+        if idx >= self.len {
+            return Option::None;
+        }
+        let ptr: *T = self.data + idx;
+        Option::Some(&(*ptr))
+    }
+
+    /// Get mutable element at index (no bounds checking)
+    pub fn get_mut_unchecked(self: &mut Vec<T, A>, idx: u64) -> &mut T {
+        let ptr: *T = self.data + idx;
+        &mut (*ptr)
+    }
+
+    /// Get mutable element at index with bounds checking
+    pub fn get_mut(self: &mut Vec<T, A>, idx: u64) -> Option<&mut T> {
+        if idx >= self.len {
+            return Option::None;
+        }
+        let ptr: *T = self.data + idx;
+        Option::Some(&mut (*ptr))
+    }
+
+    /// Clear the vector (does not deallocate)
+    pub fn clear(self: &mut Vec<T, A>) {
+        self.len = 0;
+    }
+
+    /// Get raw pointer to data
+    pub fn as_ptr(self: &Vec<T, A>) -> *T {
+        self.data
+    }
+
+    /// Get mutable raw pointer to data
+    pub fn as_mut_ptr(self: &mut Vec<T, A>) -> *T {
+        self.data
+    }
+}
+
+/// Drop implementation - frees memory using the stored allocator
+impl<T, A: Allocator> Drop for Vec<T, A> {
+    fn drop(self: &mut Vec<T, A>) effect[alloc] {
+        if self.capacity > 0 {
+            let elem_size: u64 = 8;  // TODO: sizeof<T>
+            self.alloc.deallocate(self.data as *u8, self.capacity * elem_size, 8);
+        }
+    }
+}
+
+// =============================================================================
+// Convenience type alias and functions using GlobalAllocator
+// =============================================================================
+
+/// Vec using the global allocator (most common case)
+pub type GVec<T> = Vec<T, GlobalAllocator>
+
+/// Create a new empty vector using the global allocator
+pub fn vec_new<T>() -> GVec<T> {
+    Vec::new_in(GlobalAllocator::new())
+}
+
+/// Create a vector with capacity using the global allocator
+pub fn vec_with_capacity<T>(cap: u64) -> GVec<T> effect[alloc] {
+    Vec::with_capacity_in(cap, GlobalAllocator::new())
+}
+
+// =============================================================================
+// Legacy API (for backward compatibility)
+// =============================================================================
+
+/// Legacy Vec without explicit allocator (uses global allocator internally)
+pub struct LegacyVec<T> {
+    data: *T,
+    len: u64,
+    capacity: u64,
+}
+
+impl<T> LegacyVec<T> {
+    pub fn new() -> LegacyVec<T> {
+        LegacyVec {
+            data: 0 as *T,
+            len: 0,
+            capacity: 0,
+        }
+    }
+
+    pub fn with_capacity(cap: u64) -> LegacyVec<T> effect[alloc] {
+        let elem_size: u64 = 8;
+        let data: *T = malloc(cap * elem_size) as *T;
+        LegacyVec {
+            data: data,
+            len: 0,
+            capacity: cap,
+        }
+    }
+
+    pub fn len(self: &LegacyVec<T>) -> u64 { self.len }
+    pub fn is_empty(self: &LegacyVec<T>) -> bool { self.len == 0 }
+    pub fn capacity(self: &LegacyVec<T>) -> u64 { self.capacity }
+
+    fn ensure_capacity(self: &mut LegacyVec<T>, additional: u64) effect[alloc] {
+        let required: u64 = self.len + additional;
+        if required > self.capacity {
+            let new_cap: u64 = if self.capacity == 0 { 8 } else { self.capacity * 2 };
+            let final_cap: u64 = if new_cap < required { required } else { new_cap };
+            let elem_size: u64 = 8;
+            let new_data: *T = malloc(final_cap * elem_size) as *T;
+            if self.len > 0 {
+                memcpy(new_data as *u8, self.data as *u8, self.len * elem_size);
+            }
+            if self.capacity > 0 {
+                free(self.data as *u8);
+            }
+            self.data = new_data;
+            self.capacity = final_cap;
+        }
+    }
+
+    pub fn push(self: &mut LegacyVec<T>, value: T) effect[alloc] {
+        self.ensure_capacity(1);
+        let ptr: *T = self.data + self.len;
+        *ptr = value;
+        self.len = self.len + 1;
+    }
+
+    pub fn pop(self: &mut LegacyVec<T>) -> T {
         self.len = self.len - 1;
         let ptr: *T = self.data + self.len;
         *ptr
     }
-    
-    /// Get element at index (no bounds checking)
-    pub fn get(self: &Vec<T>, idx: u64) -> &T {
+
+    pub fn get(self: &LegacyVec<T>, idx: u64) -> &T {
         let ptr: *T = self.data + idx;
         &(*ptr)
     }
-    
-    /// Get mutable element at index
-    pub fn get_mut(self: &mut Vec<T>, idx: u64) -> &mut T {
+
+    pub fn get_mut(self: &mut LegacyVec<T>, idx: u64) -> &mut T {
         let ptr: *T = self.data + idx;
         &mut (*ptr)
     }
-    
-    /// Clear the vector
-    pub fn clear(self: &mut Vec<T>) {
+
+    pub fn clear(self: &mut LegacyVec<T>) {
         self.len = 0;
     }
 }
 
-/// Drop implementation
-impl<T> Drop for Vec<T> {
-    fn drop(self: &mut Vec<T>) {
+impl<T> Drop for LegacyVec<T> {
+    fn drop(self: &mut LegacyVec<T>) effect[alloc] {
         if self.capacity > 0 {
             free(self.data as *u8);
         }

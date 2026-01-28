@@ -1,0 +1,249 @@
+//! Allocator trait and implementations for AetherLang
+//!
+//! AetherLang uses explicit allocators to make memory allocation visible.
+//! This reduces hidden allocations and makes code more predictable for AI analysis.
+
+use core::{malloc, free, realloc}
+
+// =============================================================================
+// Allocator Trait
+// =============================================================================
+
+/// The core allocator trait. All memory-allocating containers accept an allocator.
+pub trait Allocator {
+    /// Allocate memory of given size and alignment
+    /// Returns null pointer on failure
+    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[alloc];
+
+    /// Deallocate previously allocated memory
+    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[alloc];
+
+    /// Reallocate memory to a new size
+    /// Returns null pointer on failure (original memory unchanged)
+    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[alloc];
+}
+
+// =============================================================================
+// Global Allocator - Uses system malloc/free
+// =============================================================================
+
+/// The global heap allocator using libc malloc/free
+/// This is a zero-sized type - all instances are equivalent
+pub struct GlobalAllocator { }
+
+impl Allocator for GlobalAllocator {
+    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[alloc] {
+        // Note: malloc doesn't guarantee alignment beyond 16 bytes
+        // For larger alignments, use aligned_alloc (TODO)
+        malloc(size)
+    }
+
+    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[alloc] {
+        free(ptr);
+    }
+
+    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[alloc] {
+        realloc(ptr, new_size)
+    }
+}
+
+impl GlobalAllocator {
+    /// Create a new global allocator instance
+    pub fn new() -> GlobalAllocator {
+        GlobalAllocator { }
+    }
+}
+
+/// The default global allocator instance
+/// Use this when you don't need a custom allocator
+pub static mut GLOBAL: GlobalAllocator = GlobalAllocator { }
+
+// =============================================================================
+// Arena Allocator - Bump allocator for fast, bulk deallocation
+// =============================================================================
+
+/// An arena (bump) allocator that allocates from a contiguous block
+/// All memory is freed at once when the arena is dropped
+pub struct ArenaAllocator {
+    /// Base pointer of the arena
+    base: *u8,
+    /// Current allocation position
+    pos: u64,
+    /// Total capacity
+    capacity: u64,
+}
+
+impl ArenaAllocator {
+    /// Create a new arena with given capacity (allocated from global allocator)
+    pub fn new(capacity: u64) -> ArenaAllocator effect[alloc] {
+        let base: *u8 = malloc(capacity);
+        ArenaAllocator {
+            base: base,
+            pos: 0,
+            capacity: capacity,
+        }
+    }
+
+    /// Create an arena from existing memory (does not own the memory)
+    pub fn from_raw(ptr: *u8, capacity: u64) -> ArenaAllocator {
+        ArenaAllocator {
+            base: ptr,
+            pos: 0,
+            capacity: capacity,
+        }
+    }
+
+    /// Reset the arena, making all memory available again
+    /// Does NOT call destructors - use with caution
+    pub fn reset(self: &mut ArenaAllocator) {
+        self.pos = 0;
+    }
+
+    /// Get remaining capacity
+    pub fn remaining(self: &ArenaAllocator) -> u64 {
+        self.capacity - self.pos
+    }
+
+    /// Get total bytes allocated
+    pub fn used(self: &ArenaAllocator) -> u64 {
+        self.pos
+    }
+}
+
+impl Allocator for ArenaAllocator {
+    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[alloc] {
+        // Align the current position
+        let aligned_pos: u64 = (self.pos + align - 1) & !(align - 1);
+
+        // Check if we have enough space
+        if aligned_pos + size > self.capacity {
+            return 0 as *u8;  // Out of memory
+        }
+
+        let result: *u8 = self.base + aligned_pos;
+        self.pos = aligned_pos + size;
+        result
+    }
+
+    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[alloc] {
+        // Arena doesn't deallocate individual allocations
+        // Memory is reclaimed when arena is reset or dropped
+    }
+
+    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[alloc] {
+        // Arena can't reallocate - allocate new and copy
+        let new_ptr: *u8 = self.allocate(new_size, align);
+        if new_ptr as u64 != 0 {
+            // Copy old data (simplified - should use memcpy)
+            let copy_size: u64 = if old_size < new_size { old_size } else { new_size };
+            let mut i: u64 = 0;
+            while i < copy_size {
+                *(new_ptr + i) = *(ptr + i);
+                i = i + 1;
+            }
+        }
+        new_ptr
+    }
+}
+
+impl Drop for ArenaAllocator {
+    fn drop(self: &mut ArenaAllocator) effect[alloc] {
+        if self.base as u64 != 0 {
+            free(self.base);
+        }
+    }
+}
+
+// =============================================================================
+// Stack Allocator - LIFO allocation pattern
+// =============================================================================
+
+/// A stack allocator that requires deallocations in reverse order
+pub struct StackAllocator {
+    base: *u8,
+    pos: u64,
+    capacity: u64,
+    /// Marker for checking deallocation order
+    last_alloc_size: u64,
+}
+
+impl StackAllocator {
+    pub fn new(capacity: u64) -> StackAllocator effect[alloc] {
+        let base: *u8 = malloc(capacity);
+        StackAllocator {
+            base: base,
+            pos: 0,
+            capacity: capacity,
+            last_alloc_size: 0,
+        }
+    }
+}
+
+impl Allocator for StackAllocator {
+    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[alloc] {
+        let aligned_pos: u64 = (self.pos + align - 1) & !(align - 1);
+
+        if aligned_pos + size > self.capacity {
+            return 0 as *u8;
+        }
+
+        let result: *u8 = self.base + aligned_pos;
+        self.pos = aligned_pos + size;
+        self.last_alloc_size = size;
+        result
+    }
+
+    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[alloc] {
+        // Only deallocate if this was the last allocation
+        // (simplified check - production code should verify ptr)
+        if size == self.last_alloc_size {
+            self.pos = self.pos - size;
+        }
+        // Otherwise: memory leak (caller error)
+    }
+
+    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[alloc] {
+        // Can only grow the last allocation in place
+        if old_size == self.last_alloc_size {
+            let additional: u64 = new_size - old_size;
+            if self.pos + additional <= self.capacity {
+                self.pos = self.pos + additional;
+                self.last_alloc_size = new_size;
+                return ptr;
+            }
+        }
+        // Otherwise allocate new
+        let new_ptr: *u8 = self.allocate(new_size, align);
+        if new_ptr as u64 != 0 {
+            let copy_size: u64 = if old_size < new_size { old_size } else { new_size };
+            let mut i: u64 = 0;
+            while i < copy_size {
+                *(new_ptr + i) = *(ptr + i);
+                i = i + 1;
+            }
+        }
+        new_ptr
+    }
+}
+
+impl Drop for StackAllocator {
+    fn drop(self: &mut StackAllocator) effect[alloc] {
+        if self.base as u64 != 0 {
+            free(self.base);
+        }
+    }
+}
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
+
+/// Allocate using the global allocator
+pub fn global_alloc(size: u64) -> *u8 effect[alloc] {
+    malloc(size)
+}
+
+/// Deallocate using the global allocator
+pub fn global_dealloc(ptr: *u8) effect[alloc] {
+    free(ptr);
+}
