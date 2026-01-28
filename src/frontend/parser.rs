@@ -755,10 +755,15 @@ impl Parser {
         let mutable = self.consume(&TokenKind::Mut);
         let name = self.parse_ident()?;
 
+        // P5.1: Type annotation is REQUIRED for let statements
+        // AetherLang enforces explicit types to reduce AI hallucinations
         let ty = if self.consume(&TokenKind::Colon) {
             Some(self.parse_type()?)
         } else {
-            None
+            return Err(Error::Expected(
+                "type annotation required: use `let x: Type = value;` (AetherLang requires explicit types)".into(),
+                self.current().span
+            ));
         };
 
         let value = if self.consume(&TokenKind::Eq) {
@@ -1234,13 +1239,17 @@ impl Parser {
                 self.advance(); // consume |
                 let mut params = Vec::new();
                 
-                // Parse parameters: |x, y: T, z|
+                // Parse parameters: |x: T, y: T| - types are REQUIRED (P5.1)
                 while !self.check(&TokenKind::Or) && !self.is_at_end() {
                     let name = self.parse_ident()?;
+                    // P5.1: Closure parameters MUST have explicit types
                     let ty = if self.consume(&TokenKind::Colon) {
                         Some(self.parse_type()?)
                     } else {
-                        None
+                        return Err(Error::Expected(
+                            "closure parameter requires type annotation: use `|x: Type|` (AetherLang requires explicit types)".into(),
+                            self.current().span
+                        ));
                     };
                     params.push(ClosureParam { name, ty });
                     if !self.consume(&TokenKind::Comma) {

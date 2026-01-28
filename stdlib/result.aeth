@@ -1,0 +1,204 @@
+//! Result and Option types for AetherLang
+//!
+//! AetherLang intentionally does NOT provide `unwrap()` methods.
+//! Use pattern matching, `?` operator, or `unwrap_or` for safe error handling.
+
+// =============================================================================
+// Option<T> - Represents an optional value
+// =============================================================================
+
+pub enum Option<T> {
+    Some(T),
+    None,
+}
+
+impl<T> Option<T> {
+    /// Returns true if the option contains a value
+    pub fn is_some(self: &Option<T>) -> bool {
+        match self {
+            Option::Some(_) => true,
+            Option::None => false,
+        }
+    }
+
+    /// Returns true if the option is None
+    pub fn is_none(self: &Option<T>) -> bool {
+        match self {
+            Option::Some(_) => false,
+            Option::None => true,
+        }
+    }
+
+    /// Returns the contained value or a default
+    pub fn unwrap_or(self: Option<T>, default: T) -> T {
+        match self {
+            Option::Some(v) => v,
+            Option::None => default,
+        }
+    }
+
+    /// Returns the contained value or computes it from a closure
+    pub fn unwrap_or_else(self: Option<T>, f: fn() -> T) -> T {
+        match self {
+            Option::Some(v) => v,
+            Option::None => f(),
+        }
+    }
+
+    /// Maps an Option<T> to Option<U> by applying a function
+    pub fn map<U>(self: Option<T>, f: fn(T) -> U) -> Option<U> {
+        match self {
+            Option::Some(v) => Option::Some(f(v)),
+            Option::None => Option::None,
+        }
+    }
+
+    /// Returns None if the option is None, otherwise calls f with the value
+    pub fn and_then<U>(self: Option<T>, f: fn(T) -> Option<U>) -> Option<U> {
+        match self {
+            Option::Some(v) => f(v),
+            Option::None => Option::None,
+        }
+    }
+
+    /// Returns the option if it contains a value, otherwise returns optb
+    pub fn or(self: Option<T>, optb: Option<T>) -> Option<T> {
+        match self {
+            Option::Some(v) => Option::Some(v),
+            Option::None => optb,
+        }
+    }
+
+    /// Takes the value out of the option, leaving None in its place
+    pub fn take(self: &mut Option<T>) -> Option<T> {
+        let result: Option<T> = *self;
+        *self = Option::None;
+        result
+    }
+
+    // NOTE: unwrap() is intentionally NOT provided
+    // Use match, ?, unwrap_or, or unwrap_or_else instead
+}
+
+// =============================================================================
+// Result<T, E> - Represents either success (Ok) or failure (Err)
+// =============================================================================
+
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    /// Returns true if the result is Ok
+    pub fn is_ok(self: &Result<T, E>) -> bool {
+        match self {
+            Result::Ok(_) => true,
+            Result::Err(_) => false,
+        }
+    }
+
+    /// Returns true if the result is Err
+    pub fn is_err(self: &Result<T, E>) -> bool {
+        match self {
+            Result::Ok(_) => false,
+            Result::Err(_) => true,
+        }
+    }
+
+    /// Converts Result<T, E> to Option<T>, discarding the error
+    pub fn ok(self: Result<T, E>) -> Option<T> {
+        match self {
+            Result::Ok(v) => Option::Some(v),
+            Result::Err(_) => Option::None,
+        }
+    }
+
+    /// Converts Result<T, E> to Option<E>, discarding the success value
+    pub fn err(self: Result<T, E>) -> Option<E> {
+        match self {
+            Result::Ok(_) => Option::None,
+            Result::Err(e) => Option::Some(e),
+        }
+    }
+
+    /// Returns the contained Ok value or a default
+    pub fn unwrap_or(self: Result<T, E>, default: T) -> T {
+        match self {
+            Result::Ok(v) => v,
+            Result::Err(_) => default,
+        }
+    }
+
+    /// Returns the contained Ok value or computes it from a closure
+    pub fn unwrap_or_else(self: Result<T, E>, f: fn(E) -> T) -> T {
+        match self {
+            Result::Ok(v) => v,
+            Result::Err(e) => f(e),
+        }
+    }
+
+    /// Maps a Result<T, E> to Result<U, E> by applying a function to Ok
+    pub fn map<U>(self: Result<T, E>, f: fn(T) -> U) -> Result<U, E> {
+        match self {
+            Result::Ok(v) => Result::Ok(f(v)),
+            Result::Err(e) => Result::Err(e),
+        }
+    }
+
+    /// Maps a Result<T, E> to Result<T, F> by applying a function to Err
+    pub fn map_err<F>(self: Result<T, E>, f: fn(E) -> F) -> Result<T, F> {
+        match self {
+            Result::Ok(v) => Result::Ok(v),
+            Result::Err(e) => Result::Err(f(e)),
+        }
+    }
+
+    /// Returns Err if the result is Err, otherwise calls f with Ok value
+    pub fn and_then<U>(self: Result<T, E>, f: fn(T) -> Result<U, E>) -> Result<U, E> {
+        match self {
+            Result::Ok(v) => f(v),
+            Result::Err(e) => Result::Err(e),
+        }
+    }
+
+    /// Returns the result if it is Ok, otherwise returns resb
+    pub fn or(self: Result<T, E>, resb: Result<T, E>) -> Result<T, E> {
+        match self {
+            Result::Ok(v) => Result::Ok(v),
+            Result::Err(_) => resb,
+        }
+    }
+
+    // NOTE: unwrap() and expect() are intentionally NOT provided
+    // Use match, ?, unwrap_or, or unwrap_or_else instead
+}
+
+// =============================================================================
+// Common Error Types
+// =============================================================================
+
+/// A simple string error type
+pub struct StringError {
+    pub message: *u8,
+    pub len: u64,
+}
+
+impl StringError {
+    pub fn new(msg: *u8, len: u64) -> StringError {
+        StringError { message: msg, len: len }
+    }
+}
+
+/// Unit type for errors that carry no information
+pub struct UnitError { }
+
+// =============================================================================
+// Type Aliases for Common Patterns
+// =============================================================================
+
+/// Result with a unit error (just success or failure, no error details)
+pub type SimpleResult<T> = Result<T, UnitError>
+
+/// Result with a string error message
+pub type StringResult<T> = Result<T, StringError>

@@ -34,7 +34,7 @@ pub struct Symbol {
 #[derive(Debug, Clone)]
 pub enum SymbolKind {
     Variable,
-    Function { params: Vec<ResolvedType>, ret: ResolvedType, type_params: Vec<String>, const_params: Vec<(String, ResolvedType)> },
+    Function { params: Vec<ResolvedType>, ret: ResolvedType, type_params: Vec<String>, const_params: Vec<(String, ResolvedType)>, effects: EffectSet },
     Struct { fields: Vec<(String, ResolvedType)>, type_params: Vec<String>, const_params: Vec<(String, ResolvedType)> },
     Enum { variants: Vec<String>, type_params: Vec<String>, const_params: Vec<(String, ResolvedType)> },
     Param { ownership: Ownership },
@@ -334,7 +334,7 @@ impl ModuleResolver {
                     .unwrap_or(ResolvedType::unit());
                 Some(Symbol {
                     name: f.name.name.clone(),
-                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: vec![], const_params: vec![] },
+                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: vec![], const_params: vec![], effects: EffectSet::default() },
                     ty: ResolvedType::Function { params, ret: Box::new(ret) },
                     span,
                     mutable: false,
@@ -471,35 +471,40 @@ impl SemanticAnalyzer {
     
     /// Register built-in functions
     fn register_builtins(&mut self) {
-        // I/O functions
-        self.define_builtin("print", vec![ResolvedType::String], ResolvedType::unit());
-        self.define_builtin("println", vec![ResolvedType::String], ResolvedType::unit());
-        self.define_builtin("puts", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], ResolvedType::I32);
-        self.define_builtin("print_i64", vec![ResolvedType::I64], ResolvedType::unit());
-        self.define_builtin("println_i64", vec![ResolvedType::I64], ResolvedType::unit());
-        
-        // Memory functions
-        self.define_builtin("alloc", vec![ResolvedType::U64], 
-            ResolvedType::Pointer(Box::new(ResolvedType::U8)));
-        self.define_builtin("malloc", vec![ResolvedType::U64], 
-            ResolvedType::Pointer(Box::new(ResolvedType::U8)));
-        self.define_builtin("free", 
-            vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], 
-            ResolvedType::unit());
-        
-        // C library functions for self-hosting
-        self.define_builtin("atof", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], 
+        // Create effect sets for builtins
+        let io_effects = EffectSet { is_pure: false, effects: vec![Effect::IO] };
+        let alloc_effects = EffectSet { is_pure: false, effects: vec![Effect::Alloc] };
+        let panic_effects = EffectSet { is_pure: false, effects: vec![Effect::Panic] };
+
+        // I/O functions - require effect[io]
+        self.define_builtin_with_effects("print", vec![ResolvedType::String], ResolvedType::unit(), io_effects.clone());
+        self.define_builtin_with_effects("println", vec![ResolvedType::String], ResolvedType::unit(), io_effects.clone());
+        self.define_builtin_with_effects("puts", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], ResolvedType::I32, io_effects.clone());
+        self.define_builtin_with_effects("print_i64", vec![ResolvedType::I64], ResolvedType::unit(), io_effects.clone());
+        self.define_builtin_with_effects("println_i64", vec![ResolvedType::I64], ResolvedType::unit(), io_effects.clone());
+
+        // Memory functions - require effect[alloc]
+        self.define_builtin_with_effects("alloc", vec![ResolvedType::U64],
+            ResolvedType::Pointer(Box::new(ResolvedType::U8)), alloc_effects.clone());
+        self.define_builtin_with_effects("malloc", vec![ResolvedType::U64],
+            ResolvedType::Pointer(Box::new(ResolvedType::U8)), alloc_effects.clone());
+        self.define_builtin_with_effects("free",
+            vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))],
+            ResolvedType::unit(), alloc_effects.clone());
+
+        // C library functions for self-hosting (pure - no side effects)
+        self.define_builtin("atof", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))],
             ResolvedType::F64);
         self.define_builtin("strcmp", vec![
             ResolvedType::Pointer(Box::new(ResolvedType::U8)),
             ResolvedType::Pointer(Box::new(ResolvedType::U8)),
         ], ResolvedType::I32);
-        
-        // Process control
-        self.define_builtin("exit", vec![ResolvedType::I32], ResolvedType::never());
-        
-        // Debug
-        self.define_builtin("assert", vec![ResolvedType::BOOL], ResolvedType::UNIT);
+
+        // Process control - require effect[panic] (never returns)
+        self.define_builtin_with_effects("exit", vec![ResolvedType::I32], ResolvedType::never(), panic_effects.clone());
+
+        // Debug - require effect[panic]
+        self.define_builtin_with_effects("assert", vec![ResolvedType::BOOL], ResolvedType::UNIT, panic_effects.clone());
         
         // SIMD intrinsics for f32x4
         let f32x4 = ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 4);
@@ -554,11 +559,16 @@ impl SemanticAnalyzer {
     
     /// Define a built-in function
     fn define_builtin(&mut self, name: &str, params: Vec<ResolvedType>, ret: ResolvedType) {
+        self.define_builtin_with_effects(name, params, ret, EffectSet::default());
+    }
+
+    /// Define a built-in function with specific effects
+    fn define_builtin_with_effects(&mut self, name: &str, params: Vec<ResolvedType>, ret: ResolvedType, effects: EffectSet) {
         let symbol = Symbol {
             name: name.to_string(),
-            kind: SymbolKind::Function { params, ret, type_params: vec![], const_params: vec![] },
-            ty: ResolvedType::Unknown, // Function type handled by kind
-            span: Span::dummy(), // Built-in, no source location
+            kind: SymbolKind::Function { params, ret, type_params: vec![], const_params: vec![], effects },
+            ty: ResolvedType::Unknown,
+            span: Span::dummy(),
             mutable: false,
         };
         let _ = self.symbols.define(symbol);
@@ -597,7 +607,7 @@ impl SemanticAnalyzer {
 
                 self.symbols.define(Symbol {
                     name: func.name.name.clone(),
-                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: func.type_params.iter().map(|p| p.name.clone()).collect(), const_params: vec![] },
+                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: func.type_params.iter().map(|p| p.name.clone()).collect(), const_params: vec![], effects: func.effects.clone() },
                     ty: ResolvedType::Function {
                         params,
                         ret: Box::new(ret),
@@ -764,7 +774,7 @@ impl SemanticAnalyzer {
 
                             self.symbols.define(Symbol {
                                 name: name.name.clone(),
-                                kind: SymbolKind::Function { params: param_types.clone(), ret: ret.clone(), type_params: vec![], const_params: vec![] },
+                                kind: SymbolKind::Function { params: param_types.clone(), ret: ret.clone(), type_params: vec![], const_params: vec![], effects: EffectSet::default() },
                                 ty: ResolvedType::Function {
                                     params: param_types,
                                     ret: Box::new(ret),
@@ -976,6 +986,7 @@ impl SemanticAnalyzer {
                         ret: ResolvedType::Enum { name: "TokenKind".to_string() },
                         type_params: vec![],
                         const_params: vec![],
+                        effects: EffectSet::default(),
                     },
                     ty: ResolvedType::Function {
                         params: vec![ResolvedType::Reference {
@@ -1285,29 +1296,69 @@ impl SemanticAnalyzer {
 
             Expr::Call { func, args, span } => {
                 let func_ty = self.check_expr(func)?;
-                
-                // Effect propagation: check if calling from pure context
-                if let Some(ref effects) = self.current_effects {
-                    if effects.is_pure {
-                        // Pure functions cannot call impure functions
-                        // Check if calling a known impure builtin
-                        if let Expr::Ident(ident) = func.as_ref() {
-                            let impure_builtins = ["print", "println", "print_i64", "println_i64", "exit", "alloc", "free"];
-                            if impure_builtins.contains(&ident.name.as_str()) {
-                                let err = Error::EffectViolation {
-                                    message: format!("pure function cannot call impure builtin '{}'", ident.name),
-                                    span: *span,
-                                };
-                                if self.strict_mode {
-                                    return Err(err);
-                                } else {
-                                    self.errors.push(err);
+
+                // P5.2: Effect propagation - HARD ERROR if caller doesn't declare required effects
+                if let Some(ref caller_effects) = self.current_effects {
+                    // Get callee's effects from symbol table
+                    if let Expr::Ident(ident) = func.as_ref() {
+                        if let Some(symbol) = self.symbols.lookup(&ident.name) {
+                            if let SymbolKind::Function { effects: callee_effects, .. } = &symbol.kind {
+                                // Check each effect the callee requires
+                                for effect in &callee_effects.effects {
+                                    // If caller is pure, it cannot call any effectful function
+                                    if caller_effects.is_pure {
+                                        return Err(Error::EffectViolation {
+                                            message: format!(
+                                                "pure function cannot call '{}' which has effect {:?}",
+                                                ident.name, effect
+                                            ),
+                                            span: *span,
+                                        });
+                                    }
+                                    // If caller doesn't have this effect, error
+                                    if !caller_effects.effects.contains(effect) {
+                                        return Err(Error::EffectViolation {
+                                            message: format!(
+                                                "function with effect[{:?}] called from function without that effect. Add 'effect[{:?}]' to caller's signature.",
+                                                effect, effect
+                                            ),
+                                            span: *span,
+                                        });
+                                    }
+                                }
+                                // If callee is pure but caller is not - that's fine (pure is subset of any effect)
+                            }
+                        } else {
+                            // Check built-in impure functions
+                            let io_builtins = ["print", "println", "print_i64", "println_i64", "puts", "printf", "exit"];
+                            let alloc_builtins = ["malloc", "free", "realloc", "alloc"];
+
+                            if caller_effects.is_pure {
+                                if io_builtins.contains(&ident.name.as_str()) || alloc_builtins.contains(&ident.name.as_str()) {
+                                    return Err(Error::EffectViolation {
+                                        message: format!("pure function cannot call impure builtin '{}'", ident.name),
+                                        span: *span,
+                                    });
+                                }
+                            } else {
+                                // Check specific effects for builtins
+                                if io_builtins.contains(&ident.name.as_str()) && !caller_effects.effects.contains(&Effect::IO) {
+                                    return Err(Error::EffectViolation {
+                                        message: format!("calling '{}' requires effect[IO]. Add 'effect[io]' to function signature.", ident.name),
+                                        span: *span,
+                                    });
+                                }
+                                if alloc_builtins.contains(&ident.name.as_str()) && !caller_effects.effects.contains(&Effect::Alloc) {
+                                    return Err(Error::EffectViolation {
+                                        message: format!("calling '{}' requires effect[Alloc]. Add 'effect[alloc]' to function signature.", ident.name),
+                                        span: *span,
+                                    });
                                 }
                             }
                         }
                     }
                 }
-                
+
                 match func_ty {
                     ResolvedType::Function { params, ret } => {
                         // For method calls (func is field access), skip the self parameter
