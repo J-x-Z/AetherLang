@@ -965,7 +965,7 @@ impl IRGenerator {
         let dest: u64 = self.alloc_reg();
         
         // Convert AST op to IR op
-        let ir_op: IRBinOp = IRGenerator::ast_binop_to_ir(op);
+        let ir_op: IRBinOp = ast_binop_to_ir(op);
         
         // Create and emit instruction
         let left: Value = Value::from_reg(0);  // Would get from context
