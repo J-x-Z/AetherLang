@@ -302,6 +302,38 @@ impl ModuleResolver {
                     symbols.push(symbol);
                 }
             }
+
+            // Also extract associated functions from impl blocks
+            if let Item::Impl(impl_block) = item {
+                let type_name = impl_block.target.name.clone();
+
+                for method in &impl_block.methods {
+                    if method.is_pub {
+                        let params: Vec<ResolvedType> = method.params.iter()
+                            .map(|p| self.ast_type_to_resolved(&p.ty))
+                            .collect();
+                        let ret = method.ret_type.as_ref()
+                            .map(|t| self.ast_type_to_resolved(t))
+                            .unwrap_or(ResolvedType::unit());
+
+                        // Register as Type::method (e.g., IRGenerator::new)
+                        let qualified_name = format!("{}::{}", type_name, method.name.name);
+                        symbols.push(Symbol {
+                            name: qualified_name,
+                            kind: SymbolKind::Function {
+                                params: params.clone(),
+                                ret: ret.clone(),
+                                type_params: vec![],
+                                const_params: vec![],
+                                effects: EffectSet::default()
+                            },
+                            ty: ResolvedType::Function { params, ret: Box::new(ret) },
+                            span,
+                            mutable: false,
+                        });
+                    }
+                }
+            }
         }
         
         // Cache the symbols
@@ -1372,7 +1404,14 @@ impl SemanticAnalyzer {
                         let is_variadic = matches!(func.as_ref(), Expr::Ident(ident) if ident.name == "printf");
                         
                         if !is_variadic && args.len() != expected_args {
+                            // Debug: print function name for better error messages
+                            let func_name = match func.as_ref() {
+                                Expr::Ident(ident) => ident.name.clone(),
+                                Expr::Path { segments, .. } => segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("::"),
+                                _ => "unknown".to_string(),
+                            };
                             return Err(Error::ArgCountMismatch {
+                                func_name,
                                 expected: expected_args,
                                 got: args.len(),
                                 span: *span,
@@ -1607,7 +1646,7 @@ impl SemanticAnalyzer {
                     ResolvedType::Pointer(inner) => {
                         if method.name == "add" {
                             if args.len() != 1 {
-                                return Err(Error::ArgCountMismatch { expected: 1, got: args.len(), span: *span });
+                                return Err(Error::ArgCountMismatch { func_name: "ptr.add".to_string(), expected: 1, got: args.len(), span: *span });
                             }
                             let offset_ty = self.check_expr(&args[0])?;
                             // Check offset is integer

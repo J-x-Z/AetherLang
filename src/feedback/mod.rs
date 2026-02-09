@@ -287,12 +287,12 @@ fn generate_error_info(error: &Error) -> (String, String, Vec<Suggestion>) {
         }
         
         // ========== Argument Count Mismatch ==========
-        Error::ArgCountMismatch { expected, got, span } => {
+        Error::ArgCountMismatch { func_name, expected, got, span } => {
             let mut suggestions = vec![];
-            
+
             if *got < *expected {
                 suggestions.push(Suggestion {
-                    message: format!("Add {} more argument(s)", expected - got),
+                    message: format!("Add {} more argument(s) to '{}'", expected - got, func_name),
                     replacement: None,
                     location: None,
                     confidence: 0.9,

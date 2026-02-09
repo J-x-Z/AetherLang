@@ -56,8 +56,9 @@ pub enum Error {
         span: Span,
     },
     
-    #[error("Argument count mismatch: expected {expected}, got {got}")]
+    #[error("Argument count mismatch for '{func_name}': expected {expected}, got {got}")]
     ArgCountMismatch {
+        func_name: String,
         expected: usize,
         got: usize,
         span: Span,

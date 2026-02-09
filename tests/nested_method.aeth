@@ -1,0 +1,46 @@
+// Test nested method calls
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+pub struct Gen {
+    pub reg: u64,
+}
+
+impl Gen {
+    pub fn new() -> Gen {
+        return Gen { reg: 0 };
+    }
+
+    pub fn alloc(self: *Gen) -> u64 {
+        let r: u64 = (*self).reg;
+        (*self).reg = (*self).reg + 1;
+        return r;
+    }
+
+    pub fn make_two(self: *Gen) -> u64 {
+        // Nested method call: self.alloc() inside a method
+        let a: u64 = self.alloc();
+        let b: u64 = self.alloc();
+        return a + b;
+    }
+}
+
+fn main() -> i32 {
+    puts("Nested Method Test\0" as *u8);
+
+    let mut g: Gen = Gen::new();
+    let ptr: *Gen = &g as *Gen;
+
+    let x: u64 = ptr.alloc();
+    printf("First alloc: %llu\n\0" as *u8, x);
+
+    let y: u64 = ptr.make_two();
+    printf("make_two result: %llu\n\0" as *u8, y);
+
+    printf("Final reg: %llu\n\0" as *u8, (*ptr).reg);
+
+    puts("Done!\0" as *u8);
+    return 0;
+}

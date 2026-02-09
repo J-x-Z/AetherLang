@@ -1,0 +1,41 @@
+// Simplified bootstrap test - no methods, just basic structs
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+pub struct Value {
+    pub kind: u8,
+    pub reg: u64,
+    pub int_val: i64,
+}
+
+fn value_from_const(val: i64) -> Value {
+    return Value {
+        kind: 1,
+        reg: 0,
+        int_val: val,
+    };
+}
+
+fn value_from_reg(reg: u64) -> Value {
+    return Value {
+        kind: 0,
+        reg: reg,
+        int_val: 0,
+    };
+}
+
+fn main() -> i32 {
+    puts("Bootstrap Simple Test\0" as *u8);
+
+    // Test struct creation
+    let v1: Value = value_from_const(42);
+    let v2: Value = value_from_reg(5);
+
+    printf("v1.int_val = %lld\n\0" as *u8, v1.int_val);
+    printf("v2.reg = %llu\n\0" as *u8, v2.reg);
+
+    puts("Done!\0" as *u8);
+    return 0;
+}

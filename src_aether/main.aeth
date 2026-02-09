@@ -18,7 +18,9 @@ extern "C" {
 // Import compiler modules
 use lexer::Lexer;
 use parser::Parser;
-use ir_gen::{IRGenerator, IRModule, IRType};
+use ir_gen::IRGenerator;
+use ir_gen::IRModule;
+use ir_gen::IRType;
 use ir_to_llvm::IRToLLVM;
 
 // ==================== File I/O ====================
@@ -91,14 +93,23 @@ impl Compiler {
         if (*self).verbose {
             puts("[2/5] Lexical analysis...\0" as *u8);
         }
-        let mut lexer: Lexer = Lexer::new(source, src_len);
-        // Tokenize (tokens are consumed by parser)
+        let mut lexer: Lexer = Lexer::new(source, src_len, 0);
+
+        // Tokenize - allocate token buffer and run lexer
+        let max_tokens: u64 = 65536;
+        let tokens: *Token = malloc(max_tokens * 24) as *Token;  // Token is ~24 bytes
+        if tokens == (0 as *Token) {
+            puts("Error: Out of memory for tokens\0" as *u8);
+            free(source as *void);
+            return 1;
+        }
+        let token_count: u64 = lexer.tokenize(tokens, max_tokens);
 
         // Step 3: Parsing
         if (*self).verbose {
             puts("[3/5] Parsing AST...\0" as *u8);
         }
-        let mut parser: Parser = Parser::new(&lexer);
+        let mut parser: Parser = Parser::new(tokens, token_count);
         let parse_ok: bool = parser.parse();
         if !parse_ok {
             puts("Error: Parse failed\0" as *u8);

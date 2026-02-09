@@ -131,6 +131,16 @@ pub struct Instruction {
 }
 
 impl Instruction {
+    pub fn default() -> Instruction {
+        return Instruction {
+            kind: InstrKind::BinOp,
+            dest: 0,
+            op: IRBinOp::Add,
+            src1: Value::from_const(0),
+            src2: Value::from_const(0),
+        };
+    }
+
     pub fn binop(dest: u64, op: IRBinOp, src1: Value, src2: Value) -> Instruction {
         return Instruction {
             kind: InstrKind::BinOp,
@@ -238,15 +248,9 @@ pub struct InstructionList {
 
 impl InstructionList {
     pub fn new() -> InstructionList {
-        // Initialize with dummy instructions
+        // Initialize with dummy instructions using default()
         return InstructionList {
-            data: [Instruction {
-                kind: InstrKind::BinOp,
-                dest: 0,
-                op: IRBinOp::Add,
-                src1: Value::from_const(0),
-                src2: Value::from_const(0),
-            }; 1024],
+            data: [Instruction::default(); 1024],
             len: 0,
         };
     }
@@ -277,6 +281,16 @@ pub struct BasicBlock {
 }
 
 impl BasicBlock {
+    pub fn default() -> BasicBlock {
+        return BasicBlock {
+            id: 0,
+            label: 0 as *u8,
+            instructions: InstructionList::new(),
+            terminator: Terminator::ret(Value::from_const(0)),
+            has_terminator: false,
+        };
+    }
+
     pub fn new(id: u64, label: *u8) -> BasicBlock {
         return BasicBlock {
             id: id,
@@ -313,13 +327,24 @@ pub struct IRFunction {
 }
 
 impl IRFunction {
+    pub fn default() -> IRFunction {
+        return IRFunction {
+            name: 0 as *u8,
+            param_count: 0,
+            next_reg: 0,
+            return_type: IRType::Void,
+            blocks: [BasicBlock::default(); 256],
+            block_count: 0,
+        };
+    }
+
     pub fn new(name: *u8, ret: IRType) -> IRFunction {
         return IRFunction {
             name: name,
             param_count: 0,
             next_reg: 0,
             return_type: ret,
-            blocks: [BasicBlock::new(0, "entry\0" as *u8); 256],
+            blocks: [BasicBlock::default(); 256],
             block_count: 0,
         };
     }
@@ -360,7 +385,7 @@ impl IRModule {
     pub fn new(name: *u8) -> IRModule {
         return IRModule {
             name: name,
-            functions: [IRFunction::new("dummy\0" as *u8, IRType::Void); 128],
+            functions: [IRFunction::default(); 128],
             func_count: 0,
             global_count: 0,
         };
@@ -393,6 +418,16 @@ pub struct ScopeEntry {
     reg: u64,
 }
 
+impl ScopeEntry {
+    pub fn default() -> ScopeEntry {
+        return ScopeEntry {
+            name_ptr: 0 as *u8,
+            name_len: 0,
+            reg: 0,
+        };
+    }
+}
+
 pub struct Scope {
     entries: [ScopeEntry; 256],
     len: u64,
@@ -402,7 +437,7 @@ pub struct Scope {
 impl Scope {
     pub fn new() -> Scope {
         return Scope {
-            entries: [ScopeEntry { name_ptr: 0 as *u8, name_len: 0, reg: 0 }; 256],
+            entries: [ScopeEntry::default(); 256],
             len: 0,
             parent: 0 as *Scope,
         };
@@ -410,7 +445,7 @@ impl Scope {
 
     pub fn with_parent(parent: *Scope) -> Scope {
         return Scope {
-            entries: [ScopeEntry { name_ptr: 0 as *u8, name_len: 0, reg: 0 }; 256],
+            entries: [ScopeEntry::default(); 256],
             len: 0,
             parent: parent,
         };

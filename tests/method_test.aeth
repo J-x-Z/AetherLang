@@ -1,0 +1,42 @@
+// Test method calls with pointer self
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+pub struct Counter {
+    pub value: u64,
+}
+
+impl Counter {
+    pub fn new() -> Counter {
+        return Counter { value: 0 };
+    }
+
+    pub fn increment(self: *Counter) -> u64 {
+        (*self).value = (*self).value + 1;
+        return (*self).value;
+    }
+
+    pub fn get(self: *Counter) -> u64 {
+        return (*self).value;
+    }
+}
+
+fn main() -> i32 {
+    puts("Method Call Test\0" as *u8);
+
+    let mut counter: Counter = Counter::new();
+    let ptr: *Counter = &counter as *Counter;
+
+    printf("Initial: %llu\n\0" as *u8, ptr.get());
+
+    let v1: u64 = ptr.increment();
+    let v2: u64 = ptr.increment();
+    let v3: u64 = ptr.increment();
+
+    printf("After 3 increments: %llu\n\0" as *u8, ptr.get());
+
+    puts("Done!\0" as *u8);
+    return 0;
+}

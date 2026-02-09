@@ -1,0 +1,30 @@
+// Test pointer field access without methods
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+pub struct Counter {
+    pub value: u64,
+}
+
+fn get_value(ptr: *Counter) -> u64 {
+    return (*ptr).value;
+}
+
+fn main() -> i32 {
+    puts("Pointer Field Test\0" as *u8);
+
+    let mut c: Counter = Counter { value: 42 };
+    let ptr: *Counter = &c as *Counter;
+
+    // Direct field access
+    printf("Direct: %llu\n\0" as *u8, c.value);
+
+    // Through function
+    let v: u64 = get_value(ptr);
+    printf("Via function: %llu\n\0" as *u8, v);
+
+    puts("Done!\0" as *u8);
+    return 0;
+}

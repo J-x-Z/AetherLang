@@ -1,0 +1,28 @@
+// Minimal method test
+extern "C" {
+    fn puts(s: *u8) -> i32;
+    fn printf(fmt: *u8, ...) -> i32;
+}
+
+pub struct Counter {
+    pub value: u64,
+}
+
+impl Counter {
+    pub fn get(self: *Counter) -> u64 {
+        return (*self).value;
+    }
+}
+
+fn main() -> i32 {
+    puts("Method Minimal Test\0" as *u8);
+
+    let mut c: Counter = Counter { value: 42 };
+    let ptr: *Counter = &c as *Counter;
+
+    let v: u64 = ptr.get();
+    printf("Value: %llu\n\0" as *u8, v);
+
+    puts("Done!\0" as *u8);
+    return 0;
+}
