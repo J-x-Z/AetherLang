@@ -527,14 +527,14 @@ impl IRGenerator {
         };
     }
     
-    /// Generate IR for a program
+    // Generate IR for a program
     pub fn generate(self: &mut IRGenerator) -> bool {
         // Would iterate over program items
         // For each item, call generate_item
         return true;
     }
     
-    /// Generate IR for a top-level item
+    // Generate IR for a top-level item
     pub fn generate_item(self: &mut IRGenerator) -> bool {
         // Dispatch based on item kind
         // Function -> generate_function
@@ -545,7 +545,7 @@ impl IRGenerator {
         return true;
     }
     
-    /// Generate IR for a function
+    // Generate IR for a function
     pub fn generate_function(self: &mut IRGenerator) -> bool {
         // Create new function
         let _func_id: u64 = self.module.add_function();
@@ -562,14 +562,14 @@ impl IRGenerator {
         return true;
     }
     
-    /// Generate IR for a method
+    // Generate IR for a method
     pub fn generate_method(self: &mut IRGenerator) -> bool {
         // Same as function but with Type_method naming
         return self.generate_function();
     }
     
-    /// Generate IR for a block with statement list
-    /// stmt_kinds: array of statement kinds (0=Let, 1=Return, 2=Expr, 3=While, 4=For, 5=Loop, 6=Break, 7=Continue)
+    // Generate IR for a block with statement list
+    // stmt_kinds: array of statement kinds (0=Let, 1=Return, 2=Expr, 3=While, 4=For, 5=Loop, 6=Break, 7=Continue)
     pub fn generate_block_with_stmts(self: &mut IRGenerator, stmt_count: u64) -> Value {
         let mut last_value: Value = Value::from_const(0);
         let mut i: u64 = 0;
@@ -583,14 +583,14 @@ impl IRGenerator {
         return last_value;
     }
 
-    /// Generate IR for a block (compatibility stub)
+    // Generate IR for a block (compatibility stub)
     pub fn generate_block(self: &mut IRGenerator) -> Value {
         return Value::from_const(0);
     }
 
     // ==================== AST-Connected Functions ====================
 
-    /// Generate IR for a Block from AST
+    // Generate IR for a Block from AST
     pub fn generate_block_from_ast(self: &mut IRGenerator, block: *Block) -> Value {
         if block == (0 as *Block) {
             return Value::from_const(0);
@@ -616,7 +616,7 @@ impl IRGenerator {
         return last_value;
     }
 
-    /// Generate IR for a Stmt from AST
+    // Generate IR for a Stmt from AST
     pub fn generate_stmt_from_ast(self: &mut IRGenerator, stmt: *Stmt) -> Value {
         if stmt == (0 as *Stmt) {
             return Value::from_const(0);
@@ -677,7 +677,7 @@ impl IRGenerator {
         return Value::from_const(0);
     }
 
-    /// Generate IR for an Expr from AST
+    // Generate IR for an Expr from AST
     pub fn generate_expr_from_ast(self: &mut IRGenerator, expr: *Expr) -> Value {
         if expr == (0 as *Expr) {
             return Value::from_const(0);
@@ -837,7 +837,7 @@ impl IRGenerator {
         return Value::from_const(0);
     }
 
-    /// Convert AST BinOp to IR BinOp
+    // Convert AST BinOp to IR BinOp
     pub fn convert_binop(self: &IRGenerator, op: ast::BinOp) -> BinOp {
         if op == BinOp::Add { return IRBinOp::Add; }
         else if op == BinOp::Sub { return IRBinOp::Sub; }
@@ -855,8 +855,8 @@ impl IRGenerator {
         return IRBinOp::Add;
     }
 
-    /// Generate IR for a statement by kind
-    /// kind: 0=Let, 1=Return, 2=Expr, 3=While, 4=For, 5=Loop, 6=Break, 7=Continue
+    // Generate IR for a statement by kind
+    // kind: 0=Let, 1=Return, 2=Expr, 3=While, 4=For, 5=Loop, 6=Break, 7=Continue
     pub fn generate_stmt_kind(self: &mut IRGenerator, kind: u8, has_value: u8) -> Value {
         if kind == 0 {
             // Let statement: alloca + optional store
@@ -909,13 +909,13 @@ impl IRGenerator {
         return Value::from_const(0);
     }
 
-    /// Generate IR for a statement (compatibility stub)
+    // Generate IR for a statement (compatibility stub)
     pub fn generate_stmt(self: &mut IRGenerator) -> Value {
         return Value::from_const(0);
     }
     
-    /// Generate IR for an expression (dispatcher)
-    /// expr_kind: 0=Literal, 1=Ident, 2=Binary, 3=Unary, 4=Call, 5=Field, 6=Index, 7=If, 8=Block
+    // Generate IR for an expression (dispatcher)
+    // expr_kind: 0=Literal, 1=Ident, 2=Binary, 3=Unary, 4=Call, 5=Field, 6=Index, 7=If, 8=Block
     pub fn generate_expr_kind(self: &mut IRGenerator, expr_kind: u8, int_val: i64, op: u8) -> Value {
         if expr_kind == 0 {
             // Literal
@@ -945,17 +945,17 @@ impl IRGenerator {
         return Value::from_const(0);
     }
     
-    /// Generate IR for an expression (old stub for compatibility)
+    // Generate IR for an expression (old stub for compatibility)
     pub fn generate_expr(self: &mut IRGenerator) -> Value {
         return Value::from_const(0);
     }
     
-    /// Generate IR for a literal
+    // Generate IR for a literal
     pub fn generate_literal(self: &IRGenerator, val: i64) -> Value {
         return Value::from_const(val);
     }
     
-    /// Generate IR for a binary operation
+    // Generate IR for a binary operation
     pub fn generate_binary_op(self: &mut IRGenerator, op: u8) -> Value {
         // Assume left and right have been generated and are on a "stack"
         // In real impl, would pass Value arguments
@@ -973,12 +973,12 @@ impl IRGenerator {
         return Value::from_reg(dest);
     }
     
-    /// Generate IR for a binary operation (simplified stub)
+    // Generate IR for a binary operation (simplified stub)
     pub fn generate_binary(self: &mut IRGenerator) -> Value {
         return self.generate_binary_op(0);
     }
     
-    /// Generate IR for a unary operation
+    // Generate IR for a unary operation
     pub fn generate_unary_op(self: &mut IRGenerator, op: u8) -> Value {
         let dest: u64 = self.alloc_reg();
         // op: 0=Neg, 1=Not, 2=Deref, 3=Ref
@@ -986,12 +986,12 @@ impl IRGenerator {
         return Value::from_reg(dest);
     }
     
-    /// Generate IR for a unary operation (stub)
+    // Generate IR for a unary operation (stub)
     pub fn generate_unary(self: &mut IRGenerator) -> Value {
         return self.generate_unary_op(0);
     }
     
-    /// Generate IR for a function call instruction
+    // Generate IR for a function call instruction
     pub fn generate_call_instr(self: &mut IRGenerator) -> Value {
         // Would get function name and args from context
         let dest: u64 = self.alloc_reg();
@@ -999,12 +999,12 @@ impl IRGenerator {
         return Value::from_reg(dest);
     }
     
-    /// Generate IR for a function call (stub)
+    // Generate IR for a function call (stub)
     pub fn generate_call(self: &mut IRGenerator) -> Value {
         return self.generate_call_instr();
     }
     
-    /// Generate IR for if expression
+    // Generate IR for if expression
     pub fn generate_if_expr(self: &mut IRGenerator) -> Value {
         // Create blocks
         let then_block: u64 = self.alloc_block();
@@ -1037,12 +1037,12 @@ impl IRGenerator {
         return Value::from_const(0);
     }
     
-    /// Generate IR for if expression (stub)
+    // Generate IR for if expression (stub)
     pub fn generate_if(self: &mut IRGenerator) -> Value {
         return self.generate_if_expr();
     }
     
-    /// Generate IR for while loop
+    // Generate IR for while loop
     pub fn generate_while_loop(self: &mut IRGenerator) -> Value {
         // Create blocks
         let cond_block: u64 = self.alloc_block();
@@ -1068,12 +1068,12 @@ impl IRGenerator {
         return Value::from_const(0);
     }
     
-    /// Generate IR for while loop (stub)
+    // Generate IR for while loop (stub)
     pub fn generate_while(self: &mut IRGenerator) -> Value {
         return self.generate_while_loop();
     }
 
-    /// Generate IR for infinite loop (loop { ... })
+    // Generate IR for infinite loop (loop { ... })
     pub fn generate_loop(self: &mut IRGenerator) -> Value {
         // Create blocks
         let body_block: u64 = self.alloc_block();
@@ -1107,7 +1107,7 @@ impl IRGenerator {
         return Value::from_const(0);
     }
 
-    /// Generate IR for for-in loop (for x in iter { ... })
+    // Generate IR for for-in loop (for x in iter { ... })
     pub fn generate_for_loop(self: &mut IRGenerator) -> Value {
         // For loops desugar to:
         // let mut iter = <iterable>.into_iter();
@@ -1191,7 +1191,7 @@ impl IRGenerator {
         return Value::from_const(0);
     }
 
-    /// Generate IR for break statement
+    // Generate IR for break statement
     pub fn generate_break(self: &mut IRGenerator) -> Value {
         // Jump to loop exit block
         if self.loop_exit_block != 0 {
@@ -1200,7 +1200,7 @@ impl IRGenerator {
         return Value::from_const(0);
     }
 
-    /// Generate IR for continue statement
+    // Generate IR for continue statement
     pub fn generate_continue(self: &mut IRGenerator) -> Value {
         // Jump to loop condition block
         if self.loop_cond_block != 0 {
@@ -1209,7 +1209,7 @@ impl IRGenerator {
         return Value::from_const(0);
     }
 
-    /// Generate IR for array literal [a, b, c]
+    // Generate IR for array literal [a, b, c]
     pub fn generate_array_literal(self: &mut IRGenerator, elem_count: u64) -> Value {
         // Allocate space for array
         let array_reg: u64 = self.alloc_reg();
@@ -1235,17 +1235,17 @@ impl IRGenerator {
         return array_ptr;
     }
 
-    /// Generate IR for tuple literal (a, b, c)
+    // Generate IR for tuple literal (a, b, c)
     pub fn generate_tuple_literal(self: &mut IRGenerator, elem_count: u64) -> Value {
         // Similar to array, but with struct semantics
         return self.generate_array_literal(elem_count);
     }
 
-    /// Generate IR for closure |args| body
-    /// Closures compile to:
-    /// 1. A struct containing captured variables (environment)
-    /// 2. A function that takes env + args
-    /// 3. A closure object = (env_ptr, fn_ptr)
+    // Generate IR for closure |args| body
+    // Closures compile to:
+    // 1. A struct containing captured variables (environment)
+    // 2. A function that takes env + args
+    // 3. A closure object = (env_ptr, fn_ptr)
     pub fn generate_closure(self: &mut IRGenerator, param_count: u64, capture_count: u64) -> Value {
         // Allocate closure struct: { env*, fn* }
         let closure_reg: u64 = self.alloc_reg();
@@ -1282,13 +1282,13 @@ impl IRGenerator {
         return closure_ptr;
     }
 
-    /// Generate IR for closure with explicit captures
+    // Generate IR for closure with explicit captures
     pub fn generate_closure_with_captures(self: &mut IRGenerator, captures: *u64, capture_count: u64) -> Value {
         return self.generate_closure(0, capture_count);
     }
     
-    /// Generate IR for match expression
-    /// Generates a comparison chain with conditional branches
+    // Generate IR for match expression
+    // Generates a comparison chain with conditional branches
     pub fn generate_match(self: &mut IRGenerator, arm_count: u64) -> Value {
         // Allocate result register
         let result_reg: u64 = self.alloc_reg();
@@ -1361,48 +1361,48 @@ impl IRGenerator {
         return Value::from_reg(load_dest);
     }
 
-    /// Generate IR for match expression with values
-    /// scrutinee_reg: register containing the value to match
-    /// patterns: array of pattern values
-    /// arm_count: number of match arms
+    // Generate IR for match expression with values
+    // scrutinee_reg: register containing the value to match
+    // patterns: array of pattern values
+    // arm_count: number of match arms
     pub fn generate_match_expr(self: &mut IRGenerator, scrutinee_reg: u64, arm_count: u64) -> Value {
         return self.generate_match(arm_count);
     }
     
-    /// Generate IR for field access
+    // Generate IR for field access
     pub fn generate_field_access(self: &mut IRGenerator) -> Value {
         let dest: u64 = self.alloc_reg();
         // Would emit GEP instruction with field index
         return Value::from_reg(dest);
     }
     
-    /// Generate IR for field access (stub)
+    // Generate IR for field access (stub)
     pub fn generate_field(self: &mut IRGenerator) -> Value {
         return self.generate_field_access();
     }
     
-    /// Generate IR for index access
+    // Generate IR for index access
     pub fn generate_index_access(self: &mut IRGenerator) -> Value {
         let dest: u64 = self.alloc_reg();
         // Would emit GEP instruction with index
         return Value::from_reg(dest);
     }
     
-    /// Generate IR for index access (stub)
+    // Generate IR for index access (stub)
     pub fn generate_index(self: &mut IRGenerator) -> Value {
         return self.generate_index_access();
     }
     
     // ==================== Helper Methods ====================
 
-    /// Allocate a new register
+    // Allocate a new register
     pub fn alloc_reg(self: &mut IRGenerator) -> u64 {
         let r: u64 = self.next_reg;
         self.next_reg = self.next_reg + 1;
         return r;
     }
 
-    /// Allocate a new block in current function
+    // Allocate a new block in current function
     pub fn alloc_block(self: &mut IRGenerator) -> u64 {
         let func: *IRFunction = self.module.get_function(self.current_function);
         if func != (0 as *IRFunction) {
@@ -1415,7 +1415,7 @@ impl IRGenerator {
         return b;
     }
 
-    /// Emit an instruction to current block
+    // Emit an instruction to current block
     pub fn emit(self: &mut IRGenerator, inst: Instruction) {
         let func: *IRFunction = self.module.get_function(self.current_function);
         if func != (0 as *IRFunction) {
@@ -1426,7 +1426,7 @@ impl IRGenerator {
         }
     }
 
-    /// Set terminator for current block
+    // Set terminator for current block
     pub fn set_terminator(self: &mut IRGenerator, term: Terminator) {
         let func: *IRFunction = self.module.get_function(self.current_function);
         if func != (0 as *IRFunction) {
@@ -1437,7 +1437,7 @@ impl IRGenerator {
         }
     }
 
-    /// Check if current block has terminator
+    // Check if current block has terminator
     pub fn has_terminator(self: &IRGenerator) -> bool {
         let func: *IRFunction = self.module.get_function(self.current_function);
         if func != (0 as *IRFunction) {
@@ -1449,12 +1449,12 @@ impl IRGenerator {
         return false;
     }
 
-    /// Get the generated IR module
+    // Get the generated IR module
     pub fn get_module(self: &IRGenerator) -> *IRModule {
         return &self.module;
     }
 
-    /// Start a new function
+    // Start a new function
     pub fn begin_function(self: &mut IRGenerator, name: *u8, ret: IRType) -> u64 {
         let func_id: u64 = self.module.add_function(name, ret);
         self.current_function = func_id;
@@ -1471,7 +1471,7 @@ impl IRGenerator {
         return func_id;
     }
 
-    /// End current function
+    // End current function
     pub fn end_function(self: &mut IRGenerator) {
         // Ensure function has a terminator
         if !self.has_terminator() {
@@ -1479,24 +1479,24 @@ impl IRGenerator {
         }
     }
     
-    /// Convert AST BinOp to IR BinOp
+    // Convert AST BinOp to IR BinOp
     pub fn ast_binop_to_ir(op: u8) -> BinOp {
         // Map AST operators to IR operators
         return IRBinOp::Add;
     }
     
-    /// Convert AST Type to IR Type
+    // Convert AST Type to IR Type
     pub fn ast_type_to_ir(self: &IRGenerator) -> IRType {
         // Map type names to IR types
         return IRType::I64;
     }
     
-    /// Get type of a value
+    // Get type of a value
     pub fn get_value_type(self: &IRGenerator, _val: Value) -> IRType {
         return IRType::I64;
     }
     
-    /// Check if type is integer
+    // Check if type is integer
     pub fn is_integer_type(ty: IRType) -> bool {
         // Would check if ty is I8/I16/I32/I64/U8/U16/U32/U64
         return true;
