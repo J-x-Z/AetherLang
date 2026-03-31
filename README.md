@@ -6,7 +6,7 @@
 ![Tests](https://img.shields.io/badge/tests-passing-green)
 ![Self-Hosting](https://img.shields.io/badge/self--hosting-100%25-brightgreen)
 
-## 🎯 Vision
+##  Vision
 
 AetherLang is an **AI-Native Programming Language** built from the ground up to:
 
@@ -14,9 +14,9 @@ AetherLang is an **AI-Native Programming Language** built from the ground up to:
 2. **Enable AI Self-Iteration** - AI-readable IR, structured feedback, sandboxed optimization
 3. **Maintain Rigor & Safety** - Contract programming, effect system, ownership semantics
 
-## 🔄 Self-Hosting Progress
+##  Self-Hosting Progress
 
-🎉 **Self-hosting complete!** AetherLang compiler is written in AetherLang.
+ **Self-hosting complete!** AetherLang compiler is written in AetherLang.
 
 | Component | Status | Functions | Notes |
 |-----------|--------|-----------|-------|
@@ -179,7 +179,7 @@ jxz install       # Install from Jxz.lock
 
 **161 functions** written entirely in AetherLang (self-hosting!)
 
-## 📚 Documentation
+##  Documentation
 
 ### Language Reference
 - [Language Guide](docs/LANGUAGE.md) - Complete language reference with P5 rules
@@ -194,7 +194,7 @@ jxz install       # Install from Jxz.lock
 ### Tutorials
 - [Quick Start Guide](docs/GUIDE.md) - Getting started
 
-## 🔬 For AI Models
+##  For AI Models
 
 AetherLang is designed to be **AI-friendly**:
 
