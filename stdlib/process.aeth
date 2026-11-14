@@ -1,67 +1,359 @@
-// Blocking POSIX child execution. argv is borrowed and NUL-terminated.
-// Arguments are never interpreted by a shell; caller retains all argv storage.
-// Returns child status, 128+signal, 125 for setup/wait failure, 127 for exec failure.
+// Composable POSIX children. Command strings/argv/envp are borrowed until spawn
+// returns; no shell parses arguments. Descriptor fields are borrowed numbers,
+// -1 means inherit. Child owns the obligation to wait/reap exactly once.
+// envp=null inherits the environment; a non-null array is the complete child
+// environment. PATH lookup uses that array (default /usr/bin:/bin if absent).
+use result::Result;
+use option::Option;
+use vec::{Vec, vec_new, vec_reserve, vec_push, vec_free};
+use fd::{Descriptor, Pipe, fd_pipe, fd_duplicate, fd_duplicate_to, fd_close, fd_read, fd_write_all, fd_open_write};
+use posix::{EINTR, EIO, ECHILD, ENOMEM, EACCES, EINVAL, ENOENT, ENOTDIR, WNOHANG, SIGKILL};
 extern "C" {
     fn fork() -> i32;
-    fn execvp(file: *u8, argv: **u8) -> i32;
+    fn execve(file: *u8, argv: **u8, envp: **u8) -> i32;
     fn waitpid(pid: i32, status: *i32, options: i32) -> i32;
+    fn kill(pid: i32, signal: i32) -> i32;
+    fn chdir(path: *u8) -> i32;
     fn _exit(code: i32);
-    fn perror(message: *u8);
-    fn fopen(path: *u8, mode: *u8) -> *void;
-    fn fclose(file: *void) -> i32;
-    fn fileno(file: *void) -> i32;
-    fn dup2(oldfd: i32, newfd: i32) -> i32;
     fn fflush(file: *void) -> i32;
     fn getenv(name: *u8) -> *u8;
+    fn setenv(name: *u8, value: *u8, overwrite: i32) -> i32;
+    fn unsetenv(name: *u8) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(pointer: *void);
+    fn strlen(text: *u8) -> u64;
+    fn memcpy(destination: *void, source: *void, size: u64) -> *void;
+    static environ: **u8;
+}
+const PROCESS_ARGUMENT: i32 = 1;
+const PROCESS_DESCRIPTOR: i32 = 2;
+const PROCESS_PIPE: i32 = 3;
+const PROCESS_FORK: i32 = 4;
+const PROCESS_CWD: i32 = 5;
+const PROCESS_EXEC: i32 = 6;
+const PROCESS_WAIT: i32 = 7;
+const PROCESS_SIGNAL: i32 = 8;
+const PROCESS_MEMORY: i32 = 9;
+const PROCESS_PROTOCOL: i32 = 10;
+
+pub struct ProcessError { stage: i32, code: i32 }
+pub struct Command {
+    argv: **u8,
+    envp: **u8,
+    cwd: *u8,
+    stdin_fd: i32,
+    stdout_fd: i32,
+    stderr_fd: i32,
+}
+pub struct ExitStatus { exited: bool, code: i32, signal: i32, raw: i32 }
+pub struct Child { pid: i32, reaped: bool, status: i32 }
+
+pub fn command_new(argv: **u8) -> Command {
+    Command { argv: argv, envp: 0 as **u8, cwd: 0 as *u8, stdin_fd: -1, stdout_fd: -1, stderr_fd: -1 }
+}
+fn error(stage: i32, code: i32) -> ProcessError { ProcessError { stage: stage, code: code } }
+fn decode_status(raw: i32) -> ExitStatus {
+    let signal: i32 = raw & 127;
+    ExitStatus { exited: signal == 0, code: if signal == 0 { (raw >> 8) & 255 } else { 0 }, signal: signal, raw: raw }
+}
+pub fn process_status_code(status: ExitStatus) -> i32 {
+    if status.exited { return status.code; }
+    128 + status.signal
 }
 
-pub fn process_run(argv: **u8, stdout_path: *u8) -> i32 {
-    // Flush inherited stdio buffers before fork so they are not printed twice.
-    if fflush(0 as *void) != 0 { perror("process: flush\0" as *u8); return 125; }
-    let pid: i32 = fork();
-    if pid < 0 {
-        perror("jxz: fork\0" as *u8);
-        return 125;
-    }
-    if pid == 0 {
-        if stdout_path != (0 as *u8) {
-            let file: *void = fopen(stdout_path, "wb\0" as *u8);
-            if file == (0 as *void) {
-                perror("jxz: capture\0" as *u8);
-                _exit(125);
-                return 125;
-            }
-            let fd: i32 = fileno(file);
-            if dup2(fd, 1) < 0 {
-                perror("jxz: dup2\0" as *u8);
-                fclose(file);
-                _exit(125);
-                return 125;
-            }
-            if fd != 1 { fclose(file); }
-        }
-        execvp(argv[0], argv);
-        perror(argv[0]);
-        _exit(127);
-        return 127;
-    }
-    let mut status: i32 = 0;
-    if waitpid(pid, &status as *i32, 0) < 0 {
-        perror("jxz: waitpid\0" as *u8);
-        return 125;
-    }
-    // POSIX wait status: low seven bits are the terminating signal.
-    let signal: i32 = status & 127;
-    if signal != 0 {
-        return 128 + signal;
-    }
-    return (status >> 8) & 255;
+// These helpers preserve empty values rather than conflating empty and unset.
+pub fn environment_get(name: *u8) -> *u8 {
+    if name == (0 as *u8) { return 0 as *u8; }
+    getenv(name)
 }
-
+pub fn environment_set(name: *u8, value: *u8) -> Result<(), i32> {
+    if name == (0 as *u8) || value == (0 as *u8) { return Result::Err(EINVAL); }
+    if setenv(name, value, 1) != 0 { return Result::Err(__errno_get()); }
+    Result::Ok(())
+}
+pub fn environment_unset(name: *u8) -> Result<(), i32> {
+    if name == (0 as *u8) { return Result::Err(EINVAL); }
+    if unsetenv(name) != 0 { return Result::Err(__errno_get()); }
+    Result::Ok(())
+}
 pub fn environment_tool(key: *u8, fallback: *u8) -> *u8 {
-    let value: *u8 = getenv(key);
+    let value: *u8 = environment_get(key);
     if value == (0 as *u8) { return fallback; }
     if value[0] == 0 { return fallback; }
-    return value;
+    value
 }
 
+fn path_value(envp: **u8) -> *u8 {
+    let mut index: u64 = 0;
+    while envp[index] != (0 as *u8) {
+        let value: *u8 = envp[index];
+        if value[0] == 80 && value[1] == 65 && value[2] == 84 && value[3] == 72 && value[4] == 61 { return value + 5; }
+        index = index + 1;
+    }
+    "/usr/bin:/bin\0" as *u8
+}
+fn free_paths(paths: *Vec<*u8>) {
+    let mut index: u64 = 0;
+    while index < paths.len { free(paths.data[index] as *void); index = index + 1; }
+    vec_free(paths);
+}
+fn add_path(paths: *Vec<*u8>, directory: *u8, length: u64, program: *u8, program_length: u64) -> bool {
+    let size: u64 = length + program_length + 2;
+    let value: *u8 = malloc(size) as *u8;
+    if value == (0 as *u8) { return false; }
+    if length > 0 { memcpy(value as *void, directory as *void, length); value[length] = 47; }
+    let offset: u64 = if length > 0 { length + 1 } else { 0 };
+    memcpy((value + offset) as *void, program as *void, program_length + 1);
+    if !vec_push(paths, value) { free(value as *void); return false; }
+    true
+}
+fn prepare_paths(program: *u8, envp: **u8) -> Result<Vec<*u8>, ProcessError> {
+    let mut paths: Vec<*u8> = vec_new();
+    let length: u64 = strlen(program);
+    let mut index: u64 = 0;
+    while index < length {
+        if program[index] == 47 {
+            if !add_path(&paths as *Vec<*u8>, program, 0, program, length) { free_paths(&paths as *Vec<*u8>); return Result::Err(error(PROCESS_MEMORY, ENOMEM)); }
+            return Result::Ok(paths);
+        }
+        index = index + 1;
+    }
+    let path: *u8 = path_value(envp);
+    let mut start: u64 = 0;
+    index = 0;
+    loop {
+        if path[index] == 58 || path[index] == 0 {
+            if !add_path(&paths as *Vec<*u8>, path + start, index - start, program, length) { free_paths(&paths as *Vec<*u8>); return Result::Err(error(PROCESS_MEMORY, ENOMEM)); }
+            if path[index] == 0 { break; }
+            start = index + 1;
+        }
+        index = index + 1;
+    }
+    Result::Ok(paths)
+}
+
+fn close_copies(copies: *Descriptor) -> i32 {
+    let mut first: i32 = 0;
+    let mut index: u64 = 0;
+    while index < 3 {
+        match fd_close(&copies[index] as *Descriptor) { Result::Ok(_) => {}, Result::Err(code) => { if first == 0 { first = code; } }, }
+        index = index + 1;
+    }
+    first
+}
+fn wait_raw(child: *Child, options: i32) -> Result<Option<ExitStatus>, ProcessError> {
+    if child.reaped { return Result::Ok(Option::Some(decode_status(child.status))); }
+    if child.pid <= 0 { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
+    let mut raw: i32 = 0;
+    loop {
+        let result: i32 = waitpid(child.pid, &raw as *i32, options);
+        if result == child.pid {
+            child.reaped = true; child.status = raw;
+            return Result::Ok(Option::Some(decode_status(raw)));
+        }
+        if result == 0 { return Result::Ok(Option::None); }
+        let code: i32 = __errno_get();
+        if code != EINTR { return Result::Err(error(PROCESS_WAIT, code)); }
+    }
+}
+pub fn child_wait(child: *Child) -> Result<ExitStatus, ProcessError> {
+    let status: Option<ExitStatus> = wait_raw(child, 0)?;
+    match status { Option::Some(value) => Result::Ok(value), Option::None => Result::Err(error(PROCESS_WAIT, EIO)), }
+}
+pub fn child_poll(child: *Child) -> Result<Option<ExitStatus>, ProcessError> { wait_raw(child, WNOHANG) }
+pub fn child_signal(child: *Child, signal: i32) -> Result<(), ProcessError> {
+    if child.reaped { return Result::Err(error(PROCESS_SIGNAL, ECHILD)); }
+    if child.pid <= 0 { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
+    if kill(child.pid, signal) < 0 { return Result::Err(error(PROCESS_SIGNAL, __errno_get())); }
+    Result::Ok(())
+}
+fn kill_and_reap(child: *Child) {
+    if !child.reaped { kill(child.pid, SIGKILL); child_wait(child); }
+}
+fn report_child_failure(descriptor: i32, stage: i32, code: i32) {
+    let message: [i32; 2] = [stage, code];
+    fd_write_all(descriptor, (&message[0] as *i32) as *u8, size_of([i32; 2]) as u64);
+    _exit(127);
+}
+
+pub fn process_spawn(command: *Command) -> Result<Child, ProcessError> {
+    if command.argv == (0 as **u8) || command.argv[0] == (0 as *u8) { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
+    if command.argv[0][0] == 0 { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
+    if command.stdin_fd < -1 || command.stdout_fd < -1 || command.stderr_fd < -1 { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
+    let empty_environment: [*u8; 1] = [0 as *u8];
+    let inherited: **u8 = if environ == (0 as **u8) { &empty_environment[0] as **u8 } else { environ };
+    let environment: **u8 = if command.envp == (0 as **u8) { inherited } else { command.envp };
+    let mut paths: Vec<*u8> = prepare_paths(command.argv[0], environment)?;
+    let inputs: [i32; 3] = [command.stdin_fd, command.stdout_fd, command.stderr_fd];
+    let mut copies: [Descriptor; 3] = [Descriptor { value: -1 }, Descriptor { value: -1 }, Descriptor { value: -1 }];
+    let mut index: u64 = 0;
+    while index < 3 {
+        if inputs[index] >= 0 {
+            match fd_duplicate(inputs[index]) {
+                Result::Ok(value) => { copies[index] = value; },
+                Result::Err(code) => { close_copies(&copies[0] as *Descriptor); free_paths(&paths as *Vec<*u8>); return Result::Err(error(PROCESS_DESCRIPTOR, code)); },
+            }
+        }
+        index = index + 1;
+    }
+    let mut channel: Pipe = match fd_pipe() {
+        Result::Ok(value) => value,
+        Result::Err(code) => { close_copies(&copies[0] as *Descriptor); free_paths(&paths as *Vec<*u8>); return Result::Err(error(PROCESS_PIPE, code)); },
+    };
+    let pid: i32 = fork();
+    if pid < 0 {
+        let code: i32 = __errno_get();
+        fd_close(&channel.reader as *Descriptor); fd_close(&channel.writer as *Descriptor);
+        close_copies(&copies[0] as *Descriptor); free_paths(&paths as *Vec<*u8>);
+        return Result::Err(error(PROCESS_FORK, code));
+    }
+    if pid == 0 {
+        fd_close(&channel.reader as *Descriptor);
+        index = 0;
+        while index < 3 {
+            if copies[index].value >= 0 {
+                match fd_duplicate_to(copies[index].value, index as i32) {
+                    Result::Ok(_) => {},
+                    Result::Err(code) => { report_child_failure(channel.writer.value, PROCESS_DESCRIPTOR, code); return Result::Err(error(PROCESS_DESCRIPTOR, code)); },
+                }
+            }
+            index = index + 1;
+        }
+        let close_error: i32 = close_copies(&copies[0] as *Descriptor);
+        if close_error != 0 { report_child_failure(channel.writer.value, PROCESS_DESCRIPTOR, close_error); return Result::Err(error(PROCESS_DESCRIPTOR, close_error)); }
+        if command.cwd != (0 as *u8) {
+            if chdir(command.cwd) < 0 { let code: i32 = __errno_get(); report_child_failure(channel.writer.value, PROCESS_CWD, code); return Result::Err(error(PROCESS_CWD, code)); }
+        }
+        index = 0;
+        let mut denied: bool = false;
+        let mut final_error: i32 = ENOENT;
+        while index < paths.len {
+            execve(paths.data[index], command.argv, environment);
+            final_error = __errno_get();
+            if final_error == EACCES { denied = true; }
+            else { if final_error != ENOENT && final_error != ENOTDIR { break; } }
+            index = index + 1;
+        }
+        if denied && (final_error == ENOENT || final_error == ENOTDIR || final_error == EACCES) { final_error = EACCES; }
+        report_child_failure(channel.writer.value, PROCESS_EXEC, final_error);
+        return Result::Err(error(PROCESS_EXEC, final_error));
+    }
+    let mut child: Child = Child { pid: pid, reaped: false, status: 0 };
+    let mut close_error: i32 = close_copies(&copies[0] as *Descriptor);
+    match fd_close(&channel.writer as *Descriptor) { Result::Ok(_) => {}, Result::Err(code) => { if close_error == 0 { close_error = code; } }, }
+    free_paths(&paths as *Vec<*u8>);
+    if close_error != 0 { fd_close(&channel.reader as *Descriptor); kill_and_reap(&child as *Child); return Result::Err(error(PROCESS_DESCRIPTOR, close_error)); }
+    let mut message: [i32; 2] = [0, 0];
+    let mut count: u64 = 0;
+    let total: u64 = size_of([i32; 2]) as u64;
+    while count < total {
+        match fd_read(channel.reader.value, ((&message[0] as *i32) as *u8) + count, total - count) {
+            Result::Ok(received) => { if received == 0 { break; } count = count + received; },
+            Result::Err(code) => { fd_close(&channel.reader as *Descriptor); kill_and_reap(&child as *Child); return Result::Err(error(PROCESS_PROTOCOL, code)); },
+        }
+    }
+    match fd_close(&channel.reader as *Descriptor) {
+        Result::Ok(_) => {},
+        Result::Err(code) => { kill_and_reap(&child as *Child); return Result::Err(error(PROCESS_PROTOCOL, code)); },
+    }
+    if count == 0 { return Result::Ok(child); }
+    if count == total { child_wait(&child as *Child); return Result::Err(error(message[0], message[1])); }
+    kill_and_reap(&child as *Child);
+    Result::Err(error(PROCESS_PROTOCOL, EIO))
+}
+
+fn close_pipes(pipes: *Vec<Pipe>) -> i32 {
+    let mut first: i32 = 0;
+    let mut index: u64 = 0;
+    while index < pipes.len {
+        match fd_close(&pipes.data[index].reader as *Descriptor) { Result::Ok(_) => {}, Result::Err(code) => { if first == 0 { first = code; } }, }
+        match fd_close(&pipes.data[index].writer as *Descriptor) { Result::Ok(_) => {}, Result::Err(code) => { if first == 0 { first = code; } }, }
+        index = index + 1;
+    }
+    vec_free(pipes);
+    first
+}
+fn abort_children(children: *Vec<Child>) {
+    let mut index: u64 = 0;
+    // Signal all before waiting, so one blocked stage cannot stall cleanup.
+    while index < children.len { child_signal(&children.data[index] as *Child, SIGKILL); index = index + 1; }
+    index = 0;
+    while index < children.len { child_wait(&children.data[index] as *Child); index = index + 1; }
+    vec_free(children);
+}
+
+// Start every stage before waiting. An explicit stdin/stdout descriptor wins
+// over the adjacent pipe, matching redirection composition. statuses has count
+// writable entries; each completed child has its own status (no hidden policy).
+pub fn pipeline_run(commands: *Command, count: u64, statuses: *ExitStatus) -> Result<(), ProcessError> {
+    if count == 0 || commands == (0 as *Command) || statuses == (0 as *ExitStatus) { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
+    let mut pipes: Vec<Pipe> = vec_new();
+    let mut children: Vec<Child> = vec_new();
+    if !vec_reserve(&pipes as *Vec<Pipe>, count - 1) || !vec_reserve(&children as *Vec<Child>, count) {
+        vec_free(&pipes as *Vec<Pipe>); vec_free(&children as *Vec<Child>); return Result::Err(error(PROCESS_MEMORY, ENOMEM));
+    }
+    let mut index: u64 = 0;
+    while index + 1 < count {
+        match fd_pipe() {
+            Result::Ok(value) => {
+                let mut connection: Pipe = value;
+                if !vec_push(&pipes as *Vec<Pipe>, connection) {
+                    fd_close(&connection.reader as *Descriptor); fd_close(&connection.writer as *Descriptor);
+                    close_pipes(&pipes as *Vec<Pipe>); vec_free(&children as *Vec<Child>); return Result::Err(error(PROCESS_MEMORY, ENOMEM));
+                }
+            },
+            Result::Err(code) => { close_pipes(&pipes as *Vec<Pipe>); vec_free(&children as *Vec<Child>); return Result::Err(error(PROCESS_PIPE, code)); },
+        }
+        index = index + 1;
+    }
+    index = 0;
+    while index < count {
+        let mut command: Command = commands[index];
+        if index > 0 && command.stdin_fd < 0 { command.stdin_fd = pipes.data[index - 1].reader.value; }
+        if index + 1 < count && command.stdout_fd < 0 { command.stdout_fd = pipes.data[index].writer.value; }
+        match process_spawn(&command as *Command) {
+            Result::Ok(value) => {
+                let mut child: Child = value;
+                if !vec_push(&children as *Vec<Child>, child) {
+                    close_pipes(&pipes as *Vec<Pipe>); kill_and_reap(&child as *Child); abort_children(&children as *Vec<Child>); return Result::Err(error(PROCESS_MEMORY, ENOMEM));
+                }
+            },
+            Result::Err(failure) => { close_pipes(&pipes as *Vec<Pipe>); abort_children(&children as *Vec<Child>); return Result::Err(failure); },
+        }
+        index = index + 1;
+    }
+    let close_error: i32 = close_pipes(&pipes as *Vec<Pipe>);
+    if close_error != 0 { abort_children(&children as *Vec<Child>); return Result::Err(error(PROCESS_DESCRIPTOR, close_error)); }
+    let mut first: ProcessError = error(0, 0);
+    index = 0;
+    while index < count {
+        match child_wait(&children.data[index] as *Child) {
+            Result::Ok(status) => { statuses[index] = status; },
+            Result::Err(failure) => { if first.stage == 0 { first = failure; } },
+        }
+        index = index + 1;
+    }
+    vec_free(&children as *Vec<Child>);
+    if first.stage != 0 { return Result::Err(first); }
+    Result::Ok(())
+}
+
+// Compatibility adapter for JXZ. New callers should use structured spawn/wait.
+// Preserve 125 setup/wait, 127 exec, and 128+signal status conventions.
+pub fn process_run(argv: **u8, stdout_path: *u8) -> i32 {
+    if fflush(0 as *void) != 0 { return 125; }
+    let mut command: Command = command_new(argv);
+    let mut output: Descriptor = Descriptor { value: -1 };
+    if stdout_path != (0 as *u8) {
+        match fd_open_write(stdout_path, false) { Result::Ok(value) => { output = value; command.stdout_fd = output.value; }, Result::Err(_) => { return 125; }, }
+    }
+    let spawned: Result<Child, ProcessError> = process_spawn(&command as *Command);
+    let closed: Result<(), i32> = fd_close(&output as *Descriptor);
+    let mut child: Child = match spawned {
+        Result::Ok(value) => value,
+        Result::Err(failure) => { if failure.stage == PROCESS_EXEC { return 127; } return 125; },
+    };
+    let status: Result<ExitStatus, ProcessError> = child_wait(&child as *Child);
+    match closed { Result::Ok(_) => {}, Result::Err(_) => { return 125; }, }
+    match status { Result::Ok(value) => process_status_code(value), Result::Err(_) => 125, }
+}

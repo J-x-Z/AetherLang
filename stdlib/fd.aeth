@@ -1,0 +1,143 @@
+// Owned POSIX file descriptors. Descriptor/Pipe values must not be copied while
+// live: transfer ownership or borrow their numeric value. Close explicitly.
+// New descriptors are >= 3 and close-on-exec, so standard streams stay distinct.
+use result::Result;
+use posix::{EINTR, EIO, EINVAL, F_DUPFD, F_GETFD, F_SETFD, FD_CLOEXEC};
+extern "C" {
+    fn pipe(descriptors: *i32) -> i32;
+    fn fcntl(descriptor: i32, command: i32, ...) -> i32;
+    fn dup2(source: i32, destination: i32) -> i32;
+    fn close(descriptor: i32) -> i32;
+    fn read(descriptor: i32, buffer: *void, size: u64) -> i64;
+    fn write(descriptor: i32, buffer: *void, size: u64) -> i64;
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fileno(file: *void) -> i32;
+    fn fclose(file: *void) -> i32;
+}
+pub struct Descriptor { value: i32 }
+pub struct Pipe { reader: Descriptor, writer: Descriptor }
+
+// Invalidate before close. Do not retry close after EINTR: the OS may already
+// have released the number, which another thread could reuse.
+pub fn fd_close(descriptor: *Descriptor) -> Result<(), i32> {
+    if descriptor.value < 0 { return Result::Ok(()); }
+    let raw: i32 = descriptor.value;
+    descriptor.value = -1;
+    if close(raw) < 0 { return Result::Err(__errno_get()); }
+    Result::Ok(())
+}
+
+pub fn fd_cloexec(descriptor: i32, enabled: bool) -> Result<(), i32> {
+    let mut flags: i32 = -1;
+    loop {
+        flags = fcntl(descriptor, F_GETFD);
+        if flags >= 0 { break; }
+        let error: i32 = __errno_get();
+        if error != EINTR { return Result::Err(error); }
+    }
+    if enabled { flags = flags | FD_CLOEXEC; } else { flags = flags & (-1 ^ FD_CLOEXEC); }
+    loop {
+        if fcntl(descriptor, F_SETFD, flags) >= 0 { return Result::Ok(()); }
+        let error: i32 = __errno_get();
+        if error != EINTR { return Result::Err(error); }
+    }
+}
+
+pub fn fd_duplicate(descriptor: i32) -> Result<Descriptor, i32> {
+    let mut copy: i32 = -1;
+    loop {
+        copy = fcntl(descriptor, F_DUPFD, 3 as i32);
+        if copy >= 0 { break; }
+        let error: i32 = __errno_get();
+        if error != EINTR { return Result::Err(error); }
+    }
+    match fd_cloexec(copy, true) {
+        Result::Ok(_) => Result::Ok(Descriptor { value: copy }),
+        Result::Err(error) => { close(copy); Result::Err(error) },
+    }
+}
+
+// Borrowed raw descriptors; this does not transfer ownership of the source.
+pub fn fd_duplicate_to(source: i32, destination: i32) -> Result<(), i32> {
+    loop {
+        if dup2(source, destination) >= 0 { return Result::Ok(()); }
+        let error: i32 = __errno_get();
+        if error != EINTR { return Result::Err(error); }
+    }
+}
+
+pub fn fd_pipe() -> Result<Pipe, i32> {
+    let mut values: [i32; 2] = [-1, -1];
+    loop {
+        if pipe(&values[0] as *i32) == 0 { break; }
+        let error: i32 = __errno_get();
+        if error != EINTR { return Result::Err(error); }
+    }
+    // Normalize both ends before closing originals, including when the caller
+    // started with stdin/stdout/stderr closed.
+    let mut reader: Descriptor = match fd_duplicate(values[0]) {
+        Result::Ok(value) => value,
+        Result::Err(error) => { close(values[0]); close(values[1]); return Result::Err(error); },
+    };
+    let mut writer: Descriptor = match fd_duplicate(values[1]) {
+        Result::Ok(value) => value,
+        Result::Err(error) => { fd_close(&reader as *Descriptor); close(values[0]); close(values[1]); return Result::Err(error); },
+    };
+    let mut close_error: i32 = 0;
+    if close(values[0]) < 0 { close_error = __errno_get(); }
+    if close(values[1]) < 0 { let code: i32 = __errno_get(); if close_error == 0 { close_error = code; } }
+    if close_error != 0 {
+        fd_close(&reader as *Descriptor); fd_close(&writer as *Descriptor);
+        return Result::Err(close_error);
+    }
+    Result::Ok(Pipe { reader: reader, writer: writer })
+}
+
+// Ok(0) is EOF; errors remain distinguishable from EOF. Short reads are valid.
+pub fn fd_read(descriptor: i32, buffer: *u8, size: u64) -> Result<u64, i32> {
+    loop {
+        let count: i64 = read(descriptor, buffer as *void, size);
+        if count >= 0 { return Result::Ok(count as u64); }
+        let error: i32 = __errno_get();
+        if error != EINTR { return Result::Err(error); }
+    }
+}
+
+// Complete every byte, including short writes. SIGPIPE disposition belongs to
+// the application; with it ignored, a closed reader is returned as an OS error.
+pub fn fd_write_all(descriptor: i32, buffer: *u8, size: u64) -> Result<(), i32> {
+    let mut position: u64 = 0;
+    while position < size {
+        let count: i64 = write(descriptor, (buffer + position) as *void, size - position);
+        if count > 0 { position = position + count as u64; }
+        else {
+            let error: i32 = if count == 0 { EIO } else { __errno_get() };
+            if error != EINTR { return Result::Err(error); }
+        }
+    }
+    Result::Ok(())
+}
+
+fn open_mode(path: *u8, mode: *u8) -> Result<Descriptor, i32> {
+    if path == (0 as *u8) { return Result::Err(EINVAL); }
+    let file: *void = fopen(path, mode);
+    if file == (0 as *void) { return Result::Err(__errno_get()); }
+    let raw: i32 = fileno(file);
+    if raw < 0 { let error: i32 = __errno_get(); fclose(file); return Result::Err(error); }
+    let result: Result<Descriptor, i32> = fd_duplicate(raw);
+    let closed: i32 = fclose(file);
+    let close_error: i32 = if closed == 0 { 0 } else { __errno_get() };
+    match result {
+        Result::Err(error) => Result::Err(error),
+        Result::Ok(mut_descriptor) => {
+            let mut descriptor: Descriptor = mut_descriptor;
+            if close_error != 0 { fd_close(&descriptor as *Descriptor); return Result::Err(close_error); }
+            Result::Ok(descriptor)
+        },
+    }
+}
+pub fn fd_open_read(path: *u8) -> Result<Descriptor, i32> { open_mode(path, "rb\0" as *u8) }
+pub fn fd_open_write(path: *u8, append: bool) -> Result<Descriptor, i32> {
+    if append { return open_mode(path, "ab\0" as *u8); }
+    open_mode(path, "wb\0" as *u8)
+}

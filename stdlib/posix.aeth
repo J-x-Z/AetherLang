@@ -1,0 +1,21 @@
+// POSIX constants shared by the Darwin/Linux descriptor/process foundation.
+// These values are common to the two supported host ABIs. errno itself is read
+// through the target-aware __errno_get intrinsic, never by guessing TLS layout.
+const EINTR: i32 = 4;
+const EIO: i32 = 5;
+const ECHILD: i32 = 10;
+const ENOMEM: i32 = 12;
+const EACCES: i32 = 13;
+const EINVAL: i32 = 22;
+const ENOENT: i32 = 2;
+const ENOTDIR: i32 = 20;
+const F_DUPFD: i32 = 0;
+const F_GETFD: i32 = 1;
+const F_SETFD: i32 = 2;
+const FD_CLOEXEC: i32 = 1;
+const WNOHANG: i32 = 1;
+const SIGKILL: i32 = 9;
+const SIGTERM: i32 = 15;
+const SIGINT: i32 = 2;
+const EBADF: i32 = 9;
+const EMFILE: i32 = 24;

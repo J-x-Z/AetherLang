@@ -1,0 +1,180 @@
+use process::{Command, Child, ExitStatus, ProcessError, command_new, process_spawn, child_wait, child_poll, child_signal, process_status_code, pipeline_run, environment_get, environment_set, environment_unset, PROCESS_EXEC, PROCESS_CWD, PROCESS_DESCRIPTOR, PROCESS_ARGUMENT, PROCESS_FORK, PROCESS_PIPE, PROCESS_PROTOCOL};
+use fd::{Descriptor, Pipe, fd_pipe, fd_duplicate, fd_duplicate_to, fd_close, fd_read, fd_write_all, fd_open_write};
+use option::Option;
+use result::Result;
+use posix::{SIGTERM, WNOHANG, ECHILD, F_GETFD, ENOENT, EBADF, ENOMEM, EMFILE, EIO, EINVAL};
+extern "C" {
+    fn strcmp(a: *u8, b: *u8) -> i32;
+    fn getcwd(buffer: *u8, size: u64) -> *u8;
+    fn fcntl(descriptor: i32, command: i32, ...) -> i32;
+    fn waitpid(pid: i32, status: *i32, options: i32) -> i32;
+    fn close(descriptor: i32) -> i32;
+    fn sleep(seconds: u32) -> u32;
+}
+fn same(a: *u8, b: *u8) -> bool { a != (0 as *u8) && b != (0 as *u8) && strcmp(a,b) == 0 }
+fn descriptor_count() -> i32 {
+    let mut count: i32 = 0; let mut index: i32 = 0;
+    while index < 512 { if fcntl(index, F_GETFD) >= 0 { count = count + 1; } index = index + 1; }
+    count
+}
+fn no_children() -> bool {
+    let mut status: i32 = 0;
+    let pid: i32 = waitpid(-1, &status as *i32, WNOHANG);
+    pid == -1 && __errno_get() == ECHILD
+}
+fn producer() -> i32 {
+    let mut buffer: [u8;256] = [0;256];
+    let mut index: u64 = 0;
+    while index < 256 { buffer[index] = (index % 251) as u8; index = index + 1; }
+    index = 0;
+    while index < 4096 {
+        match fd_write_all(1, &buffer[0] as *u8, 256) { Result::Ok(_) => {}, Result::Err(_) => { return 70; }, }
+        index = index + 1;
+    }
+    17
+}
+fn transform() -> i32 {
+    let mut buffer: [u8;256] = [0;256];
+    loop {
+        let count: u64 = match fd_read(0, &buffer[0] as *u8, 256) { Result::Ok(value) => value, Result::Err(_) => { return 71; }, };
+        if count == 0 { return 19; }
+        let mut index: u64 = 0;
+        while index < count { buffer[index] = buffer[index] ^ 90; index = index + 1; }
+        match fd_write_all(1, &buffer[0] as *u8, count) { Result::Ok(_) => {}, Result::Err(_) => { return 72; }, }
+    }
+}
+fn consumer() -> i32 {
+    let mut buffer: [u8;256] = [0;256]; let mut total: u64 = 0;
+    loop {
+        let count: u64 = match fd_read(0, &buffer[0] as *u8, 256) { Result::Ok(value) => value, Result::Err(_) => { return 73; }, };
+        if count == 0 { break; }
+        let mut index: u64 = 0;
+        while index < count {
+            let expected: u8 = ((((total + index) % 256) % 251) as u8) ^ 90;
+            if buffer[index] != expected { return 74; }
+            index = index + 1;
+        }
+        total = total + count;
+    }
+    if total != 1048576 { return 75; }
+    match fd_write_all(1, "pipeline-ok\n\0" as *u8, 12) { Result::Ok(_) => {}, Result::Err(_) => { return 76; }, }
+    23
+}
+fn empty_status() -> ExitStatus { ExitStatus { exited: false, code: 0, signal: 0, raw: 0 } }
+fn main(argc: i32, argv: **u8) -> i32 {
+    if argc < 2 { return 1; }
+    let mode: *u8 = argv[1];
+    if same(mode, "write-zero\0" as *u8) {
+        match fd_write_all(1,"x\0" as *u8,1) {Result::Err(code)=>{if code==EIO{return 0;}return 90;},Result::Ok(_)=>{return 91;},}
+    }
+    if same(mode, "emit\0" as *u8) { return producer(); }
+    if same(mode, "transform\0" as *u8) { return transform(); }
+    if same(mode, "consume\0" as *u8) { return consumer(); }
+    if same(mode, "sleep\0" as *u8) { sleep(30); return 0; }
+    if same(mode, "exit127\0" as *u8) { return 127; }
+    if same(mode, "args-child\0" as *u8) {
+        if argc != 4 || !same(argv[2], "hello world\0" as *u8) || !same(argv[3], "; touch INJECTED\0" as *u8) { return 77; }
+        return 37;
+    }
+    if same(mode, "env-child\0" as *u8) {
+        let mut cwd: [u8;256] = [0;256];
+        if argc != 3 || getcwd(&cwd[0] as *u8,256) == (0 as *u8) || !same(&cwd[0] as *u8,argv[2]) { return 78; }
+        if !same(environment_get("AETHER_CHILD_ONLY\0" as *u8),"isolated\0" as *u8) || environment_get("USER\0" as *u8) != (0 as *u8) { return 79; }
+        return 0;
+    }
+    if same(mode, "streams-child\0" as *u8) {
+        match fd_write_all(1,"out\0" as *u8,3) { Result::Ok(_) => {}, Result::Err(_) => {return 80;}, }
+        match fd_write_all(2,"err\0" as *u8,3) { Result::Ok(_) => {}, Result::Err(_) => {return 81;}, }
+        return 0;
+    }
+    if same(mode, "signal\0" as *u8) {
+        let args: [*u8;3] = [argv[0],"sleep\0" as *u8,0 as *u8];
+        let command: Command = command_new(&args[0] as **u8);
+        let mut child: Child = match process_spawn(&command as *Command) {Result::Ok(value)=>value,Result::Err(_)=>{return 2;},};
+        match child_poll(&child as *Child) { Result::Ok(value) => {match value {Option::None=>{},Option::Some(_)=>{return 3;},}},Result::Err(_)=>{return 4;}, }
+        match child_signal(&child as *Child,SIGTERM) {Result::Ok(_)=>{},Result::Err(_)=>{return 5;},}
+        let status: ExitStatus = match child_wait(&child as *Child) {Result::Ok(value)=>value,Result::Err(_)=>{return 6;},};
+        if status.exited || status.signal != SIGTERM || process_status_code(status) != 143 {return 7;}
+        match child_wait(&child as *Child) {Result::Ok(value)=>{if value.signal != SIGTERM{return 8;}},Result::Err(_)=>{return 9;},}
+        if !no_children() {return 10;}
+        return 0;
+    }
+    if same(mode,"argv\0" as *u8) || same(mode,"exit-status\0" as *u8) {
+        let role: *u8 = if same(mode,"argv\0" as *u8) {"args-child\0" as *u8} else {"exit127\0" as *u8};
+        let args: [*u8;5] = [argv[0],role,"hello world\0" as *u8,"; touch INJECTED\0" as *u8,0 as *u8];
+        let command: Command = command_new(&args[0] as **u8);
+        let mut child: Child = match process_spawn(&command as *Command) {Result::Ok(value)=>value,Result::Err(_)=>{return 11;},};
+        let status: ExitStatus = match child_wait(&child as *Child) {Result::Ok(value)=>value,Result::Err(_)=>{return 12;},};
+        let expected: i32 = if same(mode,"argv\0" as *u8) {37} else {127};
+        if !status.exited || status.code != expected || !no_children() {return 13;}
+        return 0;
+    }
+    if same(mode,"envcwd\0" as *u8) {
+        if argc != 5 {return 14;}
+        let mut before: [u8;256]=[0;256]; let mut after: [u8;256]=[0;256];
+        if getcwd(&before[0] as *u8,256)==(0 as *u8){return 15;}
+        let args: [*u8;4]=[argv[3],"env-child\0" as *u8,argv[2],0 as *u8];
+        let environment: [*u8;3]=[argv[4],"AETHER_CHILD_ONLY=isolated\0" as *u8,0 as *u8];
+        let mut command: Command=command_new(&args[0] as **u8); command.envp=&environment[0] as **u8; command.cwd=argv[2];
+        let mut child: Child=match process_spawn(&command as *Command){Result::Ok(value)=>value,Result::Err(_)=>{return 16;},};
+        let status: ExitStatus=match child_wait(&child as *Child){Result::Ok(value)=>value,Result::Err(_)=>{return 17;},};
+        if !status.exited || status.code!=0{return 18;}
+        if getcwd(&after[0] as *u8,256)==(0 as *u8) || !same(&before[0] as *u8,&after[0] as *u8){return 19;}
+        if environment_get("AETHER_CHILD_ONLY\0" as *u8)!=(0 as *u8){return 20;}
+        match environment_set("AETHER_PROCESS_EMPTY\0" as *u8,"\0" as *u8){Result::Ok(_)=>{},Result::Err(_)=>{return 21;},}
+        let empty: *u8=environment_get("AETHER_PROCESS_EMPTY\0" as *u8);
+        if empty==(0 as *u8) || empty[0]!=0{return 22;}
+        match environment_unset("AETHER_PROCESS_EMPTY\0" as *u8){Result::Ok(_)=>{},Result::Err(_)=>{return 23;},}
+        if environment_get("AETHER_PROCESS_EMPTY\0" as *u8)!=(0 as *u8){return 24;}
+        return 0;
+    }
+    if same(mode,"swap\0" as *u8) {
+        if argc!=4{return 25;}
+        let mut first:Descriptor=match fd_open_write(argv[2],false){Result::Ok(value)=>value,Result::Err(_)=>{return 26;},};
+        let mut second:Descriptor=match fd_open_write(argv[3],false){Result::Ok(value)=>value,Result::Err(_)=>{return 27;},};
+        let mut out:Descriptor=match fd_duplicate(1){Result::Ok(value)=>value,Result::Err(_)=>{return 28;},};
+        let mut err:Descriptor=match fd_duplicate(2){Result::Ok(value)=>value,Result::Err(_)=>{return 29;},};
+        match fd_duplicate_to(first.value,1){Result::Ok(_)=>{},Result::Err(_)=>{return 30;},}
+        match fd_duplicate_to(second.value,2){Result::Ok(_)=>{},Result::Err(_)=>{return 31;},}
+        let args:[*u8;3]=[argv[0],"streams-child\0" as *u8,0 as *u8];
+        let mut command:Command=command_new(&args[0] as **u8);command.stdout_fd=2;command.stderr_fd=1;
+        let spawned:Result<Child,ProcessError>=process_spawn(&command as *Command);
+        fd_duplicate_to(out.value,1);fd_duplicate_to(err.value,2);
+        fd_close(&out as *Descriptor);fd_close(&err as *Descriptor);fd_close(&first as *Descriptor);fd_close(&second as *Descriptor);
+        let mut child:Child=match spawned{Result::Ok(value)=>value,Result::Err(_)=>{return 32;},};
+        let status:ExitStatus=match child_wait(&child as *Child){Result::Ok(value)=>value,Result::Err(_)=>{return 33;},};
+        if !status.exited || status.code!=0{return 34;}
+        return 0;
+    }
+    if same(mode,"closed-stdin\0" as *u8) {close(0);}
+    if argc<3{return 35;}
+    let mut output:Descriptor=match fd_open_write(argv[2],false){Result::Ok(value)=>value,Result::Err(_)=>{return 36;},};
+    let emit:[*u8;3]=[argv[0],"emit\0" as *u8,0 as *u8];
+    let transform_args:[*u8;3]=[argv[0],"transform\0" as *u8,0 as *u8];
+    let consume:[*u8;3]=[argv[0],"consume\0" as *u8,0 as *u8];
+    let missing:[*u8;2]=["/aetherlang/missing-executable\0" as *u8,0 as *u8];
+    let mut commands:[Command;3]=[command_new(&emit[0] as **u8),command_new(&transform_args[0] as **u8),command_new(&consume[0] as **u8)];
+    commands[2].stdout_fd=output.value;
+    if same(mode,"exec-failure\0" as *u8){commands[1].argv=&missing[0] as **u8;}
+    if same(mode,"cwd-failure\0" as *u8){commands[1].cwd="/aetherlang/missing-directory\0" as *u8;}
+    if same(mode,"fd-failure\0" as *u8){commands[1].stderr_fd=500;}
+    if same(mode,"argument-failure\0" as *u8){commands[1].stderr_fd=-2;}
+    let before:i32=descriptor_count();
+    let mut statuses:[ExitStatus;3]=[empty_status(),empty_status(),empty_status()];
+    let result:Result<(),ProcessError>=pipeline_run(&commands[0] as *Command,3,&statuses[0] as *ExitStatus);
+    let after:i32=descriptor_count();
+    fd_close(&output as *Descriptor);
+    if before!=after || !no_children(){return 37;}
+    let expected:i32=if same(mode,"argument-failure\0" as *u8){PROCESS_ARGUMENT}else{if same(mode,"close-failure\0" as *u8){PROCESS_PIPE}else{if same(mode,"exec-failure\0" as *u8){PROCESS_EXEC}else{if same(mode,"cwd-failure\0" as *u8){PROCESS_CWD}else{if same(mode,"fd-failure\0" as *u8){PROCESS_DESCRIPTOR}else{if same(mode,"fork-failure\0" as *u8){PROCESS_FORK}else{if same(mode,"pipe-failure\0" as *u8){PROCESS_PIPE}else{if same(mode,"protocol-failure\0" as *u8){PROCESS_PROTOCOL}else{0}}}}}}}};
+    match result {
+        Result::Ok(_)=>{if expected!=0{return 38;}},
+        Result::Err(failure)=>{
+            if expected!=failure.stage{return 39;}
+            let expected_code:i32=if expected==PROCESS_ARGUMENT{EINVAL}else{if same(mode,"close-failure\0" as *u8){EIO}else{if expected==PROCESS_EXEC || expected==PROCESS_CWD{ENOENT}else{if expected==PROCESS_DESCRIPTOR{EBADF}else{if expected==PROCESS_FORK{ENOMEM}else{if expected==PROCESS_PIPE{EMFILE}else{EIO}}}}}};
+            if failure.code!=expected_code{return 41;}
+            return 0;
+        },
+    }
+    if !statuses[0].exited || statuses[0].code!=17 || !statuses[1].exited || statuses[1].code!=19 || !statuses[2].exited || statuses[2].code!=23{return 40;}
+    return 0;
+}
