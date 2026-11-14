@@ -9,7 +9,8 @@ T01–T20保留本轮20项语言基础任务：让开发者能够安装工具链
 - `[ ]` 待完成；`[ ] 部分完成` 表示已有可验证子项，但整项尚未达标；只有验收条件、对应提交与证据齐备后改为`[x]`。
 - 每次实现先看本文件的“下一项具体实施”与根目录HANDOFF；完成一个子项就更新状态、提交和证据，避免重复全面审计。
 - 当前没有任何整项被标为完成。审计/整理清单已完成，不能代替实现。
-- 最新功能提交：`cd2569b698eea33710a55c2a0701923e4007c049`，闭合N03字面量转义/字节保真及字符显式整数转换；此前JXZ数组接口为`a8a6c20`。29组原基线问题以及N01/N02仍待修复。
+- 最新功能提交：`c964ccbf9eee4c294ac3bfb1f8641fe8eadcf395`，闭合N04兼容extern声明与唯一C ABI函数定义；此前N03字面量为`cd2569b`，JXZ数组接口为`a8a6c20`。29组原基线问题以及N01/N02仍待修复。
+- N04已完成：兼容的`extern "C"`声明可解析到同模块或其他已加载模块的唯一非泛型`#[no_mangle]`定义；类型/变参/重复函数体冲突仍拒绝，C ABI void规范化，真实函数体效果不被extern遮盖。独立包`WORK/releases/extern-definitions-20261115/manifest.json`；编译器SHA256 `d3b915d2000e8242a2d09e1358b74f0584a6c070c0d251825a3c77f0558653ce`。Shell pin未更新、产品未联验。
 - N03已完成：主前端与Script共用escape decoder，Core对齐字符串规则；未知/畸形转义报错，ASCII `\xHH`、Unicode `\u{...}`、UTF-8位置、字符码点转换和C后端NUL相邻数字均有真实运行回归。独立版本包`WORK/releases/literal-escapes-20261115/manifest.json`，编译器SHA256 `8e67c244d52a6f04536504f4a8df7888d9ed02570c25329061c3479c630c008b`。新工具链8e67c244的Shell GUI联验与pin更新未执行。
 - 追加实际阻塞N01：Shell的递归`Vec<Node>`元素保留空fields占位类型，合法引用转换被E2100拒绝。本线已用冻结编译器独立复现，归入T02/T04。证据在`WORK/language-blockers/recursive-value/language-side-receipt.json`；尚未修复。
 - 追加目标缺陷N02：本机macOS27.2/SDK27.0，冻结编译器LLVM native对象的minos为28.0，最终binary为27.0；显式`aarch64-apple-macosx27.0`时两者均为27.0。本线已独立编译/链接并检查Mach-O元数据，直接Clang链接确认newer-version警告；aethc成功链接路径丢弃stderr。未执行该探针程序、未修复，归T07/T18；证据`WORK/language-blockers/darwin-native-target/results.json`。
@@ -17,6 +18,7 @@ T01–T20保留本轮20项语言基础任务：让开发者能够安装工具链
 
 | 已有进展 | 所属主线任务 | 提交与证据 | 尚缺 |
 | --- | --- | --- | --- |
+| N04：同/跨模块C ABI兼容声明合并到唯一Aether实现，省略/显式Unit返回统一 | T02、T07、T18 | `c964ccb`；`WORK/extern-definitions/receipt.json`：原4行复现check+双后端执行通过；160 Cargo、98定向检查、独立15命令、49 ABI、103完整自举、22工作负载及JXZ各19通过 | 未扩张Core子集；原窄整数ABI等T07缺陷仍待修；新包Shell关联验收与pin更新未执行 |
 | Shell macOS arm64首阶段可运行交付，沿用原冻结工具链 | T17、T28 | Shell `bfe01906`，Glass `a076dacc`；Shell binary SHA `0585df50…cc8e`。`WORK/shell-acceptance/20261115-bfe0190/receipt.json`：已核对9份验收receipt与产物/lock/44个stdlib哈希；51 CLI、27编辑PTY、12 vi/job-control，以及两套Terminal PTY/GUI的原始结果归档 | 本线核对证据，未重跑产品；部分GUI IME/Unicode和单元证据按原交接复用前一候选。新语言工具链关联验收、明确更新lock、Linux宿主包及原生验收仍待完成；N01/N02绕过不算语言修复 |
 | N03：严格且统一的字面量转义、Unicode/char→integer、NUL字节保真；自举Core字符串同步 | T01、T02、T16、T18 | `cd2569b`；`WORK/literal-escapes/verification-final.json`；134单元+14driver+3tooling，220定向检查，完整四代自举103检查及每模式98语义用例+字节运行，22工作负载，JXZ两后端各19 | 仅这些子项完成；T02的f32/Self/add/递归类型、T16的外部符号捕获/u64 cast等仍未闭合；全工程/GPU复验未重跑 |
 | JXZ `[build] module_paths` / `link_objects`，支持有序、跨行路径数组，所有build/run/test透传独立argv | T13、T18 | `a8a6c20`；`WORK/jxz-native-inputs/results.json`：LLVM/C各19项、3项ASan/UBSan通过；版本包`WORK/releases/jxz-0.3.0-dev.1/manifest.json` | 本地依赖图/确定性记录/缓存语义等T13其余内容；全项目T18验收；新版JXZ的Shell关联验收及pin更新尚未执行 |
@@ -24,9 +26,9 @@ T01–T20保留本轮20项语言基础任务：让开发者能够安装工具链
 
 ## 当前事实与范围
 
-审计基线为本地分支 `work/aetherlang-upgrade` 的 `a6cc268977129a5e69c57de501e04586fabc6060`；该基线主编译器源码 `a017d18`。审计使用外置冻结的LLVM+C编译器 `aetherlang-upgrade-work/release/aethc`，SHA256 `b4d0d036575aa0db02ded37375ba9bdc754c15b5e1a991c22daef3840bc1eecd`。当前Cargo target/debug与target/release已更新为本次LLVM+C构建；原WORK/release保留旧审计二进制，新开发版独立冻结在WORK/releases/literal-escapes-20261115。不要混淆不同版本的证据。
+审计基线为本地分支 `work/aetherlang-upgrade` 的 `a6cc268977129a5e69c57de501e04586fabc6060`；该基线主编译器源码 `a017d18`。审计使用外置冻结的LLVM+C编译器 `aetherlang-upgrade-work/release/aethc`，SHA256 `b4d0d036575aa0db02ded37375ba9bdc754c15b5e1a991c22daef3840bc1eecd`。当前Cargo target/debug与target/release已更新为本次LLVM+C构建；原WORK/release保留旧审计二进制，最新开发版独立冻结在WORK/releases/extern-definitions-20261115；此前literal-escapes包保留。不要混淆不同版本的证据。
 
-三名子代理分别审查前端/自举、IR/后端、标准库/JXZ，主代理补充安装、输出失败、LSP 和编译器健壮性。该基线审计阶段进行了定向源码检查、真实编译/链接/运行和失败注入；没有修改编译器、运行库源码，没有重跑Cargo、全量回归、自举完整链或GPU验收。随后JXZ接口实现的独立提交和验证见上方进度表。
+三名子代理分别审查前端/自举、IR/后端、标准库/JXZ，主代理补充安装、输出失败、LSP 和编译器健壮性。该基线审计阶段进行了定向源码检查、真实编译/链接/运行和失败注入；没有修改编译器、运行库源码，没有重跑Cargo、全量回归、自举完整链或GPU验收。随后各项实现的独立提交和验证见上方进度表。
 
 基线审计整理 29 组可复现缺陷或能力不一致，**均仍待处理**；这不是29个独立根因，也不表示其他部分无缺陷。只有源码线索、未实现的长期能力、正向对照另行记录。旧测试通过依然是对应样例的有效证据，不能据此断言语言已经完整或正确。
 
@@ -63,7 +65,7 @@ T01–T20保留本轮20项语言基础任务：让开发者能够安装工具链
 | T04 | [ ] | P0 / 核心类型、模块与接口规则 | 补齐非空 tuple 的布局/投影/传参/返回；校验 interface/impl 的类型、方法签名、缺失和冲突实现及最小静态分派；保留模块身份并执行私有性；修复递归泛型元素占位类型未回填（N01），核实泛型实例化及未实例化模板检查政策。普通泛型实现继续使用。 | P01/P03/F04/N01修复，递归Vec实际插入/访问/释放可执行，合法组合两后端可执行，非法声明在语义阶段拒绝。Closure 在捕获/生命周期完整实现前明确标实验并诊断，不宣称已支持；其完整实现仍留在后续清单。 |
 | T05 | [ ] | P0 / 效果与契约真实执行 | 基于精确 callee 和 place 投影传播效果；写字段/索引/解引用一致；明确 requires/ensures 的静态检查、运行检查和失败语义，再实现；未证明契约不能成为优化假设。 | pure 非法写入被拒绝、不同类型同名方法互不干扰；契约失败在规定模式下可观察，O0/O2/O3遵守同一政策，不再静默忽略。 |
 | T06 | [ ] | P0 / 对齐分配与最小资源所有权 | 先修 Vec 对齐、溢出及扩容回滚；为资源 owner 明确 move/copy、借用和析构/显式转移边界，实施作用域退出清理；贯通 Vec、fd、Tensor、QuantumLease、提前 return 和 `?`。保留 raw pointer、unsafe 与低层分配能力。 | 超对齐元素实际读写正确；safe 使用不能复制 owner 后重复释放或逃逸失效引用；正常/错误/嵌套退出恰好释放一次，失败保留原对象；ASan/UBSan及资源计数通过。仅更换包装API不算闭合。 |
-| T07 | [ ] | P0 / 目标布局与完整 ABI 规则 | 共享target data layout，修usize/isize；按目标在声明、定义及调用点实施标量扩展、聚合布局和调用约定；统一一次解析的effective target（架构、平台、deployment与SDK选择）供代码生成和C编译/链接使用，明确显式目标/环境配置优先级，修N02而非硬编码本机系统版本；保留C后端作独立参照。 | 主机双向C ABI独立oracle覆盖signed/unsigned窄整数、float、聚合及变参，O0/O2/O3一致；Darwin native/显式target/deployment配置的对象与binary版本一致，LLVM/C对照完成链接运行，成功链接的有用警告不被吞；32位编译/链接/运行分别记录，不支持目标明确拒绝。 |
+| T07 | [ ] 部分完成 | P0 / 目标布局与完整 ABI 规则 | 共享target data layout，修usize/isize；按目标在声明、定义及调用点实施标量扩展、聚合布局和调用约定；统一一次解析的effective target（架构、平台、deployment与SDK选择）供代码生成和C编译/链接使用，明确显式目标/环境配置优先级，修N02而非硬编码本机系统版本；保留C后端作独立参照。 | 主机双向C ABI独立oracle覆盖signed/unsigned窄整数、float、聚合及变参，O0/O2/O3一致；Darwin native/显式target/deployment配置的对象与binary版本一致，LLVM/C对照完成链接运行，成功链接的有用警告不被吞；32位编译/链接/运行分别记录，不支持目标明确拒绝。 |
 | T08 | [ ] | P0 / 系统编程能力诚实落地 | 检查 interrupt/naked/asm 等目标属性；拆分 hosted 与 freestanding runtime/头文件；延续 volatile、atomic、FFI 的可控低层行为。 | 纯计算 no_std 能生成可链接对象；目标属性有正确对象级证据，未支持必须报错；对象成功不等于内核启动成功。中断功能完整支持需另有目标运行验收，不能以拒绝代替实现。 |
 | T09 | [ ] | P0 / 编译器健壮性与诊断 | 最小化深表达式崩溃；限制或消除危险递归，处理语法深度、递归实例化和诊断恢复；对词法、解析、类型边界做有界变异/模糊测试。 | I05及畸形输入得到有位置的诊断和非零退出，无 abort/挂死；限额前合法输入正常；主编译器与 LSP 不因单文件崩溃；保留最小回归。 |
 | T10 | [ ] | P1 / 可用的基础标准库 | 形成稳定模块清单；补齐持有长度的 Bytes/String、Vec、Option/Result、最小 Map 及必要迭代操作，统一分配/所有权/错误契约；修 LLVM FFI 和公开示例；迁移有实际消费者的旧模块。 | 每个稳定公开模块有消费者编译、链接、运行和失败测试；二进制/NUL、UTF-8、空值、容量边界可用；历史模块单列，不以语法通过冒充能力。JNI等可选集成未实测前保持实验状态且保留待办。 |

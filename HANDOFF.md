@@ -1,6 +1,6 @@
 # AetherLang 工程交接
 
-2026-11-14升级快照已交付；2026-11-15追加审计发现新的未修问题，当前不能视为稳定发布。仓库 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`，只做本地提交，未推送。原始起点 `aceff1522790df3edfe5c711db5884350ab1b44a`；最终功能源码 `0709b338b2582906f02f12a2558ab16b783ad086`；主编译器源码 `a017d18`。2026-11-14交付由原外置release/manifest.json标识；最新开发版源码为`cd2569b`，新版本包见末尾，当前Git HEAD可用`git rev-parse HEAD`查询。
+2026-11-14升级快照已交付；2026-11-15追加审计发现新的未修问题，当前不能视为稳定发布。仓库 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`，只做本地提交，未推送。原始起点 `aceff1522790df3edfe5c711db5884350ab1b44a`；最终功能源码 `0709b338b2582906f02f12a2558ab16b783ad086`；主编译器源码 `a017d18`。2026-11-14交付由原外置release/manifest.json标识；最新开发版源码为`c964ccb`，新版本包见末尾，当前Git HEAD可用`git rev-parse HEAD`查询。
 
 所有资产在 `/Volumes/WINDOWS/work/aetherlang-upgrade-work`（下称 WORK）。已有源码与历史证据保留；没有清理其他项目或修改全局Rust配置。远端NVIDIA验收任务目录 `/tmp/aetherlang-cudaq-20261114` 已取证并删除，未关闭设备或修改全局SDK。
 
@@ -19,7 +19,7 @@ sh scripts/build.sh llvm
 sh scripts/test.sh llvm
 ```
 
-Rust/Cargo1.100.0、LLVM21.1.8、AppleClang21；`c`选择C-only。一次只做一个Cargo构建。本机CARGO_HOME为外置离线缓存，其他机器可使用正常缓存。最后一次Cargo为LLVM+C，当前target/debug与target/release均支持LLVM/C。原冻结WORK/release保持不变；最新版本在WORK/releases/literal-escapes-20261115，带独立manifest与stdlib快照。
+Rust/Cargo1.100.0、LLVM21.1.8、AppleClang21；`c`选择C-only。一次只做一个Cargo构建。本机CARGO_HOME为外置离线缓存，其他机器可使用正常缓存。最后一次Cargo为LLVM+C，当前target/debug与target/release均支持LLVM/C。原冻结WORK/release保持不变；最新版本在WORK/releases/extern-definitions-20261115，带独立manifest与stdlib快照；此前literal-escapes包保留。
 
 自举：`python3 tests/bootstrap_core.py --compiler "$WORK/release/aethc-c" --work-dir "$WORK/bootstrap-repeat" --backend c`。完整链会真实执行自编译、工作负载与sanitizer；不是统计可编译模块。
 
@@ -94,3 +94,15 @@ Shell源码提交 `bfe01906da145b68ac434c3286b5480f9a68866e`，Glass验收索引
 本线只读核对Shell HEAD、实际binary hash、lock中的编译器/JXZ/44个stdlib文件及原release manifest hash；9份receipt逐项与验收索引SHA匹配，快照归档至 `WORK/shell-acceptance/20261115-bfe0190/`。原结果包括51 CLI、27编辑PTY、12真实vi/job-control、两套Terminal PTY和GUI；完整单元及部分IME/Unicode结果按Shell交接复用前一候选，不能都说成最终hash重跑。本线没有重新启动GUI/PTY测试。
 
 T17/T28记为部分完成：已有旧pin的macOS产品验收；新工具链聚焦联验/显式更新lock、Linux x86_64宿主aethc/JXZ包及真实Linux验收仍未完成。原固定发布继续保留。当前没有新增阻塞macOS核心的语言接口需求，N01/N02等已知语言问题仍按主线修复，不把应用绕过当作闭合。
+
+## 2026-11-15 N04：extern声明与唯一C ABI定义已闭合
+
+功能提交 `c964ccbf9eee4c294ac3bfb1f8641fe8eadcf395`。Shell的4行repro已分别用原b4d0d036与8e67c244冻结编译器复现E2003；新编译器check及C/LLVM O2实际执行通过，证据 `WORK/extern-definitions/baseline.json` 和 `original-repro-results.json`。
+
+主编译器共享C ABI签名登记允许兼容声明+唯一非泛型no_mangle定义，同/跨模块均可；类型别名按真实类型比较、参数名不参与比较、名义结构体仍区分。未知ABI、类型/返回/参数个数/变参冲突、函数/静态变量重名和重复函数体仍拒绝；泛型固定符号导出在特殊化前诊断，迁移方式是具体非泛型包装函数。IR只保留唯一定义，C ABI省略或显式Unit返回统一为void，实际函数体效果保持权威。最小自举Core子集没有新增attributes/modules能力。
+
+两名代理独立复核；其中15条独立探针通过。Cargo 138单元+22集成=160通过；`tests/extern_definitions.py`已接入scripts/test.sh，98项C/LLVM O0/O2/O3检查通过；49项聚合ABI含sanitizer通过；完整stage0→1→2→3→4共103检查、生成C固定点仍为`eaefb458043767b5d3559e13feb8a160bedb9f4f91d5ce990e31789ba776b813`；22组真实工作负载、JXZ两后端各19通过。完整证据 `WORK/extern-definitions/verification.json`；没有重跑全工程/GPU/Shell产品验收。
+
+独立包 `WORK/releases/extern-definitions-20261115/` 含aethc、aethc-core、重建JXZ双后端、44文件匹配stdlib和manifest。主编译器SHA256 `d3b915d2000e8242a2d09e1358b74f0584a6c070c0d251825a3c77f0558653ce`，3834616B，比上一开发版增加1248B；没有编译器RSS/运行速度改善声明。构建有Rust rust-objcopy缺libLLVM的非致命strip警告，产物构建和运行验证均成功，详见release-build.log。Mac arm64，仍依赖LLVM21动态库，安装stdlib需显式-I；Linux宿主交付待办不变。
+
+T02/T07/T18仅增加已验证子项。Shell当前固定发布、lock和trampoline未修改；本次新包供独立关联验收，不能把本线回调样例通过当作Shell产品已采用。原N01/N02及29组审计问题仍开放。下一项仍是B2/F05/B3/N01的已定型事实与类型身份传递，不重新全面审计。

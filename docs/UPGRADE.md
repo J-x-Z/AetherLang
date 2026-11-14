@@ -129,3 +129,9 @@ sh scripts/test.sh llvm
 - 当前没有自动析构、完整所有权/trait/closure/async/const-generics体系；数学不是完整JAX/JIT/vmap，量子不是QPU实机验证；Metal/Adreno与自动异构调度未实现。旧标准库未验证的模块不计入交付能力。
 
 下一项应先建立资源拥有者的不可隐式复制语义与作用域退出清理，覆盖提前return、Result传播和多资源失败路径。异构计算下一里程碑是同一16比特电路在CPU、NVIDIA、Metal及Adreno上有明确精度、峰值内存与同步证据；应先实现一个真实的新后端和能力查询，再扩大调度器。Shell可复用这轮进程/文件/管道基础，但本轮不替用户决定具体项目迁移。
+
+## 2026-11-15增量：跨模块C ABI回调定义（N04）
+
+提交`c964ccb`使同一或不同已加载模块的兼容extern C声明能够指向唯一no_mangle Aether函数体，不再因E2003拒绝合法回调。保留签名/变参/名义类型/重复定义检查，C ABI的Unit返回规范化为void；泛型固定符号需改为具体包装函数。详见LANGUAGE.md和MIGRATION.md。此能力没有扩大Core自举子集。
+
+原4行问题已复现并闭合。160 Cargo测试、98两后端O0/O2/O3定向检查、15独立探针命令、49聚合ABI检查、103完整自举检查、22真实负载及JXZ每后端19项通过。证据`WORK/extern-definitions/receipt.json`；独立开发包`WORK/releases/extern-definitions-20261115/manifest.json`。编译器3834616B，比上一开发包增加1248B；没有新的RSS/运行性能对比。Shell保持旧pin，本次没有产品联验或Linux宿主交付；主线其余问题见MAINLINE_TASKS.md。
