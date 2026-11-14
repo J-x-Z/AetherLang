@@ -1,0 +1,19 @@
+use fs::{File, write_file, file_open_write, file_write_line, file_close, file_error, file_is_open, file_raw_handle};
+extern "C" { fn setvbuf(file: *void, buffer: *u8, mode: i32, size: u64) -> i32; fn strcmp(a: *u8, b: *u8) -> i32; }
+fn main(argc: i32, argv: **u8) -> i32 {
+    if argc != 3 { return 1; }
+    if strcmp(argv[1], "write\0" as *u8) == 0 {
+        if write_file(argv[2], "abc\0" as *u8, 3) { return 2; }
+        return 0;
+    }
+    let mut file: File = file_open_write(argv[2]);
+    if !file_is_open(&file as *File) { return 3; }
+    // POSIX libc _IONBF=2 on the acceptance hosts: isolate newline write failure.
+    if setvbuf(file_raw_handle(&file as *File), 0 as *u8, 2, 0) != 0 { file_close(&file as *File); return 4; }
+    let accepted: bool = file_write_line(&file as *File, "abc\0" as *u8);
+    let failed: bool = file_error(&file as *File);
+    file_close(&file as *File);
+    if accepted || !failed { return 5; }
+    if !file_close(&file as *File) { return 6; }
+    return 0;
+}

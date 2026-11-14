@@ -1,5 +1,6 @@
 // AetherLang Standard Library - String Module
-// stdlib/string.aeth
+// Byte-oriented, NUL-terminated strings. Raw copy/concat require caller capacity;
+// copy_into/append_into check capacity. alloc/dup results must be deallocated.
 
 extern "C" {
     fn strlen(s: *u8) -> u64;
@@ -9,6 +10,7 @@ extern "C" {
     fn malloc(size: u64) -> *void;
     fn free(ptr: *void);
     fn memcpy(dest: *void, src: *void, n: u64) -> *void;
+    fn memmove(dest: *void, src: *void, n: u64) -> *void;
     fn memset(s: *void, c: i32, n: u64) -> *void;
 }
 
@@ -49,8 +51,34 @@ pub fn concat(dest: *u8, src: *u8) -> *u8 {
 
 // Duplicate a string (allocates new memory)
 pub fn dup(s: *u8) -> *u8 {
-    let l = strlen(s) + 1;
-    let new_s = malloc(l) as *u8;
-    strcpy(new_s, s);
+    if s == (0 as *u8) { return 0 as *u8; }
+    let l: u64 = strlen(s) + 1;
+    let new_s: *u8 = malloc(l) as *u8;
+    if new_s == (0 as *u8) { return new_s; }
+    memcpy(new_s as *void, s as *void, l);
     return new_s;
+}
+
+// Checked alternatives retain the original buffer on insufficient capacity.
+// Inputs are NUL-terminated strings; capacity includes the trailing NUL.
+pub fn copy_into(dest: *u8, capacity: u64, src: *u8) -> bool {
+    if dest == (0 as *u8) || src == (0 as *u8) { return false; }
+    let size: u64 = strlen(src);
+    if size >= capacity { return false; }
+    memmove(dest as *void, src as *void, size + 1);
+    return true;
+}
+
+pub fn append_into(dest: *u8, capacity: u64, src: *u8) -> bool {
+    if dest == (0 as *u8) || src == (0 as *u8) { return false; }
+    let mut used: u64 = 0;
+    while used < capacity {
+        if dest[used] == 0 { break; }
+        used = used + 1;
+    }
+    if used == capacity { return false; }
+    let size: u64 = strlen(src);
+    if size >= capacity - used { return false; }
+    memmove((dest + used) as *void, src as *void, size + 1);
+    return true;
 }

@@ -1,0 +1,64 @@
+use string::{len, equals, dup, dealloc, copy_into, append_into};
+use fs::{File, file_open_read, file_open_write, file_close, file_read_all, file_write, file_write_line, file_flush, file_error, file_eof, read_file, write_file, file_rename, file_delete, file_exists, dir_remove};
+use io::{File as IoFile, open_write, close, is_valid, println, flush};
+use args::{Args, args_init, args_count, args_get, args_has, args_positional};
+use path::{path_join, make_directories, directory_exists};
+use process::{process_run};
+use core::{my_println};
+extern "C" { fn free(ptr: *void); fn strcmp(a: *u8, b: *u8) -> i32; }
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    if argc > 1 {
+        if strcmp(argv[1], "--child\0" as *u8) == 0 {
+            if argc != 3 || strcmp(argv[2], "space ; literal\0" as *u8) != 0 { return 98; }
+            if !println("child %% literal\0" as *u8) || !flush() { return 99; }
+            return 37;
+        }
+    }
+    if argc != 5 { return 1; }
+    let mut args: Args = args_init(argc, argv);
+    if args_count(&args as *Args) != 5 { return 2; }
+    if args_get(&args as *Args, -1) != (0 as *u8) || args_get(&args as *Args, 5) != (0 as *u8) { return 3; }
+    if args_has(&args as *Args, "-literal\0" as *u8) { return 4; }
+    if !equals(args_positional(&args as *Args, 2), "-literal\0" as *u8) { return 5; }
+    let mut text: [u8; 12] = [0; 12];
+    if !copy_into(&text[0] as *u8, 12, "hello\0" as *u8) { return 6; }
+    if !append_into(&text[0] as *u8, 12, " world\0" as *u8) { return 7; }
+    if append_into(&text[0] as *u8, 12, "!\0" as *u8) { return 8; }
+    if !equals(&text[0] as *u8, "hello world\0" as *u8) || len(&text[0] as *u8) != 11 { return 9; }
+    let owned: *u8 = dup(&text[0] as *u8);
+    if owned == (0 as *u8) || !equals(owned, &text[0] as *u8) { return 10; }
+    dealloc(owned);
+    if dup(0 as *u8) != (0 as *u8) { return 11; }
+    let directory: *u8 = path_join(argv[1], "nested/path\0" as *u8);
+    if directory == (0 as *u8) || !make_directories(directory) || !directory_exists(directory) { return 12; }
+    if make_directories("\0" as *u8) { return 13; }
+    let path: *u8 = path_join(directory, "binary data\0" as *u8);
+    let renamed: *u8 = path_join(directory, "renamed data\0" as *u8);
+    let mut bytes: [u8; 5] = [65, 0, 66, 10, 67];
+    if !write_file(path, &bytes[0] as *u8, 5) { return 14; }
+    let mut file: File = file_open_read(path);
+    let mut buffer: [u8; 8] = [0; 8];
+    if file_read_all(&file as *File, &buffer[0] as *u8, 8) != 5 { return 15; }
+    if file_error(&file as *File) || !file_eof(&file as *File) { return 16; }
+    if !file_close(&file as *File) || !file_close(&file as *File) { return 17; }
+    if buffer[0] != 65 || buffer[1] != 0 || buffer[4] != 67 { return 18; }
+    if !file_rename(path, renamed) || file_exists(path) { return 19; }
+    let data: *u8 = read_file(renamed);
+    if data == (0 as *u8) || data[4] != 67 || data[5] != 0 { return 20; }
+    free(data as *void);
+    if !file_delete(renamed) || read_file(renamed) != (0 as *u8) { return 21; }
+    let mut output: IoFile = open_write(path);
+    if !is_valid(&output as *IoFile) { return 22; }
+    if !file_write_line(&output as *File, "line %%\0" as *u8) || !file_flush(&output as *File) { return 23; }
+    if close(&output as *IoFile) != 0 || is_valid(&output as *IoFile) || close(&output as *IoFile) != 0 { return 24; }
+    let mut child: [*u8; 4] = [argv[0], "--child\0" as *u8, "space ; literal\0" as *u8, 0 as *u8];
+    if process_run(&child[0] as **u8, path) != 37 { return 25; }
+    let captured: *u8 = read_file(path);
+    if captured == (0 as *u8) || !equals(captured, "child %% literal\n\0" as *u8) { return 26; }
+    free(captured as *void);
+    if !file_delete(path) || !dir_remove(directory) { return 27; }
+    free(path as *void); free(renamed as *void); free(directory as *void);
+    my_println("literal %% text\0" as *u8);
+    return 0;
+}

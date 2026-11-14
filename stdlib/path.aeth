@@ -1,0 +1,52 @@
+// Owned POSIX path strings and recursive directory creation.
+// path_join allocates; callers release its result with free().
+use fs::{dir_exists};
+extern "C" {
+    fn strlen(s: *u8) -> u64;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn memcpy(dest: *void, src: *void, size: u64) -> *void;
+    fn mkdir(path: *u8, mode: u32) -> i32;
+    fn perror(message: *u8);
+}
+
+pub fn path_join(directory: *u8, name: *u8) -> *u8 {
+    if directory == (0 as *u8) || name == (0 as *u8) { return 0 as *u8; }
+    let a: u64 = strlen(directory);
+    let b: u64 = strlen(name);
+    let result: *u8 = malloc(a + b + 2) as *u8;
+    if result == (0 as *u8) { return result; }
+    memcpy(result as *void, directory as *void, a);
+    result[a] = 47;
+    memcpy((result + a + 1) as *void, name as *void, b + 1);
+    return result;
+}
+
+pub fn directory_exists(path: *u8) -> bool { return dir_exists(path); }
+
+pub fn make_directories(path: *u8) -> bool {
+    if path == (0 as *u8) { return false; }
+    let length: u64 = strlen(path);
+    if length == 0 { return false; }
+    let copy: *u8 = malloc(length + 1) as *u8;
+    if copy == (0 as *u8) { return false; }
+    memcpy(copy as *void, path as *void, length + 1);
+    let mut i: u64 = 1;
+    while i <= length {
+        if copy[i] == 47 || copy[i] == 0 {
+            let saved: u8 = copy[i];
+            copy[i] = 0;
+            if mkdir(copy, 493) != 0 {
+                if !directory_exists(copy) {
+                    perror(copy);
+                    free(copy as *void);
+                    return false;
+                }
+            }
+            copy[i] = saved;
+        }
+        i = i + 1;
+    }
+    free(copy as *void);
+    return true;
+}
