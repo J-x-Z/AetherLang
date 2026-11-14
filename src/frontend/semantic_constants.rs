@@ -75,8 +75,12 @@ impl SemanticAnalyzer {
     pub(super) fn evaluate_scalar(&mut self, expr: &Expr, expected: Option<&ResolvedType>, visiting: &mut HashSet<String>) -> Result<TypedConstant> {
         let span = expr.span();
         let value = match expr {
+            Expr::Literal(Literal::Int(value, _)) => {
+                let ty = expected.filter(|ty| Self::is_integer(ty)).cloned().unwrap_or(ResolvedType::I64);
+                Self::integer_result(*value, &ty, span)?
+            }
             Expr::Literal(literal) => TypedConstant { ty: self.literal_type(literal), value: match literal {
-                Literal::Int(value, _) => ScalarConstant::Int(*value),
+                Literal::Int(_, _) => unreachable!(),
                 Literal::Float(value, _) => ScalarConstant::Float(*value),
                 Literal::Bool(value, _) => ScalarConstant::Bool(*value),
                 Literal::Char(value, _) => ScalarConstant::Char(*value),
@@ -87,15 +91,16 @@ impl SemanticAnalyzer {
                 self.evaluate_constant(&name.name, visiting)?
             }
             Expr::Cast { expr, ty, .. } => {
-                let source = self.evaluate_scalar(expr, None, visiting)?;
                 let target = self.resolve_type(ty)?;
+                let context = Self::wide_cast_context(expr, &target);
+                let source = self.evaluate_scalar(expr, context.as_ref(), visiting)?;
                 self.cast_constant(source, &target, span)?
             }
             Expr::Unary { op, expr: operand, .. } => {
                 let context = expected.filter(|ty| Self::is_numeric(ty));
                 // A negative signed literal must be range-checked after negation,
                 // so the magnitude 128 remains valid in an i8 initializer -128.
-                if *op == UnOp::Neg {
+                if *op == UnOp::Neg && matches!(operand.as_ref(), Expr::Literal(Literal::Int(_, _))) {
                     if let Some(value) = Self::integer_constant(expr) {
                         let ty = context.cloned().unwrap_or(ResolvedType::I64);
                         let result = Self::integer_result(value, &ty, span)?;
@@ -129,8 +134,16 @@ impl SemanticAnalyzer {
                 let context = if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr) {
                     expected.filter(|ty| Self::is_numeric(ty))
                 } else { None };
-                let mut lhs = self.evaluate_scalar(left, context, visiting)?;
-                let mut rhs = self.evaluate_scalar(right, context, visiting)?;
+                let (mut lhs, mut rhs) = if context.is_none() && Self::contextual_number(left) && !Self::contextual_number(right) {
+                    let rhs = self.evaluate_scalar(right, None, visiting)?;
+                    let lhs = self.evaluate_scalar(left, Some(&rhs.ty), visiting)?;
+                    (lhs, rhs)
+                } else {
+                    let lhs = self.evaluate_scalar(left, context, visiting)?;
+                    let hint = if context.is_none() && Self::contextual_number(right) { Some(&lhs.ty) } else { context };
+                    let rhs = self.evaluate_scalar(right, hint, visiting)?;
+                    (lhs, rhs)
+                };
                 let (left_type, right_type) = self.common_operand_types(left, lhs.ty.clone(), right, rhs.ty.clone());
                 self.check_binary_op(&left_type, *op, &right_type, span)?;
                 lhs = self.coerce_constant(lhs, &left_type, left)?;
@@ -169,11 +182,11 @@ impl SemanticAnalyzer {
     fn coerce_constant(&self, value: TypedConstant, expected: &ResolvedType, expr: &Expr) -> Result<TypedConstant> {
         if value.ty == *expected { return self.normalize_constant(value, expr.span()); }
         if !Self::literal_fits(expr, expected) { self.require_type(expected, &value.ty, expr.span())?; }
+        if let Some(number) = Self::integer_value(&value) {
+            if Self::is_integer(expected) { return Self::integer_result(number, expected, expr.span()); }
+        }
         let mut value = value;
         value.ty = expected.clone();
-        if let ScalarConstant::Int(number) = value.value {
-            if Self::is_integer(expected) { return Self::integer_result(number as i128, expected, expr.span()); }
-        }
         self.normalize_constant(value, expr.span())
     }
 

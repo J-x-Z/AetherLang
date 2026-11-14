@@ -1,0 +1,39 @@
+const SIGNED_MIN:i64=-9223372036854775808;
+const SIGNED_HEX:i64=-0x8000000000000000;
+const UNSIGNED_MAX:u64=18446744073709551615;
+const UNSIGNED_HEX:u64=0xffff_ffff_ffff_ffff;
+const HALF_MAX:u64=18446744073709551615 / 3;
+static HIGH:u64=0x8000000000000000;
+struct Wide { value:u64 }
+fn identity<T>(value:T)->T { value }
+fn choose<T>(first:T,second:T)->T { first }
+fn max_value()->u64 { 18446744073709551615 }
+fn main()->i32 {
+    let min:i64=-9223372036854775808;
+    let max:u64=18446744073709551615;
+    if min!=SIGNED_MIN || min!=SIGNED_HEX || ~min!=9223372036854775807 { return 1; }
+    if max!=UNSIGNED_MAX || max!=UNSIGNED_HEX || max!=max_value() { return 2; }
+    if max/3!=6148914691236517205 || HALF_MAX!=6148914691236517205 { return 3; }
+    if max%3!=0 || (max>>63)!=1 || max<=9223372036854775808 { return 4; }
+    if 18446744073709551615!=max || 18446744073709551615<max { return 5; }
+    let quotient:u64=18446744073709551615/3;
+    let wrapped:u64=18446744073709551615+1;
+    if quotient!=HALF_MAX || wrapped!=0 { return 6; }
+    let generic:u64=identity(18446744073709551615);
+    if generic!=max || choose(18446744073709551615,max)!=max { return 7; }
+    let array:[u64;2]=[18446744073709551615,9223372036854775808];
+    let field:Wide=Wide{value:18446744073709551615};
+    if array[0]!=max || array[1]!=HIGH || field.value!=max { return 8; }
+    let float_value:f64=max as f64;
+    if float_value!=18446744073709551616.0 { return 9; }
+    if (max as i64)!=-1 || (min as u64)!=HIGH { return 10; }
+    let unsigned_pattern:i32=match max { 18446744073709551615=>1,_=>0 };
+    let signed_pattern:i32=match min { -9223372036854775808=>1,_=>0 };
+    if unsigned_pattern!=1 || signed_pattern!=1 { return 11; }
+    let wrapped_min:i64=-(-9223372036854775808);
+    if wrapped_min!=min { return 12; }
+    let wrapped_cast:u64=(-(-9223372036854775808)) as u64;
+    if wrapped_cast!=HIGH || (18446744073709551615 as u64)!=max { return 13; }
+    if ((0xffffffffffffffff as u64) as u8)!=255 { return 14; }
+    0
+}

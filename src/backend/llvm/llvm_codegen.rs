@@ -1008,6 +1008,15 @@ impl LLVMCodeGen {
             
             let cpu = CString::new("generic").unwrap();
             let features = CString::new("").unwrap();
+            // Hosted Linux linkers commonly produce PIE executables by
+            // default. Static text relocations (notably R_X86_64_32 for a
+            // string address) cannot participate in that link. Keep the
+            // target default for freestanding none/elf and other platforms.
+            let relocation = if self.target_triple.split('-').any(|part| part == "linux") {
+                LLVMRelocMode::LLVMRelocPIC
+            } else {
+                LLVMRelocMode::LLVMRelocDefault
+            };
             
             let target_machine = LLVMCreateTargetMachine(
                 target,
@@ -1020,7 +1029,7 @@ impl LLVMCodeGen {
                     2 => LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault,
                     _ => LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive,
                 },
-                LLVMRelocMode::LLVMRelocDefault,
+                relocation,
                 LLVMCodeModel::LLVMCodeModelDefault
             );
             

@@ -82,3 +82,36 @@ fn recursive_reference_regions_terminate_and_preserve_escapes() {
     }
     fs::remove_dir_all(work).unwrap();
 }
+
+#[test]
+fn nested_enum_coverage_and_array_references_execute() {
+    let work = std::env::temp_dir().join(format!("aether-pattern-array-{}", std::process::id()));
+    fs::create_dir_all(&work).unwrap();
+    let compiler = env!("CARGO_BIN_EXE_aethc");
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/regressions/semantics/patterns_arrays.aeth");
+    for backend in if cfg!(feature = "llvm") {
+        vec!["c", "llvm"]
+    } else {
+        vec!["c"]
+    } {
+        for level in ["-O0", "-O2"] {
+            let binary = work.join(format!("patterns-{backend}-{level}"));
+            let built = run_bounded(
+                Command::new(compiler)
+                    .arg("build")
+                    .arg(&source)
+                    .args(["--backend", backend, level, "-o"])
+                    .arg(&binary),
+            );
+            assert!(
+                built.status.success(),
+                "{}",
+                String::from_utf8_lossy(&built.stderr)
+            );
+            let ran = run_bounded(&mut Command::new(binary));
+            assert!(ran.status.success(), "{backend}/{level}: {:?}", ran.status);
+        }
+    }
+    fs::remove_dir_all(work).unwrap();
+}

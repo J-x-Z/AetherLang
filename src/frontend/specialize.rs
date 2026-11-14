@@ -1653,6 +1653,14 @@ mod tests {
         assert!(matches!(&f.params[0].ty, Type::Named(n, _) if n == "u8"));
     }
     #[test]
+    fn wide_magnitudes_infer_from_return_context_and_later_typed_arguments() {
+        let p = compile("fn identity<T>(value:T)->T{value} fn choose<T>(a:T,b:T)->T{a} fn main(){let max:u64=identity(18446744073709551615);choose(18446744073709551615,max);}").unwrap();
+        for prefix in ["identity__spec_", "choose__spec_"] {
+            let f = function(&p, prefix);
+            assert!(matches!(&f.params[0].ty, Type::Named(n,_) if n == "u64"));
+        }
+    }
+    #[test]
     fn recursive_generic_function_uses_one_cached_instance() {
         let p = compile("fn again<T>(x: T, n: i64) -> T { if n == 0 { return x; } again(x, n - 1) } fn main() -> i64 { again(42, 5) }").unwrap();
         assert_eq!(

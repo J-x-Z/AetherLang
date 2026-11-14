@@ -691,7 +691,7 @@ pub enum AsmOperandKind {
 /// Literal value
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
-    Int(i64, Span),
+    Int(i128, Span),
     Float(f64, Span),
     String(String, Span),
     Char(char, Span),

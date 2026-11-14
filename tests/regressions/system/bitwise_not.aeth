@@ -1,0 +1,8 @@
+const MASK:u64=~0;
+fn main()->i32 {
+ let byte:u8=0;let bits:u8=~byte;if bits!=255{return 1;}
+ let negative:i32=1;if ~negative!= -2{return 2;}
+ let wide:u64=1;if ((~wide)^MASK)!=1{return 3;}
+ let min:i64=-9223372036854775808;if ~min!=9223372036854775807{return 4;}
+ return 0;
+}

@@ -1,0 +1,40 @@
+enum Inner { Number(i32), Empty }
+enum Outer { Wrapped(Inner), Bits(bool, bool), Empty }
+fn describe(value: Outer) -> i32 {
+    match value {
+        Outer::Wrapped(Inner::Number(n)) => n,
+        Outer::Wrapped(Inner::Empty) => 10,
+        Outer::Bits(true, _) => 20,
+        Outer::Bits(false, true) => 30,
+        Outer::Bits(false, false) => 40,
+        Outer::Empty => 50,
+    }
+}
+fn sum(values: &[i32; 2]) -> i32 { values[0] + values[1] }
+fn nested_sum(values: & &[i32; 2]) -> i32 { values[0] + values[1] }
+fn change(values: &mut [i32; 2]) { values[1] = 9; }
+fn first(values: &[i32; 2]) -> &i32 { &values[0] }
+fn swap(slot: **i32, replacement: *i32) -> i64 { *slot = replacement; 0 }
+fn main() -> i32 {
+    if describe(Outer::Wrapped(Inner::Number(7))) != 7 { return 1; }
+    if describe(Outer::Wrapped(Inner::Empty)) != 10 { return 2; }
+    if describe(Outer::Bits(true, false)) != 20 { return 3; }
+    if describe(Outer::Bits(false, true)) != 30 { return 4; }
+    if describe(Outer::Bits(false, false)) != 40 { return 5; }
+    if describe(Outer::Empty) != 50 { return 6; }
+    let mut values: [i32; 2] = [2, 3];
+    if sum(&values) != 5 { return 7; }
+    let borrowed: &[i32; 2] = &values;
+    if nested_sum(&borrowed) != 5 || *first(borrowed) != 2 { return 8; }
+    change(&mut values);
+    if sum(&values) != 11 { return 9; }
+    // A raw pointer to array still indexes whole arrays.
+    let raw: *[i32; 2] = &values as *[i32; 2];
+    if raw[0][1] != 9 { return 10; }
+    let mut old: i32 = 17; let mut new: i32 = 29;
+    let mut pointer: *i32 = &mut old as *i32;
+    let replacement: *i32 = &mut new as *i32;
+    if pointer[swap(&mut pointer as **i32, replacement)] != 17 { return 11; }
+    if *pointer != 29 { return 12; }
+    0
+}

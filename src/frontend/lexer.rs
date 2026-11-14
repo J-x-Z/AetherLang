@@ -153,8 +153,8 @@ impl Lexer {
                 .filter(|&&c| c != '_')
                 .collect();
             
-            return self.make_token(match i64::from_str_radix(&text[2..], 16) {
-                Ok(value) => TokenKind::IntLit(value),
+            return self.make_token(match u64::from_str_radix(&text[2..], 16) {
+                Ok(value) => TokenKind::IntLit(value as i128),
                 Err(_) => TokenKind::Invalid("invalid or out-of-range hexadecimal integer".into()),
             });
         }
@@ -213,8 +213,8 @@ impl Lexer {
                 _ => TokenKind::Invalid("invalid or out-of-range floating-point literal".into()),
             })
         } else {
-            self.make_token(match text.parse::<i64>() {
-                Ok(value) => TokenKind::IntLit(value),
+            self.make_token(match text.parse::<u64>() {
+                Ok(value) => TokenKind::IntLit(value as i128),
                 Err(_) => TokenKind::Invalid("invalid or out-of-range integer literal".into()),
             })
         }
@@ -578,8 +578,17 @@ mod tests {
     }
     #[test]
     fn malformed_literals_and_comments_are_not_silently_accepted() {
-        for source in ["9223372036854775808", "0x", "0x8000000000000000", "1e+", "1e999", "\"unterminated", "'7", "/* unfinished"] {
+        for source in ["18446744073709551616", "0x", "0x10000000000000000", "1e+", "1e999", "\"unterminated", "'7", "/* unfinished"] {
             assert!(matches!(Lexer::new(source, 0).next_token().kind, TokenKind::Invalid(_)), "{}", source);
+        }
+    }
+
+    #[test]
+    fn full_width_integer_magnitudes_remain_positive_until_type_checking() {
+        let tokens = Lexer::new("-9223372036854775808 18446744073709551615 0x8000_0000_0000_0000 0xffff_ffff_ffff_ffff", 0).tokenize();
+        assert!(matches!(tokens[0].kind, TokenKind::Minus));
+        for (index, expected) in [(1, 1i128 << 63), (2, u64::MAX as i128), (3, 1i128 << 63), (4, u64::MAX as i128)] {
+            assert!(matches!(tokens[index].kind, TokenKind::IntLit(value) if value == expected));
         }
     }
 

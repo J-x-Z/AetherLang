@@ -281,6 +281,7 @@ impl CCodeGen {
         match val {
             Value::Register(reg) => self.get_var(*reg),
             Value::Constant(c) => match c {
+                Constant::Int(n) if *n == i64::MIN => "INT64_MIN".to_string(),
                 Constant::Int(n) => format!("{}LL", n),
                 Constant::Float(f) if f.is_nan() => "NAN".into(),
                 Constant::Float(f) if f.is_infinite() => if f.is_sign_negative() { "(-INFINITY)".into() } else { "INFINITY".into() },
@@ -294,7 +295,7 @@ impl CCodeGen {
                 if self.current_func_name == "main" && self.current_func_param_count == 2 {
                     match i {
                         0 => "argc".to_string(),
-                        1 => "argv".to_string(),
+                        1 => "((uint8_t**)argv)".to_string(),
                         _ => format!("_arg{}", i),
                     }
                 } else {
@@ -1127,7 +1128,7 @@ impl CCodeGen {
         // foreign function receives a prototype, including its variadic marker.
         const HEADER_FUNCTIONS: &[&str] = &[
             "abort", "exit", "malloc", "calloc", "realloc", "free", "atoi", "atol", "atof", "strtol", "strtoul",
-            "system", "getenv", "setenv", "unsetenv", "qsort", "bsearch", "abs", "labs", "llabs", "rand", "srand",
+            "system", "getenv", "setenv", "unsetenv", "realpath", "mkstemp", "qsort", "bsearch", "abs", "labs", "llabs", "rand", "srand",
             "puts", "putchar", "getchar", "printf", "fprintf", "sprintf", "snprintf", "scanf", "sscanf", "fscanf",
             "fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "rewind", "fgets", "fputs", "fflush", "feof", "ferror", "clearerr",
             "tmpfile", "remove", "rename", "perror", "setbuf", "setvbuf", "fileno", "fgetc", "fputc", "getc", "putc", "ungetc", "freopen",

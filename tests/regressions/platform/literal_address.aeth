@@ -1,0 +1,5 @@
+extern "C" { fn puts(text:*u8)->i32; }
+@no_mangle
+pub fn aether_literal_address()->*u8 { "position independent literal" }
+@no_mangle
+pub fn aether_print_literal()->i32 { puts("position independent literal") }

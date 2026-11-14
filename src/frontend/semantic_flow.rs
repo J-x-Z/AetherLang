@@ -1215,20 +1215,28 @@ impl<'a> Flow<'a> {
                 let Some(mut base) = self.address(expr, live)? else {
                     return Ok(None);
                 };
-                if self.expr(index, true, live)?.is_none() {
-                    return Ok(None);
+                // Snapshot the collection reference before evaluating the
+                // index, just as the native address calculation does.
+                let temporaries = self.temporary_loans.len();
+                while matches!(base.ty.unqualified(), ResolvedType::Reference { .. }) {
+                    let value = self.read(&base, false, expr.span())?;
+                    self.hold_temporary(&value, expr.span())?;
+                    base = self.indirect(value, expr.span())?;
                 }
-                if matches!(base.ty.unqualified(), ResolvedType::Pointer(_)) {
+                let raw = matches!(base.ty.unqualified(), ResolvedType::Pointer(_));
+                if raw {
                     let value = self.read(&base, false, expr.span())?;
                     base = self.indirect(value, expr.span())?;
-                } else {
-                    if matches!(base.ty.unqualified(), ResolvedType::Reference { .. }) {
-                        let value = self.read(&base, false, expr.span())?;
-                        base = self.indirect(value, expr.span())?;
-                    }
+                }
+                let index_value = self.expr(index, true, live);
+                self.temporary_loans.truncate(temporaries);
+                if index_value?.is_none() {
+                    return Ok(None);
+                }
+                if !raw {
                     let projection = Projection::Index(
                         if let Expr::Literal(Literal::Int(index, _)) = &**index {
-                            Some(*index)
+                            i64::try_from(*index).ok()
                         } else {
                             None
                         },
@@ -1241,6 +1249,7 @@ impl<'a> Flow<'a> {
                 }
                 base
             }
+
             _ => {
                 let Some(value) = self.expr(expression, false, live)? else {
                     return Ok(None);
@@ -1842,7 +1851,11 @@ impl<'a> Flow<'a> {
                 self.child_type(&ty, &Projection::Field(field.name.clone()))
             }
             Expr::Index { expr, .. } => {
-                self.child_type(&self.expression_type(expr), &Projection::Index(None))
+                let mut ty = self.expression_type(expr);
+                while let ResolvedType::Reference { inner, .. } = ty.unqualified() {
+                    ty = (**inner).clone();
+                }
+                self.child_type(&ty, &Projection::Index(None))
             }
             Expr::Call { func, .. } => match self.expression_type(func) {
                 ResolvedType::Function { ret, .. } => *ret,

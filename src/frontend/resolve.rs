@@ -123,6 +123,21 @@ impl Resolver {
                 if public { exports.symbols.insert(name.into(), resolved); }
             }
         }
+        // Foreign declarations keep their linker spelling and are importable
+        // from the module that declares them. Compatible repeated ABI
+        // declarations are merged later by semantic signature checking.
+        for item in &items {
+            if let Item::Extern(block) = item {
+                for foreign in &block.items {
+                    let (ForeignItem::Fn {name,..} | ForeignItem::Static {name,..}) = foreign;
+                    if names.get(&name.name).is_some_and(|previous| previous != &name.name) {
+                        return Err(Error::ModuleError(format!("foreign declaration '{}' conflicts with a local definition in {}",name.name,path.display())));
+                    }
+                    names.insert(name.name.clone(),name.name.clone());
+                    exports.symbols.insert(name.name.clone(),name.name.clone());
+                }
+            }
+        }
         // Materialize declared modules before imports so inline modules work too.
         for item in &items {
             if let Item::Module(module) = item {

@@ -659,7 +659,7 @@ impl Parser {
             if self.consume(&TokenKind::Semicolon) {
                 let size = match self.current_kind() {
                     TokenKind::IntLit(n) => {
-                        let n = *n as usize;
+                        let n = usize::try_from(*n).map_err(|_| Error::Expected("array size representable on this host".into(), self.current().span))?;
                         self.advance();
                         n
                     }
@@ -1147,6 +1147,11 @@ impl Parser {
                     expr: Box::new(expr),
                 }
             }
+            TokenKind::Tilde => {
+                self.advance();
+                let expr = self.parse_primary()?;
+                Expr::Unary { op: UnOp::BitNot, span: token.span.merge(&expr.span()), expr: Box::new(expr) }
+            }
             TokenKind::Not => {
                 self.advance();
                 let expr = self.parse_primary()?;
@@ -1310,7 +1315,7 @@ impl Parser {
                 if self.consume(&TokenKind::Semicolon) {
                     let count = match self.current_kind() {
                         TokenKind::IntLit(n) => {
-                            let n = *n as usize;
+                            let n = usize::try_from(*n).map_err(|_| Error::Expected("array repeat count representable on this host".into(), self.current().span))?;
                             self.advance();
                             n
                         }
@@ -1573,6 +1578,16 @@ impl Parser {
             TokenKind::IntLit(n) => {
                 self.advance();
                 Ok(Pattern::Literal(Literal::Int(*n, token.span)))
+            }
+            TokenKind::Minus => {
+                self.advance();
+                let magnitude = self.current().clone();
+                if let TokenKind::IntLit(value) = magnitude.kind {
+                    self.advance();
+                    Ok(Pattern::Literal(Literal::Int(-value, token.span.merge(&magnitude.span))))
+                } else {
+                    Err(Error::Expected("integer literal after '-' in pattern".into(), magnitude.span))
+                }
             }
             TokenKind::StringLit(s) => {
                 self.advance();
@@ -2337,9 +2352,19 @@ mod tests {
 
     #[test]
     fn test_malformed_literals_fail_before_semantics() {
-        for source in ["fn main() { let x: i64 = 9223372036854775808; }", "fn main() { let x: f64 = 1e+; }", "fn main() {} /* unfinished"] {
+        for source in ["fn main() { let x: u64 = 18446744073709551616; }", "fn main() { let x: f64 = 1e+; }", "fn main() {} /* unfinished"] {
             assert!(matches!(parse(source), Err(Error::UnexpectedToken { .. })));
         }
+    }
+
+    #[test]
+    fn integer_boundary_types_are_deferred_and_negative_patterns_preserved() {
+        let program = parse("fn f(x:i64)->i64 { let high:u64=18446744073709551615; match x { -9223372036854775808=>1,_=>0 } }").unwrap();
+        let Item::Function(function) = &program.items[0] else {panic!("function")};
+        let statements: Vec<_> = function.body.stmts.iter().filter(|stmt| !matches!(stmt, Stmt::Empty {..})).collect();
+        assert_eq!(statements.len(), 2);
+        assert!(matches!(statements[0], Stmt::Let {value:Some(Expr::Literal(Literal::Int(value,_))),..} if *value == u64::MAX as i128));
+        assert!(matches!(statements[1], Stmt::Expr(Expr::Match {arms,..}) if matches!(&arms[0].pattern,Pattern::Literal(Literal::Int(value,_)) if *value == i64::MIN as i128)));
     }
 
     #[test]

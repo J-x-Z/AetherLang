@@ -471,9 +471,15 @@ impl IRGenerator {
     fn generate_expr(&mut self, expr: &ast::Expr) -> Result<Value> {
         if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
         let value = self.generate_expr_inner(expr)?;
-        if self.semantic_facts.as_ref().and_then(|facts| self.current_fn.as_ref().and_then(|function| facts.expr_types.get(&(function.name.clone(),expr.span())))) == Some(&ResolvedType::NEVER) {
+        let checked_type = self.semantic_facts.as_ref().and_then(|facts| self.current_fn.as_ref().and_then(|function| facts.expr_types.get(&(function.name.clone(),expr.span())))).cloned();
+        if checked_type == Some(ResolvedType::NEVER) {
             if self.get_current_terminator().is_none() { self.set_terminator_current(Terminator::Unreachable); }
             return Ok(Value::Unit);
+        }
+        // Constants carry raw 64-bit bits in IR. Apply the semantic signedness
+        // before consumers select division, comparisons, shifts or conversion.
+        if matches!(&checked_type, Some(ResolvedType::Primitive(primitive)) if primitive.is_integer()) {
+            return Ok(self.coerce_value(value, &Self::resolved_type_to_ir(checked_type.as_ref().unwrap())?));
         }
         Ok(value)
     }
@@ -1084,7 +1090,7 @@ impl IRGenerator {
     /// Generate a constant value from a literal
     fn generate_literal(&self, lit: &ast::Literal) -> Value {
         match lit {
-            ast::Literal::Int(n, _) => Value::Constant(Constant::Int(*n)),
+            ast::Literal::Int(n, _) => Value::Constant(Constant::Int(*n as i64)),
             ast::Literal::Float(n, _) => Value::Constant(Constant::Float(*n)),
             ast::Literal::Bool(b, _) => Value::Constant(Constant::Bool(*b)),
             ast::Literal::String(s, _) => Value::Constant(Constant::String(s.clone())),
@@ -1172,7 +1178,30 @@ impl IRGenerator {
                 }
             }
             Expr::Index { expr, index, .. } => {
-                let (base, base_ty) = self.address_or_temporary(expr)?;
+                let (mut base, mut base_ty) = self.address_or_temporary(expr)?;
+                // References and raw pointers share an IR representation, but
+                // indexing has different source semantics: &array indexes its
+                // elements, while *[T; N] advances by a whole array. Preserve
+                // that distinction using the checked expression type.
+                let mut source_ty = self.semantic_facts.as_ref().and_then(|facts| {
+                    self.current_fn.as_ref().and_then(|function| {
+                        facts.expr_types.get(&(function.name.clone(), expr.span())).cloned()
+                    })
+                });
+                while let Some(ResolvedType::Reference { inner, .. }) = source_ty {
+                    let pointee = match base_ty.unqualified() {
+                        IRType::Ptr(inner) => (**inner).clone(),
+                        _ => return Err(crate::utils::Error::CodeGen("reference index base lost its pointer representation".into())),
+                    };
+                    base = self.load_address(base, base_ty);
+                    base_ty = pointee;
+                    source_ty = Some(*inner);
+                }
+                // Snapshot a pointer value before evaluating the index, which
+                // may itself mutate the variable holding that pointer.
+                if matches!(base_ty.unqualified(), IRType::Ptr(_)) {
+                    base = self.load_address(base, base_ty.clone());
+                }
                 let index = self.generate_expr(index)?;
                 let dest = self.alloc_register();
                 let base_volatile = matches!(base_ty, IRType::Volatile(_));
@@ -1182,9 +1211,8 @@ impl IRGenerator {
                         (Instruction::ArrayElementPtr { dest, ptr: base, index, array_ty: IRType::Array(Box::new(ty.clone()), size) }, if base_volatile { IRType::Volatile(Box::new(ty)) } else { ty })
                     }
                     IRType::Ptr(element) => {
-                        let ptr = self.load_address(base, IRType::Ptr(element.clone()));
                         let ty = *element;
-                        (Instruction::GetElementPtr { dest, ptr, index, elem_ty: ty.clone() }, ty)
+                        (Instruction::GetElementPtr { dest, ptr: base, index, elem_ty: ty.clone() }, ty)
                     }
                     _ => return Err(crate::utils::Error::CodeGen("index requires an array or pointer".into())),
                 };
@@ -1436,7 +1464,7 @@ impl IRGenerator {
         match expr {
             ast::Expr::Literal(lit) => {
                 match lit {
-                    ast::Literal::Int(n, _) => Some(*n),
+                    ast::Literal::Int(n, _) => i64::try_from(*n).ok(),
                     ast::Literal::Bool(b, _) => Some(if *b { 1 } else { 0 }),
                     _ => None,
                 }

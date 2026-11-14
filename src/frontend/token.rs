@@ -113,8 +113,9 @@ pub enum TokenKind {
     // ============ Identifiers and Literals ============
     /// Identifier (variable name, function name, etc.)
     Ident(String),
-    /// Integer literal
-    IntLit(i64),
+    /// Unsigned source magnitude, retained through contextual type checking.
+    /// The lexer accepts up to u64::MAX; unary minus remains an AST operation.
+    IntLit(i128),
     /// Floating-point literal
     FloatLit(f64),
     /// String literal

@@ -126,4 +126,10 @@ for backend in args.backends:
         run(f'union payload/{backend}/O{level}/build', [compiler, payload, '--backend', backend, f'-O{level}', '-o', binary])
         run(f'union payload/{backend}/O{level}/run', [binary])
 
+for backend in args.backends:
+    for level in [0,2]:
+        binary=work/f'bitnot-{backend}-{level}'
+        run('bitwise not build',[compiler,root/'bitwise_not.aeth','--backend',backend,f'-O{level}','-o',binary])
+        run('bitwise not run',[binary])
+
 print(f'{len(records)} system checks passed; evidence: {work / "results.json"}')

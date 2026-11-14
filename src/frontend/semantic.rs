@@ -1321,6 +1321,9 @@ impl SemanticAnalyzer {
     }
     fn check_expr_inner(&mut self, expr: &Expr) -> Result<ResolvedType> {
         match expr {
+            Expr::Literal(Literal::Int(value, span)) if *value > i64::MAX as i128 || *value < i64::MIN as i128 => {
+                Err(Error::Expected("i64 integer literal, or an explicit representable integer context".into(), *span))
+            }
             Expr::Literal(lit) => Ok(self.literal_type(lit)),
             Expr::Layout { query, ty, field, span } => {
                 let resolved = self.resolve_type(ty)?;
@@ -1401,8 +1404,8 @@ impl SemanticAnalyzer {
 
 
             Expr::Binary { left, op, right, span } => {
-                let left_ty = self.check_expr(left)?;
                 if matches!(op, BinOp::Assign | BinOp::AddAssign | BinOp::SubAssign | BinOp::MulAssign | BinOp::DivAssign) {
+                    let left_ty = self.check_expr(left)?;
                     self.check_assignable(left)?;
                     let right_ty = if matches!(left_ty, ResolvedType::Pointer(_)) && matches!(op, BinOp::AddAssign | BinOp::SubAssign) {
                         self.check_expr(right)?
@@ -1418,8 +1421,17 @@ impl SemanticAnalyzer {
                     }
                     return Ok(if left_ty == ResolvedType::NEVER || right_ty == ResolvedType::NEVER { ResolvedType::NEVER } else { ResolvedType::UNIT });
                 }
-                let saved_breaks=self.loop_breaks.clone();
-                let right_ty = self.check_expr(right)?;
+                let (left_ty, right_ty, saved_breaks) = if Self::contextual_number(left) && !Self::contextual_number(right) {
+                    let saved = self.loop_breaks.clone();
+                    let right_ty = self.check_expr(right)?;
+                    let left_ty = if Self::is_numeric(&right_ty) { self.check_expected_expr(left, &right_ty)? } else { self.check_expr(left)? };
+                    (left_ty, right_ty, saved)
+                } else {
+                    let left_ty = self.check_expr(left)?;
+                    let saved = self.loop_breaks.clone();
+                    let right_ty = if Self::contextual_number(right) && Self::is_numeric(&left_ty) { self.check_expected_expr(right, &left_ty)? } else { self.check_expr(right)? };
+                    (left_ty, right_ty, saved)
+                };
                 let skips=matches!((op,left.as_ref()),(BinOp::And,Expr::Literal(Literal::Bool(false,_)))|(BinOp::Or,Expr::Literal(Literal::Bool(true,_))));
                 let mandatory=matches!((op,left.as_ref()),(BinOp::And,Expr::Literal(Literal::Bool(true,_)))|(BinOp::Or,Expr::Literal(Literal::Bool(false,_))));
                 if left_ty==ResolvedType::NEVER || skips {self.loop_breaks=saved_breaks;}
@@ -1431,6 +1443,9 @@ impl SemanticAnalyzer {
 
             Expr::Try { expr, span } => self.check_try(expr, *span),
 
+            Expr::Unary { op: UnOp::Neg, expr: operand, .. } if matches!(operand.as_ref(), Expr::Literal(Literal::Int(_, _))) => {
+                self.check_expected_expr(expr, &ResolvedType::I64)
+            }
             Expr::Unary { op, expr, span } => {
                 let ty = self.check_expr(expr)?;
                 if ty == ResolvedType::NEVER {return Ok(ty);}
@@ -1554,8 +1569,15 @@ impl SemanticAnalyzer {
                 let Expr::Range { start: Some(start), end: Some(end), .. } = iter.as_ref() else {
                     return Err(Error::Expected("bounded integer range (start..end)".into(), iter.span()));
                 };
-                let start_ty = self.check_expr(start)?;
-                let end_ty = self.check_expr(end)?;
+                let (start_ty, end_ty) = if Self::contextual_number(start) && !Self::contextual_number(end) {
+                    let end_ty = self.check_expr(end)?;
+                    let start_ty = if Self::is_integer(&end_ty) { self.check_expected_expr(start, &end_ty)? } else { self.check_expr(start)? };
+                    (start_ty, end_ty)
+                } else {
+                    let start_ty = self.check_expr(start)?;
+                    let end_ty = if Self::contextual_number(end) && Self::is_integer(&start_ty) { self.check_expected_expr(end, &start_ty)? } else { self.check_expr(end)? };
+                    (start_ty, end_ty)
+                };
                 let (start_ty, end_ty) = self.common_operand_types(start, start_ty, end, end_ty);
                 if !Self::is_integer(&start_ty) {
                     return Err(Error::TypeMismatch { expected: "integer range".into(), got: format!("{:?}", start_ty), span: iter.span() });
@@ -1716,9 +1738,11 @@ impl SemanticAnalyzer {
 
 
             Expr::Cast { expr, ty, span } => {
-                let source_ty = self.check_expr(expr)?;
-                if source_ty==ResolvedType::NEVER {return Ok(source_ty);}
                 let target_ty = self.resolve_type(ty)?;
+                let source_ty = if let Some(context) = Self::wide_cast_context(expr, &target_ty) {
+                    self.check_expected_expr(expr, &context)?
+                } else { self.check_expr(expr)? };
+                if source_ty==ResolvedType::NEVER {return Ok(source_ty);}
                 
                 // Allow explicit casts in the following cases:
                 // 1. Integer to Integer (any size)
@@ -1880,6 +1904,33 @@ impl SemanticAnalyzer {
         }
     }
 
+    fn contextual_number(expr: &Expr) -> bool {
+        match expr {
+            Expr::Literal(Literal::Int(_, _) | Literal::Float(_, _)) => true,
+            Expr::Unary { op: UnOp::Neg | UnOp::BitNot, expr, .. } => Self::contextual_number(expr),
+            Expr::Binary { left, op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr, right, .. } => Self::contextual_number(left) && Self::contextual_number(right),
+            _ => false,
+        }
+    }
+    // Existing representable source literals keep normal explicit-cast
+    // truncation. An otherwise unrepresentable positive magnitude can obtain
+    // its source type from an explicit wide integer/pointer cast.
+    fn wide_cast_context(expr: &Expr, target: &ResolvedType) -> Option<ResolvedType> {
+        fn requires_wide(expr: &Expr) -> bool {
+            match expr {
+                Expr::Literal(Literal::Int(value, _)) => *value > i64::MAX as i128 || *value < i64::MIN as i128,
+                Expr::Unary { op: UnOp::Neg, expr: operand, .. } if matches!(operand.as_ref(), Expr::Literal(Literal::Int(_, _))) => !SemanticAnalyzer::literal_fits(expr, &ResolvedType::I64),
+                Expr::Unary { expr, .. } => requires_wide(expr),
+                Expr::Binary { left, right, .. } => requires_wide(left) || requires_wide(right),
+                _ => false,
+            }
+        }
+        if requires_wide(expr) && Self::integer_constant(expr).is_some() {
+            let context = if matches!(target, ResolvedType::Pointer(_)) { ResolvedType::Primitive(PrimitiveType::U64) } else { target.clone() };
+            if Self::is_integer(&context) && Self::literal_fits(expr, &context) { return Some(context); }
+        }
+        None
+    }
     fn literal_fits(expr: &Expr, expected: &ResolvedType) -> bool {
         if let Some(value) = Self::integer_constant(expr) {
             if let ResolvedType::Primitive(primitive) = expected {
@@ -1918,6 +1969,41 @@ impl SemanticAnalyzer {
         Ok(ty)
     }
     fn check_expected_expr_inner(&mut self, expr: &Expr, expected: &ResolvedType) -> Result<ResolvedType> {
+        // Resolve integer magnitudes before assigning the default i64 type.
+        // The sole signed-minimum exception is the operand of direct unary -.
+        if let Expr::Literal(Literal::Int(_, _)) = expr {
+            if Self::is_integer(expected) {
+                if !Self::literal_fits(expr, expected) { return Err(Error::Expected(format!("integer literal representable as {expected:?}"), expr.span())); }
+                return Ok(expected.clone());
+            }
+        }
+        if let Expr::Unary { op: UnOp::Neg, expr: operand, .. } = expr {
+            if Self::is_integer(expected) && matches!(operand.as_ref(), Expr::Literal(Literal::Int(_, _))) {
+                if !Self::literal_fits(expr, expected) { return Err(Error::Expected(format!("integer literal representable as {expected:?}"), expr.span())); }
+                self.remember_expr_type(operand, expected);
+                return Ok(expected.clone());
+            }
+        }
+        // Propagate the chosen arithmetic type to every operand. Casting only
+        // the result after a signed division would corrupt high u64 literals.
+        if Self::is_numeric(expected) {
+            match expr {
+                Expr::Binary { left, op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr, right, .. } => {
+                    let left_ty = self.check_expected_expr(left, expected)?;
+                    let right_ty = self.check_expected_expr(right, expected)?;
+                    if left_ty == ResolvedType::NEVER || right_ty == ResolvedType::NEVER { return Ok(ResolvedType::NEVER); }
+                    let Expr::Binary {op,span,..}=expr else {unreachable!()};
+                    return self.check_binary_op(&left_ty, *op, &right_ty, *span);
+                }
+                Expr::Unary { op: UnOp::Neg | UnOp::BitNot, expr: operand, span } => {
+                    let ty = self.check_expected_expr(operand, expected)?;
+                    if ty == ResolvedType::NEVER { return Ok(ty); }
+                    let Expr::Unary{op,..}=expr else {unreachable!()};
+                    return self.check_unary_op(*op, &ty, *span);
+                }
+                _ => {}
+            }
+        }
         // Propagate context into aggregate elements and branch values.
         match (expr, expected) {
             (Expr::Match { expr: value, arms, span }, _) => {
@@ -1968,34 +2054,25 @@ impl SemanticAnalyzer {
 
     fn check_match(&mut self, expr: &Expr, arms: &[MatchArm], span: Span, expected: Option<&ResolvedType>) -> Result<ResolvedType> {
         let scrutinee = self.check_expr(expr)?;
-        let mut catch_all = false;
-        let mut true_case = false;
-        let mut false_case = false;
-        let mut covered_variants = HashSet::new();
         let mut result = ResolvedType::NEVER;
         let mut first_value: Option<&Expr> = None;
         for arm in arms {
             self.symbols.enter_scope();
             let arm_result = (|| {
                 match &arm.pattern {
-                    Pattern::Wildcard { .. } => { if arm.guard.is_none() { catch_all = true; } }
+                    Pattern::Wildcard { .. } => {}
                     Pattern::Binding { name, mutable, span } => {
                         self.symbols.define(Symbol { name: name.name.clone(), kind: SymbolKind::Variable,
                             ty: scrutinee.clone(), span: *span, mutable: *mutable })?;
-                        if arm.guard.is_none() { catch_all = true; }
                     }
                     Pattern::Literal(literal) => {
                         if matches!(literal, Literal::String(_, _) | Literal::Float(_, _)) {
                             return Err(Error::Expected("integer, bool, or char match pattern".into(), literal.span()));
                         }
                         self.check_expected_expr(&Expr::Literal(literal.clone()), &scrutinee)?;
-                        if arm.guard.is_none() {
-                            if let Literal::Bool(value, _) = literal { if *value { true_case = true; } else { false_case = true; } }
-                        }
                     }
-                    Pattern::Variant { variant, fields, .. } => {
+                    Pattern::Variant { .. } => {
                         self.bind_pattern(&arm.pattern, &scrutinee)?;
-                        if arm.guard.is_none() && fields.iter().all(enums::irrefutable) { covered_variants.insert(variant.name.clone()); }
                     }
                     _ => return Err(Error::Expected("scalar or enum variant pattern".into(), arm.span)),
                 }
@@ -2015,10 +2092,7 @@ impl SemanticAnalyzer {
                 result = left;
             }
         }
-        let enum_complete = if let ResolvedType::Enum { name } = &scrutinee {
-            self.facts.enum_variants.get(name).is_some_and(|variants|variants.iter().all(|(name,_)|covered_variants.contains(name)))
-        } else { false };
-        if !catch_all && !enum_complete && !(scrutinee == ResolvedType::BOOL && true_case && false_case) {
+        if scrutinee != ResolvedType::NEVER && !self.match_exhaustive(&scrutinee, arms) {
             return Err(Error::Expected("exhaustive match: add an unguarded wildcard or binding arm".into(), span));
         }
         Ok(result)
@@ -2073,10 +2147,16 @@ impl SemanticAnalyzer {
                 _ => Err(Error::CannotDeref { span: *span }),
             },
             Expr::Index { expr, index, span } => {
-                let base = self.check_place_type(expr)?;
+                let mut base = self.check_place_type(expr)?;
                 let index_ty = self.check_expr(index)?;
                 if base == ResolvedType::NEVER || index_ty == ResolvedType::NEVER { return Ok(ResolvedType::NEVER); }
                 if !Self::is_integer(&index_ty) { return Err(Error::TypeMismatch { expected: "integer".into(), got: format!("{:?}", index_ty), span: index.span() }); }
+                // References borrow their collection; raw pointers retain
+                // pointer arithmetic semantics (a pointer to an array indexes
+                // whole arrays, whereas a reference indexes array elements).
+                while let ResolvedType::Reference { inner, .. } = base.unqualified() {
+                    base = (**inner).clone();
+                }
                 match base.unqualified() {
                     ResolvedType::Array { elem, .. } | ResolvedType::Slice(elem) => Ok(if matches!(base, ResolvedType::Volatile(_)) { ResolvedType::Volatile(elem.clone()) } else { (**elem).clone() }),
                     ResolvedType::Pointer(elem) => Ok((**elem).clone()),
@@ -2331,7 +2411,7 @@ impl SemanticAnalyzer {
         match expr {
             Expr::Literal(lit) => {
                 match lit {
-                    Literal::Int(n, _) => Ok(ConstValue::Int(*n)),
+                    Literal::Int(n, span) => i64::try_from(*n).map(ConstValue::Int).map_err(|_| Error::Expected("const generic integer within i64 range".into(), *span)),
                     Literal::Bool(b, _) => Ok(ConstValue::Bool(*b)),
                     _ => Err(Error::TypeMismatch {
                         expected: "integer or boolean constant".to_string(),
@@ -2502,6 +2582,41 @@ mod tests {
         rejects("fn f() { let x: i64 = 1; let y: i32 = x; }");
         rejects("fn f() { let x: i32 = 1; let y: u32 = x; }");
         accepts("fn f() { let x: i64 = 1; let y: i32 = x as i32; }");
+    }
+
+    #[test]
+    fn full_width_literals_have_context_before_defaulting_or_lowering() {
+        for source in [
+            "fn f()->i64{-9223372036854775808}",
+            "fn f()->u64{18446744073709551615}",
+            "fn f()->u64{18446744073709551615/3}",
+            "fn f()->u64{18446744073709551615+1}",
+            "fn f(x:u64)->bool{18446744073709551615==x && x>=9223372036854775808}",
+            "fn f()->u64{18446744073709551615 as u64}",
+            "fn f()->*u8{18446744073709551615 as *u8}",
+            "fn f()->u64{(-(-9223372036854775808)) as u64}",
+            "fn f(x:u64)->i32{match x {18446744073709551615=>1,_=>0}}",
+            "fn f(x:i64)->i32{match x {-9223372036854775808=>1,_=>0}}",
+        ] { accepts(source); }
+        for source in [
+            "fn f(){18446744073709551615;}",
+            "fn f()->i64{9223372036854775808}",
+            "fn f()->i64{-9223372036854775809}",
+            "fn f()->u64{-1}",
+            "fn f()->u32{4294967296}",
+            "fn f(x:i64)->bool{x==18446744073709551615}",
+            "fn f()->u8{18446744073709551615 as u8}",
+        ] { rejects(source); }
+        let source="const MIN:i64=-9223372036854775808;const MAX:u64=18446744073709551615;const Q:u64=18446744073709551615/3;const EQ:bool=18446744073709551615==MAX;const LOW:u8=(18446744073709551615 as u64) as u8;";
+        let program=Parser::new(Lexer::new(source,0)).parse_program().unwrap();
+        let mut analyzer=SemanticAnalyzer::new();analyzer.analyze(&program).unwrap();
+        for (name, expected) in [("MIN",i64::MIN),("MAX",-1),("Q",6148914691236517205),("LOW",255)] {
+            assert!(matches!(analyzer.facts.constants[name].value,ScalarConstant::Int(value) if value==expected), "{name}");
+        }
+        assert!(matches!(analyzer.facts.constants["EQ"].value,ScalarConstant::Bool(true)));
+        rejects("const BAD:i64=-(-9223372036854775808);");
+        rejects("const BAD:i8=-(127+1);");
+        rejects("const BAD:u64=18446744073709551615+1;");
     }
 
     #[test]

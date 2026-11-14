@@ -179,6 +179,60 @@ impl SemanticAnalyzer {
             )),
         }
     }
+    /// Pattern-matrix specialization keeps correlations between payload
+    /// columns. Checking each nested variant independently would incorrectly
+    /// accept Pair(true, _) | Pair(_, true), which misses Pair(false, false).
+    pub(super) fn match_exhaustive(&self, ty: &ResolvedType, arms: &[MatchArm]) -> bool {
+        let rows = arms
+            .iter()
+            .filter(|arm| arm.guard.is_none())
+            .map(|arm| vec![Some(&arm.pattern)])
+            .collect::<Vec<_>>();
+        self.exhaustive_matrix(&rows, std::slice::from_ref(ty))
+    }
+    fn exhaustive_matrix(&self, rows: &[Vec<Option<&Pattern>>], types: &[ResolvedType]) -> bool {
+        if types.is_empty() {
+            return !rows.is_empty();
+        }
+        if rows
+            .iter()
+            .any(|row| row.iter().all(|pattern| pattern.is_none_or(irrefutable)))
+        {
+            return true;
+        }
+        let wildcard = |pattern: Option<&Pattern>| pattern.is_none_or(irrefutable);
+        match &types[0] {
+            ResolvedType::Enum { name } => {
+                let Some(variants) = self.facts.enum_variants.get(name) else { return false; };
+                variants.iter().all(|(name, payload)| {
+                    let specialized = rows.iter().filter_map(|row| {
+                        let mut fields = if wildcard(row[0]) { vec![None; payload.len()] }
+                        else if let Some(Pattern::Variant { variant, fields, .. }) = row[0] {
+                            if variant.name != *name { return None; }
+                            fields.iter().map(Some).collect()
+                        } else { return None; };
+                        fields.extend_from_slice(&row[1..]);
+                        Some(fields)
+                    }).collect::<Vec<_>>();
+                    let mut remaining = payload.clone(); remaining.extend_from_slice(&types[1..]);
+                    self.exhaustive_matrix(&specialized, &remaining)
+                })
+            }
+            ty if *ty == ResolvedType::BOOL => [false, true].iter().all(|value| {
+                let specialized = rows.iter().filter(|row| {
+                    wildcard(row[0]) || matches!(row[0], Some(Pattern::Literal(Literal::Bool(found, _))) if found == value)
+                }).map(|row| row[1..].to_vec()).collect::<Vec<_>>();
+                self.exhaustive_matrix(&specialized, &types[1..])
+            }),
+            _ => {
+                // Scalar literal lists do not establish coverage of an open
+                // domain; an unguarded wildcard/binding must cover the rest.
+                let defaults = rows.iter().filter(|row| wildcard(row[0]))
+                    .map(|row| row[1..].to_vec()).collect::<Vec<_>>();
+                self.exhaustive_matrix(&defaults, &types[1..])
+            }
+        }
+    }
     pub(super) fn check_try(&mut self, expr: &Expr, span: Span) -> Result<ResolvedType> {
         let operand = self.check_expr(expr)?;
         if operand == ResolvedType::NEVER {
@@ -228,6 +282,31 @@ mod tests {
         ] {
             assert!(check(invalid).is_err(), "{invalid}");
         }
+    }
+    #[test]
+    fn nested_pattern_matrix_preserves_payload_correlations() {
+        let prefix = "enum I { A(i32), B } enum E { Wrap(I), Pair(bool,bool), Empty } fn f(e:E)->i32{match e{";
+        let full = format!("{prefix}E::Wrap(I::A(x))=>x,E::Wrap(I::B)=>0,E::Pair(true,_)=>1,E::Pair(false,true)=>2,E::Pair(false,false)=>3,E::Empty=>4}}}}");
+        assert!(check(&full).is_ok(), "{:?}", check(&full));
+        for arms in [
+            "E::Wrap(I::A(x))=>x,E::Pair(_,_)=>0,E::Empty=>0",
+            "E::Wrap(_)=>0,E::Pair(true,_)=>1,E::Pair(_,true)=>2,E::Empty=>0",
+            "E::Wrap(_)=>0,E::Pair(true,_)=>1,E::Pair(false,_) if true=>2,E::Empty=>0",
+        ] {
+            assert!(check(&format!("{prefix}{arms}}}}}")).is_err(), "{arms}");
+        }
+    }
+    #[test]
+    fn array_references_index_elements_and_preserve_mutability() {
+        for source in [
+            "fn sum(a:&[i32;2])->i32{a[0]+a[1]}",
+            "fn sum(a:& &[i32;2])->i32{a[0]+a[1]}",
+            "fn set(a:&mut [i32;2]){a[0]=7;}",
+        ] {
+            assert!(check(source).is_ok(), "{source}: {:?}", check(source));
+        }
+        assert!(check("fn set(a:&[i32;2]){a[0]=7;}").is_err());
+        assert!(check("fn bad()->&i32{let a:[i32;2]=[1,2];let r:&[i32;2]=&a;&r[0]}").is_err());
     }
     #[test]
     fn result_propagation_checks_error_type_and_preserves_ok_type() {
