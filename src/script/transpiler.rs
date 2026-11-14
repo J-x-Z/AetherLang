@@ -11,6 +11,8 @@ type Result<T> = std::result::Result<T, String>;
 
 pub struct Transpiler {
     output: String,
+    pub source_lines: Vec<usize>,
+    source_line: usize,
     indent: usize,
     source_file: Option<String>,
     functions: HashMap<String, String>,
@@ -24,7 +26,7 @@ pub struct Transpiler {
 
 impl Transpiler {
     pub fn new() -> Self {
-        Self { output: String::new(), indent: 0, source_file: None,
+        Self { output: String::new(), source_lines: Vec::new(), source_line: 1, indent: 0, source_file: None,
             functions: HashMap::new(), locals: BTreeMap::new(), assigned: HashSet::new(),
             return_type: "void".into(), is_main: false, loop_depth: 0, temporary: 0 }
     }
@@ -36,6 +38,7 @@ impl Transpiler {
 
     pub fn transpile(&mut self, module: &ScriptModule) -> Result<String> {
         self.output.clear();
+        self.source_lines.clear();
         self.functions.clear();
         for statement in &module.stmts {
             let Stmt::FunctionDef(function) = statement else {
@@ -63,6 +66,7 @@ impl Transpiler {
 
     fn function(&mut self, function: &FunctionDef) -> Result<()> {
         if function.is_comptime { return Err("Script @comptime execution is not implemented".into()); }
+        self.source_line = function.span.line;
         self.locals.clear();
         self.assigned.clear();
         self.loop_depth = 0;
@@ -82,16 +86,20 @@ impl Transpiler {
             copies.push(format!("{} = {};", param.name, internal));
         }
         let outer_output = std::mem::take(&mut self.output);
+        let outer_lines = std::mem::take(&mut self.source_lines);
         self.indent = 1;
         for copy in copies { self.line(&copy); }
         self.statements(&function.body)?;
         if self.is_main && !Self::ends_in_return(&function.body) { self.line("return 0;"); }
         let body = std::mem::replace(&mut self.output, outer_output);
+        let body_lines = std::mem::replace(&mut self.source_lines, outer_lines);
+        self.source_line = function.span.line;
         self.indent = 0;
         self.line(&format!("fn {}({}) -> {} {{", function.name, parameters.join(", "), self.return_type));
         self.indent = 1;
         for (name, ty) in self.locals.clone() { self.line(&format!("let mut {}: {};", name, ty)); }
         self.output.push_str(&body);
+        self.source_lines.extend(body_lines);
         self.indent = 0;
         self.line("}");
         Ok(())
@@ -112,6 +120,18 @@ impl Transpiler {
     }
 
     fn statement(&mut self, statement: &Stmt) -> Result<()> {
+        self.source_line = match statement {
+            Stmt::FunctionDef(x) => x.span.line, Stmt::If(x) => x.span.line,
+            Stmt::While(x) => x.span.line, Stmt::For(x) => x.span.line,
+            Stmt::Return(x) => x.span.line, Stmt::Assign(x) => x.span.line,
+            Stmt::Expr(x) => x.span().line, _ => self.source_line,
+        };
+        self.statement_inner(statement).map_err(|message| {
+            if message.starts_with("line ") { message } else { format!("line {}: {}", self.source_line, message) }
+        })
+    }
+
+    fn statement_inner(&mut self, statement: &Stmt) -> Result<()> {
         match statement {
             Stmt::Assign(assignment) => {
                 let Expr::Identifier { name, .. } = &assignment.target else {
@@ -265,6 +285,7 @@ impl Transpiler {
     }
 
     fn line(&mut self, text: &str) {
+        self.source_lines.push(self.source_line);
         self.output.push_str(&"    ".repeat(self.indent));
         self.output.push_str(text); self.output.push('\n');
     }

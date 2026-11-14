@@ -8,3 +8,7 @@ pub mod semantic;
 pub mod module;
 
 pub mod resolve;
+
+pub mod session;
+
+pub mod symbols;

@@ -12,7 +12,7 @@ mod script;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::{fs, path::{Path, PathBuf}, process::{self, Command}, sync::atomic::{AtomicU64, Ordering}};
-use frontend::{resolve::Resolver, semantic::SemanticAnalyzer};
+use frontend::{resolve::Resolver, session::{Session, Diagnostic}};
 use middle::{ir_gen::IRGenerator, optimize::Optimizer, ir_printer::print_ir};
 use backend::CCodeGen;
 #[cfg(feature = "llvm")]
@@ -20,6 +20,9 @@ use backend::codegen::CodeGen;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Backend { C, Llvm }
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ErrorFormat { Human, Json }
 
 #[derive(Parser, Debug)]
 #[command(name = "aethc", version, about = "AetherLang compiler")]
@@ -54,6 +57,15 @@ struct Cli {
     cc: Option<PathBuf>,
     #[arg(short, long, global = true)]
     quiet: bool,
+    /// Diagnostic output format (stable codes and UTF-8 spans in JSON mode)
+    #[arg(long, value_enum, default_value = "human", global = true)]
+    error_format: ErrorFormat,
+    /// Additional native object or archive to link (repeatable)
+    #[arg(long, global = true)]
+    link_object: Vec<PathBuf>,
+    /// Native library name passed to the linker (repeatable)
+    #[arg(short = 'l', long, global = true)]
+    link_library: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -62,6 +74,10 @@ enum Commands {
     Build { input: PathBuf },
     /// Parse, resolve imports and type-check without generating code
     Check { input: PathBuf },
+    /// Emit resolved symbols and references as JSON
+    Symbols { input: PathBuf },
+    /// Serve the Language Server Protocol over stdin/stdout
+    Lsp,
     Version,
 }
 
@@ -70,33 +86,39 @@ fn default_backend() -> &'static str { if cfg!(feature = "llvm") { "llvm" } else
 fn main() {
     env_logger::init();
     let cli = Cli::parse();
-    if let Err(error) = run(&cli) { eprintln!("error: {error}"); process::exit(1); }
+    if let Err(error) = run(&cli) {
+        match cli.error_format {
+            ErrorFormat::Human => eprintln!("error: {}", error.render()),
+            ErrorFormat::Json => eprintln!("{}", serde_json::to_string(&error).expect("serializable diagnostic")),
+        }
+        process::exit(1);
+    }
 }
 
-fn run(cli: &Cli) -> Result<(), String> {
+fn run(cli: &Cli) -> Result<(), Diagnostic> {
     let (input, check) = match &cli.command {
         Some(Commands::Build { input }) => (input, false),
         Some(Commands::Check { input }) => (input, true),
+        Some(Commands::Lsp) => return lsp::serve(search_paths(cli)).map_err(Diagnostic::from),
+        Some(Commands::Symbols { input }) => (input, true),
         Some(Commands::Version) => { println!("aethc {}", env!("CARGO_PKG_VERSION")); return Ok(()); }
         None => (cli.input.as_ref().ok_or("no input file; use aethc build <FILE> or aethc check <FILE>")?, false),
     };
     let source = fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
-    let core = if input.extension().is_some_and(|e| e == "ath") {
-        let module = script::parser::Parser::new(&source).parse().map_err(|e| format!("{}: script parse error: {e}", input.display()))?;
-        script::transpiler::Transpiler::new().with_source_file(&input.to_string_lossy()).transpile(&module).map_err(|e| format!("{}: script translation error: {e}", input.display()))?
-    } else { source };
-    let mut paths = cli.module_paths.clone();
-    if let Some(env) = std::env::var_os("AETHER_PATH") { paths.extend(std::env::split_paths(&env)); }
-    // Bundled stdlib is a fallback. Local modules always take precedence.
-    paths.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib"));
-    let mut resolver = Resolver::new(paths);
-    let program = resolver.resolve(input, core).map_err(|e| diagnostic(&resolver, &e))?;
-    let mut analyzer = SemanticAnalyzer::new();
-    analyzer.analyze(&program).map_err(|e| diagnostic(&resolver, &e))?;
-    if check { if !cli.quiet { println!("Checked {}", input.display()); } return Ok(()); }
+    let session = Session::parse(input, source, search_paths(cli), Default::default())?;
+    let facts = session.check()?;
+    if matches!(cli.command, Some(Commands::Symbols { .. })) {
+        println!("{}", serde_json::to_string(&frontend::symbols::SymbolIndex::new(&session)).expect("serializable symbols"));
+        return Ok(());
+    }
+    if check {
+        if !cli.quiet && matches!(cli.error_format, ErrorFormat::Human) { println!("Checked {}", input.display()); }
+        return Ok(());
+    }
+    let resolver = &session.resolver;
     let mut ir = IRGenerator::new(input.file_stem().and_then(|s| s.to_str()).unwrap_or("module"))
-        .with_semantic_facts(analyzer.facts().clone())
-        .generate(&program).map_err(|e| diagnostic(&resolver, &e))?;
+        .with_semantic_facts(facts)
+        .generate(&session.program).map_err(|e| session.diagnostic(&e))?;
     if cli.opt_level > 0 { Optimizer::new().optimize(&mut ir); }
     if cli.emit_ir {
         let output = cli.output.clone().unwrap_or_else(|| input.with_extension("ir"));
@@ -137,20 +159,11 @@ fn run(cli: &Cli) -> Result<(), String> {
     Ok(())
 }
 
-fn diagnostic(resolver: &Resolver, error: &utils::Error) -> String {
-    if let Some(span) = error.span() {
-        if let Some(file) = resolver.sources.get(span.file_id) {
-            let pos = span.start.min(file.text.len());
-            let pos = (0..=pos).rev().find(|p| file.text.is_char_boundary(*p)).unwrap_or(0);
-            let before = &file.text[..pos];
-            let line = before.bytes().filter(|b| *b == b'\n').count() + 1;
-            let col = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-            let source_line = file.text[pos..].split('\n').next().unwrap_or("");
-            let prefix = before.rsplit('\n').next().unwrap_or("");
-            return format!("{}:{line}:{col}: {error}\n  {prefix}{source_line}\n  {}^", file.path.display(), " ".repeat(col - 1));
-        }
-    }
-    error.to_string()
+fn search_paths(cli: &Cli) -> Vec<PathBuf> {
+    let mut paths = cli.module_paths.clone();
+    if let Some(env) = std::env::var_os("AETHER_PATH") { paths.extend(std::env::split_paths(&env)); }
+    paths.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib"));
+    paths
 }
 
 fn protect_sources(resolver: &Resolver, output: &Path) -> Result<(), String> {
@@ -210,6 +223,10 @@ fn native_compile(cli: &Cli, input: &Path, output: &Path, object: bool) -> Resul
         if cli.target != "native" { command.arg(format!("--target={}", cli.target)); }
         if object { command.arg("-c"); }
         command.arg(input).arg("-o").arg(output);
+        if !object {
+            command.args(&cli.link_object);
+            for library in &cli.link_library { command.arg(format!("-l{}", library)); }
+        }
         if let Some(script) = &cli.linker_script { command.arg("-T").arg(script).arg("-nostdlib"); }
         match command.output() {
             Ok(result) if result.status.success() => return Ok(()),

@@ -103,3 +103,14 @@ pub enum BinOp {
 
 #[derive(Debug, Clone)]
 pub enum UnaryOp { Neg, Not }
+
+impl Expr {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Identifier { span, .. } | Self::Integer { span, .. } | Self::Boolean { span, .. }
+            | Self::Unary { span, .. } | Self::Float { span, .. } | Self::String { span, .. }
+            | Self::Binary { span, .. } | Self::Call { span, .. } | Self::FieldAccess { span, .. }
+            | Self::List { span, .. } => *span,
+        }
+    }
+}

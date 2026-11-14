@@ -74,6 +74,14 @@ impl Parser {
     // --- Parsing Methods ---
 
     pub fn parse(&mut self) -> Result<ScriptModule, String> {
+        self.parse_inner().map_err(|message| {
+            if message.starts_with("line ") { message } else {
+                format!("line {}:{}: {}", self.peek().span.line, self.peek().span.column, message)
+            }
+        })
+    }
+
+    fn parse_inner(&mut self) -> Result<ScriptModule, String> {
         for token in &self.tokens {
             if let TokenKind::Invalid(message) = &token.kind { return Err(format!("line {}: {}", token.span.line, message)); }
         }

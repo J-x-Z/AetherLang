@@ -28,15 +28,27 @@ pub struct Resolver {
     items: Vec<Item>,
     next_module: usize,
     entrypoint_enabled: bool,
+    overlays: HashMap<PathBuf, String>,
 }
 
 impl Resolver {
     pub fn new(search_paths: Vec<PathBuf>) -> Self {
-        Self { sources: vec![], search_paths, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, entrypoint_enabled: true }
+        Self { sources: vec![], search_paths, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, entrypoint_enabled: true, overlays: HashMap::new() }
+    }
+
+    pub fn with_overlays(mut self, overlays: HashMap<PathBuf, String>) -> Self {
+        self.overlays = overlays.into_iter().map(|(path, text)| (Self::source_path(&path), text)).collect();
+        self
+    }
+
+    pub fn source_path(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| {
+            if path.is_absolute() { path.into() } else { std::env::current_dir().unwrap_or_default().join(path) }
+        })
     }
 
     pub fn resolve(&mut self, path: &Path, source: String) -> Result<Program> {
-        let path = std::fs::canonicalize(path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+        let path = Self::source_path(path);
         let program = self.parse(&path, source)?;
         let attrs = program.inner_attrs.clone();
         self.entrypoint_enabled = !attrs.iter().any(|attribute| attribute.name.name == "no_main");
@@ -63,13 +75,16 @@ impl Resolver {
     }
 
     fn load(&mut self, path: PathBuf) -> Result<Exports> {
-        let path = std::fs::canonicalize(&path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+        let path = Self::source_path(&path);
         if self.loading.contains(&path) {
             return Err(Error::ModuleError(format!("circular import: {} -> {}",
                 self.loading.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" -> "), path.display())));
         }
         if let Some(exports) = self.loaded.get(&path) { return Ok(exports.clone()); }
-        let text = std::fs::read_to_string(&path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+        let text = match self.overlays.get(&path) {
+            Some(text) => text.clone(),
+            None => std::fs::read_to_string(&path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?,
+        };
         let program = self.parse(&path, text)?;
         self.loading.push(path.clone());
         let result = self.expand(program.items, &path, false);
@@ -82,7 +97,7 @@ impl Resolver {
     fn find(&self, dir: &Path, name: &str) -> Result<PathBuf> {
         for base in std::iter::once(dir).chain(self.search_paths.iter().map(PathBuf::as_path)) {
             for candidate in [base.join(format!("{name}.aeth")), base.join(name).join("mod.aeth")] {
-                if candidate.is_file() { return Ok(candidate); }
+                if candidate.is_file() || self.overlays.contains_key(&Self::source_path(&candidate)) { return Ok(candidate); }
             }
         }
         Err(Error::ModuleError(format!("module '{name}' not found relative to {} or in module search paths", dir.display())))

@@ -1,233 +1,140 @@
-//! Language Server Protocol (LSP) Support
-//!
-//! Provides IDE integration for AetherLang through the LSP protocol.
-//! This is a foundation module - actual LSP communication would use tower-lsp or similar.
-#![allow(dead_code)]
+//! Stdio LSP using the same resolver, checker, source maps and symbol index as CLI.
+use std::{collections::{BTreeMap, HashMap, HashSet}, io::{self, BufRead, Write}, path::{Path,PathBuf}};
+use serde_json::{json,Value};
+use crate::frontend::{resolve::Resolver, session::{Diagnostic,Location,Session}, symbols::SymbolIndex};
 
-use std::collections::HashMap;
+struct Document { text: String, version: i64 }
+struct Server { documents: BTreeMap<PathBuf,Document>, paths: Vec<PathBuf>, published: HashSet<String>, shutdown: bool }
 
-// ==================== LSP Message Types ====================
-
-/// Represents a position in a text document
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Position {
-    pub line: u32,
-    pub character: u32,
+pub fn serve(paths: Vec<PathBuf>) -> Result<(),String> {
+    let stdin=io::stdin();let stdout=io::stdout();
+    let mut input=stdin.lock();let mut output=stdout.lock();
+    let mut server=Server {documents:BTreeMap::new(),paths,published:HashSet::new(),shutdown:false};
+    while let Some(message)=read_message(&mut input)? {
+        if message.get("method").and_then(Value::as_str)==Some("exit") { return if server.shutdown {Ok(())}else{Err("LSP exited without shutdown".into())}; }
+        for reply in server.handle(message) {write_message(&mut output,&reply)?;}
+    }
+    Ok(())
 }
-
-/// Represents a range in a text document
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Range {
-    pub start: Position,
-    pub end: Position,
+fn read_message(input:&mut impl BufRead)->Result<Option<Value>,String>{
+    let mut size=None;let mut read_any=false;
+    loop {
+        let mut line=String::new();
+        if input.read_line(&mut line).map_err(|e|e.to_string())?==0 {return if read_any {Err("truncated LSP header".into())}else{Ok(None)};}
+        read_any=true;
+        if line=="\r\n" || line=="\n" {break;}
+        if let Some((key,value))=line.split_once(':') {if key.eq_ignore_ascii_case("Content-Length") {size=Some(value.trim().parse::<usize>().map_err(|_|"invalid Content-Length")?);}}
+    }
+    let size=size.ok_or("missing Content-Length")?;
+    if size>16*1024*1024{return Err("LSP message exceeds 16 MiB".into());}
+    let mut bytes=vec![0;size];input.read_exact(&mut bytes).map_err(|e|e.to_string())?;
+    serde_json::from_slice(&bytes).map(Some).map_err(|e|e.to_string())
 }
-
-/// A text document identifier
-#[derive(Debug, Clone)]
-pub struct TextDocument {
-    pub uri: String,
-    pub language_id: String,
-    pub version: i32,
-    pub content: String,
+fn write_message(output:&mut impl Write,value:&Value)->Result<(),String>{
+    let body=serde_json::to_vec(value).map_err(|e|e.to_string())?;
+    write!(output,"Content-Length: {}\r\n\r\n",body.len()).map_err(|e|e.to_string())?;
+    output.write_all(&body).and_then(|_|output.flush()).map_err(|e|e.to_string())
 }
-
-// ==================== LSP Results ====================
-
-/// Completion item for auto-complete
-#[derive(Debug, Clone)]
-pub struct CompletionItem {
-    pub label: String,
-    pub kind: CompletionKind,
-    pub detail: Option<String>,
-    pub documentation: Option<String>,
-    pub insert_text: Option<String>,
+fn path_from_uri(uri:&str)->Option<PathBuf>{
+    let encoded=uri.strip_prefix("file://")?;
+    let encoded=encoded.strip_prefix("localhost/").map(|s|format!("/{s}")).unwrap_or_else(||encoded.into());
+    let mut bytes=Vec::new();let input=encoded.as_bytes();let mut i=0;
+    while i<input.len(){if input[i]==b'%' {let pair=std::str::from_utf8(input.get(i+1..i+3)?).ok()?;bytes.push(u8::from_str_radix(pair,16).ok()?);i+=3;}else{bytes.push(input[i]);i+=1;}}
+    let path=String::from_utf8(bytes).ok()?;
+    #[cfg(windows)] let path=path.strip_prefix('/').unwrap_or(&path).to_string();
+    Some(Resolver::source_path(Path::new(&path)))
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompletionKind {
-    Function,
-    Variable,
-    Struct,
-    Enum,
-    Field,
-    Keyword,
-    Snippet,
-    Type,
-    Trait,
-    Module,
+fn uri_from_path(path:&str)->String{
+    let mut uri=String::from("file://");
+    #[cfg(windows)] uri.push('/');
+    for byte in path.replace('\\',"/").bytes(){if byte.is_ascii_alphanumeric() || b"/-_.~:".contains(&byte){uri.push(byte as char);}else{uri.push_str(&format!("%{:02X}",byte));}}
+    uri
 }
-
-/// Hover information
-#[derive(Debug, Clone)]
-pub struct HoverInfo {
-    pub contents: String,
-    pub range: Option<Range>,
+fn range(loc:&Location)->Value{json!({"start":{"line":loc.line-1,"character":loc.utf16_column},"end":{"line":loc.end_line-1,"character":loc.end_utf16_column}})}
+fn location(loc:&Location)->Value{json!({"uri":uri_from_path(&loc.file),"range":range(loc)})}
+fn byte_at(text:&str,pos:&Value)->usize{
+    let line=pos["line"].as_u64().unwrap_or(0) as usize;
+    let character=pos["character"].as_u64().unwrap_or(0) as usize;
+    let start=text.split_inclusive('\n').take(line).map(str::len).sum::<usize>().min(text.len());
+    let mut units=0;
+    for (i,c) in text[start..].char_indices(){if c=='\n'||units+c.len_utf16()>character{return start+i;}units+=c.len_utf16();if units==character{return start+i+c.len_utf8();}}
+    text.len()
 }
-
-/// Go to definition result
-#[derive(Debug, Clone)]
-pub struct Location {
-    pub uri: String,
-    pub range: Range,
-}
-
-/// Diagnostic message
-#[derive(Debug, Clone)]
-pub struct Diagnostic {
-    pub range: Range,
-    pub severity: DiagnosticSeverity,
-    pub code: Option<String>,
-    pub message: String,
-    pub related: Vec<DiagnosticRelated>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiagnosticSeverity {
-    Error = 1,
-    Warning = 2,
-    Information = 3,
-    Hint = 4,
-}
-
-#[derive(Debug, Clone)]
-pub struct DiagnosticRelated {
-    pub location: Location,
-    pub message: String,
-}
-
-// ==================== Language Server ====================
-
-/// AetherLang Language Server
-pub struct LanguageServer {
-    /// Open documents
-    documents: HashMap<String, TextDocument>,
-    /// Keywords for completion
-    keywords: Vec<&'static str>,
-}
-
-impl LanguageServer {
-    /// Create a new language server
-    pub fn new() -> Self {
-        Self {
-            documents: HashMap::new(),
-            keywords: vec![
-                "fn", "let", "mut", "if", "else", "while", "for", "return",
-                "struct", "enum", "impl", "interface", "trait", "const",
-                "pub", "use", "mod", "macro", "match", "true", "false",
-                "requires", "ensures", "invariant", "pure", "effect",
-                "own", "ref", "shared", "as", "in",
-            ],
+impl Server {
+    fn session(&self,path:&Path)->Result<Session,Diagnostic>{
+        let source=match self.documents.get(path){Some(doc)=>doc.text.clone(),None=>std::fs::read_to_string(path).map_err(|e|Diagnostic::message("E9001",e.to_string()))?};
+        Session::parse(path,source,self.paths.clone(),self.documents.iter().map(|(p,d)|(p.clone(),d.text.clone())).collect::<HashMap<_,_>>())
+    }
+    fn diagnostics(&mut self)->Vec<Value>{
+        let mut diagnostics:BTreeMap<String,Vec<Value>>=BTreeMap::new();
+        for path in self.documents.keys(){
+            let uri=uri_from_path(&path.to_string_lossy());diagnostics.entry(uri.clone()).or_default();
+            let result=self.session(path).and_then(|s|s.check().map(|_|()));
+            if let Err(d)=result {
+                let target=d.location.as_ref().map(|l|uri_from_path(&l.file)).unwrap_or(uri);
+                let position=d.location.as_ref().map(range).unwrap_or(json!({"start":{"line":0,"character":0},"end":{"line":0,"character":0}}));
+                let value=json!({"range":position,"severity":1,"code":d.code,"source":"aethc","message":d.message});
+                let entries=diagnostics.entry(target).or_default();if !entries.contains(&value){entries.push(value);}
+            }
+        }
+        for uri in &self.published{diagnostics.entry(uri.clone()).or_default();}
+        self.published=diagnostics.keys().cloned().collect();
+        diagnostics.into_iter().map(|(uri,values)|json!({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":uri,"diagnostics":values}})).collect()
+    }
+    fn handle(&mut self,message:Value)->Vec<Value>{
+        let method=message["method"].as_str().unwrap_or("");let params=&message["params"];let id=message.get("id").cloned();
+        let reply=|result:Value|vec![json!({"jsonrpc":"2.0","id":id.clone().unwrap_or(Value::Null),"result":result})];
+        let error=|code:i64,text:&str|if let Some(id)=&id{vec![json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":text}})]}else{vec![]};
+        if self.shutdown{return error(-32600,"server has shut down");}
+        match method {
+            "initialize"=>{
+                if let Some(path)=params["rootUri"].as_str().and_then(path_from_uri){self.paths.push(path);}
+                reply(json!({"capabilities":{"positionEncoding":"utf-16","textDocumentSync":{"openClose":true,"change":1},"hoverProvider":true,"definitionProvider":true,"referencesProvider":true,"documentSymbolProvider":true,"completionProvider":{"triggerCharacters":[":","."]}},"serverInfo":{"name":"aethc","version":env!("CARGO_PKG_VERSION")}}))
+            }
+            "initialized"|"$/cancelRequest"|"$/setTrace"=>vec![],
+            "shutdown"=>{self.shutdown=true;reply(Value::Null)}
+            "textDocument/didOpen"=>{
+                if let Some(path)=params["textDocument"]["uri"].as_str().and_then(path_from_uri){self.documents.insert(path,Document{text:params["textDocument"]["text"].as_str().unwrap_or("").into(),version:params["textDocument"]["version"].as_i64().unwrap_or(0)});}
+                self.diagnostics()
+            }
+            "textDocument/didChange"=>{
+                if let Some(path)=params["textDocument"]["uri"].as_str().and_then(path_from_uri){
+                    if let Some(doc)=self.documents.get_mut(&path){let version=params["textDocument"]["version"].as_i64().unwrap_or(doc.version+1);
+                        if version>doc.version {if let Some(changes)=params["contentChanges"].as_array(){for change in changes{
+                            // Full sync is advertised; accepting ranges also avoids losing edits from clients that send incremental updates.
+                            if let Some(text)=change["text"].as_str(){if let Some(r)=change.get("range"){let a=byte_at(&doc.text,&r["start"]);let b=byte_at(&doc.text,&r["end"]);if a<=b{doc.text.replace_range(a..b,text);}}else{doc.text=text.into();}}
+                        }}doc.version=version;}
+                    }
+                }self.diagnostics()
+            }
+            "textDocument/didClose"=>{if let Some(path)=params["textDocument"]["uri"].as_str().and_then(path_from_uri){self.documents.remove(&path);}self.diagnostics()}
+            "textDocument/didSave"=>self.diagnostics(),
+            "textDocument/hover"|"textDocument/definition"|"textDocument/references"|"textDocument/documentSymbol"|"textDocument/completion"=>{
+                let Some(path)=params["textDocument"]["uri"].as_str().and_then(path_from_uri)else{return error(-32602,"expected file URI");};
+                let session=match self.session(&path){Ok(s)=>s,Err(_)=>return reply(Value::Null)};
+                let index=SymbolIndex::new(&session);let file=path.to_string_lossy();
+                if method=="textDocument/documentSymbol"{
+                    return reply(Value::Array(index.symbols.iter().filter(|s|s.definition.file==file).map(|s|json!({"name":s.name,"detail":s.type_name,"kind":match s.kind.as_str(){"function"|"method"|"extern function"=>12,"struct"|"union"=>23,"enum"=>10,"constant"=>14,_=>13},"range":range(&s.definition),"selectionRange":range(&s.definition)})).collect()));
+                }
+                if method=="textDocument/completion"{
+                    return reply(json!({"isIncomplete":false,"items":index.symbols.iter().map(|s|json!({"label":s.name,"detail":s.type_name,"kind":if s.kind.contains("function"){3}else{6}})).collect::<Vec<_>>()}));
+                }
+                let text=self.documents.get(&path).map(|d|d.text.as_str()).or_else(||session.source(0)).unwrap_or("");
+                let byte=byte_at(text,&params["position"]);
+                let Some(symbol)=index.at(&file,byte)else{return reply(Value::Null);};
+                match method{
+                    "textDocument/hover"=>reply(json!({"contents":{"kind":"plaintext","value":format!("{}: {}",symbol.name,symbol.type_name)}})),
+                    "textDocument/definition"=>reply(location(&symbol.definition)),
+                    _=>{let mut values:Vec<_>=index.references.iter().filter(|r|r.symbol==symbol.id).map(|r|location(&r.location)).collect();if params["context"]["includeDeclaration"].as_bool().unwrap_or(false){values.push(location(&symbol.definition));}reply(Value::Array(values))}
+                }
+            }
+            _=>error(-32601,"method not supported"),
         }
     }
-
-    /// Open a document
-    pub fn open_document(&mut self, uri: String, content: String, version: i32) {
-        let doc = TextDocument {
-            uri: uri.clone(),
-            language_id: "aether".to_string(),
-            version,
-            content,
-        };
-        self.documents.insert(uri, doc);
-    }
-
-    /// Update a document
-    pub fn update_document(&mut self, uri: &str, content: String, version: i32) {
-        if let Some(doc) = self.documents.get_mut(uri) {
-            doc.content = content;
-            doc.version = version;
-        }
-    }
-
-    /// Close a document
-    pub fn close_document(&mut self, uri: &str) {
-        self.documents.remove(uri);
-    }
-
-    /// Get diagnostics for a document (stub - integration with actual parser pending)
-    pub fn get_diagnostics(&self, _uri: &str) -> Vec<Diagnostic> {
-        // TODO: Integrate with actual lexer/parser/semantic analyzer
-        Vec::new()
-    }
-
-    /// Get completions at position
-    pub fn get_completions(&self, _uri: &str, _position: Position) -> Vec<CompletionItem> {
-        let mut completions = Vec::new();
-        
-        // Add keywords
-        for kw in &self.keywords {
-            completions.push(CompletionItem {
-                label: kw.to_string(),
-                kind: CompletionKind::Keyword,
-                detail: Some("keyword".to_string()),
-                documentation: None,
-                insert_text: Some(kw.to_string()),
-            });
-        }
-        
-        // Add built-in types
-        for ty in &["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "str"] {
-            completions.push(CompletionItem {
-                label: ty.to_string(),
-                kind: CompletionKind::Type,
-                detail: Some("built-in type".to_string()),
-                documentation: None,
-                insert_text: Some(ty.to_string()),
-            });
-        }
-        
-        completions
-    }
-
-    /// Get hover info at position
-    pub fn get_hover(&self, _uri: &str, _position: Position) -> Option<HoverInfo> {
-        // TODO: Implement proper position-based lookup
-        None
-    }
-
-    /// Go to definition
-    pub fn goto_definition(&self, _uri: &str, _position: Position) -> Option<Location> {
-        // TODO: Implement proper go-to-definition
-        None
-    }
-    
-    /// Find references
-    pub fn find_references(&self, _uri: &str, _position: Position) -> Vec<Location> {
-        // TODO: Implement find references
-        Vec::new()
-    }
-    
-    /// Get document symbols
-    pub fn get_document_symbols(&self, _uri: &str) -> Vec<DocumentSymbol> {
-        // TODO: Implement document symbols from AST
-        Vec::new()
-    }
 }
-
-impl Default for LanguageServer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Document symbol for outline view
-#[derive(Debug, Clone)]
-pub struct DocumentSymbol {
-    pub name: String,
-    pub kind: SymbolKind,
-    pub range: Range,
-    pub selection_range: Range,
-    pub children: Vec<DocumentSymbol>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SymbolKind {
-    Function,
-    Struct,
-    Enum,
-    Interface,
-    Constant,
-    Variable,
-    Field,
-    Module,
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test]fn utf16_position_and_file_uri_round_trip(){let text="a😀中x";assert_eq!(byte_at(text,&json!({"line":0,"character":3})),5);let path="/tmp/你好 space.aeth";assert_eq!(path_from_uri(&uri_from_path(path)).unwrap(),PathBuf::from(path));}
+    #[test]fn frames_use_byte_length(){let value=json!({"text":"你好"});let mut bytes=vec![];write_message(&mut bytes,&value).unwrap();assert_eq!(read_message(&mut io::Cursor::new(bytes)).unwrap().unwrap(),value);}
 }
