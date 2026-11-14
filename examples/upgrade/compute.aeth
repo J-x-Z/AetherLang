@@ -1,0 +1,67 @@
+// Deterministic integer sorting, pointer-indexed storage, binary search,
+// polynomial floating-point reduction, and bitwise PRNG in one workload.
+extern "C" {
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn printf(format: *u8, ...) -> i32;
+}
+fn sift(values: *i64, root: i64, count: i64) {
+    let mut current: i64 = root;
+    while current * 2 + 1 < count {
+        let mut child: i64 = current * 2 + 1;
+        if child + 1 < count && values[child] < values[child + 1] { child = child + 1; }
+        if values[current] >= values[child] { break; }
+        let saved: i64 = values[current];
+        values[current] = values[child];
+        values[child] = saved;
+        current = child;
+    }
+}
+fn heapsort(values: *i64, count: i64) {
+    let mut start: i64 = count / 2;
+    while start > 0 { start = start - 1; sift(values, start, count); }
+    let mut end: i64 = count;
+    while end > 1 {
+        end = end - 1;
+        let saved: i64 = values[0]; values[0] = values[end]; values[end] = saved;
+        sift(values, 0, end);
+    }
+}
+fn find(values: *i64, count: i64, needle: i64) -> i64 {
+    let mut lo: i64 = 0;
+    let mut hi: i64 = count;
+    while lo < hi {
+        let mid: i64 = lo + (hi - lo) / 2;
+        if values[mid] < needle { lo = mid + 1; } else { hi = mid; }
+    }
+    if lo < count && values[lo] == needle { return lo; }
+    return -1;
+}
+fn main() -> i32 {
+    let count: i64 = 32768;
+    let values: *i64 = malloc(count as u64 * 8) as *i64;
+    if values == (0 as *i64) { return 2; }
+    let mut state: u64 = 123456789;
+    let mut sum: i64 = 0;
+    for i in 0..count {
+        state = state ^ (state << 13);
+        state = state ^ (state >> 7);
+        state = state ^ (state << 17);
+        values[i] = (state & 1048575) as i64;
+        sum = sum + values[i];
+    }
+    heapsort(values, count);
+    let mut sorted_sum: i64 = values[0];
+    for i in 1..count {
+        if values[i - 1] > values[i] { free(values as *void); return 3; }
+        sorted_sum = sorted_sum + values[i];
+    }
+    if sum != sorted_sum || find(values, count, values[1234]) < 0 || find(values, count, -1) != -1 {
+        free(values as *void); return 4;
+    }
+    let mut series: f64 = 0.0;
+    for i in 0..100000 { let x: f64 = i as f64 / 100000.0; series = series + x * x; }
+    printf("compute %lld %lld %lld %.6f\n\0" as *u8, sum, values[0], values[count - 1], series);
+    free(values as *void);
+    return 0;
+}

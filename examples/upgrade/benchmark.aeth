@@ -1,0 +1,10 @@
+// Uses the original baseline's supported scalar syntax for comparable measures.
+extern "C" { fn printf(format: *u8, ...) -> i32; }
+fn benchmark_mix(value: i64) -> i64 { return (value * 17 + 11) % 1000003; }
+fn main() -> i32 {
+    let mut i: i64 = 0;
+    let mut value: i64 = 12345;
+    while i < 2000000 { value = benchmark_mix(value); i = i + 1; }
+    printf("%lld\n\0" as *u8, value);
+    return 0;
+}

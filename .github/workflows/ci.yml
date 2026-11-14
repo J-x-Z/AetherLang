@@ -1,124 +1,56 @@
-name: Cross-Platform Build
-
+name: Build and execute
 on:
   push:
-    branches: [ master, main ]
+    branches: [master, main]
   pull_request:
-    branches: [ master, main ]
-
 env:
   CARGO_TERM_COLOR: always
-
+  CARGO_BUILD_JOBS: 3
 jobs:
-  # C backend - reliable, no external dependencies
-  build-c-backend:
+  c:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache cargo
-      uses: Swatinem/rust-cache@v2
-
-    - name: Build (C backend)
-      run: cargo build --release --no-default-features
-
-    - name: Run unit tests
-      run: cargo test --no-default-features
-
-    - name: Test C backend compilation
-      run: |
-        ./target/release/aethc --emit-c tests/hello.aeth
-        cat tests/hello.c
-      shell: bash
-
-    - name: End-to-end test (compile and run)
-      if: runner.os != 'Windows'
-      run: |
-        ./target/release/aethc --emit-c tests/hello.aeth
-        cc -o tests/hello tests/hello.c
-        ./tests/hello
-      shell: bash
-
-  # LLVM backend - Linux only (easier LLVM setup)
-  build-llvm-backend:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --no-default-features
+      - run: cargo build --locked --release --no-default-features
+      - run: python3 scripts/validate.py --compiler target/release/aethc --work-dir target/validation --backends c
+      - run: AETHC="$PWD/target/release/aethc" jxz/build.sh "$PWD/target/jxz"
+      - run: python3 jxz/tests/integration.py --jxz target/jxz --aethc target/release/aethc --work-dir target/jxz-tests
+  llvm:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    env:
+      LLVM_SYS_211_PREFIX: /usr/lib/llvm-21
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Install LLVM 19
-      run: |
-        wget https://apt.llvm.org/llvm.sh
-        chmod +x llvm.sh
-        sudo ./llvm.sh 19
-        sudo apt-get install -y llvm-19-dev libpolly-19-dev
-        echo "LLVM_SYS_191_PREFIX=/usr/lib/llvm-19" >> $GITHUB_ENV
-
-    - name: Cache cargo
-      uses: Swatinem/rust-cache@v2
-
-    - name: Build (LLVM backend)
-      run: cargo build --release --features llvm
-
-    - name: Run unit tests (LLVM)
-      run: cargo test --features llvm
-
-    - name: Test LLVM backend compilation
-      run: |
-        ./target/release/aethc build tests/hello.aeth -o tests/hello_llvm
-        ./tests/hello_llvm || echo "Binary execution test"
-
-  # Script layer tests
-  test-script-layer:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+      - name: Install LLVM 21
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+          sudo apt-get install -y llvm-21-dev libpolly-21-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --features llvm
+      - run: cargo build --locked --release --features llvm
+      - run: python3 scripts/validate.py --compiler target/release/aethc --work-dir target/validation
+      - run: AETHC="$PWD/target/release/aethc" jxz/build.sh "$PWD/target/jxz"
+      - run: python3 jxz/tests/integration.py --jxz target/jxz --aethc target/release/aethc --work-dir target/jxz-tests
+  windows-c-build:
+    runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache cargo
-      uses: Swatinem/rust-cache@v2
-
-    - name: Run script module tests
-      run: "cargo test script:: --no-default-features"
-
-    - name: Test .ath transpilation
-      run: |
-        cargo build --release --no-default-features
-        # Test that transpiler is functional (via unit tests)
-        cargo test transpiler --no-default-features
-
-  # Stdlib compilation check
-  test-stdlib:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache cargo
-      uses: Swatinem/rust-cache@v2
-
-    - name: Build compiler
-      run: cargo build --release --no-default-features
-
-    - name: Test stdlib modules compile
-      run: |
-        echo "Testing stdlib modules..."
-        ./target/release/aethc --emit-c stdlib/result.aeth || echo "result.aeth needs work"
-        ./target/release/aethc --emit-c stdlib/alloc.aeth || echo "alloc.aeth needs work"
-        echo "Stdlib check complete"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release --no-default-features
+      - run: cargo test --locked --no-default-features --bin aethc

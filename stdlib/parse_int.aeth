@@ -1,0 +1,24 @@
+// Parse a complete signed decimal integer with an explicit magnitude bound.
+// The output is modified only on success. No allocation and no locale state.
+pub fn parse_bounded_i64(text: *u8, limit: i64, output: *i64) -> bool {
+    if text == (0 as *u8) || output == (0 as *i64) || limit < 0 { return false; }
+    let mut i: u64 = 0;
+    let mut negative: bool = false;
+    if text[0] == 45 { negative = true; i = 1; }
+    let start: u64 = i;
+    let mut value: i64 = 0;
+    while text[i] >= 48 && text[i] <= 57 {
+        let digit: i64 = (text[i] - 48) as i64;
+        if value > limit / 10 { return false; }
+        if value == limit / 10 && digit > limit % 10 { return false; }
+        value = value * 10 + digit;
+        i = i + 1;
+    }
+    if i == start { return false; }
+    if text[i] == 13 { i = i + 1; }
+    if text[i] == 10 { i = i + 1; }
+    if text[i] != 0 { return false; }
+    if negative { value = -value; }
+    *output = value;
+    return true;
+}
