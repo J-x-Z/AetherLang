@@ -6,8 +6,4 @@ description = "AetherLang Package Manager"
 authors = ["J-x-Z"]
 
 [dependencies]
-# stdlib modules
-fs = { path = "../stdlib/fs.aeth" }
-string = { path = "../stdlib/string.aeth" }
-args = { path = "../stdlib/args.aeth" }
-toml = { path = "../stdlib/toml.aeth" }
+# JXZ uses sibling Aether modules and the host POSIX C ABI.

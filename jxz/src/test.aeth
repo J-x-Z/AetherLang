@@ -1,78 +1,99 @@
-// JXZ Test Command Implementation
-// Discovers and runs test files
-
+// Discover NUL-delimited paths with the host's find utility. Compilation,
+// execution, status aggregation and resource ownership are AetherLang code.
+use config::{Config, config_load, config_free};
+use process::{process_run, path_join, make_directories, directory_exists};
+use build::{compile_source};
 extern "C" {
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(file: *void) -> i32;
+    fn fgetc(file: *void) -> i32;
+    fn ferror(file: *void) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn realloc(ptr: *void, size: u64) -> *void;
+    fn free(ptr: *void);
+    fn remove(path: *u8) -> i32;
     fn puts(s: *u8) -> i32;
-    fn system(cmd: *u8) -> i32;
-    fn access(path: *u8, mode: i32) -> i32;
-    fn opendir(name: *u8) -> *void;
-    fn closedir(dirp: *void) -> i32;
-    fn mkdir(path: *u8, mode: u32) -> i32;
 }
 
-const F_OK: i32 = 0
+fn test_discover(list: *u8) -> i32 {
+    let mut args: [*u8; 9] = ["find\0" as *u8, "tests\0" as *u8,
+        "-type\0" as *u8, "f\0" as *u8, "-name\0" as *u8,
+        "test_*.aeth\0" as *u8, "-print0\0" as *u8, 0 as *u8, 0 as *u8];
+    return process_run(&args[0] as **u8, list);
+}
 
-// ==================== Test Runner ====================
-
-pub struct TestResult {
-    total: i32,
-    passed: i32,
-    failed: i32,
+fn test_execute(file: *void, executable: *u8) -> i32 {
+    let mut capacity: u64 = 256;
+    let mut path: *u8 = malloc(capacity) as *u8;
+    if path == (0 as *u8) { return 1; }
+    let mut length: u64 = 0;
+    let mut failed: bool = false;
+    let mut total: i32 = 0;
+    let mut byte: i32 = fgetc(file);
+    while byte >= 0 {
+        if length + 1 >= capacity {
+            capacity = capacity * 2;
+            let grown: *u8 = realloc(path as *void, capacity) as *u8;
+            if grown == (0 as *u8) { free(path as *void); return 1; }
+            path = grown;
+        }
+        path[length] = byte as u8;
+        if byte == 0 {
+            if length > 0 {
+                total = total + 1;
+                puts(path);
+                // Never run a previous executable after a compile/link error.
+                remove(executable);
+                let compiled: i32 = compile_source(path, executable, false);
+                if compiled == 0 {
+                    let mut args: [*u8; 2] = [executable, 0 as *u8];
+                    if process_run(&args[0] as **u8, 0 as *u8) != 0 { failed = true; }
+                } else { failed = true; }
+                remove(executable);
+            }
+            length = 0;
+        } else { length = length + 1; }
+        byte = fgetc(file);
+    }
+    if ferror(file) != 0 || length != 0 { failed = true; }
+    free(path as *void);
+    if total == 0 { puts("jxz: no test_*.aeth files found\0" as *u8); }
+    if failed { puts("jxz: tests failed\0" as *u8); return 1; }
+    puts("jxz: tests passed\0" as *u8);
+    return 0;
 }
 
 pub fn run_tests() -> i32 {
-    puts("   Discovering tests...\0" as *u8)
-    
-    // Check if tests directory exists
-    let tests_dir = opendir("tests\0" as *u8)
-    if tests_dir == (0 as *void) {
-        puts("   No tests directory found\0" as *u8)
-        puts("   Create tests/ directory with test_*.aeth files\0" as *u8)
-        return 0
+    let mut cfg: Config = config_load();
+    let mut status: i32 = 1;
+    if cfg.valid {
+        if !directory_exists("tests\0" as *u8) {
+            puts("jxz: no tests directory\0" as *u8);
+            config_free(&cfg as *Config);
+            return 0;
+        }
+        if make_directories(cfg.target_dir) {
+            let list: *u8 = path_join(cfg.target_dir, ".jxz-test-list\0" as *u8);
+            let output: *u8 = path_join(cfg.target_dir, ".jxz-test\0" as *u8);
+            let mut executable: *u8 = output;
+            if output != (0 as *u8) {
+                if output[0] != 47 { executable = path_join(".\0" as *u8, output); }
+            }
+            if list != (0 as *u8) && executable != (0 as *u8) {
+                if test_discover(list) == 0 {
+                    let file: *void = fopen(list, "rb\0" as *u8);
+                    if file != (0 as *void) {
+                        status = test_execute(file, executable);
+                        if fclose(file) != 0 { status = 1; }
+                    }
+                }
+            }
+            if list != (0 as *u8) { remove(list); }
+            free(list as *void);
+            if executable != output { free(executable as *void); }
+            free(output as *void);
+        }
     }
-    closedir(tests_dir)
-    
-    puts("   Compiling tests...\0" as *u8)
-    
-    // Ensure target/tests directory exists
-    mkdir("target\0" as *u8, 493)
-    mkdir("target/tests\0" as *u8, 493)
-    
-    // Compile all test files
-    let result = system("for f in tests/test_*.aeth; do [ -f \"$f\" ] && aethc --emit-c \"$f\" 2>/dev/null; done\0" as *u8)
-    
-    // Compile C files
-    result = system("for f in tests/test_*.c; do [ -f \"$f\" ] && cc -o \"target/tests/$(basename $f .c)\" \"$f\" 2>/dev/null; done\0" as *u8)
-    
-    puts("   Running tests...\0" as *u8)
-    puts("\0" as *u8)
-    
-    // Run all test executables
-    result = system("for f in target/tests/test_*; do [ -x \"$f\" ] && echo \"Running $f\" && \"$f\"; done\0" as *u8)
-    
-    puts("\0" as *u8)
-    puts("   Tests completed\0" as *u8)
-    
-    return 0
-}
-
-// Run a single test file
-pub fn run_single_test(test_file: *u8) -> i32 {
-    puts("   Running single test:\0" as *u8)
-    puts(test_file)
-    
-    // Compile test
-    let result = system("aethc --emit-c\0" as *u8)
-    
-    return result
-}
-
-// Watch mode - rerun tests on file changes
-pub fn watch_tests() -> i32 {
-    puts("   Watching for changes...\0" as *u8)
-    puts("   Press Ctrl+C to stop\0" as *u8)
-    
-    // TODO: Implement file watching
-    // For now, just run tests once
-    return run_tests()
+    config_free(&cfg as *Config);
+    return status;
 }

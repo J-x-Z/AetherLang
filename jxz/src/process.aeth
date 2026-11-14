@@ -1,0 +1,114 @@
+// POSIX process and path primitives. Arguments are never interpreted by a shell.
+extern "C" {
+    fn fork() -> i32;
+    fn execvp(file: *u8, argv: **u8) -> i32;
+    fn waitpid(pid: i32, status: *i32, options: i32) -> i32;
+    fn _exit(code: i32);
+    fn perror(message: *u8);
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(file: *void) -> i32;
+    fn fileno(file: *void) -> i32;
+    fn dup2(oldfd: i32, newfd: i32) -> i32;
+    fn fflush(file: *void) -> i32;
+    fn strlen(s: *u8) -> u64;
+    fn malloc(size: u64) -> *void;
+    fn free(ptr: *void);
+    fn memcpy(dest: *void, src: *void, size: u64) -> *void;
+    fn mkdir(path: *u8, mode: u32) -> i32;
+    fn opendir(path: *u8) -> *void;
+    fn closedir(dir: *void) -> i32;
+    fn getenv(name: *u8) -> *u8;
+}
+
+pub fn process_run(argv: **u8, stdout_path: *u8) -> i32 {
+    // Flush inherited stdio buffers before fork so they are not printed twice.
+    fflush(0 as *void);
+    let pid: i32 = fork();
+    if pid < 0 {
+        perror("jxz: fork\0" as *u8);
+        return 125;
+    }
+    if pid == 0 {
+        if stdout_path != (0 as *u8) {
+            let file: *void = fopen(stdout_path, "wb\0" as *u8);
+            if file == (0 as *void) {
+                perror("jxz: capture\0" as *u8);
+                _exit(125);
+                return 125;
+            }
+            let fd: i32 = fileno(file);
+            if dup2(fd, 1) < 0 {
+                perror("jxz: dup2\0" as *u8);
+                fclose(file);
+                _exit(125);
+                return 125;
+            }
+            if fd != 1 { fclose(file); }
+        }
+        execvp(argv[0], argv);
+        perror(argv[0]);
+        _exit(127);
+        return 127;
+    }
+    let mut status: i32 = 0;
+    if waitpid(pid, &status as *i32, 0) < 0 {
+        perror("jxz: waitpid\0" as *u8);
+        return 125;
+    }
+    // POSIX wait status: low seven bits are the terminating signal.
+    let signal: i32 = status & 127;
+    if signal != 0 {
+        return 128 + signal;
+    }
+    return (status >> 8) & 255;
+}
+
+pub fn environment_tool(key: *u8, fallback: *u8) -> *u8 {
+    let value: *u8 = getenv(key);
+    if value == (0 as *u8) { return fallback; }
+    if value[0] == 0 { return fallback; }
+    return value;
+}
+
+pub fn path_join(directory: *u8, name: *u8) -> *u8 {
+    let a: u64 = strlen(directory);
+    let b: u64 = strlen(name);
+    let result: *u8 = malloc(a + b + 2) as *u8;
+    if result == (0 as *u8) { return result; }
+    memcpy(result as *void, directory as *void, a);
+    result[a] = 47;
+    memcpy((result + a + 1) as *void, name as *void, b + 1);
+    return result;
+}
+
+pub fn directory_exists(path: *u8) -> bool {
+    let dir: *void = opendir(path);
+    if dir == (0 as *void) { return false; }
+    closedir(dir);
+    return true;
+}
+
+pub fn make_directories(path: *u8) -> bool {
+    let length: u64 = strlen(path);
+    let copy: *u8 = malloc(length + 1) as *u8;
+    if copy == (0 as *u8) { return false; }
+    memcpy(copy as *void, path as *void, length + 1);
+    let mut i: u64 = 1;
+    while i <= length {
+        if copy[i] == 47 || copy[i] == 0 {
+            let saved: u8 = copy[i];
+            copy[i] = 0;
+            if mkdir(copy, 493) != 0 {
+                if !directory_exists(copy) {
+                    perror(copy);
+                    free(copy as *void);
+                    return false;
+                }
+            }
+            copy[i] = saved;
+        }
+        i = i + 1;
+    }
+    free(copy as *void);
+    return true;
+}

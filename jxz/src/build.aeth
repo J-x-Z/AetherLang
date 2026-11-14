@@ -1,166 +1,158 @@
-// JXZ Build Command Implementation
-// Compiles AetherLang project using aethc
+// The compiler owns backend selection and linking; JXZ owns project policy.
+use config::{Config, config_load, config_free, package_name_valid};
+use process::{process_run, environment_tool, path_join, make_directories};
 
 extern "C" {
-    fn puts(s: *u8) -> i32;
-    fn system(cmd: *u8) -> i32;
-    fn access(path: *u8, mode: i32) -> i32;
-    fn fopen(path: *u8, mode: *u8) -> *void;
-    fn fclose(fp: *void) -> i32;
-    fn fgets(buf: *u8, size: i32, fp: *void) -> *u8;
-    fn mkdir(path: *u8, mode: u32) -> i32;
-    fn strlen(s: *u8) -> u64;
-    fn strcpy(dest: *u8, src: *u8) -> *u8;
-    fn strcat(dest: *u8, src: *u8) -> *u8;
     fn malloc(size: u64) -> *void;
     fn free(ptr: *void);
+    fn puts(s: *u8) -> i32;
+    fn remove(path: *u8) -> i32;
+    fn access(path: *u8, mode: i32) -> i32;
+    fn rmdir(path: *u8) -> i32;
+    fn perror(s: *u8);
+    fn fopen(path: *u8, mode: *u8) -> *void;
+    fn fclose(file: *void) -> i32;
+    fn fputs(s: *u8, file: *void) -> i32;
+    fn fgetc(file: *void) -> i32;
+    fn ferror(file: *void) -> i32;
+    fn strlen(s: *u8) -> u64;
 }
 
-// Import config module
-use config::{Config, config_load}
-
-const F_OK: i32 = 0
-
-// Check if Jxz.toml exists
-fn check_project() -> bool {
-    if access("Jxz.toml\0" as *u8, F_OK) != 0 {
-        puts("Error: No Jxz.toml found in current directory\0" as *u8)
-        puts("Run 'jxz init' to create a new project\0" as *u8)
-        return false
+pub fn compile_source(source: *u8, output: *u8, release: bool) -> i32 {
+    let compiler: *u8 = environment_tool("AETHC\0" as *u8, "aethc\0" as *u8);
+    let backend: *u8 = environment_tool("AETHER_BACKEND\0" as *u8, "\0" as *u8);
+    let mut optimization: *u8 = "0\0" as *u8;
+    if release { optimization = "2\0" as *u8; }
+    let mut args: [*u8; 11] = [compiler, "build\0" as *u8,
+        "-O\0" as *u8, optimization, "-o\0" as *u8, output,
+        "--backend\0" as *u8, backend, "--\0" as *u8, source, 0 as *u8];
+    if backend[0] == 0 {
+        args[6] = "--\0" as *u8;
+        args[7] = source;
+        args[8] = 0 as *u8;
     }
-    return true
+    return process_run(&args[0] as **u8, 0 as *u8);
 }
 
-// Compile main.aeth to executable
+pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
+    if !make_directories(cfg.target_dir) { return 1; }
+    let output: *u8 = path_join(cfg.target_dir, cfg.name);
+    let mut source: *u8 = cfg.main_file;
+    let mut owns_source: bool = false;
+    if source == (0 as *u8) {
+        source = path_join(cfg.src_dir, "main.aeth\0" as *u8);
+        owns_source = true;
+    }
+    let mut status: i32 = 1;
+    if source != (0 as *u8) && output != (0 as *u8) {
+        puts("jxz: compiling\0" as *u8);
+        puts(source);
+        status = compile_source(source, output, release);
+        if status == 0 {
+            if !record_output(cfg.target_dir, cfg.name) { status = 1; }
+        }
+    }
+    if owns_source { free(source as *void); }
+    free(output as *void);
+    return status;
+}
+
 pub fn build_project(release: bool) -> i32 {
-    if !check_project() {
-        return 1
-    }
-
-    // Load configuration from Jxz.toml
-    let cfg: Config = config_load()
-
-    puts("   Compiling project...\0" as *u8)
-    puts("   Package: \0" as *u8)
-    puts(cfg.name)
-    puts(" v\0" as *u8)
-    puts(cfg.version)
-    puts("\n\0" as *u8)
-
-    // Ensure target directory exists
-    mkdir(cfg.target_dir, 493)
-
-    // Build command dynamically: aethc --emit-c <main_file>
-    let cmd: *u8 = malloc(512) as *u8
-    let result: i32 = 0
-
-    // Step 1: Compile to C
-    puts("     Compiling \0" as *u8)
-    puts(cfg.main_file)
-    puts(" -> C\n\0" as *u8)
-
-    strcpy(cmd, "aethc --emit-c \0" as *u8)
-    strcat(cmd, cfg.main_file)
-    strcat(cmd, "\0" as *u8)
-    result = system(cmd)
-
-    if result != 0 {
-        puts("Error: Compilation failed\0" as *u8)
-        free(cmd as *void)
-        return 1
-    }
-
-    // Step 2: Compile C to executable
-    // Build output path: <target_dir>/<name>
-    puts("     Compiling C -> executable\n\0" as *u8)
-
-    if release {
-        strcpy(cmd, "cc -O2 -o \0" as *u8)
-    } else {
-        strcpy(cmd, "cc -g -o \0" as *u8)
-    }
-    strcat(cmd, cfg.target_dir)
-    strcat(cmd, "/\0" as *u8)
-    strcat(cmd, cfg.name)
-    strcat(cmd, " \0" as *u8)
-    strcat(cmd, cfg.src_dir)
-    strcat(cmd, "/main.c 2>/dev/null || gcc \0" as *u8)
-    if release {
-        strcat(cmd, "-O2 -o \0" as *u8)
-    } else {
-        strcat(cmd, "-g -o \0" as *u8)
-    }
-    strcat(cmd, cfg.target_dir)
-    strcat(cmd, "/\0" as *u8)
-    strcat(cmd, cfg.name)
-    strcat(cmd, " \0" as *u8)
-    strcat(cmd, cfg.src_dir)
-    strcat(cmd, "/main.c\0" as *u8)
-
-    result = system(cmd)
-    free(cmd as *void)
-
-    if result != 0 {
-        puts("Error: C compilation failed\0" as *u8)
-        return 1
-    }
-
-    puts("    Finished build\0" as *u8)
-    return 0
+    let mut cfg: Config = config_load();
+    let mut status: i32 = 1;
+    if cfg.valid { status = build_loaded(&cfg as *Config, release); }
+    config_free(&cfg as *Config);
+    return status;
 }
 
-// Build and run
-pub fn run_project(args: *u8) -> i32 {
-    let result: i32 = build_project(false)
-    if result != 0 {
-        return result
+pub fn run_project(argc: i32, argv: **u8) -> i32 {
+    let mut cfg: Config = config_load();
+    let mut status: i32 = 1;
+    if cfg.valid {
+        status = build_loaded(&cfg as *Config, false);
+        if status == 0 {
+            // Prefix relative output with ./ so execvp never searches PATH.
+            let output: *u8 = path_join(cfg.target_dir, cfg.name);
+            let mut executable: *u8 = output;
+            if output != (0 as *u8) {
+                if output[0] != 47 { executable = path_join(".\0" as *u8, output); }
+                if executable != (0 as *u8) {
+                    // argv points to a spare command/-- slot followed by user arguments.
+                    let saved: *u8 = argv[0];
+                    argv[0] = executable;
+                    status = process_run(argv, 0 as *u8);
+                    argv[0] = saved;
+                } else { status = 1; }
+                if executable != output { free(executable as *void); }
+                free(output as *void);
+            } else { status = 1; }
+        }
     }
-
-    // Load config to get executable path
-    let cfg: Config = config_load()
-
-    puts("     Running \0" as *u8)
-    puts(cfg.target_dir)
-    puts("/\0" as *u8)
-    puts(cfg.name)
-    puts("\n\n\0" as *u8)
-
-    // Build run command: ./<target_dir>/<name>
-    let cmd: *u8 = malloc(256) as *u8
-    strcpy(cmd, "./\0" as *u8)
-    strcat(cmd, cfg.target_dir)
-    strcat(cmd, "/\0" as *u8)
-    strcat(cmd, cfg.name)
-    strcat(cmd, "\0" as *u8)
-
-    result = system(cmd)
-    free(cmd as *void)
-    return result
+    config_free(&cfg as *Config);
+    return status;
 }
 
-// Clean build artifacts
+fn record_output(directory: *u8, name: *u8) -> bool {
+    let path: *u8 = path_join(directory, ".jxz-output-name\0" as *u8);
+    if path == (0 as *u8) { return false; }
+    let file: *void = fopen(path, "wb\0" as *u8);
+    free(path as *void);
+    if file == (0 as *void) { return false; }
+    let written: i32 = fputs(name, file);
+    let closed: i32 = fclose(file);
+    return written >= 0 && closed == 0;
+}
+
+fn clean_owned_output(directory: *u8) -> bool {
+    let record: *u8 = path_join(directory, ".jxz-output-name\0" as *u8);
+    if record == (0 as *u8) { return false; }
+    if access(record, 0) != 0 { free(record as *void); return true; }
+    let file: *void = fopen(record, "rb\0" as *u8);
+    if file == (0 as *void) { free(record as *void); return false; }
+    // Package output is a single filename; POSIX NAME_MAX is at most 255 here.
+    let mut name: [u8; 257] = [0; 257];
+    let mut count: u64 = 0;
+    let mut byte: i32 = fgetc(file);
+    while byte >= 0 && count < 256 {
+        name[count] = byte as u8;
+        count = count + 1;
+        byte = fgetc(file);
+    }
+    let failed: i32 = ferror(file);
+    let closed: i32 = fclose(file);
+    let mut ok: bool = false;
+    if byte < 0 && failed == 0 && closed == 0 && count < 256 {
+        if package_name_valid(&name[0] as *u8) {
+            ok = clean_file(directory, &name[0] as *u8);
+        }
+    }
+    if ok { if remove(record) != 0 { ok = false; } }
+    free(record as *void);
+    return ok;
+}
+
+fn clean_file(directory: *u8, name: *u8) -> bool {
+    let path: *u8 = path_join(directory, name);
+    if path == (0 as *u8) { return false; }
+    let mut ok: bool = true;
+    if access(path, 0) == 0 {
+        if remove(path) != 0 { perror(path); ok = false; }
+    }
+    free(path as *void);
+    return ok;
+}
+
 pub fn clean_project() -> i32 {
-    // Load config to get directories
-    let cfg: Config = config_load()
-
-    puts("Cleaning build artifacts...\0" as *u8)
-
-    // Build clean commands using config paths
-    let cmd: *u8 = malloc(256) as *u8
-
-    // Remove target directory
-    strcpy(cmd, "rm -rf \0" as *u8)
-    strcat(cmd, cfg.target_dir)
-    strcat(cmd, "\0" as *u8)
-    system(cmd)
-
-    // Remove generated C files
-    strcpy(cmd, "rm -f \0" as *u8)
-    strcat(cmd, cfg.src_dir)
-    strcat(cmd, "/*.c\0" as *u8)
-    system(cmd)
-
-    free(cmd as *void)
-    puts("  Cleaned\0" as *u8)
-    return 0
+    let mut cfg: Config = config_load();
+    let mut status: i32 = 1;
+    if cfg.valid {
+        status = 0;
+        if !clean_owned_output(cfg.target_dir) { status = 1; }
+        if !clean_file(cfg.target_dir, ".jxz-test\0" as *u8) { status = 1; }
+        if !clean_file(cfg.target_dir, ".jxz-test-list\0" as *u8) { status = 1; }
+        // Only remove an empty directory: unrelated files and source C survive.
+        rmdir(cfg.target_dir);
+    }
+    config_free(&cfg as *Config);
+    return status;
 }
