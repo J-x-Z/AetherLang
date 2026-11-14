@@ -1,0 +1,29 @@
+extern "C" {
+    fn malloc(size: u64) -> *u8;
+    fn free(pointer: *u8);
+    fn snprintf(buffer: *u8, size: u64, format: *u8, ...) -> i32;
+    fn fprintf(file: *u8, format: *u8, ...) -> i32;
+    fn tmpfile() -> *u8;
+    fn fclose(file: *u8) -> i32;
+    fn rewind(file: *u8);
+    fn fgets(buffer: *u8, size: i32, file: *u8) -> *u8;
+    fn strcmp(left: *u8, right: *u8) -> i32;
+}
+fn main() -> i32 effect[io, alloc] {
+    let buffer: *u8 = malloc(64);
+    if buffer == (0 as *u8) { return 1; }
+    let number: i8 = -7;
+    let fraction: f32 = 1.25;
+    let length: i32 = snprintf(buffer, 64, "%d %.2f\0" as *u8, number, fraction);
+    if length != 7 || strcmp(buffer, "-7 1.25\0" as *u8) != 0 { free(buffer); return 2; }
+    let file: *u8 = tmpfile();
+    if file == (0 as *u8) { free(buffer); return 3; }
+    let written: i32 = fprintf(file, "%d %.2f\0" as *u8, number, fraction);
+    rewind(file);
+    let read: *u8 = fgets(buffer, 64, file);
+    let same: bool = read != (0 as *u8) && strcmp(buffer, "-7 1.25\0" as *u8) == 0;
+    let closed: i32 = fclose(file);
+    free(buffer);
+    if written != 7 || !same || closed != 0 { return 4; }
+    return 0;
+}

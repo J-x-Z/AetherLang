@@ -22,6 +22,7 @@ pub enum TokenKind {
     Pass,
     Break,
     Continue,
+    And, Or, Not, True, False,
     
     // Metaprogramming
     Comptime, // @comptime
@@ -36,6 +37,7 @@ pub enum TokenKind {
     Plus,       // +
     Minus,      // -
     Star,       // *
+    Percent,
     Slash,      // /
     Eq,         // =
     EqEq,       // ==
@@ -59,6 +61,7 @@ pub enum TokenKind {
     // For now, skip comments.
     
     Unknown(char),
+    Invalid(String),
 }
 
 #[derive(Debug, Clone)]

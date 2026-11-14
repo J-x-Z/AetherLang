@@ -65,6 +65,7 @@ pub struct IRModule {
 #[derive(Debug, Clone)]
 pub struct IRExtern {
     pub name: String,
+    pub variadic: bool,
     pub params: Vec<(String, IRType)>,
     pub ret_type: IRType,
 }
@@ -102,6 +103,8 @@ pub struct IRFunction {
     pub sret_type: Option<IRType>,
     pub blocks: Vec<BasicBlock>,
     pub entry_block: BlockId,
+    /// Canonical types assigned by lowering, shared by every backend.
+    pub register_types: std::collections::HashMap<Register, IRType>,
     /// Contract assertions for runtime checking
     pub contracts: IRContracts,
     /// SIMD annotation - enable auto-vectorization hints
@@ -134,6 +137,7 @@ impl IRFunction {
             sret_type: None,
             blocks: Vec::new(),
             entry_block: BlockId(0),
+            register_types: std::collections::HashMap::new(),
             contracts: IRContracts::default(),
             simd: false,
             naked: false,
@@ -222,6 +226,9 @@ pub enum Instruction {
     /// dest = gep ptr, index (with explicit element type for LLVM opaque pointers)
     GetElementPtr { dest: Register, ptr: Value, index: Value, elem_ty: IRType },
     
+    /// Address a struct field; distinct from indexing an array of structs.
+    GetFieldPtr { dest: Register, ptr: Value, field: usize, struct_ty: IRType },
+
     /// dest = phi [(val1, block1), (val2, block2), ...]
     Phi { dest: Register, incoming: Vec<(Value, BlockId)> },
 
@@ -311,6 +318,34 @@ impl fmt::Display for Constant {
     }
 }
 
+/// Aether asm placeholders use source operand order ($0, $1, ...). Native
+/// constraints put outputs before inputs; both backends use this same mapping.
+pub fn render_asm_template(template: &str, operands: &[IRAsmOperand], c_syntax: bool) -> std::result::Result<String, String> {
+    let output_count = operands.iter().filter(|op| op.output.is_some()).count();
+    let mut output_index = 0;
+    let mut input_index = output_count;
+    let mut mapping = Vec::new();
+    for operand in operands {
+        if operand.output.is_some() { mapping.push(output_index); output_index += 1; }
+        else if matches!(operand.kind, IRAsmOperandKind::Input) { mapping.push(input_index); input_index += 1; }
+    }
+    let mut chars = template.chars().peekable();
+    let mut result = String::new();
+    while let Some(ch) = chars.next() {
+        if ch == '$' {
+            if chars.peek() == Some(&'$') { chars.next(); result.push_str(if c_syntax { "$" } else { "$$" }); continue; }
+            let mut digits = String::new();
+            while chars.peek().is_some_and(|ch| ch.is_ascii_digit()) { digits.push(chars.next().unwrap()); }
+            if digits.is_empty() { return Err("asm literal '$' must be escaped as '$$'".into()); }
+            let index: usize = digits.parse().map_err(|_| "invalid asm operand index")?;
+            let mapped = mapping.get(index).ok_or_else(|| format!("asm operand ${index} does not exist"))?;
+            result.push(if c_syntax { '%' } else { '$' }); result.push_str(&mapped.to_string());
+        } else if ch == '%' && c_syntax { result.push_str("%%"); }
+        else { result.push(ch); }
+    }
+    Ok(result)
+}
+
 /// Binary operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
@@ -372,6 +407,18 @@ pub enum IRType {
 }
 
 impl IRType {
+    pub fn integer_bits(&self) -> Option<u32> {
+        match self {
+            Self::I8 | Self::U8 => Some(8), Self::I16 | Self::U16 => Some(16),
+            Self::I32 | Self::U32 => Some(32), Self::I64 | Self::U64 => Some(64),
+            _ => None,
+        }
+    }
+
+    pub fn is_signed_integer(&self) -> bool {
+        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64)
+    }
+
     pub fn size_bytes(&self) -> usize {
         match self {
             IRType::Void => 0,

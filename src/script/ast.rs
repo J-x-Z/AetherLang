@@ -15,6 +15,8 @@ pub enum Stmt {
     Expr(Expr),
     Assign(AssignStmt),
     Pass,
+    Break,
+    Continue,
     // Add ClassDef, Import, etc. later
 }
 
@@ -82,6 +84,8 @@ pub struct AssignStmt {
 pub enum Expr {
     Identifier { name: String, span: Span },
     Integer { value: i64, span: Span },
+    Boolean { value: bool, span: Span },
+    Unary { op: UnaryOp, expr: Box<Expr>, span: Span },
     Float { value: f64, span: Span },
     String { value: String, span: Span },
     Binary { left: Box<Expr>, op: BinOp, right: Box<Expr>, span: Span },
@@ -92,7 +96,10 @@ pub enum Expr {
 
 #[derive(Debug, Clone)]
 pub enum BinOp {
-    Add, Sub, Mul, Div,
+    Add, Sub, Mul, Div, Mod,
     Eq, Ne, Lt, Gt, Le, Ge,
     And, Or,
 }
+
+#[derive(Debug, Clone)]
+pub enum UnaryOp { Neg, Not }

@@ -133,6 +133,9 @@ impl IRPrinter {
                     self.value_str(index)
                 ).unwrap();
             }
+            Instruction::GetFieldPtr { dest, ptr, field, .. } => {
+                write!(self.output, "{} = fieldptr {}, {}", dest, self.value_str(ptr), field).unwrap();
+            }
             Instruction::Phi { dest, incoming } => {
                 write!(self.output, "{} = phi ", dest).unwrap();
                 for (i, (val, block)) in incoming.iter().enumerate() {

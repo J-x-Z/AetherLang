@@ -1,0 +1,14 @@
+fn classify(n: i32) -> bool {
+    return match n { 0 => false, value if value < 0 => false, _ => true };
+}
+fn choose(n: i32) -> i64 {
+    match n { 0 => { return 8; }, _ => { return 3; } }
+}
+fn forward(n: i32) -> i32 { return later(n); }
+fn main() -> i32 {
+    if classify(0) || classify(-3) || !classify(4) { return 1; }
+    if choose(0) != 8 || choose(2) != 3 { return 2; }
+    if forward(5) != 7 { return 3; }
+    return 0;
+}
+fn later(n: i32) -> i32 { return n + 2; }

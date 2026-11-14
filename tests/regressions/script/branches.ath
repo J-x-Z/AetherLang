@@ -1,0 +1,21 @@
+def classify(x: int) -> int:
+    if x < 0:
+        return -1
+    elif x == 0:
+        return 0
+    elif x < 10:
+        return 1
+    else:
+        return 2
+
+def main():
+    if classify(-10) != -1 or classify(0) != 0:
+        return 1
+    if classify(7) != 1 or classify(20) != 2:
+        return 2
+    if True:
+        value = 12
+    else:
+        value = 99
+    print("quoted: \"Aether\"\\path")
+    return value - 12

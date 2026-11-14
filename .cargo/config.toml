@@ -1,5 +1,2 @@
-# Only use GNU toolchain when llvm feature is enabled
-# The GNU toolchain is needed for linking with MSYS2 LLVM
-
-[env]
-LLVM_SYS_211_PREFIX = "C:\\msys64\\ucrt64"
+# Set LLVM_SYS_211_PREFIX in the environment when LLVM 21 is not on PATH.
+# C-only builds use: cargo build --no-default-features

@@ -1,0 +1,9 @@
+fn main() -> i32 {
+    let text: *u8 = "éA\0B" as *u8;
+    if text[0] != (195 as u8) { return 1; }
+    if text[1] != (169 as u8) { return 2; }
+    if text[2] != (65 as u8) { return 3; }
+    if text[3] != (0 as u8) { return 4; }
+    if text[4] != (66 as u8) { return 5; }
+    return 0;
+}

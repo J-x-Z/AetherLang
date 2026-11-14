@@ -156,8 +156,7 @@ impl Lexer {
                             }
                             
                             if current_indent != *self.indent_stack.last().unwrap() {
-                                // Indentation error!
-                                // For now, treat as just dedenting to nearest.
+                                return self.make_token(TokenKind::Invalid("indentation does not match an enclosing block".into()));
                             }
                             
                             if self.pending_dedents > 0 {
@@ -192,6 +191,16 @@ impl Lexer {
                 } else {
                     self.make_token(TokenKind::Minus)
                 }
+            }
+            Some('%') => { self.advance(); self.make_token(TokenKind::Percent) }
+            Some('<') | Some('>') | Some('!') => {
+                let first = self.advance().unwrap();
+                let equal = if self.peek() == Some('=') { self.advance(); true } else { false };
+                self.make_token(match (first, equal) {
+                    ('<', false) => TokenKind::Lt, ('<', true) => TokenKind::LtEq,
+                    ('>', false) => TokenKind::Gt, ('>', true) => TokenKind::GtEq,
+                    ('!', true) => TokenKind::NotEq, _ => TokenKind::Unknown(first),
+                })
             }
             Some('*') => { self.advance(); self.make_token(TokenKind::Star) }
             Some('/') => { self.advance(); self.make_token(TokenKind::Slash) }
@@ -259,6 +268,8 @@ impl Lexer {
             "pass" => TokenKind::Pass,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
+            "and" => TokenKind::And, "or" => TokenKind::Or, "not" => TokenKind::Not,
+            "True" | "true" => TokenKind::True, "False" | "false" => TokenKind::False,
             "@comptime" => TokenKind::Comptime,
             _ => TokenKind::Identifier(text),
         };
@@ -286,9 +297,9 @@ impl Lexer {
         }
 
         let kind = if is_float {
-            TokenKind::Float(text.parse().unwrap_or(0.0))
+            match text.parse::<f64>() { Ok(value) if value.is_finite() => TokenKind::Float(value), _ => TokenKind::Invalid("invalid floating-point literal".into()) }
         } else {
-            TokenKind::Integer(text.parse().unwrap_or(0))
+            match text.parse::<i64>() { Ok(value) => TokenKind::Integer(value), _ => TokenKind::Invalid("integer literal is out of range".into()) }
         };
 
         let span = Span::new(start, self.pos, self.line, self.col - (self.pos - start));
@@ -297,21 +308,27 @@ impl Lexer {
 
     fn string(&mut self) -> Token {
         let start = self.pos;
-        self.advance(); // consume opening quote
+        let line = self.line;
+        let column = self.col;
+        self.advance();
         let mut text = String::new();
-        
+        let mut terminated = false;
         while let Some(c) = self.peek() {
-            if c == '"' {
-                self.advance(); // consume closing
-                break;
-            } else {
-                text.push(c);
-                self.advance();
-            }
+            if c == '"' { self.advance(); terminated = true; break; }
+            if c == '\n' { break; }
+            self.advance();
+            if c == '\\' {
+                let escaped = match self.advance() {
+                    Some('n') => '\n', Some('t') => '\t', Some('r') => '\r',
+                    Some('0') => '\0', Some('"') => '"', Some('\\') => '\\',
+                    _ => return self.make_token(TokenKind::Invalid("invalid string escape".into())),
+                };
+                text.push(escaped);
+            } else { text.push(c); }
         }
-
-        let span = Span::new(start, self.pos, self.line, self.col - (self.pos - start));
-        Token { kind: TokenKind::String(text), span }
+        let kind = if terminated { TokenKind::String(text) }
+            else { TokenKind::Invalid("unterminated string literal".into()) };
+        Token { kind, span: Span::new(start, self.pos, line, column) }
     }
 
     fn make_token(&self, kind: TokenKind) -> Token {

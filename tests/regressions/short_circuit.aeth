@@ -1,0 +1,13 @@
+extern "C" { fn puts(text: *u8) -> i32; }
+fn fail() -> bool effect[io] {
+    puts("unexpected rhs\0" as *u8);
+    return true;
+}
+fn main() -> i32 effect[io] {
+    let a: bool = false && fail();
+    let b: bool = true || fail();
+    if a || !b { return 1; }
+    let c: bool = true && (false || true);
+    if !c { return 2; }
+    return 0;
+}

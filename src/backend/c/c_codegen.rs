@@ -109,9 +109,9 @@ impl CCodeGen {
                 '"' => result.push_str("\\\""),
                 c if c.is_ascii() && !c.is_control() => result.push(c),
                 c => {
-                    // Non-ASCII or control chars: use hex escape
+                    // Fixed-width octal cannot absorb following hexadecimal characters
                     for b in c.to_string().bytes() {
-                        result.push_str(&format!("\\x{:02x}", b));
+                        result.push_str(&format!("\\{:03o}", b));
                     }
                 }
             }
@@ -134,7 +134,10 @@ impl CCodeGen {
             IRType::U64 => "uint64_t".to_string(),
             IRType::F32 => "float".to_string(),
             IRType::F64 => "double".to_string(),
-            IRType::Ptr(inner) => format!("{}*", self.ir_type_to_c(inner)),
+            IRType::Ptr(inner) => match inner.as_ref() {
+                IRType::Array(elem, _) => format!("{}*", self.ir_type_to_c(elem)),
+                _ => format!("{}*", self.ir_type_to_c(inner)),
+            },
             IRType::Array(elem, size) => format!("{}[{}]", self.ir_type_to_c(elem), size),
             IRType::Struct(name) => format!("struct {}", name),
             IRType::Function { params, ret } => {
@@ -179,8 +182,8 @@ impl CCodeGen {
             BinOp::Mul => "*",
             BinOp::Div => "/",
             BinOp::Mod => "%",
-            BinOp::And => "&&",
-            BinOp::Or => "||",
+            BinOp::And => "&",
+            BinOp::Or => "|",
             BinOp::Xor => "^",
             BinOp::Shl => "<<",
             BinOp::Shr => ">>",
@@ -199,7 +202,9 @@ impl CCodeGen {
             Value::Register(reg) => self.get_var(*reg),
             Value::Constant(c) => match c {
                 Constant::Int(n) => format!("{}LL", n),
-                Constant::Float(f) => format!("{}", f),
+                Constant::Float(f) if f.is_nan() => "NAN".into(),
+                Constant::Float(f) if f.is_infinite() => if f.is_sign_negative() { "(-INFINITY)".into() } else { "INFINITY".into() },
+                Constant::Float(f) => format!("{:?}", f),
                 Constant::Bool(b) => if *b { "1" } else { "0" }.to_string(),
                 Constant::String(s) => format!("\"{}\"", Self::escape_for_c(s)),
                 Constant::Null => "NULL".to_string(),
@@ -233,8 +238,11 @@ impl CCodeGen {
                     self.reg_types.insert(*dest, ty);
                 }
             }
-            Instruction::BinOp { dest, .. } => {
-                self.reg_types.insert(*dest, IRType::I64); 
+            Instruction::BinOp { dest, op, left, .. } => {
+                let ty = if matches!(op, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge) {
+                    IRType::Bool
+                } else { self.get_value_type(left).unwrap_or(IRType::I64) };
+                self.reg_types.insert(*dest, ty);
             }
             Instruction::UnaryOp { dest, value, .. } => {
                  if let Some(ty) = self.get_value_type(value) {
@@ -255,27 +263,14 @@ impl CCodeGen {
                     self.reg_types.insert(*dest, *inner);
                 }
             }
-            Instruction::GetElementPtr { dest, ptr, index, elem_ty: _ } => {
-                let ptr_ty = self.get_value_type(ptr);
-                if let Some(IRType::Ptr(inner)) = &ptr_ty {
-                    if let IRType::Struct(struct_name) = &**inner {
-                         if let Value::Constant(Constant::Int(idx)) = index {
-                             let field_info = if let Some(fields) = self.struct_layouts.get(struct_name) {
-                                 fields.get(*idx as usize).cloned()
-                             } else {
-                                 None
-                             };
-                             
-                             if let Some((_, field_type)) = field_info {
-                                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(field_type)));
-                                 return; // Handled
-                             }
-                         }
+            Instruction::GetElementPtr { dest, elem_ty, .. } => {
+                self.reg_types.insert(*dest, IRType::Ptr(Box::new(elem_ty.clone())));
+            }
+            Instruction::GetFieldPtr { dest, field, struct_ty, .. } => {
+                if let IRType::Struct(name) = struct_ty {
+                    if let Some((_, ty)) = self.struct_layouts.get(name).and_then(|fields| fields.get(*field)) {
+                        self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty.clone())));
                     }
-                }
-                // Fallback
-                if let Some(IRType::Ptr(inner)) = ptr_ty {
-                      self.reg_types.insert(*dest, IRType::Ptr(inner));
                 }
             }
             Instruction::Phi { dest, incoming } => {
@@ -380,6 +375,8 @@ impl CCodeGen {
             }
         }
 
+        self.reg_types.extend(func.register_types.clone());
+
         // Declare all variables upfront (C89 style for compatibility)
         let mut declarations = Vec::new();
         for block in &func.blocks {
@@ -391,6 +388,7 @@ impl CCodeGen {
                     Instruction::Alloca { dest, .. } |
                     Instruction::Load { dest, .. } |
                     Instruction::GetElementPtr { dest, .. } |
+                    Instruction::GetFieldPtr { dest, .. } |
                     Instruction::Phi { dest, .. } |
                     Instruction::Cast { dest, .. } => {
                         let var = self.get_var(*dest);
@@ -410,8 +408,8 @@ impl CCodeGen {
                         for op in operands {
                             if let Some(reg) = op.output {
                                 let var = self.get_var(reg);
-                                // Default to int64_t for asm outputs for not
-                                declarations.push(format!("int64_t {};", var));
+                                let ty = self.reg_types.get(&reg).cloned().unwrap_or(IRType::I64);
+                                declarations.push(format!("{} {};", self.ir_type_to_c(&ty), var));
                             }
                         }
                     }
@@ -439,7 +437,7 @@ impl CCodeGen {
             if i > 0 {
                 let label = &self.block_labels[&i];
                 self.indent -= 1;
-                self.writeln(&format!("{}:", label));
+                self.writeln(&format!("{}: ;", label));
                 self.indent += 1;
             }
 
@@ -467,6 +465,12 @@ impl CCodeGen {
         match val {
             Value::Register(reg) => self.reg_types.get(reg).cloned(),
             Value::Parameter(idx) => self.param_types.get(idx).cloned(),
+            Value::Constant(Constant::Int(_)) => Some(IRType::I64),
+            Value::Constant(Constant::Float(_)) => Some(IRType::F64),
+            Value::Constant(Constant::Bool(_)) => Some(IRType::Bool),
+            Value::Constant(Constant::String(_)) => Some(IRType::Ptr(Box::new(IRType::U8))),
+            Value::Constant(Constant::Null) => Some(IRType::Ptr(Box::new(IRType::Void))),
+            Value::Unit => Some(IRType::Void),
             _ => None,
         }
     }
@@ -507,8 +511,26 @@ impl CCodeGen {
                 let l = self.value_to_c(left);
                 let r = self.value_to_c(right);
                 let op_str = self.binop_to_c(*op);
-                self.writeln(&format!("{} = {} {} {};", var, l, op_str, r));
-                self.reg_types.insert(*dest, IRType::I64); // Default to I64 for now
+                let ty = self.get_value_type(left).unwrap_or(IRType::I64);
+                if let Some(bits) = ty.integer_bits() {
+                    let result_type = self.ir_type_to_c(&ty);
+                    let expression = match op {
+                        BinOp::Add | BinOp::Sub | BinOp::Mul => format!("({})((uint64_t)({}) {} (uint64_t)({}))", result_type, l, op_str, r),
+                        BinOp::Shl => format!("({})((uint64_t)({}) << ((uint64_t)({}) & {}))", result_type, l, r, bits - 1),
+                        BinOp::Shr if ty.is_signed_integer() => format!("({})(({}) < 0 ? ~(~(uint64_t)({}) >> ((uint64_t)({}) & {})) : ((uint64_t)({}) >> ((uint64_t)({}) & {})))", result_type, l, l, r, bits - 1, l, r, bits - 1),
+                        BinOp::Shr => format!("({})((uint64_t)({}) >> ((uint64_t)({}) & {}))", result_type, l, r, bits - 1),
+                        BinOp::Div | BinOp::Mod => {
+                            let overflow = if ty.is_signed_integer() { format!(" || (({}) == INT{}_MIN && ({}) == -1)", l, bits, r) } else { String::new() };
+                            self.writeln(&format!("if (({}) == 0{}) __builtin_trap();", r, overflow));
+                            format!("{} {} {}", l, op_str, r)
+                        }
+                        _ => format!("{} {} {}", l, op_str, r),
+                    };
+                    self.writeln(&format!("{} = {};", var, expression));
+                } else {
+                    self.writeln(&format!("{} = {} {} {};", var, l, op_str, r));
+                }
+
             }
             
             Instruction::UnaryOp { dest, op, value } => {
@@ -519,7 +541,10 @@ impl CCodeGen {
                     UnaryOp::Not => "!",
                     UnaryOp::BitNot => "~",
                 };
-                self.writeln(&format!("{} = {}{};", var, op_str, val));
+                if matches!(op, UnaryOp::Neg) && self.get_value_type(value).and_then(|t| t.integer_bits()).is_some() {
+                    let ty = self.ir_type_to_c(&self.get_value_type(value).unwrap());
+                    self.writeln(&format!("{} = ({})((uint64_t)0 - (uint64_t)({}));", var, ty, val));
+                } else { self.writeln(&format!("{} = {}{};", var, op_str, val)); }
                 if let Some(ty) = self.get_value_type(value) {
                     self.reg_types.insert(*dest, ty);
                 }
@@ -599,9 +624,15 @@ impl CCodeGen {
             Instruction::Alloca { dest, ty } => {
                 let var = self.get_var(*dest);
                 let c_type = self.ir_type_to_c(ty);
-                // Alloca in C is just a local variable
-                self.writeln(&format!("{} _alloca_{};", c_type, var));
-                self.writeln(&format!("{} = &_alloca_{};", var, var));
+                // Fixed arrays decay to their first element; scalar storage keeps its address.
+                if let IRType::Array(elem, size) = ty {
+                    let elem = self.ir_type_to_c(elem);
+                    self.writeln(&format!("{} _alloca_{}[{}];", elem, var, size));
+                    self.writeln(&format!("{} = _alloca_{};", var, var));
+                } else {
+                    self.writeln(&format!("{} _alloca_{};", c_type, var));
+                    self.writeln(&format!("{} = &_alloca_{};", var, var));
+                }
                 
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty.clone())));
             }
@@ -657,42 +688,23 @@ impl CCodeGen {
                 }
             }
             
-            Instruction::GetElementPtr { dest, ptr, index, elem_ty: _ } => {
-                let ptr_ty = self.get_value_type(ptr);
-                let mut handled = false;
-                
-                // Check if this is a struct field access
-                if let Some(IRType::Ptr(inner)) = &ptr_ty {
-                    if let IRType::Struct(struct_name) = &**inner {
-                        if let Value::Constant(Constant::Int(idx)) = index {
-                             let field_info = if let Some(fields) = self.struct_layouts.get(struct_name) {
-                                 fields.get(*idx as usize).cloned()
-                             } else {
-                                 None
-                             };
-
-                             if let Some((field_name, field_type)) = field_info {
-                                 let var = self.get_var(*dest);
-                                 let p = self.value_to_c(ptr);
-                                 self.writeln(&format!("{} = &{}->{};", var, p, field_name));
-                                 
-                                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(field_type)));
-                                 handled = true;
-                             }
-                        }
-                    }
-                }
-                
-                if !handled {
-                    let var = self.get_var(*dest);
-                    let p = self.value_to_c(ptr);
-                    let idx = self.value_to_c(index);
-                    self.writeln(&format!("{} = &{}[{}];", var, p, idx));
-                    
-                    if let Some(IRType::Ptr(inner)) = ptr_ty {
-                         self.reg_types.insert(*dest, IRType::Ptr(inner));
-                     }
-                }
+            Instruction::GetElementPtr { dest, ptr, index, elem_ty } => {
+                let var = self.get_var(*dest);
+                let p = self.value_to_c(ptr);
+                let idx = self.value_to_c(index);
+                let ty = self.ir_type_to_c(elem_ty);
+                self.writeln(&format!("{} = &(({}*){})[{}];", var, ty, p, idx));
+                self.reg_types.insert(*dest, IRType::Ptr(Box::new(elem_ty.clone())));
+            }
+            Instruction::GetFieldPtr { dest, ptr, field, struct_ty } => {
+                let (name, ty) = match struct_ty {
+                    IRType::Struct(name) => self.struct_layouts.get(name).and_then(|fields| fields.get(*field)).cloned(),
+                    _ => None,
+                }.ok_or_else(|| Error::CodeGen("invalid struct field address".into()))?;
+                let var = self.get_var(*dest);
+                let p = self.value_to_c(ptr);
+                self.writeln(&format!("{} = &{}->{};", var, p, name));
+                self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty)));
             }
 
             Instruction::Cast { dest, value, ty } => {
@@ -725,7 +737,7 @@ impl CCodeGen {
                                     op.constraint.clone()
                                 };
                                 outputs.push(format!("\"{}\" ({})", constraint, var));
-                                self.reg_types.insert(reg, IRType::I64); // Default to I64
+
                             }
                         }
                         IRAsmOperandKind::InOut => {
@@ -741,7 +753,7 @@ impl CCodeGen {
                                     op.constraint.clone()
                                 };
                                 outputs.push(format!("\"{}\" ({})", constraint, var));
-                                self.reg_types.insert(reg, IRType::I64); 
+
                              }
                         }
                         IRAsmOperandKind::Clobber => {
@@ -755,7 +767,7 @@ impl CCodeGen {
                 let clobbers_str = clobbers.join(", ");
                 
                 self.writeln(&format!("__asm__ volatile (\"{}\" : {} : {} : {});", 
-                    template, outputs_str, inputs_str, clobbers_str));
+                    Self::escape_for_c(&render_asm_template(template, operands, true).map_err(Error::CodeGen)?), outputs_str, inputs_str, clobbers_str));
             }
             
             Instruction::Phi { dest, incoming } => {
@@ -890,6 +902,7 @@ impl CCodeGen {
         self.writeln("#include <stdio.h>");
         self.writeln("#include <stdlib.h>");
         self.writeln("#include <string.h>");
+        self.writeln("#include <math.h>");
         // SIMD headers (platform-specific)
         if self.target_triple.contains("aarch64") || self.target_triple.contains("arm64") || self.target_triple.contains("arm") {
             self.writeln("#include <arm_neon.h>");
@@ -926,6 +939,7 @@ impl CCodeGen {
         
         // Struct definitions
         self.writeln("/* Struct Definitions */");
+        for definition in &module.structs { self.writeln(&format!("struct {};", definition.name)); }
         for struct_def in &module.structs {
             // Add GCC attributes based on repr
             let attr = match struct_def.repr {
@@ -1050,6 +1064,37 @@ impl CCodeGen {
             self.func_ret_types.insert(ext.name.clone(), ext.ret_type.clone());
         }
         
+        // C library headers own their ABI declarations; every other explicit
+        // foreign function receives a prototype, including its variadic marker.
+        const HEADER_FUNCTIONS: &[&str] = &[
+            "abort", "exit", "malloc", "calloc", "realloc", "free", "atoi", "atol", "atof", "strtol", "strtoul",
+            "system", "getenv", "qsort", "bsearch", "abs", "labs", "llabs", "rand", "srand",
+            "puts", "putchar", "getchar", "printf", "fprintf", "sprintf", "snprintf", "scanf", "sscanf", "fscanf",
+            "fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "rewind", "fgets", "fputs", "fflush", "feof", "ferror", "clearerr",
+            "tmpfile", "remove", "rename", "perror", "setbuf", "setvbuf", "fileno", "fgetc", "fputc", "getc", "putc", "ungetc", "freopen",
+            "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strcat", "strncat", "strchr", "strrchr", "strstr",
+            "memcpy", "memmove", "memset", "memcmp", "memchr", "strerror", "strdup", "assert",
+            // Remaining ISO C stdio APIs and common POSIX stdio extensions.
+            "fdopen", "popen", "pclose", "fseeko", "ftello", "fgetpos", "fsetpos", "tmpnam", "tmpnam_r",
+            "vprintf", "vfprintf", "vsprintf", "vsnprintf", "vscanf", "vfscanf", "vsscanf", "dprintf", "vdprintf",
+            "getline", "getdelim", "flockfile", "ftrylockfile", "funlockfile", "getc_unlocked", "putc_unlocked",
+            "getchar_unlocked", "putchar_unlocked", "getw", "putw", "ctermid",
+            // Scalar conversion/allocation/environment APIs declared by stdlib.
+            "strtod", "strtof", "strtold", "strtoll", "strtoull", "atoll", "div", "ldiv", "lldiv",
+            "atexit", "at_quick_exit", "quick_exit", "_Exit", "aligned_alloc", "mblen", "mbtowc", "wctomb", "mbstowcs", "wcstombs",
+            // Remaining byte-string APIs from string.h.
+            "strcoll", "strxfrm", "strspn", "strcspn", "strpbrk", "strtok", "strtok_r", "strndup", "strnlen",
+
+        ];
+        let mut declared = HashSet::new();
+        for ext in &module.externs {
+            if HEADER_FUNCTIONS.contains(&ext.name.as_str()) || (uses_llvm && ext.name.starts_with("LLVM")) || !declared.insert(ext.name.clone()) { continue; }
+            let mut params: Vec<_> = ext.params.iter().map(|(_, ty)| self.ir_type_to_c(ty)).collect();
+            if ext.variadic { params.push("...".into()); }
+            if params.is_empty() { params.push("void".into()); }
+            self.writeln(&format!("extern {} {}({});", self.ir_type_to_c(&ext.ret_type), ext.name, params.join(", ")));
+        }
+
         // Forward declarations
         for func in &module.functions {
             let ret_type = self.ir_type_to_c(&func.ret_type);
@@ -1184,7 +1229,9 @@ mod tests {
     fn test_binary_expression() {
         let c = generate_c("fn add() -> i64 { return 1 + 2 }");
         println!("{}", c);
-        assert!(c.contains("1LL + 2LL"));
+        // Signed arithmetic must use unsigned intermediates so overflow has
+        // the same wrapping semantics as LLVM (runtime cases are in the matrix).
+        assert!(c.contains("(int64_t)((uint64_t)(1LL) + (uint64_t)(2LL))"));
     }
 
     #[test]

@@ -1,0 +1,20 @@
+type Count = i32;
+type Weight = f64;
+type PairAlias = Pair;
+struct Pair { left: Count, right: Count }
+const BASE: Count = 20 + 2;
+const DOUBLED: Count = BASE * 2;
+const MASK: u8 = 257 as u8;
+const WEIGHT: Weight = 1.5 + 0.25;
+const ENABLED: bool = DOUBLED == 44 && MASK == 1;
+const MESSAGE: *u8 = "constants and aliases";
+extern "C" { fn puts(message: *u8) -> i32; }
+fn sum(pair: PairAlias) -> Count { pair.left + pair.right }
+fn main() -> i32 {
+    let pair: PairAlias = Pair { left: DOUBLED, right: BASE };
+    if sum(pair) != 66 || !ENABLED { return 1; }
+    let weight: Weight = WEIGHT;
+    if weight != 1.75 { return 2; }
+    puts(MESSAGE);
+    return 0;
+}

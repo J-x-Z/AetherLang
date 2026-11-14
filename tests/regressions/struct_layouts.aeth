@@ -1,0 +1,15 @@
+struct Outer { inner: Inner, tail: i64 }
+struct Inner { value: i64 }
+struct A { b: *B, tag: i64 }
+struct B { a: *A, tag: i64 }
+fn main() -> i32 {
+    let mut outer: Outer = Outer { inner: Inner { value: 17 }, tail: 23 };
+    if outer.inner.value != 17 || outer.tail != 23 { return 1; }
+    outer.inner.value = 31;
+    if outer.inner.value != 31 || outer.tail != 23 { return 2; }
+    let mut a: A = A { b: 0 as *B, tag: 11 };
+    let mut b: B = B { a: &mut a as *A, tag: 12 };
+    a.b = &mut b as *B;
+    if (*a.b).tag != 12 || (*b.a).tag != 11 { return 3; }
+    return 0;
+}

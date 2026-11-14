@@ -20,6 +20,7 @@ use crate::utils::{Error, Result};
 /// LLVM-based code generator
 pub struct LLVMCodeGen {
     target_triple: String,
+    opt_level: u8,
     context: LLVMContextRef,
     module: LLVMModuleRef,
     builder: LLVMBuilderRef,
@@ -30,6 +31,9 @@ pub struct LLVMCodeGen {
     block_map: HashMap<usize, LLVMBasicBlockRef>,
     // Current function being generated
     current_function: Option<LLVMValueRef>,
+    register_types: HashMap<Register, IRType>,
+    parameter_types: Vec<IRType>,
+    parameter_values: Vec<LLVMValueRef>,
     // Allocas for multiply-assigned registers
     alloca_map: HashMap<Register, LLVMValueRef>,
 }
@@ -44,6 +48,7 @@ impl LLVMCodeGen {
             
             let mut codegen = Self {
                 target_triple: target.to_string(),
+                opt_level: 0,
                 context,
                 module,
                 builder,
@@ -51,6 +56,9 @@ impl LLVMCodeGen {
                 block_map: HashMap::new(),
                 current_function: None,
                 alloca_map: HashMap::new(),
+                register_types: HashMap::new(),
+                parameter_types: Vec::new(),
+                parameter_values: Vec::new(),
             };
             
             codegen.declare_builtins();
@@ -58,6 +66,11 @@ impl LLVMCodeGen {
         }
     }
     
+    pub fn with_opt_level(mut self, opt_level: u8) -> Self {
+        self.opt_level = opt_level.min(3);
+        self
+    }
+
     /// Declare C standard library builtin functions
     fn declare_builtins(&mut self) {
         unsafe {
@@ -150,9 +163,8 @@ impl LLVMCodeGen {
                     let name_c = CString::new(name.as_str()).unwrap();
                     let ty = LLVMGetTypeByName2(self.context, name_c.as_ptr());
                     if ty.is_null() {
-                        // Unknown type - treat as i32 (enum discriminant or simple type)
-                        // This is a temporary fix for enum types which don't have a separate IRType
-                        LLVMInt32TypeInContext(self.context)
+                        // Preserve the nominal type until the layout declaration pass.
+                        LLVMStructCreateNamed(self.context, name_c.as_ptr())
                     } else {
                         // Return actual struct type (not pointer)
                         // Callers that need pointer should apply Ptr wrapper
@@ -192,12 +204,16 @@ impl LLVMCodeGen {
             
             // Create function
             let name = CString::new(func.name.as_str()).unwrap();
-            let llvm_func = LLVMAddFunction(self.module, name.as_ptr(), func_type);
+            let mut llvm_func = LLVMGetNamedFunction(self.module, name.as_ptr());
+            if llvm_func.is_null() { llvm_func = LLVMAddFunction(self.module, name.as_ptr(), func_type); }
             self.current_function = Some(llvm_func);
             
             // Clear mappings for new function
             self.value_map.clear();
             self.block_map.clear();
+            self.register_types = func.register_types.clone();
+            self.parameter_types = func.params.iter().map(|(_, ty)| ty.clone()).collect();
+            self.parameter_values.clear();
             
             // Create basic blocks
             for (i, block) in func.blocks.iter().enumerate() {
@@ -216,7 +232,7 @@ impl LLVMCodeGen {
                 let param_name = CString::new(name.as_str()).unwrap();
                 LLVMSetValueName2(param, param_name.as_ptr(), name.len());
                 // Store parameter in a special register
-                self.value_map.insert(Register(1000 + i), param);
+                self.parameter_values.push(param);
             }
             
             // Add sret attribute for functions returning structs via pointer
@@ -230,10 +246,12 @@ impl LLVMCodeGen {
                             4
                         );
                         if sret_attr_kind != 0 {
-                            let sret_attr = llvm_sys::core::LLVMCreateEnumAttribute(
-                                self.context,
-                                sret_attr_kind,
-                                0
+                            let returned_type = match &func.sret_type {
+                                Some(IRType::Ptr(inner)) => self.ir_type_to_llvm(inner),
+                                _ => return Err(Error::CodeGen("invalid sret type".into())),
+                            };
+                            let sret_attr = llvm_sys::core::LLVMCreateTypeAttribute(
+                                self.context, sret_attr_kind, returned_type,
                             );
                             llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, 1, sret_attr);
                         }
@@ -327,8 +345,8 @@ impl LLVMCodeGen {
                     if count > 1 {
                         // Create alloca for this register
                         let name = CString::new(format!("var_{}", reg.0)).unwrap();
-                        let i64_ty = LLVMInt64TypeInContext(self.context);
-                        let alloca = LLVMBuildAlloca(self.builder, i64_ty, name.as_ptr());
+                        let ty = self.register_types.get(&reg).cloned().unwrap_or(IRType::I64);
+                        let alloca = LLVMBuildAlloca(self.builder, self.ir_type_to_llvm(&ty), name.as_ptr());
                         alloca_map.insert(reg, alloca);
                     }
                 }
@@ -337,6 +355,34 @@ impl LLVMCodeGen {
             // Store alloca_map for use in generate_instruction
             self.alloca_map = alloca_map;
             
+            if let Some(entry) = self.block_map.get(&func.entry_block.0).copied() {
+                LLVMPositionBuilderAtEnd(self.builder, entry);
+                for block in &func.blocks {
+                    for inst in &block.instructions {
+                        if let Instruction::Alloca { dest, ty } = inst {
+                            let pointer = LLVMBuildAlloca(self.builder, self.ir_type_to_llvm(ty), c"".as_ptr());
+                            self.value_map.insert(*dest, pointer);
+                        }
+                    }
+                }
+            }
+
+            // Create all phi destinations before emitting ordinary instructions;
+            // nested CFGs can refer to a later-numbered predecessor.
+            for (i, block) in func.blocks.iter().enumerate() {
+                LLVMPositionBuilderAtEnd(self.builder, self.block_map[&i]);
+                for inst in &block.instructions {
+                    if let Instruction::Phi { dest, incoming } = inst {
+                        let ty = self.register_types.get(dest).cloned()
+                            .or_else(|| incoming.first().and_then(|(v, _)| self.value_type(v)))
+                            .ok_or_else(|| Error::CodeGen("phi has no type".into()))?;
+                        let phi = LLVMBuildPhi(self.builder, self.ir_type_to_llvm(&ty), c"".as_ptr());
+                        self.value_map.insert(*dest, phi);
+                    }
+                }
+            }
+
+            let mut block_exits = HashMap::new();
             // Generate code for each block
             for (i, block) in func.blocks.iter().enumerate() {
                 let llvm_block = self.block_map[&i];
@@ -354,8 +400,30 @@ impl LLVMCodeGen {
                     // Add implicit unreachable for blocks without terminator
                     LLVMBuildUnreachable(self.builder);
                 }
+                block_exits.insert(i, LLVMGetInsertBlock(self.builder));
             }
-            
+
+            // Resolve real incoming values after every definition exists. Loads
+            // of mutable values belong on the predecessor edge, before its jump.
+            for block in &func.blocks {
+                for inst in &block.instructions {
+                    if let Instruction::Phi { dest, incoming } = inst {
+                        let phi = self.value_map[dest];
+                        for (value, predecessor) in incoming {
+                            let incoming_block = block_exits[&predecessor.0];
+                            let term = LLVMGetBasicBlockTerminator(incoming_block);
+                            if term.is_null() { LLVMPositionBuilderAtEnd(self.builder, incoming_block); }
+                            else { LLVMPositionBuilderBefore(self.builder, term); }
+                            let mut val = self.get_value(value)?;
+                            let ty = self.register_types.get(dest).cloned().unwrap_or(IRType::I64);
+                            val = self.cast_scalar(val, value, &ty)?;
+                            let mut values = [val];
+                            let mut blocks = [incoming_block];
+                            LLVMAddIncoming(phi, values.as_mut_ptr(), blocks.as_mut_ptr(), 1);
+                        }
+                    }
+                }
+            }
             self.current_function = None;
             Ok(())
         }
@@ -370,22 +438,8 @@ impl LLVMCodeGen {
                     
                     // Check if this register uses alloca (multiply-assigned)
                     if let Some(&alloca) = self.alloca_map.get(dest) {
-                        // Store to alloca
-                        // Cast val to i64 if needed for consistency
-                        let i64_ty = LLVMInt64TypeInContext(self.context);
-                        let val_ty = LLVMTypeOf(val);
-                        let store_val = if val_ty != i64_ty {
-                            let name = CString::new("").unwrap();
-                            if LLVMGetTypeKind(val_ty) == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind {
-                                LLVMBuildPtrToInt(self.builder, val, i64_ty, name.as_ptr())
-                            } else if LLVMGetTypeKind(val_ty) == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
-                                LLVMBuildZExt(self.builder, val, i64_ty, name.as_ptr())
-                            } else {
-                                val
-                            }
-                        } else {
-                            val
-                        };
+                        let ty = self.register_types.get(dest).cloned().unwrap_or(IRType::I64);
+                        let store_val = self.cast_scalar(val, value, &ty)?;
                         LLVMBuildStore(self.builder, store_val, alloca);
                     } else {
                         self.value_map.insert(*dest, val);
@@ -430,6 +484,16 @@ impl LLVMCodeGen {
                     let is_float = LLVMGetTypeKind(lhs_ty) == llvm_sys::LLVMTypeKind::LLVMFloatTypeKind
                                 || LLVMGetTypeKind(lhs_ty) == llvm_sys::LLVMTypeKind::LLVMDoubleTypeKind;
                     
+                    let unsigned = self.value_type(left).map(|ty| Self::is_unsigned(&ty)).unwrap_or(false);
+                    if !is_float {
+                        if matches!(op, BinOp::Shl | BinOp::Shr) {
+                            let mask = LLVMConstInt(LLVMTypeOf(rhs), (LLVMGetIntTypeWidth(lhs_ty) - 1) as u64, 0);
+                            rhs = LLVMBuildAnd(self.builder, rhs, mask, c"shift.mask".as_ptr());
+                        }
+                        if matches!(op, BinOp::Div | BinOp::Mod) {
+                            self.guard_integer_division(lhs, rhs, !unsigned)?;
+                        }
+                    }
                     let result = if is_float {
                         // Use floating-point instructions
                         match op {
@@ -439,7 +503,7 @@ impl LLVMCodeGen {
                             BinOp::Div => LLVMBuildFDiv(self.builder, lhs, rhs, name.as_ptr()),
                             BinOp::Mod => LLVMBuildFRem(self.builder, lhs, rhs, name.as_ptr()),
                             BinOp::Eq => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealOEQ, lhs, rhs, name.as_ptr()),
-                            BinOp::Ne => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealONE, lhs, rhs, name.as_ptr()),
+                            BinOp::Ne => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealUNE, lhs, rhs, name.as_ptr()),
                             BinOp::Lt => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealOLT, lhs, rhs, name.as_ptr()),
                             BinOp::Le => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealOLE, lhs, rhs, name.as_ptr()),
                             BinOp::Gt => LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealOGT, lhs, rhs, name.as_ptr()),
@@ -456,19 +520,19 @@ impl LLVMCodeGen {
                             BinOp::Add => LLVMBuildAdd(self.builder, lhs, rhs, name.as_ptr()),
                             BinOp::Sub => LLVMBuildSub(self.builder, lhs, rhs, name.as_ptr()),
                             BinOp::Mul => LLVMBuildMul(self.builder, lhs, rhs, name.as_ptr()),
-                            BinOp::Div => LLVMBuildSDiv(self.builder, lhs, rhs, name.as_ptr()),
-                            BinOp::Mod => LLVMBuildSRem(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Div => if unsigned { LLVMBuildUDiv(self.builder, lhs, rhs, name.as_ptr()) } else { LLVMBuildSDiv(self.builder, lhs, rhs, name.as_ptr()) },
+                            BinOp::Mod => if unsigned { LLVMBuildURem(self.builder, lhs, rhs, name.as_ptr()) } else { LLVMBuildSRem(self.builder, lhs, rhs, name.as_ptr()) },
                             BinOp::And => LLVMBuildAnd(self.builder, lhs, rhs, name.as_ptr()),
                             BinOp::Or => LLVMBuildOr(self.builder, lhs, rhs, name.as_ptr()),
                             BinOp::Xor => LLVMBuildXor(self.builder, lhs, rhs, name.as_ptr()),
                             BinOp::Shl => LLVMBuildShl(self.builder, lhs, rhs, name.as_ptr()),
-                            BinOp::Shr => LLVMBuildAShr(self.builder, lhs, rhs, name.as_ptr()),
+                            BinOp::Shr => if unsigned { LLVMBuildLShr(self.builder, lhs, rhs, name.as_ptr()) } else { LLVMBuildAShr(self.builder, lhs, rhs, name.as_ptr()) },
                             BinOp::Eq => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntEQ, lhs, rhs, name.as_ptr()),
                             BinOp::Ne => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntNE, lhs, rhs, name.as_ptr()),
-                            BinOp::Lt => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSLT, lhs, rhs, name.as_ptr()),
-                            BinOp::Le => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSLE, lhs, rhs, name.as_ptr()),
-                            BinOp::Gt => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSGT, lhs, rhs, name.as_ptr()),
-                            BinOp::Ge => LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntSGE, lhs, rhs, name.as_ptr()),
+                            BinOp::Lt => LLVMBuildICmp(self.builder, if unsigned { LLVMIntPredicate::LLVMIntULT } else { LLVMIntPredicate::LLVMIntSLT }, lhs, rhs, name.as_ptr()),
+                            BinOp::Le => LLVMBuildICmp(self.builder, if unsigned { LLVMIntPredicate::LLVMIntULE } else { LLVMIntPredicate::LLVMIntSLE }, lhs, rhs, name.as_ptr()),
+                            BinOp::Gt => LLVMBuildICmp(self.builder, if unsigned { LLVMIntPredicate::LLVMIntUGT } else { LLVMIntPredicate::LLVMIntSGT }, lhs, rhs, name.as_ptr()),
+                            BinOp::Ge => LLVMBuildICmp(self.builder, if unsigned { LLVMIntPredicate::LLVMIntUGE } else { LLVMIntPredicate::LLVMIntSGE }, lhs, rhs, name.as_ptr()),
                         }
                     };
                     self.value_map.insert(*dest, result);
@@ -479,7 +543,9 @@ impl LLVMCodeGen {
                     let name = CString::new("").unwrap();
                     
                     let result = match op {
-                        UnaryOp::Neg => LLVMBuildNeg(self.builder, val, name.as_ptr()),
+                        UnaryOp::Neg => if matches!(LLVMGetTypeKind(LLVMTypeOf(val)), llvm_sys::LLVMTypeKind::LLVMFloatTypeKind | llvm_sys::LLVMTypeKind::LLVMDoubleTypeKind) {
+                            LLVMBuildFNeg(self.builder, val, name.as_ptr())
+                        } else { LLVMBuildNeg(self.builder, val, name.as_ptr()) },
                         UnaryOp::Not | UnaryOp::BitNot => LLVMBuildNot(self.builder, val, name.as_ptr()),
                     };
                     self.value_map.insert(*dest, result);
@@ -487,40 +553,7 @@ impl LLVMCodeGen {
                 
                 Instruction::Call { dest, func, args } => {
                     let func_name = CString::new(func.as_str()).unwrap();
-                    let mut callee = LLVMGetNamedFunction(self.module, func_name.as_ptr());
-                    
-                    if callee.is_null() {
-                        // Check if this looks like an enum variant constructor (Type_Variant pattern)
-                        if func.contains('_') {
-                            // Auto-declare as enum variant constructor
-                            // Returns i64 (tag + optional data pointer packed)
-                            let i64_ty = LLVMInt64TypeInContext(self.context);
-                            let i8_ptr_ty = LLVMPointerTypeInContext(self.context, 0);
-                            
-                            // Create function type based on number of args
-                            let func_ty = if args.is_empty() {
-                                LLVMFunctionType(i64_ty, std::ptr::null_mut(), 0, 0)
-                            } else {
-                                // For variants with data, accept pointer args
-                                let mut param_types: Vec<LLVMTypeRef> = args.iter()
-                                    .map(|_| i8_ptr_ty)
-                                    .collect();
-                                LLVMFunctionType(i64_ty, param_types.as_mut_ptr(), args.len() as u32, 0)
-                            };
-                            
-                            callee = LLVMAddFunction(self.module, func_name.as_ptr(), func_ty);
-                            
-                            // Create a simple implementation that returns a hash-based tag
-                            let entry = LLVMAppendBasicBlockInContext(self.context, callee, b"entry\0".as_ptr() as *const _);
-                            let builder = LLVMCreateBuilderInContext(self.context);
-                            LLVMPositionBuilderAtEnd(builder, entry);
-                            
-                            let hash_value = func.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
-                            let tag = LLVMConstInt(i64_ty, hash_value % 10000, 0);
-                            LLVMBuildRet(builder, tag);
-                            LLVMDisposeBuilder(builder);
-                        }
-                    }
+                    let callee = LLVMGetNamedFunction(self.module, func_name.as_ptr());
                     
                     if callee.is_null() {
                         return Err(Error::CodeGen(format!("Unknown function: {}", func)));
@@ -605,13 +638,8 @@ impl LLVMCodeGen {
                     }
                 }
                 
-                Instruction::Alloca { dest, ty } => {
-                    let llvm_ty = self.ir_type_to_llvm(ty);
-                    let name = CString::new("").unwrap();
-                    let ptr = LLVMBuildAlloca(self.builder, llvm_ty, name.as_ptr());
-                    self.value_map.insert(*dest, ptr);
-                }
-                
+                Instruction::Alloca { .. } => { /* reserved once in the entry block */ }
+
                 Instruction::Load { dest, ptr, ty } => {
                     let ptr_val = self.get_value(ptr)?;
                     let name = CString::new("").unwrap();
@@ -638,112 +666,26 @@ impl LLVMCodeGen {
                 
                 Instruction::GetElementPtr { dest, ptr, index, elem_ty } => {
                     let ptr_val = self.get_value(ptr)?;
-                    let name = CString::new("").unwrap();
-                    
-                    // Check if this is struct field access or pointer arithmetic
-                    match elem_ty {
-                        IRType::Struct(_struct_name) => {
-                            // Struct field access: use LLVMBuildStructGEP2
-                            let field_idx = if let Value::Constant(Constant::Int(i)) = index {
-                                *i as u32
-                            } else {
-                                0
-                            };
-                            let struct_ty = self.ir_type_to_llvm(elem_ty);
-                            let result = LLVMBuildStructGEP2(
-                                self.builder,
-                                struct_ty,
-                                ptr_val,
-                                field_idx,
-                                name.as_ptr()
-                            );
-                            self.value_map.insert(*dest, result);
-                        }
-                        _ => {
-                            // Pointer arithmetic: use LLVMBuildGEP2 with single index
-                            let elem_llvm_ty = self.ir_type_to_llvm(elem_ty);
-                            let idx_val = self.get_value(index)?;
-                            let mut indices = [idx_val];
-                            let result = LLVMBuildGEP2(
-                                self.builder,
-                                elem_llvm_ty,
-                                ptr_val,
-                                indices.as_mut_ptr(),
-                                1,  // Single index for pointer arithmetic
-                                name.as_ptr()
-                            );
-                            self.value_map.insert(*dest, result);
-                        }
-                    }
-                }
-                
-                Instruction::Phi { dest, incoming } => {
-                    // Create empty Phi node first, incoming values will be added by a second pass
-                    // This is needed because incoming blocks may not have been generated yet
-                    if !incoming.is_empty() {
-                        // Use i32 as default type for now (most enum/int values)
-                        let i32_ty = LLVMInt32TypeInContext(self.context);
-                        let name = CString::new("").unwrap();
-                        let phi = LLVMBuildPhi(self.builder, i32_ty, name.as_ptr());
-                        self.value_map.insert(*dest, phi);
-                        
-                        // TODO: Implement proper two-phase Phi filling after all blocks generated
-                        // For now, add dummy incoming to make Phi valid (will have incorrect values)
-                        for (_, block_id) in incoming {
-                            let llvm_block = self.block_map[&block_id.0];
-                            let dummy_val = LLVMConstInt(i32_ty, 0, 0);
-                            let mut values = [dummy_val];
-                            let mut blocks = [llvm_block];
-                            LLVMAddIncoming(phi, values.as_mut_ptr(), blocks.as_mut_ptr(), 1);
-                        }
-                    }
-                }
-                
-                Instruction::Cast { dest, value, ty } => {
-                    let val = self.get_value(value)?;
-                    let dest_ty = self.ir_type_to_llvm(ty);
-                    let name = CString::new("").unwrap();
-                    
-                    // Determine correct cast instruction based on types
-                    let src_ty = LLVMTypeOf(val);
-                    let src_kind = LLVMGetTypeKind(src_ty);
-                    let dest_kind = LLVMGetTypeKind(dest_ty);
-                    
-                    let result = match (src_kind, dest_kind) {
-                        // Integer to Integer: use trunc, sext, or zext based on size
-                        (llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind, llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind) => {
-                            let src_bits = LLVMGetIntTypeWidth(src_ty);
-                            let dest_bits = LLVMGetIntTypeWidth(dest_ty);
-                            if dest_bits < src_bits {
-                                LLVMBuildTrunc(self.builder, val, dest_ty, name.as_ptr())
-                            } else if dest_bits > src_bits {
-                                // Use sign-extend for signed types (i*), zero-extend for unsigned (u*)
-                                // For now, use zero-extend as a safe default
-                                LLVMBuildZExt(self.builder, val, dest_ty, name.as_ptr())
-                            } else {
-                                val // Same size, no conversion needed
-                            }
-                        }
-                        // Pointer to Integer
-                        (llvm_sys::LLVMTypeKind::LLVMPointerTypeKind, llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind) => {
-                            LLVMBuildPtrToInt(self.builder, val, dest_ty, name.as_ptr())
-                        }
-                        // Integer to Pointer
-                        (llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind, llvm_sys::LLVMTypeKind::LLVMPointerTypeKind) => {
-                            LLVMBuildIntToPtr(self.builder, val, dest_ty, name.as_ptr())
-                        }
-                        // Pointer to Pointer: use bitcast
-                        (llvm_sys::LLVMTypeKind::LLVMPointerTypeKind, llvm_sys::LLVMTypeKind::LLVMPointerTypeKind) => {
-                            LLVMBuildBitCast(self.builder, val, dest_ty, name.as_ptr())
-                        }
-                        // Default: use bitcast
-                        _ => {
-                            LLVMBuildBitCast(self.builder, val, dest_ty, name.as_ptr())
-                        }
-                    };
+                    let mut indices = [self.get_value(index)?];
+                    let result = LLVMBuildGEP2(self.builder, self.ir_type_to_llvm(elem_ty), ptr_val,
+                        indices.as_mut_ptr(), 1, c"".as_ptr());
                     self.value_map.insert(*dest, result);
                 }
-                
+                Instruction::GetFieldPtr { dest, ptr, field, struct_ty } => {
+                    let ptr_val = self.get_value(ptr)?;
+                    let result = LLVMBuildStructGEP2(self.builder, self.ir_type_to_llvm(struct_ty), ptr_val,
+                        *field as u32, c"".as_ptr());
+                    self.value_map.insert(*dest, result);
+                }
+
+                Instruction::Phi { .. } => { /* emitted in the two-phase CFG pass */ }
+
+                Instruction::Cast { dest, value, ty } => {
+                    let val = self.get_value(value)?;
+                    let result = self.cast_scalar(val, value, ty)?;
+                    self.value_map.insert(*dest, result);
+                }
+
                 Instruction::InlineAsm { template, operands } => {
                     // Build LLVM inline assembly
                     // Format: constraints and template for LLVM
@@ -775,16 +717,13 @@ impl LLVMCodeGen {
                             }
                             IRAsmOperandKind::InOut => {
                                 if let Some(reg) = op.output {
-                                    let constraint = if !op.constraint.starts_with('+') {
-                                        format!("+{}", op.constraint)
-                                    } else {
-                                        op.constraint.clone()
-                                    };
+                                    let constraint = format!("={}", op.constraint.trim_start_matches(['+', '=']));
                                     output_constraints.push(constraint);
+                                    let tied_index = output_regs.len();
                                     output_regs.push(reg);
                                     if let Some(ref val) = op.input {
-                                        let llvm_val = self.get_value(val)?;
-                                        inputs.push(llvm_val);
+                                        inputs.push(self.get_value(val)?);
+                                        input_constraints.push(tied_index.to_string());
                                     }
                                 }
                             }
@@ -801,24 +740,18 @@ impl LLVMCodeGen {
                     all_constraints.extend(clobbers);
                     let constraints_str = all_constraints.join(",");
                     let constraints_c = CString::new(constraints_str.clone()).unwrap();
+                    let template = render_asm_template(template, operands, false).map_err(Error::CodeGen)?;
                     let template_c = CString::new(template.as_str()).unwrap();
 
-                    // Determine output type (void if no outputs, i64 for single output, struct for multiple)
-                    let i64_ty = LLVMInt64TypeInContext(self.context);
-                    let void_ty = LLVMVoidTypeInContext(self.context);
-
-                    let ret_ty = if output_regs.is_empty() {
-                        void_ty
-                    } else if output_regs.len() == 1 {
-                        i64_ty
-                    } else {
-                        // Multiple outputs: use struct type
-                        let mut types: Vec<LLVMTypeRef> = vec![i64_ty; output_regs.len()];
-                        LLVMStructTypeInContext(self.context, types.as_mut_ptr(), types.len() as u32, 0)
+                    let mut output_types: Vec<_> = output_regs.iter().map(|reg| {
+                        self.ir_type_to_llvm(self.register_types.get(reg).unwrap_or(&IRType::I64))
+                    }).collect();
+                    let ret_ty = match output_types.len() {
+                        0 => LLVMVoidTypeInContext(self.context),
+                        1 => output_types[0],
+                        _ => LLVMStructTypeInContext(self.context, output_types.as_mut_ptr(), output_types.len() as u32, 0),
                     };
-
-                    // Build function type for inline asm
-                    let mut param_types: Vec<LLVMTypeRef> = inputs.iter().map(|_| i64_ty).collect();
+                    let mut param_types: Vec<_> = inputs.iter().map(|value| LLVMTypeOf(*value)).collect();
                     let asm_func_ty = LLVMFunctionType(ret_ty, param_types.as_mut_ptr(), param_types.len() as u32, 0);
 
                     // Create inline asm value
@@ -835,7 +768,7 @@ impl LLVMCodeGen {
                     );
 
                     // Call the inline asm
-                    let name = CString::new("asm_result").unwrap();
+                    let name = CString::new(if output_regs.is_empty() { "" } else { "asm_result" }).unwrap();
                     let result = LLVMBuildCall2(
                         self.builder,
                         asm_func_ty,
@@ -946,6 +879,82 @@ impl LLVMCodeGen {
         Ok(())
     }
 
+    unsafe fn guard_integer_division(&self, lhs: LLVMValueRef, rhs: LLVMValueRef, signed: bool) -> Result<()> {
+        let ty = LLVMTypeOf(lhs);
+        let zero = LLVMConstNull(ty);
+        let mut invalid = LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntEQ, rhs, zero, c"div.zero".as_ptr());
+        if signed {
+            let bits = LLVMGetIntTypeWidth(ty);
+            let minimum = LLVMConstInt(ty, 1u64 << (bits - 1), 0);
+            let negative_one = LLVMConstAllOnes(ty);
+            let min_lhs = LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntEQ, lhs, minimum, c"div.min".as_ptr());
+            let minus_one_rhs = LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntEQ, rhs, negative_one, c"div.minusone".as_ptr());
+            let overflow = LLVMBuildAnd(self.builder, min_lhs, minus_one_rhs, c"div.overflow".as_ptr());
+            invalid = LLVMBuildOr(self.builder, invalid, overflow, c"div.invalid".as_ptr());
+        }
+        let function = self.current_function.ok_or_else(|| Error::CodeGen("division outside function".into()))?;
+        let trap_block = LLVMAppendBasicBlockInContext(self.context, function, c"arithmetic.trap".as_ptr());
+        let valid_block = LLVMAppendBasicBlockInContext(self.context, function, c"arithmetic.valid".as_ptr());
+        LLVMBuildCondBr(self.builder, invalid, trap_block, valid_block);
+        LLVMPositionBuilderAtEnd(self.builder, trap_block);
+        let trap_type = LLVMFunctionType(LLVMVoidTypeInContext(self.context), ptr::null_mut(), 0, 0);
+        let mut trap = LLVMGetNamedFunction(self.module, c"llvm.trap".as_ptr());
+        if trap.is_null() { trap = LLVMAddFunction(self.module, c"llvm.trap".as_ptr(), trap_type); }
+        LLVMBuildCall2(self.builder, trap_type, trap, ptr::null_mut(), 0, c"".as_ptr());
+        LLVMBuildUnreachable(self.builder);
+        LLVMPositionBuilderAtEnd(self.builder, valid_block);
+        Ok(())
+    }
+
+    fn is_unsigned(ty: &IRType) -> bool {
+        matches!(ty, IRType::U8 | IRType::U16 | IRType::U32 | IRType::U64 | IRType::Bool)
+    }
+
+    fn value_type(&self, value: &Value) -> Option<IRType> {
+        match value {
+            Value::Register(reg) => self.register_types.get(reg).cloned(),
+            Value::Parameter(i) => self.parameter_types.get(*i).cloned(),
+            Value::Constant(Constant::Int(_)) => Some(IRType::I64),
+            Value::Constant(Constant::Float(_)) => Some(IRType::F64),
+            Value::Constant(Constant::Bool(_)) => Some(IRType::Bool),
+            Value::Constant(Constant::String(_)) => Some(IRType::Ptr(Box::new(IRType::U8))),
+            _ => None,
+        }
+    }
+
+    unsafe fn cast_scalar(&self, val: LLVMValueRef, source: &Value, ty: &IRType) -> Result<LLVMValueRef> {
+        use llvm_sys::LLVMTypeKind::*;
+        let src_ty = LLVMTypeOf(val);
+        let dest_ty = self.ir_type_to_llvm(ty);
+        if src_ty == dest_ty { return Ok(val); }
+        let src_kind = LLVMGetTypeKind(src_ty);
+        let dst_kind = LLVMGetTypeKind(dest_ty);
+        let unsigned = self.value_type(source).map(|t| Self::is_unsigned(&t)).unwrap_or(false);
+        let name = c"".as_ptr();
+        Ok(match (src_kind, dst_kind) {
+            (LLVMIntegerTypeKind, LLVMIntegerTypeKind) => {
+                if LLVMGetIntTypeWidth(dest_ty) < LLVMGetIntTypeWidth(src_ty) {
+                    LLVMBuildTrunc(self.builder, val, dest_ty, name)
+                } else if unsigned { LLVMBuildZExt(self.builder, val, dest_ty, name) }
+                else { LLVMBuildSExt(self.builder, val, dest_ty, name) }
+            }
+            (LLVMPointerTypeKind, LLVMIntegerTypeKind) => LLVMBuildPtrToInt(self.builder, val, dest_ty, name),
+            (LLVMIntegerTypeKind, LLVMPointerTypeKind) => LLVMBuildIntToPtr(self.builder, val, dest_ty, name),
+            (LLVMPointerTypeKind, LLVMPointerTypeKind) => val,
+            (LLVMFloatTypeKind, LLVMDoubleTypeKind) => LLVMBuildFPExt(self.builder, val, dest_ty, name),
+            (LLVMDoubleTypeKind, LLVMFloatTypeKind) => LLVMBuildFPTrunc(self.builder, val, dest_ty, name),
+            (LLVMIntegerTypeKind, LLVMFloatTypeKind | LLVMDoubleTypeKind) => {
+                if unsigned { LLVMBuildUIToFP(self.builder, val, dest_ty, name) }
+                else { LLVMBuildSIToFP(self.builder, val, dest_ty, name) }
+            }
+            (LLVMFloatTypeKind | LLVMDoubleTypeKind, LLVMIntegerTypeKind) => {
+                if Self::is_unsigned(ty) { LLVMBuildFPToUI(self.builder, val, dest_ty, name) }
+                else { LLVMBuildFPToSI(self.builder, val, dest_ty, name) }
+            }
+            _ => return Err(Error::CodeGen(format!("unsupported scalar cast to {:?}", ty))),
+        })
+    }
+
     /// Get LLVM value from IR value
     fn get_value(&self, val: &Value) -> Result<LLVMValueRef> {
         unsafe {
@@ -955,8 +964,8 @@ impl LLVMCodeGen {
                     if let Some(&alloca) = self.alloca_map.get(reg) {
                         // Load from alloca
                         let name = CString::new("").unwrap();
-                        let i64_ty = LLVMInt64TypeInContext(self.context);
-                        let loaded = LLVMBuildLoad2(self.builder, i64_ty, alloca, name.as_ptr());
+                        let ty = self.register_types.get(reg).cloned().unwrap_or(IRType::I64);
+                        let loaded = LLVMBuildLoad2(self.builder, self.ir_type_to_llvm(&ty), alloca, name.as_ptr());
                         return Ok(loaded);
                     }
                     
@@ -979,12 +988,16 @@ impl LLVMCodeGen {
                             Ok(LLVMConstInt(i1_ty, *b as u64, 0))
                         }
                         Constant::String(s) => {
-                            // Create global string pointer (returns i8*)
-                            // Filter out any embedded NUL characters before creating CString
-                            let s_clean: String = s.chars().filter(|&c| c != '\0').collect();
-                            let s_c = CString::new(s_clean).unwrap();
-                            let name_c = CString::new("str").unwrap();
-                            Ok(LLVMBuildGlobalStringPtr(self.builder, s_c.as_ptr(), name_c.as_ptr()))
+                            // Preserve the byte sequence, including interior NULs.
+                            let bytes = s.as_bytes();
+                            let initializer = LLVMConstStringInContext2(self.context,
+                                bytes.as_ptr() as *const _, bytes.len(), 0);
+                            let global = LLVMAddGlobal(self.module, LLVMTypeOf(initializer), c"str".as_ptr());
+                            LLVMSetInitializer(global, initializer);
+                            LLVMSetGlobalConstant(global, 1);
+                            LLVMSetLinkage(global, llvm_sys::LLVMLinkage::LLVMPrivateLinkage);
+                            LLVMSetUnnamedAddress(global, llvm_sys::LLVMUnnamedAddr::LLVMGlobalUnnamedAddr);
+                            Ok(global)
                         }
                         Constant::Null => {
                             let ptr_ty = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
@@ -994,38 +1007,15 @@ impl LLVMCodeGen {
                 }
                 Value::Parameter(i) => {
                     // Parameters are stored with offset 1000
-                    self.value_map.get(&Register(1000 + *i))
+                    self.parameter_values.get(*i)
                         .copied()
                         .ok_or_else(|| Error::CodeGen(format!("Unknown parameter: {}", i)))
                 }
                 Value::Global(name) => {
                     let name_c = CString::new(name.as_str()).unwrap();
-                    let mut global = LLVMGetNamedGlobal(self.module, name_c.as_ptr());
-                    if global.is_null() {
-                        // Check if this looks like an enum variant (Type_Variant pattern)
-                        if name.contains('_') {
-                            // Auto-declare as i32 constant (enum discriminant)
-                            // Use a simple hash of the name as the value
-                            let hash_value = name.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
-                            let i32_ty = LLVMInt32TypeInContext(self.context);
-                            global = LLVMAddGlobal(self.module, i32_ty, name_c.as_ptr());
-                            LLVMSetInitializer(global, LLVMConstInt(i32_ty, hash_value % 10000, 0));
-                            LLVMSetGlobalConstant(global, 1);
-                            LLVMSetLinkage(global, llvm_sys::LLVMLinkage::LLVMPrivateLinkage);
-                        }
-                    }
-                    if global.is_null() {
-                        Err(Error::CodeGen(format!("Unknown global: {}", name)))
-                    } else {
-                        // For enum variants (auto-declared), load the value
-                        if name.contains('_') {
-                            let i32_ty = LLVMInt32TypeInContext(self.context);
-                            let load_name = CString::new("load").unwrap();
-                            Ok(LLVMBuildLoad2(self.builder, i32_ty, global, load_name.as_ptr()))
-                        } else {
-                            Ok(global)
-                        }
-                    }
+                    let global = LLVMGetNamedGlobal(self.module, name_c.as_ptr());
+                    if global.is_null() { Err(Error::CodeGen(format!("Unknown global: {}", name))) }
+                    else { Ok(global) }
                 }
                 Value::Unit => {
                     // Unit type represented as i32 0 for compatibility with enum types
@@ -1090,7 +1080,12 @@ impl LLVMCodeGen {
                 triple.as_ptr(),
                 cpu.as_ptr(),
                 features.as_ptr(),
-                LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault,
+                match self.opt_level {
+                    0 => LLVMCodeGenOptLevel::LLVMCodeGenLevelNone,
+                    1 => LLVMCodeGenOptLevel::LLVMCodeGenLevelLess,
+                    2 => LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault,
+                    _ => LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive,
+                },
                 LLVMRelocMode::LLVMRelocDefault,
                 LLVMCodeModel::LLVMCodeModelDefault
             );
@@ -1102,7 +1097,28 @@ impl LLVMCodeGen {
             // Get data layout
             let data_layout = LLVMCreateTargetDataLayout(target_machine);
             LLVMSetModuleDataLayout(self.module, data_layout);
-            
+            LLVMDisposeTargetData(data_layout);
+            LLVMSetTarget(self.module, triple.as_ptr());
+
+            if self.opt_level > 0 {
+                use llvm_sys::transforms::pass_builder::*;
+                let pipeline = CString::new(format!("default<O{}>", self.opt_level)).unwrap();
+                let options = LLVMCreatePassBuilderOptions();
+                let error = LLVMRunPasses(self.module, pipeline.as_ptr(), target_machine, options);
+                LLVMDisposePassBuilderOptions(options);
+                if !error.is_null() {
+                    let message = llvm_sys::error::LLVMGetErrorMessage(error);
+                    let detail = CStr::from_ptr(message).to_string_lossy().into_owned();
+                    llvm_sys::error::LLVMDisposeErrorMessage(message);
+                    LLVMDisposeTargetMachine(target_machine);
+                    return Err(Error::CodeGen(format!("LLVM optimization failed: {}", detail)));
+                }
+                if let Err(error) = self.verify_module() {
+                    LLVMDisposeTargetMachine(target_machine);
+                    return Err(error);
+                }
+            }
+
             // Emit to memory buffer
             let mut mem_buf: LLVMMemoryBufferRef = ptr::null_mut();
             let mut error_msg: *mut i8 = ptr::null_mut();
@@ -1160,6 +1176,15 @@ impl CodeGen for LLVMCodeGen {
             LLVMSetModuleIdentifier(self.module, name.as_ptr(), module.name.len());
         }
         
+        // Establish every nominal name before any field or ABI references it.
+        for definition in &module.structs {
+            unsafe {
+                let name = CString::new(definition.name.as_str()).unwrap();
+                if LLVMGetTypeByName2(self.context, name.as_ptr()).is_null() {
+                    LLVMStructCreateNamed(self.context, name.as_ptr());
+                }
+            }
+        }
         // Declare extern functions first
         for ext in &module.externs {
             unsafe {
@@ -1179,7 +1204,7 @@ impl CodeGen for LLVMCodeGen {
                     ret_ty,
                     param_types.as_mut_ptr(),
                     param_types.len() as u32,
-                    0 // not variadic
+                    ext.variadic as i32
                 );
                 
                 // Add function declaration
@@ -1192,9 +1217,8 @@ impl CodeGen for LLVMCodeGen {
             unsafe {
                 let name_c = CString::new(ir_struct.name.as_str()).unwrap();
                 let existing = LLVMGetTypeByName2(self.context, name_c.as_ptr());
-                if existing.is_null() {
-                    // Create struct type
-                    let struct_ty = LLVMStructCreateNamed(self.context, name_c.as_ptr());
+                let struct_ty = if existing.is_null() { LLVMStructCreateNamed(self.context, name_c.as_ptr()) } else { existing };
+                if LLVMIsOpaqueStruct(struct_ty) != 0 {
                     // Convert field types
                     let mut field_types: Vec<LLVMTypeRef> = ir_struct.fields.iter()
                         .map(|(_, ty)| self.ir_type_to_llvm(ty))
@@ -1214,6 +1238,18 @@ impl CodeGen for LLVMCodeGen {
             }
         }
         
+        // Declare every actual function before emitting bodies: forward calls
+        // and recursion must resolve to code, never a synthesized placeholder.
+        for func in &module.functions {
+            unsafe {
+                let name = CString::new(func.name.as_str()).unwrap();
+                if LLVMGetNamedFunction(self.module, name.as_ptr()).is_null() {
+                    let mut params: Vec<_> = func.params.iter().map(|(_, ty)| self.ir_type_to_llvm(ty)).collect();
+                    let ty = LLVMFunctionType(self.ir_type_to_llvm(&func.ret_type), params.as_mut_ptr(), params.len() as u32, 0);
+                    LLVMAddFunction(self.module, name.as_ptr(), ty);
+                }
+            }
+        }
         // Generate code for each function
         for func in &module.functions {
             self.generate_function(func)?;

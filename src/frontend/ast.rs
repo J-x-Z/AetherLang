@@ -457,8 +457,10 @@ pub enum Stmt {
         value: Option<Expr>,
         span: Span,
     },
-    /// Expression statement
+    /// Expression without a trailing semicolon (may be a block tail value).
     Expr(Expr),
+    /// Expression explicitly evaluated only for its side effects.
+    Semi(Expr),
     /// return [expr]
     Return {
         value: Option<Expr>,

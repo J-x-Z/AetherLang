@@ -184,6 +184,11 @@ impl Parser {
 
     /// Parse a complete program
     pub fn parse_program(&mut self) -> Result<Program> {
+        if let Some(token) = self.tokens.iter().find(|token| matches!(token.kind, TokenKind::Invalid(_))) {
+            if let TokenKind::Invalid(message) = &token.kind {
+                return Err(Error::UnexpectedToken { expected: "valid token".into(), got: message.clone(), span: token.span });
+            }
+        }
         // Parse inner attributes: #![no_std], #![no_main], etc.
         let mut inner_attrs = Vec::new();
         while self.check(&TokenKind::Hash) {
@@ -256,8 +261,14 @@ impl Parser {
                             self.advance(); // consume 'pub'
                             Ok(Item::Interface(self.parse_interface()?))
                         },
+                        TokenKind::Type => {
+                            self.advance(); // consume 'pub'
+                            let mut alias = self.parse_type_alias()?;
+                            alias.is_pub = true;
+                            Ok(Item::TypeAlias(alias))
+                        },
                         _ => Err(Error::UnexpectedToken {
-                            expected: "fn, struct, enum, impl or interface after pub".to_string(),
+                            expected: "fn, struct, enum, impl, interface or type after pub".to_string(),
                             got: format!("{:?}", next.kind),
                             span: next.span,
                         }),
@@ -670,7 +681,11 @@ impl Parser {
         // Named type or Generic type
         if let TokenKind::Ident(name) = self.current_kind().clone() {
             self.advance();
-            let ty_name = name;
+            let mut ty_name = name;
+            while self.consume(&TokenKind::ColonColon) {
+                ty_name.push_str("::");
+                ty_name.push_str(&self.parse_ident()?.name);
+            }
 
             // Parse generic arguments if present: Foo<i32, String> or Foo<i32, 3, 3>
             if self.consume(&TokenKind::Lt) {
@@ -687,15 +702,14 @@ impl Parser {
                  }
                  self.expect(TokenKind::Gt)?;
 
-                 // Convert to legacy format for backward compatibility
-                 let inner_types: Vec<Type> = generic_args.iter()
-                     .filter_map(|arg| match arg {
-                         GenericArg::Type(ty) => Some(ty.clone()),
-                         GenericArg::Const(_) => None,
-                     })
-                     .collect();
-
-                 return Ok(Type::Generic(ty_name, inner_types, start.merge(&self.tokens[self.pos.saturating_sub(1)].span)));
+                 let span = start.merge(&self.tokens[self.pos.saturating_sub(1)].span);
+                 if generic_args.iter().any(|arg| matches!(arg, GenericArg::Const(_))) {
+                     return Ok(Type::GenericWithArgs { name: ty_name, args: generic_args, span });
+                 }
+                 let inner_types = generic_args.into_iter().filter_map(|arg| match arg {
+                     GenericArg::Type(ty) => Some(ty), GenericArg::Const(_) => None,
+                 }).collect();
+                 return Ok(Type::Generic(ty_name, inner_types, span));
             }
 
             return Ok(Type::Named(ty_name, start.merge(&self.tokens[self.pos.saturating_sub(1)].span)));
@@ -741,9 +755,17 @@ impl Parser {
                 Ok(Stmt::Empty { span })
             }
             _ => {
-                let expr = self.parse_expr()?;
-                self.consume(&TokenKind::Semicolon);
-                Ok(Stmt::Expr(expr))
+                // A block-like expression at statement position ends at its closing
+                // brace. A following `*p = ...` is a new statement, not multiplication.
+                // Expression contexts (let/return/arguments) still use full precedence.
+                let expr = if matches!(self.current_kind(), TokenKind::If | TokenKind::While | TokenKind::For | TokenKind::Loop | TokenKind::Match | TokenKind::Unsafe | TokenKind::LBrace) {
+                    self.parse_primary()?
+                } else { self.parse_expr()? };
+                if self.consume(&TokenKind::Semicolon) {
+                    Ok(Stmt::Semi(expr))
+                } else {
+                    Ok(Stmt::Expr(expr))
+                }
             }
         }
     }
@@ -821,6 +843,17 @@ impl Parser {
                 }
                 self.advance(); // consume (
                 left = self.parse_call_rest(left)?;
+                continue;
+            }
+
+            // Ranges bind below arithmetic/comparison and above assignment.
+            if op_token.kind == TokenKind::DotDot {
+                let bp = 2;
+                if bp < min_bp { break; }
+                self.advance();
+                let end = self.parse_expr_bp(bp + 1)?;
+                let span = left.span().merge(&end.span());
+                left = Expr::Range { start: Some(Box::new(left)), end: Some(Box::new(end)), span };
                 continue;
             }
 
@@ -1445,6 +1478,7 @@ impl Parser {
     fn parse_match_arm(&mut self) -> Result<MatchArm> {
         let start = self.current().span;
         let pattern = self.parse_pattern()?;
+        let guard = if self.consume(&TokenKind::If) { Some(Box::new(self.parse_expr()?)) } else { None };
 
         self.expect(TokenKind::FatArrow)?;
         let body = self.parse_expr()?;
@@ -1453,7 +1487,7 @@ impl Parser {
 
         Ok(MatchArm {
             pattern,
-            guard: None,
+            guard,
             body,
             span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
         })
@@ -1752,6 +1786,7 @@ impl Parser {
 
         self.expect(TokenKind::Eq)?;
         let value = self.parse_expr()?;
+        self.consume(&TokenKind::Semicolon);
 
         Ok(ConstDef {
             name,
@@ -1842,43 +1877,42 @@ impl Parser {
         })
     }
     
-    /// Parse use declaration: use path::{items} or use path::item
+    /// Parse a use tree. Group members keep paths relative to their parent.
     fn parse_use(&mut self) -> Result<UseDecl> {
+        let start = self.expect(TokenKind::Use)?.span;
+        let mut declaration = self.parse_use_tree()?;
+        self.consume(&TokenKind::Semicolon);
+        declaration.span = start.merge(&self.tokens[self.pos.saturating_sub(1)].span);
+        Ok(declaration)
+    }
+
+    fn parse_use_tree(&mut self) -> Result<UseDecl> {
         let start = self.current().span;
-        self.expect(TokenKind::Use)?;
-        
-        // Parse path: foo::bar or foo::{a, b}
         let mut path = Vec::new();
-        path.push(self.parse_ident()?);
-        
-        // Parse optional path segments and kind
-        let mut kind = UseKind::Simple;
-        
-        while self.consume(&TokenKind::ColonColon) {
-            // Check for glob: use foo::*
+        let kind = loop {
             if self.consume(&TokenKind::Star) {
-                kind = UseKind::Glob;
-                break;
+                break UseKind::Glob;
             }
-            
-            // Check for multiple imports: use foo::{a, b}
-            // Simplified: just skip the braces content for now
             if self.consume(&TokenKind::LBrace) {
+                let mut children = Vec::new();
                 while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
-                    self.advance();
+                    children.push(self.parse_use_tree()?);
+                    if !self.consume(&TokenKind::Comma) {
+                        break;
+                    }
                 }
                 self.expect(TokenKind::RBrace)?;
-                kind = UseKind::Simple; // Simplified - treat as simple import
-                break;
+                break UseKind::Group(children);
             }
-            
-            // Regular path segment
             path.push(self.parse_ident()?);
-        }
-        
-        // Optional semicolon
-        self.consume(&TokenKind::Semicolon);
-        
+            if self.consume(&TokenKind::ColonColon) {
+                continue;
+            }
+            if self.consume(&TokenKind::As) {
+                break UseKind::Alias(self.parse_ident()?);
+            }
+            break UseKind::Simple;
+        };
         Ok(UseDecl {
             path,
             kind,
@@ -1886,7 +1920,7 @@ impl Parser {
             is_pub: false,
         })
     }
-    
+
     /// Parse module declaration: mod name { items } or mod name;
     fn parse_mod(&mut self) -> Result<ModuleDef> {
         let start = self.current().span;
@@ -2244,4 +2278,74 @@ mod tests {
             panic!("Expected function");
         }
     }
+    #[test]
+    fn test_use_tree_preserves_groups_aliases_and_globs() {
+        let program = parse("use foo::{bar as baz, nested::{x, y}, *};").unwrap();
+        let Item::Use(root) = &program.items[0] else { panic!("expected use") };
+        assert_eq!(root.path[0].name, "foo");
+        let UseKind::Group(children) = &root.kind else { panic!("expected group") };
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0].path[0].name, "bar");
+        assert!(matches!(&children[0].kind, UseKind::Alias(alias) if alias.name == "baz"));
+        assert_eq!(children[1].path[0].name, "nested");
+        assert!(matches!(&children[1].kind, UseKind::Group(items) if items.len() == 2));
+        assert!(children[2].path.is_empty());
+        assert!(matches!(children[2].kind, UseKind::Glob));
+        let program = parse("use foo::bar as renamed;").unwrap();
+        let Item::Use(root) = &program.items[0] else { panic!("expected use") };
+        assert_eq!(root.path.len(), 2);
+        assert!(matches!(&root.kind, UseKind::Alias(alias) if alias.name == "renamed"));
+        assert!(parse("use foo::{bar baz};").is_err());
+    }
+
+    #[test]
+    fn test_range_and_semicolon_are_preserved() {
+        let program = parse("fn main() { for i in 1 + 2..10 - 1 { i; } 7; 8 }").unwrap();
+        let Item::Function(function) = &program.items[0] else { panic!("expected fn") };
+        assert!(matches!(function.body.stmts[1], Stmt::Semi(_)));
+        assert!(matches!(function.body.stmts[2], Stmt::Expr(_)));
+        let Stmt::Expr(Expr::For { iter, .. }) = &function.body.stmts[0] else { panic!("expected for") };
+        assert!(matches!(iter.as_ref(), Expr::Range { start: Some(_), end: Some(_), .. }));
+    }
+
+    #[test]
+    fn test_malformed_literals_fail_before_semantics() {
+        for source in ["fn main() { let x: i64 = 9223372036854775808; }", "fn main() { let x: f64 = 1e+; }", "fn main() {} /* unfinished"] {
+            assert!(matches!(parse(source), Err(Error::UnexpectedToken { .. })));
+        }
+    }
+
+    #[test]
+    fn block_statements_do_not_consume_following_dereference_assignment() {
+        let program = parse("fn f(p: *i32, b: bool) { if b {} *p = 1; while b {} *p = 2; let x: i32 = if b { 1 } else { 2 }; }").unwrap();
+        let Item::Function(function) = &program.items[0] else { panic!("expected fn") };
+        assert_eq!(function.body.stmts.len(), 6);
+        assert!(matches!(function.body.stmts[1], Stmt::Semi(Expr::Binary { op: BinOp::Assign, .. })));
+        assert!(matches!(function.body.stmts[3], Stmt::Semi(Expr::Binary { op: BinOp::Assign, .. })));
+    }
+
+    #[test]
+    fn qualified_types_and_const_generic_arguments_are_preserved() {
+        let program = parse("fn f(x: module::Value, y: Array<i32, 4>) {}").unwrap();
+        let Item::Function(function) = &program.items[0] else { panic!("expected fn") };
+        assert!(matches!(&function.params[0].ty, Type::Named(name, _) if name == "module::Value"));
+        assert!(matches!(&function.params[1].ty, Type::GenericWithArgs { args, .. } if args.len() == 2 && matches!(&args[1], GenericArg::Const(Expr::Literal(Literal::Int(4, _))))));
+    }
+
+    #[test]
+    fn const_declarations_accept_optional_semicolons() {
+        assert_eq!(parse("const X: i32 = 1; const Y: i32 = 2 fn f() {}").unwrap().items.len(), 3);
+    }
+
+    #[test]
+    fn public_type_alias_preserves_export_visibility() {
+        let program = parse("pub type Number = i32; type PrivateNumber = i64;").unwrap();
+        let Item::TypeAlias(public) = &program.items[0] else { panic!("expected type alias") };
+        let Item::TypeAlias(private) = &program.items[1] else { panic!("expected type alias") };
+        assert!(public.is_pub);
+        assert!(!private.is_pub);
+        assert_eq!(public.name.name, "Number");
+        assert!(matches!(&public.ty, Type::Named(name, _) if name == "i32"));
+    }
+
 }

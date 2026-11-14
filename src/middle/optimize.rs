@@ -76,13 +76,13 @@ impl ConstantFolding {
         match (left, right) {
             (Constant::Int(l), Constant::Int(r)) => {
                 let result = match op {
-                    BinOp::Add => l.checked_add(*r)?,
-                    BinOp::Sub => l.checked_sub(*r)?,
-                    BinOp::Mul => l.checked_mul(*r)?,
+                    BinOp::Add => l.wrapping_add(*r),
+                    BinOp::Sub => l.wrapping_sub(*r),
+                    BinOp::Mul => l.wrapping_mul(*r),
                     BinOp::Div => l.checked_div(*r)?,
                     BinOp::Mod => l.checked_rem(*r)?,
-                    BinOp::Shl => l.checked_shl(*r as u32)?,
-                    BinOp::Shr => l.checked_shr(*r as u32)?,
+                    BinOp::Shl => l.wrapping_shl(*r as u32),
+                    BinOp::Shr => l.wrapping_shr(*r as u32),
                     BinOp::And => l & r,
                     BinOp::Or => l | r,
                     BinOp::Xor => l ^ r,
@@ -102,8 +102,8 @@ impl ConstantFolding {
                     BinOp::Mul => l * r,
                     BinOp::Div => l / r,
                     BinOp::Mod => l % r,
-                    BinOp::Eq => return Some(Constant::Bool((l - r).abs() < f64::EPSILON)),
-                    BinOp::Ne => return Some(Constant::Bool((l - r).abs() >= f64::EPSILON)),
+                    BinOp::Eq => return Some(Constant::Bool(l == r)),
+                    BinOp::Ne => return Some(Constant::Bool(l != r)),
                     BinOp::Lt => return Some(Constant::Bool(l < r)),
                     BinOp::Le => return Some(Constant::Bool(l <= r)),
                     BinOp::Gt => return Some(Constant::Bool(l > r)),
@@ -214,15 +214,35 @@ impl DeadCodeElimination {
         }
 
         // Mark unreachable blocks (don't remove to preserve indices)
-        let original_len = func.blocks.len();
+        let mut changed = false;
         for (i, block) in func.blocks.iter_mut().enumerate() {
             if !reachable.contains(&BlockId(i)) {
+                changed |= !block.instructions.is_empty() || !matches!(block.terminator, Some(Terminator::Unreachable));
                 block.instructions.clear();
                 block.terminator = Some(Terminator::Unreachable);
             }
         }
 
-        func.blocks.len() < original_len
+        let mut edges = std::collections::HashSet::new();
+        for block in &func.blocks {
+            match &block.terminator {
+                Some(Terminator::Jump { target }) => { edges.insert((block.id, *target)); }
+                Some(Terminator::Branch { then_target, else_target, .. }) => {
+                    edges.insert((block.id, *then_target)); edges.insert((block.id, *else_target));
+                }
+                _ => {}
+            }
+        }
+        for block in &mut func.blocks {
+            for inst in &mut block.instructions {
+                if let Instruction::Phi { incoming, .. } = inst {
+                    let before = incoming.len();
+                    incoming.retain(|(_, predecessor)| edges.contains(&(*predecessor, block.id)));
+                    changed |= incoming.len() != before;
+                }
+            }
+        }
+        changed
     }
 }
 
@@ -545,5 +565,37 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn float_folding_obeys_ieee_comparison() {
+        assert!(matches!(ConstantFolding::fold_binop(BinOp::Eq, &Constant::Float(0.0), &Constant::Float(1e-17)), Some(Constant::Bool(false))));
+        assert!(matches!(ConstantFolding::fold_binop(BinOp::Ne, &Constant::Float(f64::NAN), &Constant::Float(f64::NAN)), Some(Constant::Bool(true))));
+        assert!(matches!(ConstantFolding::fold_binop(BinOp::Eq, &Constant::Float(f64::INFINITY), &Constant::Float(f64::INFINITY)), Some(Constant::Bool(true))));
+    }
+
+    #[test]
+    fn removing_unreachable_predecessor_repairs_phi() {
+        let mut f = IRFunction::new("test", vec![], IRType::Bool);
+        let entry = f.add_block("entry");
+        let dead = f.add_block("dead");
+        let merge = f.add_block("merge");
+        f.blocks[0].set_terminator(Terminator::Jump { target: merge });
+        f.blocks[1].set_terminator(Terminator::Jump { target: merge });
+        f.blocks[2].push(Instruction::Phi { dest: Register(0), incoming: vec![
+            (Value::Constant(Constant::Bool(true)), entry),
+            (Value::Constant(Constant::Bool(false)), dead),
+        ] });
+        assert!(DeadCodeElimination::new().run_on_function(&mut f));
+        assert!(matches!(&f.blocks[2].instructions[0], Instruction::Phi { incoming, .. } if incoming.len() == 1 && incoming[0].1 == entry));
+        assert!(!DeadCodeElimination::new().run_on_function(&mut f));
+    }
+
+    #[test]
+    fn integer_folding_wraps_and_masks_shifts() {
+        assert!(matches!(ConstantFolding::fold_binop(BinOp::Add, &Constant::Int(i64::MAX), &Constant::Int(1)), Some(Constant::Int(i64::MIN))));
+        assert!(matches!(ConstantFolding::fold_binop(BinOp::Shl, &Constant::Int(1), &Constant::Int(64)), Some(Constant::Int(1))));
+        assert!(ConstantFolding::fold_binop(BinOp::Div, &Constant::Int(i64::MIN), &Constant::Int(-1)).is_none());
+        assert!(ConstantFolding::fold_binop(BinOp::Div, &Constant::Int(1), &Constant::Int(0)).is_none());
+    }
+
 }
 

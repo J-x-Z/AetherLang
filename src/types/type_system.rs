@@ -118,13 +118,13 @@ impl ConstValue {
             ConstValue::BinOp { op, lhs, rhs } => {
                 let l = lhs.try_eval()?;
                 let r = rhs.try_eval()?;
-                Some(match op {
-                    ConstBinOp::Add => l + r,
-                    ConstBinOp::Sub => l - r,
-                    ConstBinOp::Mul => l * r,
-                    ConstBinOp::Div => l / r,
-                    ConstBinOp::Mod => l % r,
-                })
+                match op {
+                    ConstBinOp::Add => l.checked_add(r),
+                    ConstBinOp::Sub => l.checked_sub(r),
+                    ConstBinOp::Mul => l.checked_mul(r),
+                    ConstBinOp::Div => l.checked_div(r),
+                    ConstBinOp::Mod => l.checked_rem(r),
+                }
             }
         }
     }
@@ -165,5 +165,23 @@ impl ResolvedType {
     /// Create a pointer type
     pub fn ptr(inner: Box<ResolvedType>) -> Self {
         Self::Pointer(inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_constant_arithmetic_never_panics_or_wraps() {
+        for (op, left, right) in [
+            (ConstBinOp::Div, 1, 0), (ConstBinOp::Mod, 1, 0),
+            (ConstBinOp::Add, i64::MAX, 1), (ConstBinOp::Sub, i64::MIN, 1),
+            (ConstBinOp::Mul, i64::MAX, 2), (ConstBinOp::Div, i64::MIN, -1),
+            (ConstBinOp::Mod, i64::MIN, -1),
+        ] {
+            let value = ConstValue::BinOp { op, lhs: Box::new(ConstValue::Int(left)), rhs: Box::new(ConstValue::Int(right)) };
+            assert_eq!(value.try_eval(), None);
+        }
     }
 }

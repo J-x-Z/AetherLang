@@ -1,7 +1,4 @@
-//! AetherLang Compiler
-//! 
-//! A self-hosting systems programming language.
-
+//! AetherLang compiler driver: one frontend for checking and building.
 mod frontend;
 mod middle;
 mod backend;
@@ -13,435 +10,225 @@ mod feedback;
 mod lsp;
 mod script;
 
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
-use std::fs;
-use std::process;
+use clap::{Parser, Subcommand, ValueEnum};
+use std::{fs, path::{Path, PathBuf}, process::{self, Command}, sync::atomic::{AtomicU64, Ordering}};
+use frontend::{resolve::Resolver, semantic::SemanticAnalyzer};
+use middle::{ir_gen::IRGenerator, optimize::Optimizer, ir_printer::print_ir};
+use backend::CCodeGen;
+#[cfg(feature = "llvm")]
+use backend::codegen::CodeGen;
 
-use frontend::lexer::Lexer;
-use frontend::parser::Parser as AethParser;
-use frontend::semantic::SemanticAnalyzer;
-use middle::ir_gen::IRGenerator;
-use middle::optimize::Optimizer;
-use middle::ir_printer::print_ir;
-use backend::{CCodeGen, codegen::CodeGen};
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Backend { C, Llvm }
 
-/// AetherLang Compiler
 #[derive(Parser, Debug)]
-#[command(name = "aethc")]
-#[command(author = "Z1529")]
-#[command(version = "0.1.0")]
-#[command(about = "AetherLang compiler - A self-hosting systems programming language")]
+#[command(name = "aethc", version, about = "AetherLang compiler")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-
-    /// Input source file (.aeth)
     #[arg(value_name = "FILE")]
     input: Option<PathBuf>,
-
-    /// Output file
-    #[arg(short, long, value_name = "FILE")]
+    /// Output file (also applies to --emit-ir and --emit-c)
+    #[arg(short, long, global = true)]
     output: Option<PathBuf>,
-
-    /// Emit C code instead of binary
-    #[arg(long)]
+    #[arg(long, global = true, conflicts_with_all = ["emit_ir", "emit_obj"])]
     emit_c: bool,
-
-    /// Emit Aether IR (for debugging)
-    #[arg(long)]
+    #[arg(long, global = true, conflicts_with = "emit_obj")]
     emit_ir: bool,
-
-    /// Optimization level (0-3)
-    #[arg(short = 'O', default_value = "0")]
+    /// Emit an object file without linking
+    #[arg(long, global = true)]
+    emit_obj: bool,
+    #[arg(short = 'O', default_value_t = 0, global = true, value_parser = clap::value_parser!(u8).range(0..=3))]
     opt_level: u8,
-
-    /// Backend to use (c, llvm)
-    #[arg(long, default_value = "c")]
-    backend: String,
-    
-    /// Target triple (native, x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, etc.)
-    #[arg(long, default_value = "native")]
+    #[arg(long, value_enum, default_value = default_backend(), global = true)]
+    backend: Backend,
+    #[arg(long, default_value = "native", global = true)]
     target: String,
-    
-    /// Custom linker script for kernel/bare-metal development
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, global = true)]
     linker_script: Option<PathBuf>,
+    /// Additional module search directory (repeatable)
+    #[arg(short = 'I', long = "module-path", global = true)]
+    module_paths: Vec<PathBuf>,
+    /// C compiler/linker executable; defaults to CC, then clang/gcc/cc
+    #[arg(long, global = true)]
+    cc: Option<PathBuf>,
+    #[arg(short, long, global = true)]
+    quiet: bool,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Compile a source file
-    Build {
-        /// Input source file
-        input: PathBuf,
-        
-        /// Output file
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
-    /// Check a source file for errors
-    Check {
-        /// Input source file
-        input: PathBuf,
-    },
-    /// Print version information
+    /// Compile and link a source file (.aeth or .ath)
+    Build { input: PathBuf },
+    /// Parse, resolve imports and type-check without generating code
+    Check { input: PathBuf },
     Version,
-    
-    /// (Hidden) Test Linker
-    #[command(hide = true)]
-    LinkTest {
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
 }
 
-/// Get the target triple for code generation
-fn get_target_triple(target: &str) -> String {
-    if target == "native" {
-        // Auto-detect native target
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        return "arm64-apple-darwin".to_string();
-        
-        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        return "x86_64-apple-darwin".to_string();
-        
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        return "x86_64-unknown-linux-gnu".to_string();
-        
-        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-        return "aarch64-unknown-linux-gnu".to_string();
-        
-        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        return "x86_64-pc-windows-msvc".to_string();
-        
-        // Fallback
-        #[cfg(not(any(
-            all(target_os = "macos", target_arch = "aarch64"),
-            all(target_os = "macos", target_arch = "x86_64"),
-            all(target_os = "linux", target_arch = "x86_64"),
-            all(target_os = "linux", target_arch = "aarch64"),
-            all(target_os = "windows", target_arch = "x86_64"),
-        )))]
-        return "x86_64-unknown-linux-gnu".to_string();
-    }
-    target.to_string()
-}
+fn default_backend() -> &'static str { if cfg!(feature = "llvm") { "llvm" } else { "c" } }
 
 fn main() {
     env_logger::init();
-    
     let cli = Cli::parse();
-    
-    // Handle subcommands
-    match &cli.command {
-        Some(Commands::Build { input, output }) => {
-            compile_file(input, output.clone(), &cli);
-        }
-        Some(Commands::Check { input }) => {
-            check_file(input);
-        }
-        Some(Commands::Version) => {
-            println!("aethc 0.1.0");
-            println!("AetherLang Compiler");
-            println!("License: Apache-2.0");
-        }
-        Some(Commands::LinkTest { output }) => {
-            use backend::linker::{Linker, PF_R, PF_X, SHT_PROGBITS, SHF_ALLOC, SHF_EXECINSTR};
-            
-            println!("Testing Self-Hosted Linker...");
-            let mut linker = Linker::new();
-            
-            // Minimal shellcode: exit(42)
-            let code = vec![
-                0x48, 0xc7, 0xc7, 0x2a, 0x00, 0x00, 0x00, // mov rdi, 42
-                0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00, // mov rax, 60
-                0x0f, 0x05                                // syscall
-            ];
-            
-            // Add as .text section
-            // In our current simple implementation, segments and sections must be added in sync
-            // or the linker should auto-manage segments.
-            // For now, we manually manage both but let's try to be consistent.
-            // Our emit logic assumes Sections == Segments 1:1 for the loop.
-            // So we add text segment AND text section.
-            
-            let vaddr = 0x400000 + 0x40;
-            linker.add_segment(code.clone(), PF_R | PF_X, vaddr);
-            linker.add_section(".text", code, SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR, vaddr);
-            
-            linker.set_entry_point(vaddr);
-            
-            // In a real implementation, we would calculate exact header size.
-            // For this test, we rely on the linker's emit function handling offsets,
-            // but the virtual mapping must match.
-            // Let's rely on simple PT_LOAD at 0x400000 mapping the whole file?
-            // Actually, our simple linker appends segments AFTER headers.
-            // So code will be at file offset ~120 bytes.
-            // We need to be careful with vaddr.
-            
-            let out_path = output.clone().unwrap_or_else(|| PathBuf::from("test_elf"));
-            if let Err(e) = linker.emit(&out_path) {
-                eprintln!("Linker error: {}", e);
-            } else {
-                println!("Generated ELF: {}", out_path.display());
-            }
-        }
-        None => {
-            // Default: compile the input file
-            if let Some(ref input) = cli.input {
-                compile_file(input, cli.output.clone(), &cli);
-            } else {
-                eprintln!("Error: No input file specified");
-                eprintln!("Usage: aethc <FILE> or aethc build <FILE>");
-                process::exit(1);
-            }
-        }
-    }
+    if let Err(error) = run(&cli) { eprintln!("error: {error}"); process::exit(1); }
 }
 
-/// Compile a source file (.aeth or .ath)
-fn compile_file(input: &PathBuf, output: Option<PathBuf>, cli: &Cli) {
-    println!("AetherLang Compiler v0.1.0");
-    println!("Compiling: {}", input.display());
-    
-    // 1. Read source file
-    let source = match fs::read_to_string(input) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error reading file: {}", e);
-            process::exit(1);
-        }
+fn run(cli: &Cli) -> Result<(), String> {
+    let (input, check) = match &cli.command {
+        Some(Commands::Build { input }) => (input, false),
+        Some(Commands::Check { input }) => (input, true),
+        Some(Commands::Version) => { println!("aethc {}", env!("CARGO_PKG_VERSION")); return Ok(()); }
+        None => (cli.input.as_ref().ok_or("no input file; use aethc build <FILE> or aethc check <FILE>")?, false),
     };
-    
-    // 1.5. Check if Aether Script (.ath) - Transpile to Core first
-    let core_source = if input.extension().map(|e| e == "ath").unwrap_or(false) {
-        println!("  [Script] Detected Aether Script (.ath)");
-        
-        // Parse Script
-        let mut script_parser = script::parser::Parser::new(&source);
-        let script_module = match script_parser.parse() {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("Script Parse error: {}", e);
-                process::exit(1);
+    let source = fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
+    let core = if input.extension().is_some_and(|e| e == "ath") {
+        let module = script::parser::Parser::new(&source).parse().map_err(|e| format!("{}: script parse error: {e}", input.display()))?;
+        script::transpiler::Transpiler::new().with_source_file(&input.to_string_lossy()).transpile(&module).map_err(|e| format!("{}: script translation error: {e}", input.display()))?
+    } else { source };
+    let mut paths = cli.module_paths.clone();
+    if let Some(env) = std::env::var_os("AETHER_PATH") { paths.extend(std::env::split_paths(&env)); }
+    // Bundled stdlib is a fallback. Local modules always take precedence.
+    paths.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib"));
+    let mut resolver = Resolver::new(paths);
+    let program = resolver.resolve(input, core).map_err(|e| diagnostic(&resolver, &e))?;
+    let mut analyzer = SemanticAnalyzer::new();
+    analyzer.analyze(&program).map_err(|e| diagnostic(&resolver, &e))?;
+    if check { if !cli.quiet { println!("Checked {}", input.display()); } return Ok(()); }
+    let mut ir = IRGenerator::new(input.file_stem().and_then(|s| s.to_str()).unwrap_or("module"))
+        .with_semantic_facts(analyzer.facts().clone())
+        .generate(&program).map_err(|e| diagnostic(&resolver, &e))?;
+    if cli.opt_level > 0 { Optimizer::new().optimize(&mut ir); }
+    if cli.emit_ir {
+        let output = cli.output.clone().unwrap_or_else(|| input.with_extension("ir"));
+        protect_sources(&resolver, &output)?;
+        write(&output, print_ir(&ir).as_bytes())?;
+        if !cli.quiet { println!("IR: {}", output.display()); }
+        return Ok(());
+    }
+    let output = cli.output.clone().unwrap_or_else(|| {
+        if cli.emit_c { input.with_extension("c") }
+        else if cli.emit_obj { input.with_extension("o") }
+        else { input.with_extension(if cfg!(windows) { "exe" } else { "" }) }
+    });
+    protect_sources(&resolver, &output)?;
+    if cli.emit_c || matches!(cli.backend, Backend::C) {
+        let c = CCodeGen::new(&cli.target).generate_source(&ir).map_err(|e| e.to_string())?;
+        if cli.emit_c { write(&output, c.as_bytes())?; }
+        else {
+            let temp = Temporary::new("c", c.as_bytes())?;
+            native_compile(cli, &temp.path, &output, cli.emit_obj)?;
+        }
+    } else {
+        #[cfg(feature = "llvm")]
+        {
+            let target = target_triple(&cli.target);
+            let mut codegen = backend::llvm::LLVMCodeGen::new(&target).with_opt_level(cli.opt_level);
+            let bytes = codegen.generate(&ir).map_err(|e| e.to_string())?;
+            if cli.emit_obj { write(&output, &bytes)?; }
+            else {
+                let temp = Temporary::new("o", &bytes)?;
+                native_compile(cli, &temp.path, &output, false)?;
+            }
+        }
+        #[cfg(not(feature = "llvm"))]
+        return Err("LLVM backend is not built; rebuild with --features llvm or use --backend c".into());
+    }
+    if !cli.quiet { println!("Output: {}", output.display()); }
+    Ok(())
+}
+
+fn diagnostic(resolver: &Resolver, error: &utils::Error) -> String {
+    if let Some(span) = error.span() {
+        if let Some(file) = resolver.sources.get(span.file_id) {
+            let pos = span.start.min(file.text.len());
+            let pos = (0..=pos).rev().find(|p| file.text.is_char_boundary(*p)).unwrap_or(0);
+            let before = &file.text[..pos];
+            let line = before.bytes().filter(|b| *b == b'\n').count() + 1;
+            let col = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+            let source_line = file.text[pos..].split('\n').next().unwrap_or("");
+            let prefix = before.rsplit('\n').next().unwrap_or("");
+            return format!("{}:{line}:{col}: {error}\n  {prefix}{source_line}\n  {}^", file.path.display(), " ".repeat(col - 1));
+        }
+    }
+    error.to_string()
+}
+
+fn protect_sources(resolver: &Resolver, output: &Path) -> Result<(), String> {
+    for source in &resolver.sources {
+        let same_path = source.path == output || match (fs::canonicalize(&source.path), fs::canonicalize(output)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+        #[cfg(unix)]
+        let same_file = {
+            use std::os::unix::fs::MetadataExt;
+            match (fs::metadata(&source.path), fs::metadata(output)) {
+                (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+                _ => false,
             }
         };
-        println!("  [✓] Script parsed ({} statements)", script_module.stmts.len());
-        
-        // Transpile to Core with source mapping enabled
-        let source_path = input.to_string_lossy().to_string();
-        let mut transpiler = script::transpiler::Transpiler::new()
-            .with_source_file(&source_path);
-        let generated = transpiler.transpile(&script_module);
-        println!("  [✓] Transpiled to Aether Core ({} bytes)", generated.len());
-        
-        // Optionally write generated .aeth to disk for debugging
-        let gen_path = input.with_extension("gen.aeth");
-        if let Err(e) = fs::write(&gen_path, &generated) {
-            eprintln!("  [!] Could not write generated Core: {}", e);
-        } else {
-            println!("  [→] Generated Core written to: {}", gen_path.display());
-        }
-        
-        generated
-    } else {
-        source
-    };
-    
-    // 2. Lexer -> Tokens (using Core source)
-    let lexer = Lexer::new(&core_source, 0);
-    
-    // 3. Parser -> AST
-    let mut parser = AethParser::new(lexer);
-    let program = match parser.parse_program() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Parse error: {}", e);
-            process::exit(1);
-        }
-    };
-    println!("  [✓] Parsed {} items", program.items.len());
-    
-    // 4. Semantic Analysis -> Typed AST
-    let mut analyzer = SemanticAnalyzer::new();
-    if let Err(e) = analyzer.analyze(&program) {
-        eprintln!("Semantic error: {}", e);
-        process::exit(1);
-    }
-    println!("  [✓] Semantic analysis passed");
-    
-    // 5. IR Generation -> Aether IR
-    let module_name = input.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("module");
-    let mut ir_gen = IRGenerator::new(module_name);
-    let mut ir_module = match ir_gen.generate(&program) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("IR generation error: {}", e);
-            process::exit(1);
-        }
-    };
-    println!("  [✓] Generated IR ({} functions)", ir_module.functions.len());
-    
-    // Emit IR if requested
-    if cli.emit_ir {
-        let ir_text = print_ir(&ir_module);
-        let ir_path = input.with_extension("ir");
-        if let Err(e) = fs::write(&ir_path, &ir_text) {
-            eprintln!("Error writing IR: {}", e);
-        } else {
-            println!("  [✓] Wrote IR to {}", ir_path.display());
-        }
-        println!("\n{}", ir_text);
-        return;
-    }
-    
-    // 6. Optimization -> Optimized IR
-    if cli.opt_level > 0 {
-        let mut optimizer = Optimizer::new();
-        optimizer.optimize(&mut ir_module);
-        println!("  [✓] Optimized (level {})", cli.opt_level);
-    }
-    
-    // 7. Code Generation
-    match cli.backend.as_str() {
-        "c" => {
-            let mut codegen = CCodeGen::new(&cli.target);
-            
-            // Generate C source
-            let c_source = match codegen.generate_source(&ir_module) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Code generation error: {}", e);
-                    process::exit(1);
-                }
-            };
-            
-            if cli.emit_c {
-                // Just output C code
-                let c_path = output.unwrap_or_else(|| input.with_extension("c"));
-                if let Err(e) = fs::write(&c_path, &c_source) {
-                    eprintln!("Error writing C file: {}", e);
-                    process::exit(1);
-                }
-                println!("  [✓] Generated C code: {}", c_path.display());
-            } else {
-                // Compile C code to executable
-                let _obj_path = input.with_extension("o");
-                let exe_path = output.unwrap_or_else(|| {
-                    #[cfg(windows)]
-                    { input.with_extension("exe") }
-                    #[cfg(not(windows))]
-                    { input.with_extension("") }
-                });
-                
-                // Write C source
-                let c_path = input.with_extension("c");
-                if let Err(e) = fs::write(&c_path, &c_source) {
-                    eprintln!("Error writing C file: {}", e);
-                    process::exit(1);
-                }
-                
-                // Compile with clang/gcc
-                let compilers = ["clang", "gcc", "cc"];
-                let mut compiled = false;
-                
-                for compiler in &compilers {
-                    let mut cmd = std::process::Command::new(compiler);
-                    cmd.args(&["-o"])
-                        .arg(&exe_path)
-                        .arg(&c_path);
-                    
-                    // Add linker script if provided
-                    if let Some(ref ld_script) = cli.linker_script {
-                        cmd.arg("-T").arg(ld_script);
-                        cmd.arg("-nostdlib"); // Usually needed with custom linker scripts
-                    }
-                    
-                    let result = cmd.output();
-                    
-                    if let Ok(output) = result {
-                        if output.status.success() {
-                            compiled = true;
-                            println!("  [✓] Compiled with {}", compiler);
-                            if cli.linker_script.is_some() {
-                                println!("  [✓] Using custom linker script");
-                            }
-                            break;
-                        }
-                    }
-                }
-                
-                // Cleanup temp C file
-                let _ = fs::remove_file(&c_path);
-                
-                if !compiled {
-                    eprintln!("Error: Could not find C compiler (clang/gcc)");
-                    process::exit(1);
-                }
-                
-                println!("\n✅ Output: {}", exe_path.display());
-            }
-        }
-        #[cfg(feature = "llvm")]
-        "llvm" => {
-            use backend::llvm::LLVMCodeGen;
-            // Get target triple from CLI or auto-detect native
-            let target_triple = get_target_triple(&cli.target);
-            let mut codegen = LLVMCodeGen::new(&target_triple);
-            
-            match codegen.generate(&ir_module) {
-                Ok(bytes) => {
-                    let obj_path = output.unwrap_or_else(|| input.with_extension("o"));
-                    if let Err(e) = fs::write(&obj_path, &bytes) {
-                        eprintln!("Error writing object file: {}", e);
-                        process::exit(1);
-                    }
-                    println!("  [✓] Generated object file: {}", obj_path.display());
-                }
-                Err(e) => {
-                    eprintln!("LLVM code generation error: {}", e);
-                    process::exit(1);
-                }
-            }
-        }
-        _ => {
-            eprintln!("Unknown backend: {}. Use 'c' or 'llvm'", cli.backend);
-            process::exit(1);
+        #[cfg(not(unix))]
+        let same_file = false;
+        if same_path || same_file {
+            return Err(format!("output must not overwrite an input source: {}", source.path.display()));
         }
     }
+    Ok(())
 }
 
-/// Check a source file for errors without generating code
-fn check_file(input: &PathBuf) {
-    println!("Checking: {}", input.display());
-    
-    let source = match fs::read_to_string(input) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error reading file: {}", e);
-            process::exit(1);
+fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    fs::write(path, bytes).map_err(|e| format!("writing {}: {e}", path.display()))
+}
+
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+struct Temporary { path: PathBuf }
+impl Temporary {
+    fn new(extension: &str, bytes: &[u8]) -> Result<Self, String> {
+        use std::io::Write;
+        for _ in 0..100 {
+            let path = std::env::temp_dir().join(format!("aethc-{}-{}.{}", process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed), extension));
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+            match options.open(&path) {
+                Ok(mut f) => { let temporary = Self { path }; f.write_all(bytes).map_err(|e| e.to_string())?; return Ok(temporary); }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("creating compiler temporary file: {e}")),
+            }
         }
-    };
-    
-    let lexer = Lexer::new(&source, 0);
-    let mut parser = AethParser::new(lexer);
-    
-    let program = match parser.parse_program() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Parse error: {}", e);
-            process::exit(1);
-        }
-    };
-    
-    let mut analyzer = SemanticAnalyzer::new();
-    if let Err(e) = analyzer.analyze(&program) {
-        eprintln!("Semantic error: {}", e);
-        process::exit(1);
+        Err("cannot allocate a unique compiler temporary file".into())
     }
-    
-    println!("✅ No errors found");
+}
+impl Drop for Temporary { fn drop(&mut self) { let _ = fs::remove_file(&self.path); } }
+
+fn native_compile(cli: &Cli, input: &Path, output: &Path, object: bool) -> Result<(), String> {
+    let compilers = if let Some(cc) = cli.cc.clone().or_else(|| std::env::var_os("CC").map(PathBuf::from)) { vec![cc] }
+        else { ["clang", "gcc", "cc"].iter().map(PathBuf::from).collect() };
+    for compiler in &compilers {
+        let mut command = Command::new(compiler);
+        command.arg(format!("-O{}", cli.opt_level));
+        if cli.target != "native" { command.arg(format!("--target={}", cli.target)); }
+        if object { command.arg("-c"); }
+        command.arg(input).arg("-o").arg(output);
+        if let Some(script) = &cli.linker_script { command.arg("-T").arg(script).arg("-nostdlib"); }
+        match command.output() {
+            Ok(result) if result.status.success() => return Ok(()),
+            Ok(result) => return Err(format!("{} failed ({}):\n{}{}", compiler.display(), result.status,
+                String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("starting {}: {e}", compiler.display())),
+        }
+    }
+    Err(format!("no C compiler found (tried {}); set --cc or CC", compilers.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")))
+}
+
+#[cfg(feature = "llvm")]
+fn target_triple(target: &str) -> String {
+    if target != "native" { return target.into(); }
+    unsafe {
+        let raw = llvm_sys::target_machine::LLVMGetDefaultTargetTriple();
+        let target = std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned();
+        llvm_sys::core::LLVMDisposeMessage(raw);
+        target
+    }
 }

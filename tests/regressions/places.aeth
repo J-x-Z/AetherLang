@@ -1,0 +1,28 @@
+struct Pair { left: i64, right: i64 }
+fn next(counter: *i64) -> i64 {
+    let value: i64 = *counter;
+    *counter += 1;
+    return value;
+}
+fn set(pointer: *i64, value: i64) { *pointer = value; }
+fn main() -> i32 {
+    let mut count: i64 = 0;
+    let counter: *i64 = &mut count as *i64;
+    let mut data: [i64; 4] = [10, 20, 30, 40];
+    data[next(counter)] = 70;
+    if count != 1 || data[0] != 70 || data[1] != 20 { return 1; }
+    data[next(counter)] += 2;
+    if count != 2 || data[1] != 22 || data[2] != 30 { return 2; }
+    set(&mut data[2] as *i64, 81);
+    if data[2] != 81 { return 3; }
+    let mut value: i64 = 4;
+    let pointer: *i64 = &mut value as *i64;
+    *pointer = 9;
+    if value != 9 { return 4; }
+    value = 12;
+    if *pointer != 12 { return 5; }
+    let mut pair: Pair = Pair { left: 5, right: 6 };
+    pair.right += 10;
+    if pair.left != 5 || pair.right != 16 { return 6; }
+    return 0;
+}

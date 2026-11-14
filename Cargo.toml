@@ -3,9 +3,9 @@ name = "aether-lang"
 version = "0.1.0"
 edition = "2021"
 authors = ["Z1529"]
-description = "AetherLang - A self-hosting systems programming language"
+description = "AetherLang - An explicit systems programming language"
 license = "Apache-2.0"
-repository = "https://github.com/Z1529/AetherLang"
+repository = "https://github.com/J-x-Z/AetherLang"
 
 [features]
 default = ["llvm"]  # LLVM is the primary backend (like Rust)
@@ -19,7 +19,7 @@ thiserror = "1.0"
 
 # LLVM bindings - requires LLVM 21
 # Enabled by default for LLVM backend
-llvm-sys = { version = "211", optional = true }
+llvm-sys = { version = "211", optional = true, features = ["prefer-dynamic"] }
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }

@@ -133,7 +133,7 @@ impl AIIRConverter {
     /// Analyze a statement for call edges  
     fn analyze_stmt(&mut self, stmt: &Stmt, parent_func: NodeId) {
         match stmt {
-            Stmt::Expr(expr) => self.analyze_expr(expr, parent_func),
+            Stmt::Expr(expr) | Stmt::Semi(expr) => self.analyze_expr(expr, parent_func),
             Stmt::Let { value, .. } => {
                 if let Some(v) = value {
                     self.analyze_expr(v, parent_func);

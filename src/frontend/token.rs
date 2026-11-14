@@ -223,6 +223,8 @@ pub enum TokenKind {
     Eof,
     /// Unknown/invalid character
     Unknown(char),
+    /// Malformed literal or unterminated comment, retaining the actual failure.
+    Invalid(String),
 }
 
 impl TokenKind {

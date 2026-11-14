@@ -13,19 +13,29 @@ use crate::middle::ir::{
     BinOp as IRBinOp, IRAsmOperand, IRAsmOperandKind, IRExtern,
 };
 use crate::utils::Result;
+use crate::frontend::semantic::{SemanticFacts, ScalarConstant};
+use crate::types::type_system::{ResolvedType, PrimitiveType};
 
 /// IR Generator
 pub struct IRGenerator {
+    semantic_facts: Option<SemanticFacts>,
+    resolved_aliases: HashMap<String, IRType>,
+    constants: HashMap<String, (IRType, Constant)>,
     /// Current module being built
     module: IRModule,
     /// Current function being built
     current_fn: Option<IRFunction>,
     /// Current block ID
     current_block: BlockId,
+    /// Innermost loop (continue target, break target).
+    loop_targets: Vec<(BlockId, BlockId)>,
     /// Register counter
     next_register: usize,
     /// Variable to value mapping (with type)
     locals: HashMap<String, (Value, IRType)>,
+    /// Addressable storage for lexical locals.
+    local_addresses: HashMap<String, Value>,
+    local_aggregates: std::collections::HashSet<String>,
     /// Register type mapping (for temporaries)
     reg_types: HashMap<Register, IRType>,
     /// Struct definitions (name -> fields)
@@ -34,25 +44,54 @@ pub struct IRGenerator {
     sret_ptr: Option<Value>,
     /// Pre-scanned function signatures for forward reference (name -> (ret_type, sret_type))
     function_signatures: HashMap<String, (IRType, Option<IRType>)>,
+    function_parameters: HashMap<String, Vec<IRType>>,
 }
 
 impl IRGenerator {
     pub fn new(module_name: &str) -> Self {
         Self {
             module: IRModule::new(module_name),
+            semantic_facts: None,
+            resolved_aliases: HashMap::new(),
+            constants: HashMap::new(),
             current_fn: None,
             current_block: BlockId(0),
             next_register: 0,
+            loop_targets: Vec::new(),
             locals: HashMap::new(),
+            local_addresses: HashMap::new(),
+            local_aggregates: std::collections::HashSet::new(),
             reg_types: HashMap::new(),
             struct_defs: HashMap::new(),
             sret_ptr: None,
             function_signatures: HashMap::new(),
+            function_parameters: HashMap::new(),
         }
+    }
+
+    pub fn with_semantic_facts(mut self, facts: SemanticFacts) -> Self {
+        self.semantic_facts = Some(facts);
+        self
     }
 
     /// Generate IR for a program
     pub fn generate(&mut self, program: &Program) -> Result<IRModule> {
+        if let Some(facts) = self.semantic_facts.clone() {
+            for (name, ty) in facts.aliases {
+                self.resolved_aliases.insert(name, Self::resolved_type_to_ir(&ty)?);
+            }
+            for (name, constant) in facts.constants {
+                let ty = Self::resolved_type_to_ir(&constant.ty)?;
+                let value = match constant.value {
+                    ScalarConstant::Int(value) => Constant::Int(value),
+                    ScalarConstant::Float(value) => Constant::Float(value),
+                    ScalarConstant::Bool(value) => Constant::Bool(value),
+                    ScalarConstant::Char(value) => Constant::Int(value as i64),
+                    ScalarConstant::String(value) => Constant::String(value),
+                };
+                self.constants.insert(name, (ty, value));
+            }
+        }
         // Process inner attributes: #![no_std], #![no_main]
         for attr in &program.inner_attrs {
             match attr.name.name.as_str() {
@@ -73,18 +112,55 @@ impl IRGenerator {
             self.collect_signatures(item);
         }
         
-        // Phase 2: Generate IR for all items
+        // Layouts and external declarations are order independent, like function signatures.
         for item in &program.items {
-            self.generate_item(item)?;
+            if matches!(item, Item::Struct(_) | Item::Enum(_) | Item::Extern(_)) { self.generate_item(item)?; }
         }
+        for item in &program.items {
+            if !matches!(item, Item::Struct(_) | Item::Enum(_) | Item::Extern(_)) { self.generate_item(item)?; }
+        }
+        self.order_struct_layouts()?;
         Ok(self.module.clone())
     }
     
+    /// By-value fields need complete layouts; pointer cycles need only names.
+    fn order_struct_layouts(&mut self) -> Result<()> {
+        fn dependencies(ty: &IRType, output: &mut Vec<String>) {
+            match ty {
+                IRType::Struct(name) => output.push(name.clone()),
+                IRType::Array(element, _) => dependencies(element, output),
+                _ => {}
+            }
+        }
+        fn visit(name: &str, definitions: &HashMap<String, crate::middle::ir::IRStruct>,
+            visiting: &mut std::collections::HashSet<String>, visited: &mut std::collections::HashSet<String>,
+            output: &mut Vec<crate::middle::ir::IRStruct>) -> Result<()> {
+            if visited.contains(name) { return Ok(()); }
+            if !visiting.insert(name.to_string()) {
+                return Err(crate::utils::Error::CodeGen(format!("recursive by-value struct layout involving '{}'", name)));
+            }
+            let definition = definitions.get(name).ok_or_else(|| crate::utils::Error::CodeGen(format!("missing by-value layout for '{}'", name)))?;
+            let mut required = Vec::new();
+            for (_, ty) in &definition.fields { dependencies(ty, &mut required); }
+            for dependency in required { visit(&dependency, definitions, visiting, visited, output)?; }
+            visiting.remove(name); visited.insert(name.to_string()); output.push(definition.clone());
+            Ok(())
+        }
+        let definitions: HashMap<_, _> = self.module.structs.iter().map(|s| (s.name.clone(), s.clone())).collect();
+        let mut output = Vec::new();
+        let mut visiting = std::collections::HashSet::new();
+        let mut visited = std::collections::HashSet::new();
+        for definition in &self.module.structs { visit(&definition.name, &definitions, &mut visiting, &mut visited, &mut output)?; }
+        self.module.structs = output;
+        Ok(())
+    }
+
     /// Register C library extern functions for self-hosting
     fn register_c_library_externs(&mut self) {
         // atof - string to float conversion
         self.module.externs.push(IRExtern {
             name: "atof".to_string(),
+            variadic: false,
             params: vec![("s".to_string(), IRType::Ptr(Box::new(IRType::I8)))],
             ret_type: IRType::F64,
         });
@@ -92,6 +168,7 @@ impl IRGenerator {
         // strcmp - string comparison
         self.module.externs.push(IRExtern {
             name: "strcmp".to_string(),
+            variadic: false,
             params: vec![
                 ("s1".to_string(), IRType::Ptr(Box::new(IRType::I8))),
                 ("s2".to_string(), IRType::Ptr(Box::new(IRType::I8))),
@@ -102,6 +179,7 @@ impl IRGenerator {
         // malloc - memory allocation
         self.module.externs.push(IRExtern {
             name: "malloc".to_string(),
+            variadic: false,
             params: vec![("size".to_string(), IRType::I64)],
             ret_type: IRType::Ptr(Box::new(IRType::I8)),
         });
@@ -109,6 +187,7 @@ impl IRGenerator {
         // free - memory deallocation
         self.module.externs.push(IRExtern {
             name: "free".to_string(),
+            variadic: false,
             params: vec![("ptr".to_string(), IRType::Ptr(Box::new(IRType::I8)))],
             ret_type: IRType::Void,
         });
@@ -128,10 +207,11 @@ impl IRGenerator {
                 // Check if this is an sret function (direct struct or pointer-to-struct return)
                 let sret_type = match &ret_type {
                     IRType::Struct(_) => Some(IRType::Ptr(Box::new(ret_type.clone()))),  // Convert to pointer
-                    IRType::Ptr(inner) if matches!(inner.as_ref(), IRType::Struct(_)) => Some(ret_type.clone()),
+
                     _ => None,
                 };
                 
+                self.function_parameters.insert(func_name.clone(), func.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect());
                 self.function_signatures.insert(func_name, (ret_type, sret_type));
             }
             Item::Impl(impl_block) => {
@@ -147,10 +227,10 @@ impl IRGenerator {
                     // Check if this is an sret function (direct struct or pointer-to-struct return)
                     let sret_type = match &ret_type {
                         IRType::Struct(_) => Some(IRType::Ptr(Box::new(ret_type.clone()))),
-                        IRType::Ptr(inner) if matches!(inner.as_ref(), IRType::Struct(_)) => Some(ret_type.clone()),
                         _ => None,
                     };
                     
+                    self.function_parameters.insert(func_name.clone(), method.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect());
                     self.function_signatures.insert(func_name, (ret_type, sret_type));
                 }
             }
@@ -170,6 +250,9 @@ impl IRGenerator {
         match item {
             Item::Function(func) => self.generate_function(func),
             Item::Struct(struct_def) => {
+                if !struct_def.generic_params.is_empty() || !struct_def.type_params.is_empty() {
+                    return Err(crate::utils::Error::CodeGen("generic struct specialization is not implemented".into()));
+                }
                 let fields: Vec<_> = struct_def.fields.iter()
                     .map(|f| (f.name.name.clone(), self.ast_type_to_ir(&f.ty)))
                     .collect();
@@ -197,6 +280,9 @@ impl IRGenerator {
                 Ok(())
             }
             Item::Enum(enum_def) => {
+                if !enum_def.generic_params.is_empty() || !enum_def.type_params.is_empty() {
+                    return Err(crate::utils::Error::CodeGen("generic enum specialization is not implemented".into()));
+                }
                 use crate::middle::ir::{IREnum, IRVariant};
                 let mut variants = Vec::new();
                 for variant in &enum_def.variants {
@@ -224,34 +310,19 @@ impl IRGenerator {
                 Ok(())
             }
             Item::Interface(_) => Ok(()),
-            Item::Const(_) => Ok(()),
+            Item::Const(value) => {
+                if self.constants.contains_key(&value.name.name) { Ok(()) }
+                else { Err(crate::utils::Error::CodeGen(format!("constant '{}' has no validated scalar value", value.name.name))) }
+            },
             // Macro/Module/Use are handled at earlier compilation stages
             Item::Macro(_) => Ok(()),
-            Item::Module(m) => {
-                // Recursively generate module items
-                if let Some(items) = &m.items {
-                    for item in items {
-                        self.generate_item(item)?;
-                    }
-                }
-                Ok(())
-            }
-            Item::Use(use_decl) => {
-                // Generate IR struct definitions for imported types
-                if !use_decl.path.is_empty() {
-                    let module_name = &use_decl.path[0].name;
-                    self.generate_module_types(module_name)?;
-                    
-                    // Also register function signatures from the imported module
-                    self.register_imported_functions(module_name)?;
-                }
-                Ok(())
-            },
+            Item::Module(_) | Item::Use(_) => Err(crate::utils::Error::CodeGen(
+                "unresolved module reached IR generation".into())),
             Item::Extern(ext) => {
                 // Register extern functions in IR module
                 for foreign_item in &ext.items {
                     match foreign_item {
-                        ast::ForeignItem::Fn { name, params, ret_type, .. } => {
+                        ast::ForeignItem::Fn { name, params, ret_type, variadic, .. } => {
                             let ir_params: Vec<(String, IRType)> = params.iter()
                                 .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
                                 .collect();
@@ -259,11 +330,12 @@ impl IRGenerator {
                                 .map(|t| self.ast_type_to_ir(t))
                                 .unwrap_or(IRType::Void);
                             
-                            self.module.externs.push(IRExtern {
-                                name: name.name.clone(),
-                                params: ir_params,
-                                ret_type: ir_ret,
-                            });
+                            if let Some(existing) = self.module.externs.iter_mut().find(|ext| ext.name == name.name) {
+                                // Explicit validated ABI declarations override implicit libc defaults.
+                                *existing = IRExtern { name: name.name.clone(), variadic: *variadic, params: ir_params, ret_type: ir_ret };
+                            } else {
+                                self.module.externs.push(IRExtern { name: name.name.clone(), variadic: *variadic, params: ir_params, ret_type: ir_ret });
+                            }
                         }
                         ast::ForeignItem::Static { .. } => {
                             // TODO: Handle static extern variables
@@ -275,118 +347,13 @@ impl IRGenerator {
             Item::Static(_) => Ok(()), // TODO: Generate global variable IR
             Item::Union(_) => Ok(()), // TODO: Generate union type IR
             Item::Trait(_) => Ok(()), // Trait definitions don't generate IR directly
-            Item::TypeAlias(_) => Ok(()), // Type aliases are resolved at semantic level
+            Item::TypeAlias(alias) => {
+                if self.resolved_aliases.contains_key(&alias.name.name) { Ok(()) }
+                else { Err(crate::utils::Error::CodeGen(format!("type alias '{}' has no resolved semantic type", alias.name.name))) }
+            },
         }
     }
     
-    /// Generate IR struct definitions for imported module types
-    fn generate_module_types(&mut self, module_name: &str) -> Result<()> {
-        match module_name {
-            "span" => {
-                if !self.struct_defs.contains_key("Span") {
-                    let fields = vec![
-                        ("file_id".to_string(), IRType::I64),
-                        ("start".to_string(), IRType::I64),
-                        ("end".to_string(), IRType::I64),
-                    ];
-                    self.struct_defs.insert("Span".to_string(), fields.clone());
-                    self.module.add_struct("Span", fields, crate::middle::ir::StructRepr::Default);
-                }
-            }
-            "string" => {
-                if !self.struct_defs.contains_key("String") {
-                    let fields = vec![
-                        ("data".to_string(), IRType::Ptr(Box::new(IRType::I8))),
-                        ("len".to_string(), IRType::I64),
-                        ("cap".to_string(), IRType::I64),
-                    ];
-                    self.struct_defs.insert("String".to_string(), fields.clone());
-                    self.module.add_struct("String", fields, crate::middle::ir::StructRepr::Default);
-                }
-            }
-            "vec" => {
-                if !self.struct_defs.contains_key("Vec") {
-                    let fields = vec![
-                        ("data".to_string(), IRType::Ptr(Box::new(IRType::I8))),
-                        ("len".to_string(), IRType::I64),
-                        ("cap".to_string(), IRType::I64),
-                    ];
-                    self.struct_defs.insert("Vec".to_string(), fields.clone());
-                    self.module.add_struct("Vec", fields, crate::middle::ir::StructRepr::Default);
-                }
-            }
-            "token" => {
-                // First ensure Span is defined
-                self.generate_module_types("span")?;
-                
-                if !self.struct_defs.contains_key("TokenKind") {
-                    // TokenKind is an enum, represented as i64 tag + data
-                    let fields = vec![
-                        ("tag".to_string(), IRType::I64),
-                        ("data".to_string(), IRType::I64),
-                    ];
-                    self.struct_defs.insert("TokenKind".to_string(), fields.clone());
-                    self.module.add_struct("TokenKind", fields, crate::middle::ir::StructRepr::Default);
-                }
-                
-                if !self.struct_defs.contains_key("Token") {
-                    let fields = vec![
-                        ("kind".to_string(), IRType::Struct("TokenKind".to_string())),
-                        ("span".to_string(), IRType::Struct("Span".to_string())),
-                    ];
-                    self.struct_defs.insert("Token".to_string(), fields.clone());
-                    self.module.add_struct("Token", fields, crate::middle::ir::StructRepr::Default);
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    
-    /// Register function signatures from an imported module
-    fn register_imported_functions(&mut self, module_name: &str) -> Result<()> {
-        use crate::frontend::module::ModuleLoader;
-        use crate::frontend::ast::Item;
-        
-        let mut loader = ModuleLoader::new();
-        
-        // Try to load the module
-        if let Ok(parsed) = loader.load_module(module_name) {
-            let items = parsed.items.clone();
-            
-            for item in &items {
-                if let Item::Function(func) = item {
-                    if func.is_pub {
-                        // Register function signature with module prefix
-                        let prefixed_name = format!("{}_{}", module_name, func.name.name);
-                        
-                        let ret_type = if let Some(ref ty) = func.ret_type {
-                            self.ast_type_to_ir(ty)
-                        } else {
-                            IRType::Void
-                        };
-                        
-                        // Register in function_signatures for return type lookup
-                        self.function_signatures.insert(prefixed_name.clone(), (ret_type.clone(), None));
-                        
-                        // Also register as extern so it can be linked
-                        let params: Vec<(String, IRType)> = func.params.iter()
-                            .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
-                            .collect();
-                        
-                        self.module.externs.push(IRExtern {
-                            name: prefixed_name,
-                            params,
-                            ret_type,
-                        });
-                    }
-                }
-            }
-        }
-        
-        Ok(())
-    }
-
     /// Generate IR for a method with Type_method naming convention
     fn generate_method(&mut self, type_name: &str, func: &ast::Function) -> Result<()> {
         // Create a modified function name with type prefix
@@ -396,10 +363,14 @@ impl IRGenerator {
 
     /// Generate IR for a function with a specific name
     fn generate_function_with_name(&mut self, func: &ast::Function, name: &str) -> Result<()> {
+        if !func.type_params.is_empty() { return Err(crate::utils::Error::CodeGen("generic specialization is not implemented".into())); }
         self.next_register = 0;
         self.locals.clear();
+        self.local_addresses.clear();
+        self.local_aggregates.clear();
         self.reg_types.clear();
         self.sret_ptr = None;
+        self.loop_targets.clear();
 
         // Convert parameters
         let mut params: Vec<(String, IRType)> = func.params.iter()
@@ -416,7 +387,6 @@ impl IRGenerator {
         // Both direct struct returns and pointer-to-struct returns use sret
         let uses_sret = match &ret_type {
             IRType::Struct(_) => true,  // Direct struct return
-            IRType::Ptr(inner) => matches!(inner.as_ref(), IRType::Struct(_)),  // Ptr(Struct)
             _ => false,
         };
         // Debug: panic on specific function to confirm sret detection
@@ -471,10 +441,16 @@ impl IRGenerator {
         }
 
         self.current_fn = Some(ir_func);
+        for (name, (value, ty)) in self.locals.clone() {
+            let address = self.allocate_local(&ty, Some(value));
+            if matches!(ty, IRType::Struct(_)) { self.local_aggregates.insert(name.clone()); }
+            self.local_addresses.insert(name, address);
+        }
 
         // Generate function body
         let last_value = self.generate_block(&func.body)?;
 
+        let last_value = self.prepare_implicit_return(last_value)?;
         // Add implicit return if needed (same as generate_function)
         if let Some(ref mut ir_func) = self.current_fn {
             let ret_type = ir_func.ret_type.clone();
@@ -495,17 +471,22 @@ impl IRGenerator {
         }
 
         // Finalize function
-        let ir_func = self.current_fn.take().unwrap();
+        let mut ir_func = self.current_fn.take().unwrap();
+        ir_func.register_types = self.reg_types.clone();
         self.module.functions.push(ir_func);
         Ok(())
     }
 
     /// Generate IR for a function
     fn generate_function(&mut self, func: &ast::Function) -> Result<()> {
+        if !func.type_params.is_empty() { return Err(crate::utils::Error::CodeGen("generic specialization is not implemented".into())); }
         self.next_register = 0;
         self.locals.clear();
+        self.local_addresses.clear();
+        self.local_aggregates.clear();
         self.reg_types.clear();
         self.sret_ptr = None;
+        self.loop_targets.clear();
 
         // Convert parameters
         let mut params: Vec<(String, IRType)> = func.params.iter()
@@ -521,7 +502,6 @@ impl IRGenerator {
         // Check if this function returns a struct (sret calling convention)
         let uses_sret = match &ret_type {
             IRType::Struct(_) => true,
-            IRType::Ptr(inner) => matches!(inner.as_ref(), IRType::Struct(_)),
             _ => false,
         };
         
@@ -540,12 +520,8 @@ impl IRGenerator {
             ret_type.clone()
         };
 
-        // Generate function name with module prefix for pub functions (but not main)
-        let func_name = if func.is_pub && func.name.name != "main" {
-            format!("{}_{}", self.module.name, func.name.name)
-        } else {
-            func.name.name.clone()
-        };
+        // The resolver owns names. Re-mangling here breaks imported calls.
+        let func_name = func.name.name.clone();
 
         let mut ir_func = IRFunction::new(&func_name, params.clone(), actual_ret_type);
 
@@ -595,10 +571,16 @@ impl IRGenerator {
         }
 
         self.current_fn = Some(ir_func);
+        for (name, (value, ty)) in self.locals.clone() {
+            let address = self.allocate_local(&ty, Some(value));
+            if matches!(ty, IRType::Struct(_)) { self.local_aggregates.insert(name.clone()); }
+            self.local_addresses.insert(name, address);
+        }
 
         // Generate body
         let last_value = self.generate_block(&func.body)?;
 
+        let last_value = self.prepare_implicit_return(last_value)?;
         // Add implicit return if needed
         if let Some(ref mut ir_func) = self.current_fn {
             let ret_type = ir_func.ret_type.clone();
@@ -619,7 +601,8 @@ impl IRGenerator {
         }
 
         // Finalize function
-        if let Some(ir_func) = self.current_fn.take() {
+        if let Some(mut ir_func) = self.current_fn.take() {
+            ir_func.register_types = self.reg_types.clone();
             self.module.functions.push(ir_func);
         }
 
@@ -629,9 +612,16 @@ impl IRGenerator {
     /// Generate IR for a block
     fn generate_block(&mut self, block: &ast::Block) -> Result<Option<Value>> {
         let mut last_value = None;
+        let saved_locals = self.locals.clone();
+        let saved_addresses = self.local_addresses.clone();
+        let saved_aggregates = self.local_aggregates.clone();
         for stmt in &block.stmts {
+            if self.get_current_terminator().is_some() { break; }
             last_value = self.generate_stmt(stmt)?;
         }
+        self.locals = saved_locals;
+        self.local_addresses = saved_addresses;
+        self.local_aggregates = saved_aggregates;
         Ok(last_value)
     }
 
@@ -639,21 +629,38 @@ impl IRGenerator {
     fn generate_stmt(&mut self, stmt: &ast::Stmt) -> Result<Option<Value>> {
         match stmt {
             Stmt::Let { name, value, ty: type_annotation, .. } => {
-                let reg = self.alloc_register();
-                let mut var_type = IRType::I64;
-
-                if let Some(expr) = value {
-                    let val = self.generate_expr(expr)?;
-                    if let Some(t) = self.get_value_type(&val) {
-                        var_type = t;
+                let mut val = match value.as_ref() {
+                    Some(Expr::Array { elements, .. }) => {
+                        let element_type = type_annotation.as_ref().and_then(|ty| self.array_element_type(ty));
+                        Some(self.generate_array(elements, element_type)?)
                     }
-                    self.emit_current(Instruction::Assign { dest: reg, value: val });
-                    self.reg_types.insert(reg, var_type.clone());
-                } else if let Some(ref ast_ty) = type_annotation {
-                    var_type = self.ast_type_to_ir(ast_ty);
+                    _ => value.as_ref().map(|expr| self.generate_expr(expr)).transpose()?,
+                };
+                self.local_aggregates.remove(&name.name);
+                let mut var_type = val.as_ref().and_then(|v| self.get_value_type(v)).unwrap_or(IRType::I64);
+                if let Some(ty) = type_annotation {
+                    let declared = self.ast_type_to_ir(ty);
+                    if let IRType::Struct(_) = &declared {
+                        self.local_aggregates.insert(name.name.clone());
+                        if let Some(source) = val {
+                            let copy = self.load_address(source, declared.clone());
+                            let address = self.allocate_local(&declared, Some(copy));
+                            val = Some(address);
+                            var_type = IRType::Ptr(Box::new(declared));
+                        }
+                    } else if !matches!(declared, IRType::Array(_, _)) {
+                        if let Some(v) = val { val = Some(self.coerce_value(v, &declared)); }
+                        var_type = declared;
+                    }
                 }
-                
-                self.locals.insert(name.name.clone(), (Value::Register(reg), var_type));
+                let address = self.allocate_local(&var_type, val);
+                self.locals.insert(name.name.clone(), (address.clone(), var_type));
+                self.local_addresses.insert(name.name.clone(), address);
+                Ok(None)
+            }
+
+            Stmt::Semi(expr) => {
+                self.generate_expr(expr)?;
                 Ok(None)
             }
 
@@ -670,34 +677,20 @@ impl IRGenerator {
                     false
                 };
                 
-                // For sret functions, the struct is already written via sret pointer,
-                // so we should return void (ignore the struct literal value)
                 if is_sret {
-                    // Still generate the expression to populate sret pointer
-                    if let Some(expr) = value {
-                        let _ = self.generate_expr(expr)?;
-                    }
+                    let expr = value.as_ref().ok_or_else(|| crate::utils::Error::CodeGen("struct return requires a value".into()))?;
+                    let value = self.generate_expr(expr)?;
+                    self.copy_to_return_slot(value)?;
                     self.set_terminator_current(Terminator::Return { value: None });
                     return Ok(None);
                 }
-                
+
                 let ret_val = if let Some(expr) = value {
                     let mut val = self.generate_expr(expr)?;
                     
-                    // Convert to function return type if needed
                     if let Some(func) = &self.current_fn {
                         let expected_ty = func.ret_type.clone();
-                        if let Some(actual_ty) = self.get_value_type(&val) {
-                            if Self::is_integer_type(&expected_ty) && Self::is_integer_type(&actual_ty) && expected_ty != actual_ty {
-                                let cast_dest = self.alloc_register();
-                                self.emit_current_with_type(Instruction::Cast {
-                                    dest: cast_dest,
-                                    value: val,
-                                    ty: expected_ty.clone(),
-                                }, expected_ty);
-                                val = Value::Register(cast_dest);
-                            }
-                        }
+                        val = self.coerce_value(val, &expected_ty);
                     }
                     Some(val)
                 } else {
@@ -709,12 +702,16 @@ impl IRGenerator {
             }
 
             Stmt::Break { .. } => {
-                // TODO: Track loop context for break
+                let (_, target) = self.loop_targets.last().copied()
+                    .ok_or_else(|| crate::utils::Error::CodeGen("break outside a loop".into()))?;
+                self.set_terminator_current(Terminator::Jump { target });
                 Ok(None)
             }
 
             Stmt::Continue { .. } => {
-                // TODO: Track loop context for continue
+                let (target, _) = self.loop_targets.last().copied()
+                    .ok_or_else(|| crate::utils::Error::CodeGen("continue outside a loop".into()))?;
+                self.set_terminator_current(Terminator::Jump { target });
                 Ok(None)
             }
 
@@ -729,11 +726,21 @@ impl IRGenerator {
             Expr::Literal(lit) => Ok(self.generate_literal(lit)),
 
             Expr::Ident(ident) => {
-                if let Some((val, _ty)) = self.locals.get(&ident.name) {
-                    Ok(val.clone())
-                } else {
-                    Ok(Value::Global(ident.name.clone()))
-                }
+                if let Some((val, ty)) = self.locals.get(&ident.name).cloned() {
+                    if let Some(address) = self.local_addresses.get(&ident.name).cloned() {
+                        if matches!(ty, IRType::Struct(_)) { return Ok(address); }
+                        return Ok(self.load_address(address, ty));
+                    }
+                    Ok(val)
+                } else if let Some((ty, value)) = self.constants.get(&ident.name).cloned() {
+                    let value = Value::Constant(value);
+                    if self.get_value_type(&value).as_ref() == Some(&ty) { Ok(value) }
+                    else {
+                        let dest = self.alloc_register();
+                        self.emit_current_with_type(Instruction::Cast { dest, value, ty: ty.clone() }, ty);
+                        Ok(Value::Register(dest))
+                    }
+                } else { Err(crate::utils::Error::CodeGen(format!("unresolved value '{}'", ident.name))) }
 
             }
 
@@ -753,189 +760,40 @@ impl IRGenerator {
                 Ok(Value::Register(dest))
             }
             Expr::Binary { left, op, right, .. } => {
-                let left_val = self.generate_expr(left)?;
-                let right_val = self.generate_expr(right)?;
-                
-                // Handle assignment specially
-                if matches!(op, ast::BinOp::Assign) {
-                    // 1. Assign to Variable
-                    if let Expr::Ident(ident) = left.as_ref() {
-                        if let Some((dest_val, _)) = self.locals.get(&ident.name) {
-                            if let Value::Register(reg) = dest_val {
-                                self.emit_current(Instruction::Assign {
-                                    dest: *reg,
-                                    value: right_val.clone(),
-                                });
-                                return Ok(right_val);
-                            }
-                        }
-                    } 
-                    // 2. Assign to Field (including (*ptr).field = val pattern)
-                    else if let Expr::Field { expr: base, field, .. } = left.as_ref() {
-                         // Handle (*ptr).field = val pattern: base is Deref expression
-                         // In this case, we need to get the pointer from the deref, not the value
-                         let (base_val, base_ty) = if let Expr::Deref { expr: inner_ptr, .. } = base.as_ref() {
-                             // base is (*ptr), so inner_ptr is the pointer - use it directly
-                             let ptr_val = self.generate_expr(inner_ptr)?;
-                             let ptr_ty = self.get_value_type(&ptr_val);
-                             (ptr_val, ptr_ty)
-                         } else {
-                             // Normal case: base is already a pointer expression
-                             let val = self.generate_expr(base)?;
-                             let ty = self.get_value_type(&val);
-                             (val, ty)
-                         };
-                         
-                         let mut base_val = base_val;
-                         
-                         // Handle Ptr(Ptr(Struct)) case - &mut self where self is a reference
-                         // Load the inner pointer first
-                         let effective_ty = if let Some(IRType::Ptr(inner)) = &base_ty {
-                             if let IRType::Ptr(inner2) = inner.as_ref() {
-                                 if let IRType::Struct(_) = inner2.as_ref() {
-                                     // Load the inner pointer to get Ptr(Struct)
-                                     let deref_dest = self.alloc_register();
-                                     self.emit_current_with_type(Instruction::Load {
-                                         dest: deref_dest,
-                                         ptr: base_val.clone(),
-                                         ty: (**inner).clone(),
-                                     }, (**inner).clone());
-                                     base_val = Value::Register(deref_dest);
-                                     Some((**inner).clone())
-                                 } else {
-                                     base_ty.clone()
-                                 }
-                             } else {
-                                 base_ty.clone()
-                             }
-                         } else {
-                             base_ty.clone()
-                         };
-                         
-                         if let Some(IRType::Ptr(inner)) = effective_ty {
-                            if let IRType::Struct(struct_name) = *inner {
-                                 let fields = self.struct_defs.get(&struct_name).cloned()
-                                     .ok_or_else(|| crate::utils::Error::UndefinedType { 
-                                         span: crate::utils::Span::dummy(),
-                                         name: struct_name.clone() 
-                                     })?;
-                                 
-                                 let (idx, (_, field_ty)) = fields.iter().enumerate()
-                                     .find(|(_, (n, _))| n == &field.name)
-                                     .ok_or_else(|| crate::utils::Error::UnknownField { 
-                                         span: crate::utils::Span::dummy(),
-                                         field: field.name.clone(),
-                                     })?;
-                                     
-                                 let field_ty = field_ty.clone();
-                                     
-                                 let dest = self.alloc_register();
-                                 let idx_val = Value::Constant(Constant::Int(idx as i64));
-                                 
-                                 self.emit_current_with_type(Instruction::GetElementPtr {
-                                     dest,
-                                     ptr: base_val,
-                                     index: idx_val,
-                                     elem_ty: IRType::Struct(struct_name.clone()),
-                                 }, IRType::Ptr(Box::new(field_ty.clone())));
-                                 
-                                 // Store directly to field pointer
-                                 self.emit_current(Instruction::Store {
-                                     ptr: Value::Register(dest),
-                                     value: right_val.clone(),
-                                 });
-                                 
-                                 return Ok(right_val);
-                            }
-                         }
-                    }
-                    // 3. Assign to Deref (*ptr = val)
-                    else if let Expr::Deref { expr: ptr_expr, .. } = left.as_ref() {
-                        let ptr_val = self.generate_expr(ptr_expr)?;
-                        self.emit_current(Instruction::Store {
-                            ptr: ptr_val,
-                            value: right_val.clone(),
-                        });
-                        return Ok(right_val);
-                    }
-                    // 4. Assign to Index (ptr[i] = val)
-                    else if let Expr::Index { expr: base_expr, index, .. } = left.as_ref() {
-                        let base_val = self.generate_expr(base_expr)?;
-                        let idx_val = self.generate_expr(index)?;
-                        
-                        // Use GetElementPtr to calculate address
-                        let gep_reg = self.alloc_register();
-                        let elem_ty = IRType::I8; // Use I8 for generic element access
-                        self.emit_current_with_type(Instruction::GetElementPtr {
-                            dest: gep_reg,
-                            ptr: base_val,
-                            index: idx_val,
-                            elem_ty: elem_ty.clone(),
-                        }, IRType::Ptr(Box::new(elem_ty)));
-                        
-                        // Store to the calculated address
-                        self.emit_current(Instruction::Store {
-                            ptr: Value::Register(gep_reg),
-                            value: right_val.clone(),
-                        });
-                        return Ok(right_val);
-                    }
-                    // 5. Assign to Field of Index: g.nodes[id].field = val
-                    else if let Expr::Field { expr: field_base, field, .. } = left.as_ref() {
-                        // Check if field_base is an Index expression
-                        if let Expr::Index { expr: index_base, index, .. } = field_base.as_ref() {
-                            // Generate base pointer (e.g., g.nodes)
-                            let base_val = self.generate_expr(index_base)?;
-                            let idx_val = self.generate_expr(index)?;
-                            
-                            // Get pointer to array element
-                            let elem_ptr = self.alloc_register();
-                            let elem_ty = IRType::I8; // Generic byte-level access
-                            self.emit_current_with_type(Instruction::GetElementPtr {
-                                dest: elem_ptr,
-                                ptr: base_val,
-                                index: idx_val,
-                                elem_ty: elem_ty.clone(),
-                            }, IRType::Ptr(Box::new(elem_ty)));
-                            
-                            // Get pointer to field within element
-                            let field_ptr = self.alloc_register();
-                            let field_idx = match field.name.as_str() {
-                                "value" => Value::Constant(Constant::Int(2)), // Assume field offset
-                                "evaluated" => Value::Constant(Constant::Int(5)),
-                                _ => Value::Constant(Constant::Int(0)),
-                            };
-                            self.emit_current_with_type(Instruction::GetElementPtr {
-                                dest: field_ptr,
-                                ptr: Value::Register(elem_ptr),
-                                index: field_idx,
-                                elem_ty: IRType::I8,
-                            }, IRType::Ptr(Box::new(IRType::I8)));
-                            
-                            // Store to field
-                            self.emit_current(Instruction::Store {
-                                ptr: Value::Register(field_ptr),
-                                value: right_val.clone(),
-                            });
-                            return Ok(right_val);
-                        }
-                    }
-                    
-                    // 4. Fallback: If we get here with Assign, the target is not in locals
-                    // This can happen with re-assignment to variables. Handle by storing to the register.
-                    if let Expr::Ident(ident) = left.as_ref() {
-                        // Variable exists but not in locals - likely needs alloca
-                        return Err(crate::utils::Error::CodeGen(
-                            format!("Cannot assign to '{}': variable not found in locals. Consider using 'let mut' for mutable variables.", ident.name)
-                        ));
-                    }
-                    
-                    // For any other Assign target, return an error
-                    return Err(crate::utils::Error::CodeGen(
-                        "Invalid assignment target".to_string()
-                    ));
+                if matches!(op, ast::BinOp::And | ast::BinOp::Or) {
+                    return self.generate_short_circuit(left, *op, right);
                 }
-                
+                if matches!(op, ast::BinOp::Assign | ast::BinOp::AddAssign | ast::BinOp::SubAssign | ast::BinOp::MulAssign | ast::BinOp::DivAssign) {
+                    // Resolve the address first and exactly once. In particular,
+                    // p[next()] = value must neither load p[next()] nor call next twice.
+                    let (address, ty) = self.generate_place(left)?;
+                    let old_value = if *op == ast::BinOp::Assign { None }
+                        else { Some(self.load_address(address.clone(), ty.clone())) };
+                    let value = self.generate_expr(right)?;
+                    let mut value = self.coerce_value(value, &ty);
+                    if let Some(old) = old_value {
+                        let operation = match op {
+                            ast::BinOp::AddAssign => IRBinOp::Add,
+                            ast::BinOp::SubAssign => IRBinOp::Sub,
+                            ast::BinOp::MulAssign => IRBinOp::Mul,
+                            ast::BinOp::DivAssign => IRBinOp::Div,
+                            _ => unreachable!(),
+                        };
+                        let dest = self.alloc_register();
+                        self.emit_current_with_type(Instruction::BinOp { dest, op: operation, left: old, right: value }, ty.clone());
+                        value = Value::Register(dest);
+                    }
+                    self.emit_current(Instruction::Store { ptr: address, value: value.clone() });
+                    return Ok(value);
+                }
+                let mut left_val = self.generate_expr(left)?;
+                let right_val = self.generate_expr(right)?;
+                if Self::numeric_literal(left) {
+                    if let Some(ty) = self.get_value_type(&right_val) {
+                        left_val = self.coerce_value(left_val, &ty);
+                    }
+                }
+
                 // Check for pointer arithmetic: ptr + offset or ptr - offset
                 let left_ty = self.get_value_type(&left_val);
                 if let Some(IRType::Ptr(inner)) = &left_ty {
@@ -971,25 +829,10 @@ impl IRGenerator {
                 let ir_op = self.ast_binop_to_ir(*op);
                 let dest = self.alloc_register();
                 
-                // Unify types for binary operations: convert right to left's type if different integers
-                let right_ty = self.get_value_type(&right_val);
-                let unified_right = if let (Some(lt), Some(rt)) = (&left_ty, &right_ty) {
-                    if Self::is_integer_type(lt) && Self::is_integer_type(rt) && lt != rt {
-                        // Cast right to left's type
-                        let cast_dest = self.alloc_register();
-                        self.emit_current_with_type(Instruction::Cast {
-                            dest: cast_dest,
-                            value: right_val.clone(),
-                            ty: lt.clone(),
-                        }, lt.clone());
-                        Value::Register(cast_dest)
-                    } else {
-                        right_val
-                    }
-                } else {
-                    right_val
-                };
-                
+                let unified_right = if let Some(ty) = &left_ty {
+                    self.coerce_value(right_val, ty)
+                } else { right_val };
+
                 // Result of binary op is usually primitive or bool (I64/Bool)
                 let res_ty = match ir_op {
                     IRBinOp::Eq | IRBinOp::Ne | IRBinOp::Lt | IRBinOp::Le | IRBinOp::Gt | IRBinOp::Ge => IRType::Bool,
@@ -1033,30 +876,25 @@ impl IRGenerator {
                 // Generate argument values
                 let mut arg_vals: Vec<Value> = Vec::new();
                 
-                // Look up function signature for type conversion
-                let param_types: Vec<IRType> = self.module.functions.iter()
-                    .find(|f| f.name == func_name)
-                    .map(|f| f.params.iter().map(|(_, ty)| ty.clone()).collect())
-                    .or_else(|| {
-                        self.module.externs.iter()
-                            .find(|e| e.name == func_name)
-                            .map(|e| e.params.iter().map(|(_, ty)| ty.clone()).collect())
-                    })
+                let external = self.module.externs.iter().find(|e| e.name == func_name).cloned();
+                let param_types = self.function_parameters.get(&func_name).cloned()
+                    .or_else(|| external.as_ref().map(|e| e.params.iter().map(|(_, ty)| ty.clone()).collect()))
                     .unwrap_or_default();
-                
+                let variadic = external.as_ref().map(|e| e.variadic).unwrap_or(false);
                 for (i, arg) in args.iter().enumerate() {
                     let mut val = self.generate_expr(arg)?;
-                    
-                    // If we have type info, check and convert if needed
-                    if let (Some(expected_ty), Some(actual_ty)) = (param_types.get(i), self.get_value_type(&val)) {
-                        // Allow implicit integer conversions (e.g., i64 -> i32)
-                        if Self::is_integer_type(expected_ty) && Self::is_integer_type(&actual_ty) && expected_ty != &actual_ty {
+                    if let Some(expected) = param_types.get(i) {
+                        val = self.coerce_value(val, expected);
+                    } else if variadic {
+                        // C default argument promotions are part of the foreign ABI.
+                        let promoted = match self.get_value_type(&val) {
+                            Some(IRType::F32) => Some(IRType::F64),
+                            Some(IRType::I8 | IRType::I16 | IRType::U8 | IRType::U16 | IRType::Bool) => Some(IRType::I32),
+                            _ => None,
+                        };
+                        if let Some(ty) = promoted {
                             let dest = self.alloc_register();
-                            self.emit_current_with_type(Instruction::Cast {
-                                dest,
-                                value: val,
-                                ty: expected_ty.clone(),
-                            }, expected_ty.clone());
+                            self.emit_current_with_type(Instruction::Cast { dest, value: val, ty: ty.clone() }, ty);
                             val = Value::Register(dest);
                         }
                     }
@@ -1162,8 +1000,14 @@ impl IRGenerator {
                 
                 // Phi node logic - only generate if BOTH branches jump to merge AND both have values
                 // For statement-level if (no else or no return value), just return Unit
+                if !then_jumps_to_merge && !else_jumps_to_merge {
+                    self.set_terminator_current(Terminator::Unreachable);
+                }
+                if then_jumps_to_merge && !else_jumps_to_merge { return Ok(then_result.unwrap_or(Value::Unit)); }
+                if else_jumps_to_merge && !then_jumps_to_merge { return Ok(else_result.unwrap_or(Value::Unit)); }
                 if then_jumps_to_merge && else_jumps_to_merge {
                     if let (Some(then_val), Some(else_val)) = (&then_result, &else_result) {
+                        if matches!(then_val, Value::Unit) || matches!(else_val, Value::Unit) { return Ok(Value::Unit); }
                         let dest = self.alloc_register();
                         let mut incoming = Vec::new();
                         let mut phi_ty = IRType::Void;
@@ -1188,103 +1032,20 @@ impl IRGenerator {
                 }
             }
 
-            Expr::Field { expr: base, field, .. } => {
-                // Special case: (*ptr).field - use ptr directly for GEP
-                let (base_val, effective_ty) = if let Expr::Deref { expr: inner_ptr, .. } = base.as_ref() {
-                    // For (*ptr).field, use ptr directly (don't load the struct)
-                    let ptr_val = self.generate_expr(inner_ptr)?;
-                    let ptr_ty = self.get_value_type(&ptr_val);
-                    (ptr_val, ptr_ty)
-                } else {
-                    let mut base_val = self.generate_expr(base)?;
-                    let base_ty = self.get_value_type(&base_val);
-
-                    // Handle Ptr(Ptr(Struct)) case - &mut self where self is a reference
-                    let effective_ty = if let Some(IRType::Ptr(inner)) = &base_ty {
-                        if let IRType::Ptr(inner2) = inner.as_ref() {
-                            if let IRType::Struct(_) = inner2.as_ref() {
-                                // Load the inner pointer to get Ptr(Struct)
-                                let deref_dest = self.alloc_register();
-                                self.emit_current_with_type(Instruction::Load {
-                                    dest: deref_dest,
-                                    ptr: base_val.clone(),
-                                    ty: (**inner).clone(),
-                                }, (**inner).clone());
-                                base_val = Value::Register(deref_dest);
-                                Some((**inner).clone())
-                            } else {
-                                base_ty.clone()
-                            }
-                        } else {
-                            base_ty.clone()
-                        }
-                    } else {
-                        base_ty.clone()
-                    };
-                    (base_val, effective_ty)
-                };
-                
-                if let Some(IRType::Ptr(inner)) = effective_ty {
-                    if let IRType::Struct(struct_name) = *inner {
-                         let fields = self.struct_defs.get(&struct_name).cloned()
-                             .ok_or_else(|| crate::utils::Error::UndefinedType { 
-                                 span: crate::utils::Span::dummy(),
-                                 name: struct_name.clone() 
-                             })?;
-                         
-                         let (idx, (_, field_ty)) = fields.iter().enumerate()
-                             .find(|(_, (n, _))| n == &field.name)
-                             .ok_or_else(|| crate::utils::Error::UnknownField { 
-                                 span: crate::utils::Span::dummy(),
-                                 field: field.name.clone(),
-                             })?;
-                             
-                         let field_ty = field_ty.clone();
-                             
-                         let dest = self.alloc_register();
-                         self.emit_current_with_type(Instruction::GetElementPtr {
-                             dest,
-                             ptr: base_val,
-                             index: Value::Constant(Constant::Int(idx as i64)),
-                             elem_ty: IRType::Struct(struct_name.clone()),
-                         }, IRType::Ptr(Box::new(field_ty.clone())));
-                         
-                         // If field is a struct, return the pointer (for chained field access)
-                         // Otherwise load the value
-                         if let IRType::Struct(_) = &field_ty {
-                             // Return pointer to nested struct
-                             return Ok(Value::Register(dest));
-                         } else {
-                             // Load primitive/pointer field value
-                             let load_dest = self.alloc_register();
-                             self.emit_current_with_type(Instruction::Load {
-                                 dest: load_dest,
-                                 ptr: Value::Register(dest),
-                                 ty: field_ty.clone(),
-                             }, field_ty.clone());
-                             
-                             return Ok(Value::Register(load_dest));
-                         }
-                    }
-                }
-                Ok(Value::Unit) // Error handling fallback
+            Expr::Field { .. } | Expr::Index { .. } | Expr::Deref { .. } => {
+                let (address, ty) = self.generate_place(expr)?;
+                if matches!(ty, IRType::Struct(_)) { Ok(address) }
+                else { Ok(self.load_address(address, ty)) }
             }
 
             Expr::StructLit { name, fields, .. } => {
                 let struct_type = IRType::Struct(name.name.clone());
                 
-                // Use sret pointer if available (caller-allocated), otherwise alloca
-                let ptr_val = if let Some(sret) = &self.sret_ptr {
-                    // Use caller-provided sret pointer - no need to allocate
-                    sret.clone()
-                } else {
-                    // Fallback: allocate on current stack frame
-                    let ptr = self.alloc_register();
-                    self.emit_current_with_type(Instruction::Alloca { dest: ptr, ty: struct_type.clone() }, 
-                        IRType::Ptr(Box::new(struct_type.clone())));
-                    Value::Register(ptr)
-                };
-                
+                // Every literal has its own storage. A return copies the selected
+                // value to the caller's result slot, so unrelated literals cannot
+                // overwrite it and pointers to structs keep their ordinary ABI.
+                let ptr_val = self.allocate_local(&struct_type, None);
+
                 let struct_fields = self.struct_defs.get(&name.name).cloned().ok_or_else(|| crate::utils::Error::UndefinedType {
                     span: crate::utils::Span::dummy(), name: name.name.clone()
                 })?;
@@ -1299,13 +1060,14 @@ impl IRGenerator {
                           })?;
                           
                      let field_val = self.generate_expr(field_expr)?;
+                     let field_val = self.coerce_value(field_val, &field_ty);
                      let field_ptr = self.alloc_register();
                      
-                     self.emit_current_with_type(Instruction::GetElementPtr {
+                     self.emit_current_with_type(Instruction::GetFieldPtr {
                          dest: field_ptr,
                          ptr: ptr_val.clone(),
-                         index: Value::Constant(Constant::Int(idx as i64)),
-                         elem_ty: struct_type.clone(),
+                         field: idx,
+                         struct_ty: struct_type.clone(),
                      }, IRType::Ptr(Box::new(field_ty.clone())));
                      
                      self.emit_current(Instruction::Store {
@@ -1314,215 +1076,165 @@ impl IRGenerator {
                      });
                 }
                 
-                // Clear sret_ptr after use (only one struct literal should use it)
-                self.sret_ptr = None;
-                
                 Ok(ptr_val)
             }
             
-            // Minimal implementations for others
             Expr::Loop { body, .. } => {
-                // Create blocks for infinite loop
                 let body_block = self.add_block("loop_body");
                 let exit_block = self.add_block("loop_exit");
-                
-                // Jump to body block
                 self.set_terminator_current(Terminator::Jump { target: body_block });
-                
-                // Body block
                 self.current_block = body_block;
+                self.loop_targets.push((body_block, exit_block));
                 self.generate_block(body)?;
-                // Jump back to body (infinite loop)
-                self.set_terminator_current(Terminator::Jump { target: body_block });
-                
-                // Exit block (unreachable unless break)
+                self.loop_targets.pop();
+                if self.get_current_terminator().is_none() {
+                    self.set_terminator_current(Terminator::Jump { target: body_block });
+                }
                 self.current_block = exit_block;
                 Ok(Value::Unit)
             }
             Expr::While { cond, body, .. } => {
-                // Create blocks for the loop
                 let cond_block = self.add_block("while_cond");
                 let body_block = self.add_block("while_body");
                 let exit_block = self.add_block("while_exit");
-                
-                // Jump to condition block
                 self.set_terminator_current(Terminator::Jump { target: cond_block });
-                
-                // Condition block
                 self.current_block = cond_block;
                 let cond_val = self.generate_expr(cond)?;
                 self.set_terminator_current(Terminator::Branch {
-                    cond: cond_val,
-                    then_target: body_block,
-                    else_target: exit_block,
+                    cond: cond_val, then_target: body_block, else_target: exit_block,
                 });
-                
-                // Body block
                 self.current_block = body_block;
+                self.loop_targets.push((cond_block, exit_block));
                 self.generate_block(body)?;
-                // Jump back to condition
-                self.set_terminator_current(Terminator::Jump { target: cond_block });
-                
-                // Continue in exit block
+                self.loop_targets.pop();
+                if self.get_current_terminator().is_none() {
+                    self.set_terminator_current(Terminator::Jump { target: cond_block });
+                }
                 self.current_block = exit_block;
                 Ok(Value::Unit)
             }
             Expr::For { var, iter, body, .. } => {
-                // Simplified: evaluate iter as a range and loop
-                // For now treat as: evaluate iter, then execute body
-                let _iter_val = self.generate_expr(iter)?;
-                
-                // Create loop blocks
+                let (start, end) = match iter.as_ref() {
+                    Expr::Range { start: Some(start), end: Some(end), .. } => (start, end),
+                    _ => return Err(crate::utils::Error::CodeGen(
+                        "for requires a bounded integer range (start..end)".into())),
+                };
+                // Evaluate each bound exactly once before entering the loop.
+                let start_val = self.generate_expr(start)?;
+                let end_val = self.generate_expr(end)?;
+                let ty = self.get_value_type(&start_val).unwrap_or(IRType::I64);
+                let end_val = self.coerce_value(end_val, &ty);
+                let counter = self.allocate_local(&ty, Some(start_val));
+                let previous = self.locals.insert(var.name.clone(), (counter.clone(), ty.clone()));
+                let previous_address = self.local_addresses.insert(var.name.clone(), counter.clone());
+                let cond_block = self.add_block("for_cond");
                 let body_block = self.add_block("for_body");
+                let step_block = self.add_block("for_step");
                 let exit_block = self.add_block("for_exit");
-                
-                // Register loop variable (placeholder)
-                let var_reg = self.alloc_register();
-                self.locals.insert(var.name.clone(), (Value::Register(var_reg), IRType::I64));
-                
-                // Jump to body
-                self.set_terminator_current(Terminator::Jump { target: body_block });
+                self.set_terminator_current(Terminator::Jump { target: cond_block });
+                self.current_block = cond_block;
+                let current = self.load_address(counter.clone(), ty.clone());
+                let cond = self.alloc_register();
+                self.emit_current_with_type(Instruction::BinOp {
+                    dest: cond, op: IRBinOp::Lt, left: current, right: end_val,
+                }, IRType::Bool);
+                self.set_terminator_current(Terminator::Branch {
+                    cond: Value::Register(cond), then_target: body_block, else_target: exit_block,
+                });
                 self.current_block = body_block;
+                self.loop_targets.push((step_block, exit_block));
                 self.generate_block(body)?;
-                self.set_terminator_current(Terminator::Jump { target: exit_block });
-                
+                self.loop_targets.pop();
+                if self.get_current_terminator().is_none() {
+                    self.set_terminator_current(Terminator::Jump { target: step_block });
+                }
+                self.current_block = step_block;
+                let current = self.load_address(counter.clone(), ty.clone());
+                let next = self.alloc_register();
+                let one = self.coerce_value(Value::Constant(Constant::Int(1)), &ty);
+                self.emit_current_with_type(Instruction::BinOp {
+                    dest: next, op: IRBinOp::Add, left: current, right: one,
+                }, ty);
+                self.emit_current(Instruction::Store { ptr: counter, value: Value::Register(next) });
+                self.set_terminator_current(Terminator::Jump { target: cond_block });
                 self.current_block = exit_block;
+                if let Some(old) = previous { self.locals.insert(var.name.clone(), old); }
+                else { self.locals.remove(&var.name); }
+                if let Some(old) = previous_address { self.local_addresses.insert(var.name.clone(), old); }
+                else { self.local_addresses.remove(&var.name); }
                 Ok(Value::Unit)
             }
             Expr::Match { expr, arms, .. } => {
-                // Generate the value to match against
-                let match_val = self.generate_expr(expr)?;
-                let match_ty = self.get_value_type(&match_val).unwrap_or(IRType::I64);
-                
-                // Create blocks for each arm and the exit block
-                let exit_block = self.add_block("match_exit");
-                let mut arm_blocks: Vec<BlockId> = Vec::new();
-                let mut body_blocks: Vec<BlockId> = Vec::new();
-                
-                for (i, _) in arms.iter().enumerate() {
-                    arm_blocks.push(self.add_block(&format!("match_arm_{}", i)));
-                    body_blocks.push(self.add_block(&format!("match_body_{}", i)));
+                if arms.iter().any(|arm| !matches!(arm.pattern, ast::Pattern::Literal(_) | ast::Pattern::Wildcard { .. } | ast::Pattern::Binding { .. })) {
+                    return Err(crate::utils::Error::CodeGen("aggregate and enum payload patterns are not implemented".into()));
                 }
-                
-                // Result register for match value
-                let result_reg = self.alloc_register();
-                self.reg_types.insert(result_reg, match_ty.clone());
-                
-                // Jump to first arm
-                if !arm_blocks.is_empty() {
-                    self.set_terminator_current(Terminator::Jump { target: arm_blocks[0] });
-                } else {
-                    self.set_terminator_current(Terminator::Jump { target: exit_block });
-                }
-                
-                // Generate each arm
+                let match_value = self.generate_expr(expr)?;
+                let match_type = self.get_value_type(&match_value).unwrap_or(IRType::I64);
+                let exit = self.add_block("match_exit");
+                let miss = self.add_block("match_unmatched");
+                let mut incoming = Vec::new();
+                let mut result_type = None;
+                let mut reaches_exit = false;
                 for (i, arm) in arms.iter().enumerate() {
-                    // Arm condition block
-                    self.current_block = arm_blocks[i];
-                    
-                    let next_block = if i + 1 < arm_blocks.len() {
-                        arm_blocks[i + 1]
-                    } else {
-                        exit_block // Default fallthrough
-                    };
-                    
-                    // Generate pattern matching condition
+                    let next = if i + 1 < arms.len() { self.add_block("match_next") } else { miss };
+                    let body = self.add_block("match_body");
+                    let guard = if arm.guard.is_some() { self.add_block("match_guard") } else { body };
+                    let saved_locals = self.locals.clone();
+                    let saved_addresses = self.local_addresses.clone();
+                    let saved_aggregates = self.local_aggregates.clone();
                     match &arm.pattern {
-                        ast::Pattern::Wildcard { .. } => {
-                            // Wildcard always matches - jump to body
-                            self.set_terminator_current(Terminator::Jump { target: body_blocks[i] });
-                        }
-                        ast::Pattern::Literal(lit) => {
-                            // Compare with literal
-                            let lit_val = self.generate_literal(lit);
-                            let cmp_reg = self.alloc_register();
-                            self.emit_current_with_type(
-                                Instruction::BinOp {
-                                    dest: cmp_reg,
-                                    op: IRBinOp::Eq,
-                                    left: match_val.clone(),
-                                    right: lit_val,
-                                },
-                                IRType::Bool
-                            );
-                            self.set_terminator_current(Terminator::Branch {
-                                cond: Value::Register(cmp_reg),
-                                then_target: body_blocks[i],
-                                else_target: next_block,
-                            });
+                        ast::Pattern::Literal(literal) => {
+                            let literal = self.generate_literal(literal);
+                            let literal = self.coerce_value(literal, &match_type);
+                            let dest = self.alloc_register();
+                            self.emit_current_with_type(Instruction::BinOp {
+                                dest, op: IRBinOp::Eq, left: match_value.clone(), right: literal,
+                            }, IRType::Bool);
+                            self.set_terminator_current(Terminator::Branch { cond: Value::Register(dest), then_target: guard, else_target: next });
                         }
                         ast::Pattern::Binding { name, .. } => {
-                            // Binding always matches and binds the value
-                            self.locals.insert(name.name.clone(), (match_val.clone(), match_ty.clone()));
-                            self.set_terminator_current(Terminator::Jump { target: body_blocks[i] });
+                            let address = self.allocate_local(&match_type, Some(match_value.clone()));
+                            self.locals.insert(name.name.clone(), (address.clone(), match_type.clone()));
+                            self.local_addresses.insert(name.name.clone(), address);
+                            self.set_terminator_current(Terminator::Jump { target: guard });
                         }
-                        _ => {
-                            // Struct, Tuple, Variant patterns - simplified: just go to body
-                            self.set_terminator_current(Terminator::Jump { target: body_blocks[i] });
-                        }
+                        _ => self.set_terminator_current(Terminator::Jump { target: guard }),
                     }
-                    
-                    // Arm body block
-                    self.current_block = body_blocks[i];
-                    let body_val = self.generate_expr(&arm.body)?;
-                    
-                    // Store result and jump to exit
-                    self.emit_current(Instruction::Assign {
-                        dest: result_reg,
-                        value: body_val,
-                    });
-                    self.set_terminator_current(Terminator::Jump { target: exit_block });
+                    if let Some(condition) = &arm.guard {
+                        self.current_block = guard;
+                        let condition = self.generate_expr(condition)?;
+                        self.set_terminator_current(Terminator::Branch { cond: condition, then_target: body, else_target: next });
+                    }
+                    self.current_block = body;
+                    let value = self.generate_expr(&arm.body)?;
+                    if self.get_current_terminator().is_none() {
+                        reaches_exit = true;
+                        if !matches!(value, Value::Unit) {
+                            let ty = result_type.get_or_insert_with(|| self.get_value_type(&value).unwrap_or(IRType::I64)).clone();
+                            let value = self.coerce_value(value, &ty);
+                            incoming.push((value, self.current_block));
+                        }
+                        self.set_terminator_current(Terminator::Jump { target: exit });
+                    }
+                    self.locals = saved_locals;
+                    self.local_addresses = saved_addresses;
+                    self.local_aggregates = saved_aggregates;
+                    self.current_block = next;
                 }
-                
-                // Exit block
-                self.current_block = exit_block;
-                Ok(Value::Register(result_reg))
+                self.current_block = miss;
+                self.set_terminator_current(Terminator::Unreachable);
+                self.current_block = exit;
+                if !reaches_exit { self.set_terminator_current(Terminator::Unreachable); }
+                if let Some(ty) = result_type {
+                    let dest = self.alloc_register();
+                    self.emit_current_with_type(Instruction::Phi { dest, incoming }, ty);
+                    Ok(Value::Register(dest))
+                } else { Ok(Value::Unit) }
             }
 
-            Expr::Array { elements, .. } => {
-                // Allocate array on stack and return pointer
-                if elements.is_empty() {
-                    return Ok(Value::Unit);
-                }
-                
-                // Generate all elements
-                let mut vals = Vec::new();
-                for elem in elements {
-                    vals.push(self.generate_expr(elem)?);
-                }
-                
-                // Get element type from first element
-                let elem_ty = self.get_value_type(&vals[0]).unwrap_or(IRType::I64);
-                let arr_size = vals.len();
-                
-                // Allocate array
-                let dest = self.alloc_register();
-                self.emit_current_with_type(
-                    Instruction::Alloca { dest, ty: IRType::Array(Box::new(elem_ty.clone()), arr_size) },
-                    IRType::Ptr(Box::new(IRType::Array(Box::new(elem_ty.clone()), arr_size)))
-                );
-                
-                // Store each element
-                for (i, val) in vals.iter().enumerate() {
-                    let idx_reg = self.alloc_register();
-                    self.emit_current_with_type(
-                        Instruction::GetElementPtr {
-                            dest: idx_reg,
-                            ptr: Value::Register(dest),
-                            index: Value::Constant(Constant::Int(i as i64)),
-                            elem_ty: elem_ty.clone(),
-                        },
-                        IRType::Ptr(Box::new(elem_ty.clone()))
-                    );
-                    self.emit_current(Instruction::Store {
-                        ptr: Value::Register(idx_reg),
-                        value: val.clone(),
-                    });
-                }
-                
-                Ok(Value::Register(dest))
-            }
-            Expr::Tuple { .. } => Ok(Value::Unit),
+            Expr::Array { elements, .. } => self.generate_array(elements, None),
+            Expr::Tuple { elements, .. } if elements.is_empty() => Ok(Value::Unit),
+            Expr::Tuple { .. } => Err(crate::utils::Error::CodeGen("tuple values are not implemented".into())),
 
             Expr::MethodCall { expr: receiver, method, args, .. } => {
                  if method.name == "add" && args.len() == 1 {
@@ -1635,78 +1347,9 @@ impl IRGenerator {
                      }
                  }
             },
-            Expr::Index { expr, index, .. } => {
-                // Generate base pointer/array
-                let base_val = self.generate_expr(expr)?;
-                // Generate index
-                let idx_val = self.generate_expr(index)?;
-                
-                // Infer element type from base type
-                let base_ty = self.get_value_type(&base_val);
-                let elem_type = if let Some(IRType::Ptr(inner)) = base_ty {
-                    // For Ptr(T), element type is T
-                    (*inner).clone()
-                } else if let Some(IRType::Array(inner, _)) = base_ty {
-                    (*inner).clone()
-                } else {
-                    // Fallback to pointer type (for **u8 argv case)
-                    IRType::Ptr(Box::new(IRType::U8))
-                };
-                
-                // Use GetElementPtr to calculate pointer offset
-                let gep_reg = self.alloc_register();
-                self.emit_current_with_type(Instruction::GetElementPtr {
-                    dest: gep_reg,
-                    ptr: base_val,
-                    index: idx_val,
-                    elem_ty: elem_type.clone(),
-                }, IRType::Ptr(Box::new(elem_type.clone())));
-                
-                // Load the element
-                let dest = self.alloc_register();
-                self.emit_current_with_type(Instruction::Load {
-                    dest,
-                    ptr: Value::Register(gep_reg),
-                    ty: elem_type.clone(),
-                }, elem_type);
-                
-                Ok(Value::Register(dest))
-            },
             Expr::Ref { expr: inner, .. } => {
-                // Get the address of the inner expression
-                // If inner is an Ident, look up its alloca pointer
-                if let Expr::Ident(ident) = inner.as_ref() {
-                    if let Some((ptr_val, _)) = self.locals.get(&ident.name) {
-                        // Return the pointer to the local variable
-                        return Ok(ptr_val.clone());
-                    }
-                }
-                // For other cases, generate the expression and hope it's a pointer
-                let val = self.generate_expr(inner)?;
-                Ok(val)
-            },
-            Expr::Deref { expr: ptr_expr, .. } => {
-                // Generate the pointer value
-                let ptr_val = self.generate_expr(ptr_expr)?;
-                let ptr_ty = self.get_value_type(&ptr_val);
-                
-                // Infer element type from pointer type
-                let elem_type = if let Some(IRType::Ptr(inner)) = ptr_ty {
-                    (*inner).clone()
-                } else {
-                    // Fallback to U8 for unknown pointer types
-                    IRType::U8
-                };
-                
-                // Generate Load instruction
-                let dest = self.alloc_register();
-                self.emit_current_with_type(Instruction::Load {
-                    dest,
-                    ptr: ptr_val,
-                    ty: elem_type.clone(),
-                }, elem_type);
-                
-                Ok(Value::Register(dest))
+                let (address, _) = self.generate_place(inner)?;
+                Ok(address)
             },
             Expr::Unsafe { body, .. } => Ok(self.generate_block(body)?.unwrap_or(Value::Unit)),
             Expr::Cast { expr, ty, .. } => {
@@ -1720,136 +1363,42 @@ impl IRGenerator {
                 }, target_ty);
                 Ok(Value::Register(dest))
             },
-            Expr::Range { .. } => Ok(Value::Unit),
+            Expr::Range { .. } => Err(crate::utils::Error::CodeGen("range values are only supported as for-loop iterators".into())),
             Expr::Asm { template, operands, .. } => {
                 let mut ir_operands = Vec::new();
-                for op in operands {
-                     let input = if let Some(expr) = &op.expr {
-                         if matches!(op.kind, ast::AsmOperandKind::Input | ast::AsmOperandKind::InOut) {
-                             Some(self.generate_expr(expr)?)
-                         } else {
-                             None
-                         }
-                     } else {
-                         None
-                     };
-                     
-                     let output = if matches!(op.kind, ast::AsmOperandKind::Output | ast::AsmOperandKind::InOut) {
-                          Some(self.alloc_register())
-                     } else {
-                          None
-                     };
-                     
-                     let kind = match op.kind {
-                         ast::AsmOperandKind::Input => IRAsmOperandKind::Input,
-                         ast::AsmOperandKind::Output => IRAsmOperandKind::Output,
-                         ast::AsmOperandKind::InOut => IRAsmOperandKind::InOut,
-                         ast::AsmOperandKind::Clobber => IRAsmOperandKind::Clobber,
-                     };
-                     
-                     ir_operands.push(IRAsmOperand {
-                         kind,
-                         constraint: op.options.clone(),
-                         input,
-                         output,
-                     });
+                let mut destinations = Vec::new();
+                for operand in operands {
+                    let mut input = None;
+                    let mut output = None;
+                    if matches!(operand.kind, ast::AsmOperandKind::Output | ast::AsmOperandKind::InOut) {
+                        let expr = operand.expr.as_ref().ok_or_else(|| crate::utils::Error::CodeGen("asm output needs an assignment place".into()))?;
+                        let (address, ty) = self.generate_place(expr)?;
+                        if matches!(operand.kind, ast::AsmOperandKind::InOut) { input = Some(self.load_address(address.clone(), ty.clone())); }
+                        let reg = self.alloc_register();
+                        self.reg_types.insert(reg, ty);
+                        output = Some(reg);
+                        destinations.push((address, reg));
+                    } else if matches!(operand.kind, ast::AsmOperandKind::Input) {
+                        if let Some(expr) = &operand.expr { input = Some(self.generate_expr(expr)?); }
+                    }
+                    ir_operands.push(IRAsmOperand {
+                        kind: match operand.kind {
+                            ast::AsmOperandKind::Input => IRAsmOperandKind::Input,
+                            ast::AsmOperandKind::Output => IRAsmOperandKind::Output,
+                            ast::AsmOperandKind::InOut => IRAsmOperandKind::InOut,
+                            ast::AsmOperandKind::Clobber => IRAsmOperandKind::Clobber,
+                        },
+                        constraint: operand.options.clone(), input, output,
+                    });
                 }
-                
-                self.emit_current(Instruction::InlineAsm {
-                    template: template.clone(),
-                    operands: ir_operands.clone(), // Clone needed because we iterate again? No, we can iterate ast operands and match indices
-                });
-
-                // Post-ASM assignments (update variables from output registers)
-                for (i, op) in operands.iter().enumerate() {
-                     let ir_op = &ir_operands[i];
-                     if let Some(reg) = ir_op.output {
-                          if let Some(expr) = &op.expr {
-                              if let Expr::Ident(ident) = expr {
-                                  if let Some((dest_val, _)) = self.locals.get(&ident.name) {
-                                      if let Value::Register(dest_reg) = dest_val {
-                                           self.emit_current(Instruction::Assign {
-                                               dest: *dest_reg,
-                                               value: Value::Register(reg)
-                                           });
-                                      }
-                                  }
-                              }
-                          }
-                     }
+                self.emit_current(Instruction::InlineAsm { template: template.clone(), operands: ir_operands });
+                for (address, reg) in destinations {
+                    self.emit_current(Instruction::Store { ptr: address, value: Value::Register(reg) });
                 }
-                
                 Ok(Value::Unit)
             }
-            Expr::Try { expr, .. } => {
-                // Basic error propagation (if err return err, else value)
-                // For now just evaluate expression
-                self.generate_expr(expr)
-            }
-            
-            Expr::Closure { params, ret_type, body, .. } => {
-                // Generate a unique closure function name
-                static CLOSURE_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-                let closure_id = CLOSURE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let closure_name = format!("__closure_{}", closure_id);
-                
-                // Save current state
-                let saved_fn = self.current_fn.take();
-                let saved_block = self.current_block;
-                let saved_locals = self.locals.clone();
-                let saved_reg = self.next_register;
-                
-                // Create new function for closure
-                self.next_register = 0;
-                self.locals.clear();
-                
-                // Convert parameters
-                let ir_params: Vec<(String, IRType)> = params.iter()
-                    .map(|p| {
-                        let ty = p.ty.as_ref()
-                            .map(|t| self.ast_type_to_ir(t))
-                            .unwrap_or(IRType::I64);
-                        (p.name.name.clone(), ty)
-                    })
-                    .collect();
-                
-                // Determine return type
-                let ir_ret = ret_type.as_ref()
-                    .map(|t| self.ast_type_to_ir(t))
-                    .unwrap_or(IRType::I64);
-                
-                // Create closure function
-                let mut closure_fn = IRFunction::new(&closure_name, ir_params.clone(), ir_ret.clone());
-                
-                // Create entry block
-                let entry_block = closure_fn.add_block("entry");
-                self.current_fn = Some(closure_fn);
-                self.current_block = entry_block;
-                
-                // Register parameters as locals
-                for (i, (name, ty)) in ir_params.iter().enumerate() {
-                    self.locals.insert(name.clone(), (Value::Parameter(i), ty.clone()));
-                }
-                
-                // Generate closure body
-                let body_val = self.generate_expr(body)?;
-                
-                // Add return
-                self.set_terminator_current(Terminator::Return { value: Some(body_val) });
-                
-                // Finalize and add function to module
-                let closure_fn = self.current_fn.take().unwrap();
-                self.module.functions.push(closure_fn);
-                
-                // Restore state
-                self.current_fn = saved_fn;
-                self.current_block = saved_block;
-                self.locals = saved_locals;
-                self.next_register = saved_reg;
-                
-                // Return function pointer as global reference
-                Ok(Value::Global(closure_name))
-            }
+            Expr::Try { .. } => Err(crate::utils::Error::CodeGen("error propagation with '?' is not implemented".into())),
+            Expr::Closure { .. } => Err(crate::utils::Error::CodeGen("closure lowering is not implemented".into())),
 
         }
     }
@@ -1866,6 +1415,186 @@ impl IRGenerator {
     }
 
     // ==================== Helper Methods ====================
+
+    fn numeric_literal(expr: &Expr) -> bool {
+        matches!(expr, Expr::Literal(ast::Literal::Int(_, _) | ast::Literal::Float(_, _)))
+            || matches!(expr, Expr::Unary { op: ast::UnOp::Neg, expr, .. } if Self::numeric_literal(expr))
+    }
+
+    fn generate_array(&mut self, elements: &[Expr], expected: Option<IRType>) -> Result<Value> {
+        let mut values = Vec::new();
+        for element in elements { values.push(self.generate_expr(element)?); }
+        let ty = expected.or_else(|| values.first().and_then(|v| self.get_value_type(v)))
+            .ok_or_else(|| crate::utils::Error::CodeGen("empty array requires an element type".into()))?;
+        let storage = self.allocate_local(&IRType::Array(Box::new(ty.clone()), values.len()), None);
+        for (index, value) in values.into_iter().enumerate() {
+            let value = self.coerce_value(value, &ty);
+            let dest = self.alloc_register();
+            self.emit_current_with_type(Instruction::GetElementPtr {
+                dest, ptr: storage.clone(), index: Value::Constant(Constant::Int(index as i64)), elem_ty: ty.clone(),
+            }, IRType::Ptr(Box::new(ty.clone())));
+            self.emit_current(Instruction::Store { ptr: Value::Register(dest), value });
+        }
+        // Array expressions decay to an element pointer in the current IR.
+        let dest = self.alloc_register();
+        let pointer_type = IRType::Ptr(Box::new(ty));
+        self.emit_current_with_type(Instruction::Cast { dest, value: storage, ty: pointer_type.clone() }, pointer_type);
+        Ok(Value::Register(dest))
+    }
+
+    fn copy_to_return_slot(&mut self, value: Value) -> Result<()> {
+        let (target, ty) = match (&self.sret_ptr, self.current_fn.as_ref().and_then(|f| f.sret_type.clone())) {
+            (Some(target), Some(IRType::Ptr(ty))) => (target.clone(), *ty),
+            _ => return Err(crate::utils::Error::CodeGen("missing struct return slot".into())),
+        };
+        let aggregate = self.load_address(value, ty);
+        self.emit_current(Instruction::Store { ptr: target, value: aggregate });
+        Ok(())
+    }
+
+    fn prepare_implicit_return(&mut self, value: Option<Value>) -> Result<Option<Value>> {
+        if self.get_current_terminator().is_some() { return Ok(value); }
+        let function = self.current_fn.as_ref().unwrap();
+        if function.sret_type.is_some() {
+            if let Some(value) = value { self.copy_to_return_slot(value)?; }
+            return Ok(None);
+        }
+        let ty = function.ret_type.clone();
+        Ok(value.map(|value| self.coerce_value(value, &ty)))
+    }
+
+    fn allocate_local(&mut self, ty: &IRType, value: Option<Value>) -> Value {
+        let dest = self.alloc_register();
+        self.emit_current_with_type(Instruction::Alloca { dest, ty: ty.clone() }, IRType::Ptr(Box::new(ty.clone())));
+        let address = Value::Register(dest);
+        if let Some(value) = value { self.emit_current(Instruction::Store { ptr: address.clone(), value }); }
+        address
+    }
+
+    fn load_address(&mut self, ptr: Value, ty: IRType) -> Value {
+        let dest = self.alloc_register();
+        self.emit_current_with_type(Instruction::Load { dest, ptr, ty: ty.clone() }, ty);
+        Value::Register(dest)
+    }
+
+    /// One lowering path for reads, writes and references. The address is
+    /// evaluated once, with the actual element or field layout.
+    fn generate_place(&mut self, expr: &Expr) -> Result<(Value, IRType)> {
+        match expr {
+            Expr::Ident(name) => {
+                let address = self.local_addresses.get(&name.name).cloned()
+                    .ok_or_else(|| crate::utils::Error::CodeGen(format!("'{}' has no addressable storage", name.name)))?;
+                let ty = self.locals.get(&name.name).unwrap().1.clone();
+                if self.local_aggregates.contains(&name.name) {
+                    if let IRType::Ptr(inner) = &ty {
+                        let ptr = self.load_address(address, ty.clone());
+                        return Ok((ptr, (**inner).clone()));
+                    }
+                }
+                Ok((address, ty))
+            }
+            Expr::Deref { expr, .. } => {
+                let ptr = self.generate_expr(expr)?;
+                match self.get_value_type(&ptr) {
+                    Some(IRType::Ptr(ty)) => Ok((ptr, *ty)),
+                    _ => Err(crate::utils::Error::CodeGen("dereference requires a pointer".into())),
+                }
+            }
+            Expr::Index { expr, index, .. } => {
+                let ptr = self.generate_expr(expr)?;
+                let index = self.generate_expr(index)?;
+                let ty = match self.get_value_type(&ptr) {
+                    Some(IRType::Ptr(ty)) => match *ty {
+                        IRType::Array(element, _) => *element,
+                        ty => ty,
+                    },
+                    _ => return Err(crate::utils::Error::CodeGen("index requires an array or pointer".into())),
+                };
+                let dest = self.alloc_register();
+                self.emit_current_with_type(Instruction::GetElementPtr {
+                    dest, ptr, index, elem_ty: ty.clone(),
+                }, IRType::Ptr(Box::new(ty.clone())));
+                Ok((Value::Register(dest), ty))
+            }
+            Expr::Field { expr: base, field, .. } => {
+                let (mut ptr, mut ptr_ty) = if let Expr::Deref { expr, .. } = base.as_ref() {
+                    let ptr = self.generate_expr(expr)?;
+                    let ty = self.get_value_type(&ptr);
+                    (ptr, ty)
+                } else {
+                    let ptr = self.generate_expr(base)?;
+                    let ty = self.get_value_type(&ptr);
+                    (ptr, ty)
+                };
+                if let Some(IRType::Ptr(inner)) = &ptr_ty {
+                    if matches!(inner.as_ref(), IRType::Ptr(_)) {
+                        let ty = (**inner).clone();
+                        ptr = self.load_address(ptr, ty.clone());
+                        ptr_ty = Some(ty);
+                    }
+                }
+                let name = match ptr_ty {
+                    Some(IRType::Ptr(inner)) => match *inner {
+                        IRType::Struct(name) => name,
+                        _ => return Err(crate::utils::Error::CodeGen("field access requires a struct".into())),
+                    },
+                    _ => return Err(crate::utils::Error::CodeGen("field access requires addressable struct storage".into())),
+                };
+                let (index, ty) = self.struct_defs.get(&name)
+                    .and_then(|fields| fields.iter().enumerate().find(|(_, (n, _))| *n == field.name))
+                    .map(|(index, (_, ty))| (index, ty.clone()))
+                    .ok_or_else(|| crate::utils::Error::UnknownField { span: field.span, field: field.name.clone() })?;
+                let dest = self.alloc_register();
+                self.emit_current_with_type(Instruction::GetFieldPtr {
+                    dest, ptr, field: index, struct_ty: IRType::Struct(name),
+                }, IRType::Ptr(Box::new(ty.clone())));
+                Ok((Value::Register(dest), ty))
+            }
+            _ => Err(crate::utils::Error::CodeGen("expression is not an assignment place".into())),
+        }
+    }
+
+    /// Preserve the declared scalar width through IR, rather than letting the
+    /// backends independently infer a local's type from an untyped literal.
+    fn coerce_value(&mut self, value: Value, ty: &IRType) -> Value {
+        if let Some(actual) = self.get_value_type(&value) {
+            if let (IRType::Ptr(inner), IRType::Struct(_)) = (&actual, ty) {
+                if inner.as_ref() == ty { return self.load_address(value, ty.clone()); }
+            }
+            if actual != *ty && ((Self::is_integer_type(&actual) && Self::is_integer_type(ty))
+                || matches!((&actual, ty), (IRType::F32 | IRType::F64, IRType::F32 | IRType::F64))) {
+                let dest = self.alloc_register();
+                self.emit_current_with_type(Instruction::Cast { dest, value, ty: ty.clone() }, ty.clone());
+                return Value::Register(dest);
+            }
+        }
+        value
+    }
+
+    fn generate_short_circuit(&mut self, left: &Expr, op: ast::BinOp, right: &Expr) -> Result<Value> {
+        let left_value = self.generate_expr(left)?;
+        let left_exit = self.current_block;
+        let rhs_block = self.add_block("logical_rhs");
+        let merge_block = self.add_block("logical_merge");
+        let is_and = op == ast::BinOp::And;
+        self.set_terminator_current(Terminator::Branch {
+            cond: left_value,
+            then_target: if is_and { rhs_block } else { merge_block },
+            else_target: if is_and { merge_block } else { rhs_block },
+        });
+        self.current_block = rhs_block;
+        let right_value = self.generate_expr(right)?;
+        let right_exit = self.current_block;
+        let mut incoming = vec![(Value::Constant(Constant::Bool(!is_and)), left_exit)];
+        if self.get_current_terminator().is_none() {
+            self.set_terminator_current(Terminator::Jump { target: merge_block });
+            incoming.push((right_value, right_exit));
+        }
+        self.current_block = merge_block;
+        let dest = self.alloc_register();
+        self.emit_current_with_type(Instruction::Phi { dest, incoming }, IRType::Bool);
+        Ok(Value::Register(dest))
+    }
 
     fn alloc_register(&mut self) -> Register {
         let reg = Register(self.next_register);
@@ -1902,7 +1631,8 @@ impl IRGenerator {
                Instruction::Call { dest: Some(dest), .. } | 
                Instruction::Alloca { dest, .. } | 
                Instruction::Load { dest, .. } | 
-               Instruction::GetElementPtr { dest, .. } | 
+               Instruction::GetElementPtr { dest, .. } |
+               Instruction::GetFieldPtr { dest, .. } |
                Instruction::Cast { dest, .. } |
                Instruction::Phi { dest, .. } = &inst {
             self.reg_types.insert(*dest, ty);
@@ -1997,19 +1727,19 @@ impl IRGenerator {
             ast::Expr::Binary { op, left, right, .. } => {
                 let l = self.try_eval_const_expr(left)?;
                 let r = self.try_eval_const_expr(right)?;
-                Some(match op {
-                    ast::BinOp::Add => l + r,
-                    ast::BinOp::Sub => l - r,
-                    ast::BinOp::Mul => l * r,
-                    ast::BinOp::Div => l / r,
-                    ast::BinOp::Mod => l % r,
-                    _ => return None,
-                })
+                match op {
+                    ast::BinOp::Add => l.checked_add(r),
+                    ast::BinOp::Sub => l.checked_sub(r),
+                    ast::BinOp::Mul => l.checked_mul(r),
+                    ast::BinOp::Div => l.checked_div(r),
+                    ast::BinOp::Mod => l.checked_rem(r),
+                    _ => None,
+                }
             }
             ast::Expr::Unary { op, expr, .. } => {
                 let v = self.try_eval_const_expr(expr)?;
                 Some(match op {
-                    ast::UnOp::Neg => -v,
+                    ast::UnOp::Neg => v.checked_neg()?,
                     ast::UnOp::Not => if v == 0 { 1 } else { 0 },
                     _ => return None,
                 })
@@ -2018,18 +1748,49 @@ impl IRGenerator {
         }
     }
 
+    fn array_element_type(&self, ty: &AstType) -> Option<IRType> {
+        match ty {
+            AstType::Array { elem, .. } => Some(self.ast_type_to_ir(elem)),
+            AstType::Named(name, _) => match self.semantic_facts.as_ref()?.aliases.get(name)? {
+                ResolvedType::Array { elem, .. } => Self::resolved_type_to_ir(elem).ok(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn resolved_type_to_ir(ty: &ResolvedType) -> Result<IRType> {
+        use PrimitiveType as P;
+        Ok(match ty {
+            ResolvedType::Primitive(primitive) => match primitive {
+                P::I8 => IRType::I8, P::I16 => IRType::I16, P::I32 => IRType::I32, P::I64 | P::Isize => IRType::I64,
+                P::U8 => IRType::U8, P::U16 => IRType::U16, P::U32 | P::Char => IRType::U32, P::U64 | P::Usize => IRType::U64,
+                P::F32 => IRType::F32, P::F64 => IRType::F64, P::Bool => IRType::Bool, P::Unit | P::Never => IRType::Void,
+            },
+            ResolvedType::Pointer(inner) | ResolvedType::Reference { inner, .. } => IRType::Ptr(Box::new(Self::resolved_type_to_ir(inner)?)),
+            ResolvedType::Array { elem, .. } => IRType::Ptr(Box::new(Self::resolved_type_to_ir(elem)?)),
+            ResolvedType::Struct { name, .. } | ResolvedType::Enum { name } => IRType::Struct(name.clone()),
+            ResolvedType::String => IRType::Ptr(Box::new(IRType::U8)),
+            ResolvedType::Vector(inner, lanes) => IRType::Vector(Box::new(Self::resolved_type_to_ir(inner)?), *lanes),
+            ResolvedType::Function { params, ret } => IRType::Function { params: params.iter().map(Self::resolved_type_to_ir).collect::<Result<_>>()?, ret: Box::new(Self::resolved_type_to_ir(ret)?) },
+            ResolvedType::Tuple(elements) if elements.is_empty() => IRType::Void,
+            _ => return Err(crate::utils::Error::CodeGen(format!("lowering resolved type {:?} is not implemented", ty))),
+        })
+    }
+
     fn ast_type_to_ir(&self, ty: &AstType) -> IRType {
         match ty {
             AstType::Named(name, _) => {
+                if let Some(ty) = self.resolved_aliases.get(name) { return ty.clone(); }
                 match name.as_str() {
                     "i8" => IRType::I8,
                     "i16" => IRType::I16,
                     "i32" => IRType::I32,
-                    "i64" | "int" => IRType::I64,
+                    "i64" | "int" | "isize" => IRType::I64,
                     "u8" | "byte" => IRType::U8,
                     "u16" => IRType::U16,
-                    "u32" => IRType::U32,
-                    "u64" => IRType::U64,
+                    "u32" | "char" => IRType::U32,
+                    "u64" | "usize" => IRType::U64,
                     "f32" => IRType::F32,
                     "f64" | "float" => IRType::F64,
                     "bool" => IRType::Bool,
@@ -2043,18 +1804,7 @@ impl IRGenerator {
                     "i64x2" => IRType::Vector(Box::new(IRType::I64), 2),
                     "i64x4" => IRType::Vector(Box::new(IRType::I64), 4),
                     "void" | "()" => IRType::Void,
-                    // Structs are NOT automatically wrapped as pointers
-                    // The pointer wrapping happens at usage sites (function calls, etc.)
-                    // But single uppercase letters are generic type params - use i64 (type erasure)
-                    s => {
-                        if s.len() == 1 && s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                            // Generic type parameter like T, U, V - use i64 as type erasure
-                            IRType::I64
-                        } else {
-                            // Struct type - NOT a pointer, just the struct itself
-                            IRType::Struct(s.to_string())
-                        }
-                    }
+                    s => IRType::Struct(s.to_string()),
                 }
 
             }
@@ -2103,17 +1853,7 @@ impl IRGenerator {
                  // Array logic hack
                  IRType::Ptr(Box::new(self.ast_type_to_ir(elem))) 
             }
-            AstType::Ref { inner, .. } => {
-                // References are implemented as pointers at the IR level
-                // But structs are already Ptr(Struct), so don't add extra level
-                let inner_ty = self.ast_type_to_ir(inner);
-                if let IRType::Ptr(_) = &inner_ty {
-                    // Already a pointer (e.g., struct), don't wrap again
-                    inner_ty
-                } else {
-                    IRType::Ptr(Box::new(inner_ty))
-                }
-            }
+            AstType::Ref { inner, .. } => IRType::Ptr(Box::new(self.ast_type_to_ir(inner))),
             AstType::Tuple(elements, _) => {
                 if elements.is_empty() {
                     IRType::Void // Unit tuple ()
@@ -2168,4 +1908,34 @@ mod tests {
         // Should have entry, then, else, merge blocks
         assert!(module.functions[0].blocks.len() >= 3);
     }
+    #[test]
+    fn unsupported_error_propagation_is_not_silently_erased() {
+        let error = generate("fn f(x: i32) -> i32 { return x?; }").unwrap_err();
+        assert!(error.to_string().contains("error propagation"));
+    }
+
+    #[test]
+    fn generic_functions_are_not_erased_to_i64() {
+        let error = generate("fn identity<T>(value: T) -> T { return value; }").unwrap_err();
+        assert!(error.to_string().contains("specialization"));
+    }
+
+    #[test]
+    fn tuple_values_are_not_lowered_to_unit() {
+        let error = generate("fn f() { (1, 2); }").unwrap_err();
+        assert!(error.to_string().contains("tuple values"));
+    }
+
+    #[test]
+    fn closures_are_not_silently_emitted_without_capture_or_call_support() {
+        // The parser currently rejects closure syntax; guard the separate AST
+        // lowering entry as well so programmatically created ASTs cannot revive
+        // the old placeholder closure implementation.
+        let span = crate::utils::Span::dummy();
+        let expression = Expr::Closure { params: vec![], ret_type: None,
+            body: Box::new(Expr::Literal(ast::Literal::Int(1, span))), span };
+        let error = IRGenerator::new("test").generate_expr(&expression).unwrap_err();
+        assert!(error.to_string().contains("closure lowering"), "{error}");
+    }
+
 }

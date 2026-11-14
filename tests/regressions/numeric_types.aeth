@@ -1,0 +1,32 @@
+fn main() -> i32 {
+    let a: i64 = 6 & 3;
+    let b: i64 = 4 | 2;
+    if a != 2 || b != 6 { return 1; }
+    let x: f64 = 1.5;
+    let y: f64 = x + 0.25;
+    if y != 1.75 { return 2; }
+    let small: i8 = -2;
+    let wide: i64 = small as i64;
+    if wide != -2 { return 3; }
+    let u: u64 = -1 as u64;
+    let half: u64 = u / (2 as u64);
+    if half != (9223372036854775807 as u64) { return 4; }
+    if (u >> (63 as u64)) != (1 as u64) { return 5; }
+    let mut f: f64 = 0.5;
+    let mut i: i32 = 0;
+    while i < 3 { f = f + 0.25; i = i + 1; }
+    if f != 1.25 { return 6; }
+    let low: f32 = 0.5;
+    let mixed: f32 = 1.25 + low;
+    if mixed != 1.75 { return 7; }
+    let narrow: [i32; 3] = [4, 5, 6];
+    if narrow[0] != 4 || narrow[1] != 5 || narrow[2] != 6 { return 8; }
+    let nan: f64 = 0.0 / 0.0;
+    if nan == nan || !(nan != nan) { return 9; }
+    let infinity: f64 = 1.0 / 0.0;
+    if infinity != infinity { return 10; }
+    if 0.0 == 0.00000000000000001 { return 11; }
+    let negative_infinity: f64 = 1.0 / -0.0;
+    if negative_infinity >= 0.0 { return 12; }
+    return 0;
+}

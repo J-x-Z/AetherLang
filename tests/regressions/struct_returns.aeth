@@ -1,0 +1,21 @@
+struct Pair { left: i64, right: i64 }
+fn make_pair(left: i64, right: i64) -> Pair {
+    let noise: Pair = Pair { left: 90, right: 91 };
+    let value: Pair = Pair { left: left, right: right };
+    return value;
+}
+fn identity(pointer: *Pair) -> *Pair { return pointer; }
+fn main() -> i32 {
+    let mut a: Pair = make_pair(3, 4);
+    let mut b: Pair = a;
+    b.left = 99;
+    if a.left != 3 || a.right != 4 { return 1; }
+    if b.left != 99 || b.right != 4 { return 2; }
+    let pointer: *Pair = identity(&mut a as *Pair);
+    (*pointer).right = 8;
+    if a.right != 8 { return 3; }
+    b = a;
+    b.left = 44;
+    if a.left != 3 || b.right != 8 { return 4; }
+    return 0;
+}

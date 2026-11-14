@@ -6,3 +6,5 @@ pub mod ast;
 pub mod parser;
 pub mod semantic;
 pub mod module;
+
+pub mod resolve;

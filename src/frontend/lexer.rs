@@ -10,6 +10,7 @@ use crate::utils::Span;
 pub struct Lexer {
     /// Source code as bytes
     source: Vec<char>,
+    byte_offsets: Vec<usize>,
     /// Current position in source
     pos: usize,
     /// Start position of current token
@@ -23,6 +24,7 @@ impl Lexer {
     pub fn new(source: &str, file_id: usize) -> Self {
         Self {
             source: source.chars().collect(),
+            byte_offsets: source.char_indices().map(|(offset, _)| offset).chain(std::iter::once(source.len())).collect(),
             pos: 0,
             start: 0,
             file_id,
@@ -53,7 +55,7 @@ impl Lexer {
     
     /// Create a span from start to current position
     fn make_span(&self) -> Span {
-        Span::new(self.start, self.pos, self.file_id)
+        Span::new(self.byte_offsets[self.start], self.byte_offsets[self.pos], self.file_id)
     }
     
     /// Create a token with the current span
@@ -62,7 +64,7 @@ impl Lexer {
     }
     
     /// Skip whitespace and comments
-    fn skip_whitespace(&mut self) {
+    fn skip_whitespace(&mut self) -> Option<Token> {
         while let Some(c) = self.peek() {
             match c {
                 // Whitespace
@@ -81,6 +83,7 @@ impl Lexer {
                 }
                 // Block comment
                 '/' if self.peek_next() == Some('*') => {
+                    self.start = self.pos;
                     self.advance(); // skip /
                     self.advance(); // skip *
                     let mut depth = 1;
@@ -101,12 +104,16 @@ impl Lexer {
                             }
                         }
                     }
+                    if depth > 0 {
+                        return Some(self.make_token(TokenKind::Invalid("unterminated block comment".into())));
+                    }
                 }
                 _ => break,
             }
         }
+        None
     }
-    
+
     /// Read an identifier or keyword
     fn read_identifier(&mut self) -> Token {
         while let Some(c) = self.peek() {
@@ -146,8 +153,10 @@ impl Lexer {
                 .filter(|&&c| c != '_')
                 .collect();
             
-            let value = i64::from_str_radix(&text[2..], 16).unwrap_or(0);
-            return self.make_token(TokenKind::IntLit(value));
+            return self.make_token(match i64::from_str_radix(&text[2..], 16) {
+                Ok(value) => TokenKind::IntLit(value),
+                Err(_) => TokenKind::Invalid("invalid or out-of-range hexadecimal integer".into()),
+            });
         }
         
         // Regular decimal number
@@ -199,11 +208,15 @@ impl Lexer {
             .collect();
         
         if is_float {
-            let value = text.parse().unwrap_or(0.0);
-            self.make_token(TokenKind::FloatLit(value))
+            self.make_token(match text.parse::<f64>() {
+                Ok(value) if value.is_finite() => TokenKind::FloatLit(value),
+                _ => TokenKind::Invalid("invalid or out-of-range floating-point literal".into()),
+            })
         } else {
-            let value = text.parse().unwrap_or(0);
-            self.make_token(TokenKind::IntLit(value))
+            self.make_token(match text.parse::<i64>() {
+                Ok(value) => TokenKind::IntLit(value),
+                Err(_) => TokenKind::Invalid("invalid or out-of-range integer literal".into()),
+            })
         }
     }
     
@@ -212,10 +225,12 @@ impl Lexer {
         self.advance(); // consume opening quote
         
         let mut value = String::new();
-        
+        let mut terminated = false;
+
         while let Some(c) = self.peek() {
             if c == '"' {
                 self.advance(); // consume closing quote
+                terminated = true;
                 break;
             } else if c == '\\' {
                 self.advance();
@@ -238,7 +253,8 @@ impl Lexer {
             }
         }
         
-        self.make_token(TokenKind::StringLit(value))
+        if terminated { self.make_token(TokenKind::StringLit(value)) }
+        else { self.make_token(TokenKind::Invalid("unterminated string literal".into())) }
     }
     
     /// Read a character literal or lifetime parameter
@@ -264,7 +280,7 @@ impl Lexer {
                 }
                 
                 // Check if there's a closing quote (char literal) or not (lifetime)
-                if self.peek() == Some('\'') && name.len() == 1 {
+                if self.peek() == Some('\'') && name.chars().count() == 1 {
                     // It's a character literal like 'a'
                     self.advance(); // consume closing quote
                     return self.make_token(TokenKind::CharLit(name.chars().next().unwrap()));
@@ -295,14 +311,15 @@ impl Lexer {
         // Consume closing quote
         if self.peek() == Some('\'') {
             self.advance();
+            self.make_token(TokenKind::CharLit(c))
+        } else {
+            self.make_token(TokenKind::Invalid("unterminated character literal".into()))
         }
-        
-        self.make_token(TokenKind::CharLit(c))
     }
     
     /// Get the next token
     pub fn next_token(&mut self) -> Token {
-        self.skip_whitespace();
+        if let Some(error) = self.skip_whitespace() { return error; }
         self.start = self.pos;
         
         if self.is_at_end() {
@@ -559,4 +576,21 @@ mod tests {
         assert!(matches!(tokens[2].kind, TokenKind::Question));
         assert!(matches!(tokens[3].kind, TokenKind::Tilde));
     }
+    #[test]
+    fn malformed_literals_and_comments_are_not_silently_accepted() {
+        for source in ["9223372036854775808", "0x", "0x8000000000000000", "1e+", "1e999", "\"unterminated", "'7", "/* unfinished"] {
+            assert!(matches!(Lexer::new(source, 0).next_token().kind, TokenKind::Invalid(_)), "{}", source);
+        }
+    }
+
+    #[test]
+    fn unicode_spans_are_utf8_byte_offsets() {
+        let source = "\"你好\" '界' xyz";
+        let tokens = Lexer::new(source, 3).tokenize();
+        assert_eq!(&source[tokens[0].span.start..tokens[0].span.end], "\"你好\"");
+        assert_eq!(&source[tokens[1].span.start..tokens[1].span.end], "'界'");
+        assert_eq!(&source[tokens[2].span.start..tokens[2].span.end], "xyz");
+        assert_eq!(tokens[2].span.file_id, 3);
+    }
+
 }

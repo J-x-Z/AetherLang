@@ -1,0 +1,38 @@
+fn touch(p: *i64) -> bool {
+    *p = *p + 1;
+    return true;
+}
+fn early() -> i64 {
+    while true {
+        return 7;
+        return 99;
+    }
+    return 88;
+}
+fn main() -> i32 {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 10 {
+        i = i + 1;
+        if i == 2 { continue; }
+        if i == 5 { break; }
+        total = total + i;
+    }
+    if total != 8 { return 1; }
+    loop { total = total + 1; break; total = 99; }
+    if total != 9 { return 2; }
+    for j in 0..6 {
+        if j == 1 { continue; }
+        if j == 4 { break; }
+        total = total + j;
+    }
+    if total != 14 { return 3; }
+    for unused in 8..3 { total = 99; }
+    if total != 14 { return 4; }
+    if early() != 7 { return 5; }
+    let x: i64 = if true { 40 } else { 2 };
+    if x != 40 { return 6; }
+    let nested: bool = (true && (false || true)) || false;
+    if !nested { return 7; }
+    return 0;
+}

@@ -1,0 +1,9 @@
+def scale(value: float) -> float:
+    return value * 1.5 + 0.25
+
+def main():
+    result = scale(2.0)
+    if result != 3.25:
+        return 1
+    print(result)
+    return 0

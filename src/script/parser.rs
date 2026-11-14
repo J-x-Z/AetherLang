@@ -9,7 +9,8 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(input: &str) -> Self {
-        let mut lexer = Lexer::new(input);
+        let normalized = format!("{}\n", input.trim_end_matches('\n'));
+        let mut lexer = Lexer::new(&normalized);
         let mut tokens = Vec::new();
         loop {
             let token = lexer.next_token();
@@ -73,6 +74,9 @@ impl Parser {
     // --- Parsing Methods ---
 
     pub fn parse(&mut self) -> Result<ScriptModule, String> {
+        for token in &self.tokens {
+            if let TokenKind::Invalid(message) = &token.kind { return Err(format!("line {}: {}", token.span.line, message)); }
+        }
         let mut stmts = Vec::new();
         while self.peek().kind != TokenKind::Eof {
             // Skip newlines at top level
@@ -92,6 +96,12 @@ impl Parser {
             TokenKind::While => self.parse_while(),
             TokenKind::For => self.parse_for(),
             TokenKind::Return => self.parse_return(),
+            TokenKind::Break | TokenKind::Continue => {
+                let is_break = self.peek().kind == TokenKind::Break;
+                self.advance();
+                self.consume(TokenKind::Newline, "Expected newline after loop control")?;
+                Ok(if is_break { Stmt::Break } else { Stmt::Continue })
+            }
             TokenKind::Pass => {
                 self.advance();
                 self.consume(TokenKind::Newline, "Expected newline after pass")?;
@@ -224,48 +234,7 @@ impl Parser {
         self.consume(TokenKind::Newline, "Expected Newline")?;
         let then_block = self.parse_block()?;
         
-        let else_block = if self.peek().kind == TokenKind::Else {
-            self.advance();
-            self.consume(TokenKind::Colon, "Expected ':'")?;
-            self.consume(TokenKind::Newline, "Expected Newline")?;
-            Some(self.parse_block()?)
-        } else if self.peek().kind == TokenKind::Elif {
-            // Desugar elif to else { if ... }
-            // Let's recurse parse_if but treat it as a new Stmt
-            // NOTE: Token is Elif. 
-            // We can trick it: consume Elif, act like we consumed If.
-            // But parse_if expects If token.
-            // For now, simple: consume Elif here.
-            self.advance();
-            let cond = self.parse_expr()?;
-            self.consume(TokenKind::Colon, "Expected ':'")?;
-            self.consume(TokenKind::Newline, "Expected Newline")?;
-            let block = self.parse_block()?;
-            
-            // Further elses?
-            // This needs full recursion.
-            // Construct nested IfStmt
-            let nested_else = if self.peek().kind == TokenKind::Else || self.peek().kind == TokenKind::Elif {
-                 // Hacky recursion or loop?
-                 // Let's just say else_block = Some(vec![Stmt::If(...)])
-                 // But I need to parse the rest of the chain.
-                 // Let's implement full parsing logic for elif chain later.
-                 // For current MVP, treat elif as just another block? No that's wrong.
-                 // Recursive call to parse_if_tail?
-                 None // TODO: Implement Elif recursion
-            } else {
-                None
-            };
-            
-            Some(vec![Stmt::If(IfStmt {
-                condition: cond,
-                then_block: block,
-                else_block: nested_else,
-                span: start_span, // approximate
-            })])
-        } else {
-            None
-        };
+        let else_block = self.parse_if_tail()?;
 
         Ok(Stmt::If(IfStmt {
             condition,
@@ -273,6 +242,24 @@ impl Parser {
             else_block,
             span: start_span,
         }))
+    }
+
+    fn parse_if_tail(&mut self) -> Result<Option<Vec<Stmt>>, String> {
+        if self.match_kind(TokenKind::Else) {
+            self.consume(TokenKind::Colon, "Expected ':'")?;
+            self.consume(TokenKind::Newline, "Expected newline")?;
+            return Ok(Some(self.parse_block()?));
+        }
+        if self.match_kind(TokenKind::Elif) {
+            let span = self.peek().span;
+            let condition = self.parse_expr()?;
+            self.consume(TokenKind::Colon, "Expected ':'")?;
+            self.consume(TokenKind::Newline, "Expected newline")?;
+            let then_block = self.parse_block()?;
+            let else_block = self.parse_if_tail()?;
+            return Ok(Some(vec![Stmt::If(IfStmt { condition, then_block, else_block, span })]));
+        }
+        Ok(None)
     }
 
     fn parse_while(&mut self) -> Result<Stmt, String> {
@@ -347,18 +334,37 @@ impl Parser {
     
     // --- Expression Parsing (Simple precedence) ---
     
-    fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_equality()
-    }
-    
-    fn parse_equality(&mut self) -> Result<Expr, String> {
-        let expr = self.parse_term()?; // actually parse_add_sub etc.
-        // Simplified: just call primary for now to test structure
-        // TODO: Implement full precedence (Eq, Add, Mul, Unary, Primary)
-        Ok(expr)
+    fn parse_expr(&mut self) -> Result<Expr, String> { self.parse_binary(0) }
+
+    fn parse_binary(&mut self, minimum: u8) -> Result<Expr, String> {
+        let mut left = self.parse_unary()?;
+        loop {
+            let (precedence, op) = match self.peek().kind {
+                TokenKind::Or => (1, BinOp::Or), TokenKind::And => (2, BinOp::And),
+                TokenKind::EqEq => (3, BinOp::Eq), TokenKind::NotEq => (3, BinOp::Ne),
+                TokenKind::Lt => (4, BinOp::Lt), TokenKind::LtEq => (4, BinOp::Le),
+                TokenKind::Gt => (4, BinOp::Gt), TokenKind::GtEq => (4, BinOp::Ge),
+                TokenKind::Plus => (5, BinOp::Add), TokenKind::Minus => (5, BinOp::Sub),
+                TokenKind::Star => (6, BinOp::Mul), TokenKind::Slash => (6, BinOp::Div),
+                TokenKind::Percent => (6, BinOp::Mod), _ => break,
+            };
+            if precedence < minimum { break; }
+            self.advance();
+            let right = self.parse_binary(precedence + 1)?;
+            let span = left.span_owned();
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right), span };
+        }
+        Ok(left)
     }
 
-    fn parse_term(&mut self) -> Result<Expr, String> {
+    fn parse_unary(&mut self) -> Result<Expr, String> {
+        let token = self.peek().clone();
+        let op = match token.kind { TokenKind::Minus => Some(UnaryOp::Neg), TokenKind::Not => Some(UnaryOp::Not), _ => None };
+        if let Some(op) = op {
+            self.advance();
+            let expr = if matches!(op, UnaryOp::Not) { self.parse_binary(3)? } else { self.parse_unary()? };
+            return Ok(Expr::Unary { op, expr: Box::new(expr), span: token.span });
+        }
         self.parse_call()
     }
 
@@ -410,6 +416,14 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Integer { value: i, span: t.span })
             }
+            TokenKind::True | TokenKind::False => {
+                self.advance();
+                Ok(Expr::Boolean { value: t.kind == TokenKind::True, span: t.span })
+            }
+            TokenKind::Float(value) => {
+                self.advance();
+                Ok(Expr::Float { value, span: t.span })
+            }
             TokenKind::String(s) => {
                 self.advance();
                 Ok(Expr::String { value: s, span: t.span })
@@ -430,7 +444,7 @@ impl Expr {
     fn span_owned(&self) -> Span {
         match self {
             Expr::Identifier { span, .. } => *span,
-            Expr::Integer { span, .. } => *span,
+            Expr::Integer { span, .. } | Expr::Boolean { span, .. } | Expr::Unary { span, .. } => *span,
             Expr::Float { span, .. } => *span,
             Expr::String { span, .. } => *span,
             Expr::Binary { span, .. } => *span,
