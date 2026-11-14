@@ -1,0 +1,17 @@
+use matrix::{Matrix, matrix_zeros, matrix_set, matrix_get, matrix_mul, matrix_transpose, matrix_free};
+use autograd::{Tape, ad_new, ad_variable, ad_sum, ad_backward, ad_gradient, ad_free};
+use result::Result;
+fn run() -> Result<(), i32> {
+    let matrix: *Matrix = matrix_zeros(1, 1)?;
+    matrix_set(matrix, 0, 3.0)?;
+    let transposed: *Matrix = matrix_transpose(matrix)?;
+    let product: *Matrix = matrix_mul(matrix, transposed)?;
+    if matrix_get(product, 0)? != 9.0 { return Result::Err(1); }
+    let tape: *Tape = ad_new()?;
+    let node: u64 = ad_variable(tape, product)?;
+    ad_backward(tape, ad_sum(tape, node)?)?;
+    if matrix_get(ad_gradient(tape, node)?, 0)? != 1.0 { return Result::Err(2); }
+    ad_free(tape); matrix_free(product); matrix_free(transposed); matrix_free(matrix);
+    Result::Ok(())
+}
+fn main() -> i32 { match run() { Result::Ok(_) => 0, Result::Err(e) => e } }

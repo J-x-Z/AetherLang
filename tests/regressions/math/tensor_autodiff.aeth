@@ -1,0 +1,155 @@
+use tensor::*;
+use autodiff::*;
+use result::Result;
+extern "C" { fn printf(format: *u8, ...) -> i32; }
+fn abs(x: f64) -> f64 { if x < 0.0 { -x } else { x } }
+fn near(x: f64, y: f64) -> bool { abs(x - y) < 0.00000001 }
+
+fn tensor_cases() -> Result<(), i32> {
+    let shape: [u64; 2] = [2, 3];
+    let data: [f64; 6] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let parent: *Tensor = tensor_from_data(2, &shape[0] as *u64, &data[0] as *f64)?;
+    let transposed: *Tensor = tensor_transpose(parent)?;
+    let sliced: *Tensor = tensor_slice(transposed, 0, 0, 3, 2)?;
+    let copy: *Tensor = tensor_clone(sliced)?;
+    tensor_free(parent);
+    tensor_free(transposed);
+    // shape [2,2], strides [2,3], survives both ancestor handle releases.
+    if tensor_len(sliced) != 4 { return Result::Err(101); }
+    if !near(tensor_get(sliced, 0)?, 1.0) || !near(tensor_get(sliced, 1)?, 4.0) ||
+       !near(tensor_get(sliced, 2)?, 3.0) || !near(tensor_get(sliced, 3)?, 6.0) { return Result::Err(102); }
+    tensor_set(sliced, 0, 10.0)?;
+    if !near(tensor_get(copy, 0)?, 1.0) { return Result::Err(103); }
+    let product: *Tensor = tensor_matmul(copy, sliced)?;
+    if !near(tensor_get(product, 0)?, 22.0) || !near(tensor_get(product, 1)?, 28.0) ||
+       !near(tensor_get(product, 2)?, 48.0) || !near(tensor_get(product, 3)?, 48.0) { return Result::Err(104); }
+    tensor_free(product);
+    let empty: *Tensor = tensor_slice(copy, 0, 1, 1, 1)?;
+    if tensor_len(empty) != 0 { return Result::Err(105); }
+    let total: *Tensor = tensor_sum(empty)?;
+    if tensor_rank(total) != 0 || !near(tensor_get(total, 0)?, 0.0) { return Result::Err(106); }
+    tensor_free(total); tensor_free(empty);
+    match tensor_slice(copy, 0, 0, 2, 0) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(107); } }
+    match tensor_get(copy, 4) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(108); } }
+    match tensor_zeros(5, &shape[0] as *u64) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(109); } }
+    let huge: [u64; 2] = [1152921504606846975, 2];
+    match tensor_zeros(2, &huge[0] as *u64) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(110); } }
+    let four: [u64; 4] = [2, 1, 2, 1];
+    let rank4: *Tensor = tensor_zeros(4, &four[0] as *u64)?;
+    tensor_set(rank4, 3, 9.0)?;
+    if !near(tensor_get(rank4, 3)?, 9.0) { return Result::Err(111); }
+    match tensor_add(rank4, copy) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(112); } }
+    match tensor_matmul(rank4, copy) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(113); } }
+    tensor_free(rank4); tensor_free(copy); tensor_free(sliced);
+    Result::Ok(())
+}
+
+fn loss(a: *Tensor, b: *Tensor) -> Result<f64, i32> {
+    let product: *Tensor = tensor_matmul(a, b)?;
+    let output: *Tensor = tensor_tanh(product)?;
+    let square: *Tensor = tensor_mul(output, output)?;
+    let total: *Tensor = tensor_sum(square)?;
+    let value: f64 = tensor_get(total, 0)?;
+    tensor_free(total); tensor_free(square); tensor_free(output); tensor_free(product);
+    Result::Ok(value)
+}
+fn finite_difference() -> Result<(), i32> {
+    let sa: [u64; 2] = [3, 2]; let sb: [u64; 2] = [3, 2];
+    let da: [f64; 6] = [0.2, -0.3, 0.4, 0.1, -0.2, 0.5];
+    let db: [f64; 6] = [0.3, 0.2, -0.1, 0.4, 0.5, -0.2];
+    let base: *Tensor = tensor_from_data(2, &sa[0] as *u64, &da[0] as *f64)?;
+    let a: *Tensor = tensor_transpose(base)?;
+    tensor_free(base);
+    let b: *Tensor = tensor_from_data(2, &sb[0] as *u64, &db[0] as *f64)?;
+    let tape: *Tape = ad_new()?;
+    let ai: u64 = ad_variable(tape, a)?; let bi: u64 = ad_variable(tape, b)?;
+    let product: u64 = ad_matmul(tape, ai, bi)?;
+    let activated: u64 = ad_tanh(tape, product)?;
+    let square: u64 = ad_mul(tape, activated, activated)?;
+    let total: u64 = ad_sum(tape, square)?;
+    ad_backward(tape, total)?;
+    let ga: *Tensor = ad_gradient(tape, ai)?; let gb: *Tensor = ad_gradient(tape, bi)?;
+    let mut maximum: f64 = 0.0;
+    let epsilon: f64 = 0.000001;
+    let mut which: u64 = 0;
+    while which < 2 {
+        let parameter: *Tensor = if which == 0 { a } else { b };
+        let gradient: *Tensor = if which == 0 { ga } else { gb };
+        let mut i: u64 = 0;
+        while i < tensor_len(parameter) {
+            let old: f64 = tensor_get(parameter, i)?;
+            tensor_set(parameter, i, old + epsilon)?; let upper: f64 = loss(a, b)?;
+            tensor_set(parameter, i, old - epsilon)?; let lower: f64 = loss(a, b)?;
+            tensor_set(parameter, i, old)?;
+            let error: f64 = abs((upper - lower) / (2.0 * epsilon) - tensor_get(gradient, i)?);
+            if error > maximum { maximum = error; }
+            if error > 0.0000001 { return Result::Err(201); }
+            i += 1;
+        }
+        which += 1;
+    }
+    // A second backward resets, rather than doubles, all accumulated gradients.
+    let old_gradient: f64 = tensor_get(ga, 0)?;
+    ad_backward(tape, total)?;
+    if !near(tensor_get(ga, 0)?, old_gradient) { return Result::Err(202); }
+    // Mutating the source cannot silently change a recorded variable.
+    let recorded: f64 = tensor_get(ad_value(tape, ai)?, 0)?;
+    tensor_set(a, 0, 20.0)?;
+    if !near(tensor_get(ad_value(tape, ai)?, 0)?, recorded) { return Result::Err(203); }
+    printf("finite_difference_max_error=%.12g\n", maximum);
+    ad_free(tape); tensor_free(a); tensor_free(b);
+    Result::Ok(())
+}
+
+fn unused_branch() -> Result<(), i32> {
+    let value: *Tensor = tensor_zeros(0, 0 as *u64)?;
+    let nan: *Tensor = tensor_zeros(0, 0 as *u64)?;
+    tensor_set(value, 0, 2.0)?; tensor_set(nan, 0, 0.0 / 0.0)?;
+    let tape: *Tape = ad_new()?;
+    let x: u64 = ad_variable(tape, value)?;
+    let bad: u64 = ad_variable(tape, nan)?;
+    let unused: u64 = ad_mul(tape, x, bad)?;
+    let objective: u64 = ad_sum(tape, x)?;
+    ad_backward(tape, objective)?;
+    let gradient: f64 = tensor_get(ad_gradient(tape, x)?, 0)?;
+    ad_free(tape); tensor_free(value); tensor_free(nan);
+    if gradient != 1.0 { return Result::Err(204); }
+    Result::Ok(())
+}
+fn train() -> Result<(), i32> {
+    let weight: *Tensor = tensor_zeros(0, 0 as *u64)?;
+    let input: *Tensor = tensor_zeros(0, 0 as *u64)?;
+    let target: *Tensor = tensor_zeros(0, 0 as *u64)?;
+    tensor_set(weight, 0, -0.4)?;
+    tensor_set(input, 0, 0.8)?;
+    // tanh(1.2 * 0.8), generated by the same scalar nonlinear primitive.
+    tensor_set(target, 0, 0.96)?;
+    let expected: *Tensor = tensor_tanh(target)?;
+    tensor_free(target);
+    let mut initial: f64 = 0.0; let mut final_loss: f64 = 0.0;
+    let mut step: u64 = 0;
+    while step < 240 {
+        let tape: *Tape = ad_new()?;
+        let w: u64 = ad_variable(tape, weight)?;
+        let x: u64 = ad_variable(tape, input)?;
+        let y: u64 = ad_variable(tape, expected)?;
+        let prediction: u64 = ad_tanh(tape, ad_mul(tape, w, x)?)?;
+        let difference: u64 = ad_sub(tape, prediction, y)?;
+        let squared: u64 = ad_mul(tape, difference, difference)?;
+        let objective: u64 = ad_sum(tape, squared)?;
+        final_loss = tensor_get(ad_value(tape, objective)?, 0)?;
+        if step == 0 { initial = final_loss; }
+        ad_backward(tape, objective)?;
+        let gradient: f64 = tensor_get(ad_gradient(tape, w)?, 0)?;
+        tensor_set(weight, 0, tensor_get(weight, 0)? - 0.2 * gradient)?;
+        ad_free(tape);
+        step += 1;
+    }
+    let fitted: f64 = tensor_get(weight, 0)?;
+    printf("gradient_descent_initial=%.12g final=%.12g weight=%.12g\n", initial, final_loss, fitted);
+    tensor_free(weight); tensor_free(input); tensor_free(expected);
+    if initial < 0.1 || final_loss > 0.00000001 || abs(fitted - 1.2) > 0.001 { return Result::Err(301); }
+    Result::Ok(())
+}
+fn run() -> Result<(), i32> { tensor_cases()?; finite_difference()?; unused_branch()?; train()?; Result::Ok(()) }
+fn main() -> i32 { match run() { Result::Ok(_) => 0, Result::Err(error) => { printf("failure=%d\n", error); error } } }

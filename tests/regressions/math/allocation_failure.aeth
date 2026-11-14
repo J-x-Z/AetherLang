@@ -1,0 +1,62 @@
+use tensor::*;
+use autodiff::*;
+use result::Result;
+extern "C" {
+    fn test_fail_after(count: i64);
+    fn test_live() -> i64;
+}
+fn main() -> i32 {
+    let shape: [u64; 2] = [2, 2];
+    let mut budget: i64 = 0;
+    let mut failures: u64 = 0;
+    let mut successes: u64 = 0;
+    while budget < 12 {
+        test_fail_after(budget);
+        match tensor_zeros(2, &shape[0] as *u64) {
+            Result::Ok(value) => { tensor_free(value); successes += 1; },
+            Result::Err(error) => { if error != TENSOR_ALLOC { return 1; } failures += 1; }
+        }
+        if test_live() != 0 { return 2; }
+        test_fail_after(budget);
+        match ad_new() {
+            Result::Ok(value) => { ad_free(value); },
+            Result::Err(error) => { if error != TENSOR_ALLOC { return 13; } }
+        }
+        if test_live() != 0 { return 14; }
+        test_fail_after(-1);
+        let input: *Tensor = match tensor_zeros(2, &shape[0] as *u64) { Result::Ok(v) => v, Result::Err(_) => { return 3; } };
+        test_fail_after(budget);
+        match tensor_transpose(input) {
+            Result::Ok(value) => { tensor_free(value); },
+            Result::Err(error) => { if error != TENSOR_ALLOC { return 4; } }
+        }
+        test_fail_after(-1);
+        let tape: *Tape = match ad_new() { Result::Ok(v) => v, Result::Err(_) => { return 5; } };
+        test_fail_after(budget);
+        match ad_variable(tape, input) {
+            Result::Ok(_) => { successes += 1; },
+            Result::Err(error) => { if error != TENSOR_ALLOC { return 6; } failures += 1; }
+        }
+        test_fail_after(-1);
+        // A failed recording has not corrupted the tape: new variables/ops work.
+        let left: u64 = match ad_variable(tape, input) { Result::Ok(v) => v, Result::Err(_) => { return 7; } };
+        let right: u64 = match ad_variable(tape, input) { Result::Ok(v) => v, Result::Err(_) => { return 8; } };
+        let before: i64 = test_live();
+        test_fail_after(budget);
+        match ad_matmul(tape, left, right) {
+            Result::Ok(_) => { successes += 1; },
+            Result::Err(error) => {
+                if error != TENSOR_ALLOC { return 9; }
+                if test_live() != before { return 10; }
+                failures += 1;
+            }
+        }
+        test_fail_after(-1);
+        ad_free(tape);
+        tensor_free(input);
+        if test_live() != 0 { return 11; }
+        budget += 1;
+    }
+    if failures < 16 || successes < 12 { return 12; }
+    0
+}

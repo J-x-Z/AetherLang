@@ -1,0 +1,154 @@
+// Reverse-mode differentiation of CPU f64 tensor expressions.
+// Tape owns all recorded values and gradients. Node IDs are stable indices,
+// not pointers into growable storage. Variables copy their source tensor.
+// ad_value/ad_gradient return borrowed handles, valid until ad_free; do not free
+// or mutate them. Clone to retain independently. Raw pointer aliases are manual.
+use tensor::*;
+use vec::{Vec, vec_new, vec_push, vec_free};
+use result::Result;
+extern "C" { fn malloc(size: u64) -> *void; fn free(pointer: *void); }
+
+const AD_NODE: i32 = 10;
+const AD_LOSS: i32 = 11;
+struct Node { value: *Tensor, gradient: *Tensor, operation: i32, left: u64, right: u64, active: bool }
+pub struct Tape { nodes: Vec<Node> }
+
+pub fn ad_new() -> Result<*Tape, i32> {
+    let tape: *Tape = malloc(size_of(Tape) as u64) as *Tape;
+    if tape == 0 as *Tape { return Result::Err(TENSOR_ALLOC); }
+    let nodes: Vec<Node> = vec_new();
+    *tape = Tape { nodes: nodes };
+    Result::Ok(tape)
+}
+pub fn ad_free(tape: *Tape) {
+    if tape == 0 as *Tape { return; }
+    let mut i: u64 = 0;
+    while i < tape.nodes.len {
+        tensor_free(tape.nodes.data[i].value);
+        tensor_free(tape.nodes.data[i].gradient);
+        i += 1;
+    }
+    vec_free(&tape.nodes as *Vec<Node>);
+    free(tape as *void);
+}
+// Takes ownership of value on both success and error. Commit only after every
+// allocation succeeds, leaving the existing tape intact when allocation fails.
+fn record(tape: *Tape, value: *Tensor, operation: i32, left: u64, right: u64) -> Result<u64, i32> {
+    let gradient: *Tensor = match tensor_zeros(value.rank, &value.shape[0] as *u64) {
+        Result::Ok(item) => item,
+        Result::Err(error) => { tensor_free(value); return Result::Err(error); }
+    };
+    let id: u64 = tape.nodes.len;
+    let node: Node = Node { value: value, gradient: gradient, operation: operation, left: left, right: right, active: false };
+    if !vec_push(&tape.nodes as *Vec<Node>, node) {
+        tensor_free(gradient); tensor_free(value); return Result::Err(TENSOR_ALLOC);
+    }
+    Result::Ok(id)
+}
+pub fn ad_variable(tape: *Tape, value: *Tensor) -> Result<u64, i32> {
+    record(tape, tensor_clone(value)?, 0, 0, 0)
+}
+pub fn ad_value(tape: *Tape, id: u64) -> Result<*Tensor, i32> {
+    if id >= tape.nodes.len { return Result::Err(AD_NODE); }
+    Result::Ok(tape.nodes.data[id].value)
+}
+pub fn ad_gradient(tape: *Tape, id: u64) -> Result<*Tensor, i32> {
+    if id >= tape.nodes.len { return Result::Err(AD_NODE); }
+    Result::Ok(tape.nodes.data[id].gradient)
+}
+fn binary(tape: *Tape, left: u64, right: u64, operation: i32) -> Result<u64, i32> {
+    let a: *Tensor = ad_value(tape, left)?;
+    let b: *Tensor = ad_value(tape, right)?;
+    let value: *Tensor = if operation == 1 { tensor_add(a, b)? }
+        else if operation == 2 { tensor_sub(a, b)? }
+        else if operation == 3 { tensor_mul(a, b)? }
+        else { tensor_matmul(a, b)? };
+    record(tape, value, operation, left, right)
+}
+pub fn ad_add(tape: *Tape, left: u64, right: u64) -> Result<u64, i32> { binary(tape, left, right, 1) }
+pub fn ad_sub(tape: *Tape, left: u64, right: u64) -> Result<u64, i32> { binary(tape, left, right, 2) }
+pub fn ad_mul(tape: *Tape, left: u64, right: u64) -> Result<u64, i32> { binary(tape, left, right, 3) }
+pub fn ad_matmul(tape: *Tape, left: u64, right: u64) -> Result<u64, i32> { binary(tape, left, right, 4) }
+pub fn ad_sum(tape: *Tape, source: u64) -> Result<u64, i32> {
+    record(tape, tensor_sum(ad_value(tape, source)?)?, 5, source, 0)
+}
+pub fn ad_tanh(tape: *Tape, source: u64) -> Result<u64, i32> {
+    record(tape, tensor_tanh(ad_value(tape, source)?)?, 6, source, 0)
+}
+
+// Every recorded value/gradient is an independent contiguous tensor. Repeated
+// backward calls reset gradients; repeated operands accumulate both edges.
+pub fn ad_backward(tape: *Tape, loss: u64) -> Result<(), i32> {
+    if loss >= tape.nodes.len { return Result::Err(AD_NODE); }
+    if tape.nodes.data[loss].value.rank != 0 { return Result::Err(AD_LOSS); }
+    let mut n: u64 = 0;
+    while n < tape.nodes.len {
+        tape.nodes.data[n].active = false;
+        let gradient: *Tensor = tape.nodes.data[n].gradient;
+        let mut i: u64 = 0;
+        while i < gradient.len { gradient.storage.data[i] = 0.0; i += 1; }
+        n += 1;
+    }
+    tape.nodes.data[loss].gradient.storage.data[0] = 1.0;
+    tape.nodes.data[loss].active = true;
+    n = loss + 1;
+    while n > 0 {
+        n -= 1;
+        let node: Node = tape.nodes.data[n];
+        if node.active && node.operation != 0 {
+            tape.nodes.data[node.left].active = true;
+            let left: Node = tape.nodes.data[node.left];
+            if node.operation == 5 {
+                let mut i: u64 = 0;
+                while i < left.value.len {
+                    left.gradient.storage.data[i] += node.gradient.storage.data[0]; i += 1;
+                }
+            } else if node.operation == 6 {
+                let mut i: u64 = 0;
+                while i < left.value.len {
+                    let y: f64 = node.value.storage.data[i];
+                    left.gradient.storage.data[i] += node.gradient.storage.data[i] * (1.0 - y * y);
+                    i += 1;
+                }
+            } else {
+                tape.nodes.data[node.right].active = true;
+                let right: Node = tape.nodes.data[node.right];
+                if node.operation == 4 {
+                    let rows: u64 = left.value.shape[0];
+                    let inner: u64 = left.value.shape[1];
+                    let cols: u64 = right.value.shape[1];
+                    let mut row: u64 = 0;
+                    while row < rows {
+                        let mut col: u64 = 0;
+                        while col < cols {
+                            let g: f64 = node.gradient.storage.data[row * cols + col];
+                            let mut k: u64 = 0;
+                            while k < inner {
+                                left.gradient.storage.data[row * inner + k] += g * right.value.storage.data[k * cols + col];
+                                right.gradient.storage.data[k * cols + col] += g * left.value.storage.data[row * inner + k];
+                                k += 1;
+                            }
+                            col += 1;
+                        }
+                        row += 1;
+                    }
+                } else {
+                    let mut i: u64 = 0;
+                    while i < node.value.len {
+                        let g: f64 = node.gradient.storage.data[i];
+                        if node.operation == 1 {
+                            left.gradient.storage.data[i] += g; right.gradient.storage.data[i] += g;
+                        } else if node.operation == 2 {
+                            left.gradient.storage.data[i] += g; right.gradient.storage.data[i] -= g;
+                        } else {
+                            left.gradient.storage.data[i] += g * right.value.storage.data[i];
+                            right.gradient.storage.data[i] += g * left.value.storage.data[i];
+                        }
+                        i += 1;
+                    }
+                }
+            }
+        }
+    }
+    Result::Ok(())
+}

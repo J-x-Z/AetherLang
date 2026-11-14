@@ -1,321 +1,203 @@
-// Tensor Library for AetherLang
-// N-dimensional array with shape tracking and broadcasting support
-//
-// Design Goals:
-// 1. Compile-time shape checking via const generics
-// 2. CPU/GPU unified interface
-// 3. Broadcasting rules (NumPy-compatible)
-// 4. BLAS/cuBLAS acceleration
-
+// CPU f64 tensors, rank 0..4, with explicit owning handles.
+// Every constructor/view returns one owned handle: free it exactly once.
+// Pointer copies are borrowed aliases, not new owners. Views retain storage,
+// so releasing the parent handle does not invalidate a view. Mutations through
+// views are shared. tensor_clone makes an independent contiguous copy.
+// Shape/stride/offset fields are library invariants; callers must not edit them.
+use result::Result;
 extern "C" {
-    fn malloc(size: u64) -> *u8;
-    fn free(ptr: *u8);
-    fn memcpy(dst: *u8, src: *u8, n: u64) -> *u8;
-    fn memset(dst: *u8, c: i32, n: u64) -> *u8;
+    fn malloc(size: u64) -> *void;
+    fn free(pointer: *void);
+    @pure fn tanh(value: f64) -> f64;
 }
 
-// ==================== Device Enum ====================
+const TENSOR_SHAPE: i32 = 1;
+const TENSOR_ALLOC: i32 = 2;
+const TENSOR_BOUNDS: i32 = 3;
+const TENSOR_OVERFLOW: i32 = 4;
 
-pub const DEVICE_CPU: i32 = 0
-pub const DEVICE_CUDA: i32 = 1
-
-// ==================== Tensor Core Structure ====================
-
-/// N-dimensional tensor with compile-time rank
-/// T = element type (f32, f64, i32, etc.)
-/// N = number of dimensions (const generic)
-pub struct Tensor<T, const N: usize> {
-    pub data: *T,           // Data pointer (CPU or GPU memory)
-    pub shape: [u64; N],    // Shape of each dimension
-    pub strides: [u64; N],  // Strides for indexing
-    pub len: u64,           // Total number of elements
-    pub device: i32,        // DEVICE_CPU or DEVICE_CUDA
-    pub owns_data: bool,    // Whether to free data on drop
+struct Storage { data: *f64, count: u64, owners: u64 }
+pub struct Tensor {
+    storage: *Storage,
+    rank: u64,
+    shape: [u64; 4],
+    strides: [u64; 4],
+    offset: u64,
+    len: u64,
 }
 
-// ==================== Shape Utilities ====================
+pub fn tensor_zeros(rank: u64, shape: *u64) -> Result<*Tensor, i32> {
+    if rank > 4 { return Result::Err(TENSOR_SHAPE); }
+    if rank > 0 && shape == 0 as *u64 { return Result::Err(TENSOR_SHAPE); }
+    let mut dims: [u64; 4] = [1, 1, 1, 1];
+    let mut strides: [u64; 4] = [0, 0, 0, 0];
+    let mut len: u64 = 1;
+    let mut i: u64 = rank;
+    // Bound each extent even for empty shapes; no wrapping layout products.
+    while i > 0 {
+        i -= 1;
+        let d: u64 = shape[i];
+        if d > 1152921504606846975 { return Result::Err(TENSOR_OVERFLOW); }
+        if d != 0 && len > 1152921504606846975 / d { return Result::Err(TENSOR_OVERFLOW); }
+        dims[i] = d;
+        strides[i] = len;
+        len *= d;
+    }
+    let storage: *Storage = malloc(size_of(Storage) as u64) as *Storage;
+    if storage == 0 as *Storage { return Result::Err(TENSOR_ALLOC); }
+    let mut data: *f64 = 0 as *f64;
+    if len > 0 {
+        data = malloc(len * 8) as *f64;
+        if data == 0 as *f64 { free(storage as *void); return Result::Err(TENSOR_ALLOC); }
+    }
+    let tensor: *Tensor = malloc(size_of(Tensor) as u64) as *Tensor;
+    if tensor == 0 as *Tensor {
+        free(data as *void); free(storage as *void); return Result::Err(TENSOR_ALLOC);
+    }
+    *storage = Storage { data: data, count: len, owners: 1 };
+    *tensor = Tensor { storage: storage, rank: rank, shape: dims, strides: strides, offset: 0, len: len };
+    i = 0;
+    while i < len { data[i] = 0.0; i += 1; }
+    Result::Ok(tensor)
+}
 
-/// Calculate total elements from shape
-pub fn shape_numel(shape: *u64, ndim: u64) -> u64 {
-    let mut total: u64 = 1;
+pub fn tensor_free(tensor: *Tensor) {
+    if tensor == 0 as *Tensor { return; }
+    let storage: *Storage = tensor.storage;
+    storage.owners -= 1;
+    if storage.owners == 0 { free(storage.data as *void); free(storage as *void); }
+    free(tensor as *void);
+}
+
+// Logical row-major indexing works for every supported non-contiguous view.
+fn physical(tensor: *Tensor, index: u64) -> u64 {
+    let mut cursor: u64 = index;
+    let mut offset: u64 = tensor.offset;
+    let mut axis: u64 = tensor.rank;
+    while axis > 0 {
+        axis -= 1;
+        offset += (cursor % tensor.shape[axis]) * tensor.strides[axis];
+        cursor /= tensor.shape[axis];
+    }
+    offset
+}
+pub fn tensor_get(tensor: *Tensor, index: u64) -> Result<f64, i32> {
+    if tensor == 0 as *Tensor { return Result::Err(TENSOR_BOUNDS); }
+    if index >= tensor.len { return Result::Err(TENSOR_BOUNDS); }
+    Result::Ok(tensor.storage.data[physical(tensor, index)])
+}
+pub fn tensor_set(tensor: *Tensor, index: u64, value: f64) -> Result<(), i32> {
+    if tensor == 0 as *Tensor { return Result::Err(TENSOR_BOUNDS); }
+    if index >= tensor.len { return Result::Err(TENSOR_BOUNDS); }
+    tensor.storage.data[physical(tensor, index)] = value;
+    Result::Ok(())
+}
+pub fn tensor_len(tensor: *Tensor) -> u64 { tensor.len }
+pub fn tensor_rank(tensor: *Tensor) -> u64 { tensor.rank }
+pub fn tensor_dim(tensor: *Tensor, axis: u64) -> Result<u64, i32> {
+    if axis >= tensor.rank { return Result::Err(TENSOR_BOUNDS); }
+    Result::Ok(tensor.shape[axis])
+}
+pub fn tensor_from_data(rank: u64, shape: *u64, data: *f64) -> Result<*Tensor, i32> {
+    let tensor: *Tensor = tensor_zeros(rank, shape)?;
+    if tensor.len > 0 && data == 0 as *f64 { tensor_free(tensor); return Result::Err(TENSOR_BOUNDS); }
     let mut i: u64 = 0;
-    while i < ndim {
-        let dim: u64 = *((shape as u64 + i * 8) as *u64);
-        total = total * dim;
-        i = i + 1;
-    }
-    return total;
+    while i < tensor.len { tensor.storage.data[i] = data[i]; i += 1; }
+    Result::Ok(tensor)
 }
-
-/// Calculate row-major strides from shape
-pub fn shape_to_strides(shape: *u64, strides: *u64, ndim: u64) {
-    if ndim == 0 {
-        return;
-    }
-    let mut i: u64 = ndim - 1;
-    let mut stride: u64 = 1;
-    loop {
-        *((strides as u64 + i * 8) as *u64) = stride;
-        let dim: u64 = *((shape as u64 + i * 8) as *u64);
-        stride = stride * dim;
-        if i == 0 {
-            break;
-        }
-        i = i - 1;
-    }
+pub fn tensor_clone(tensor: *Tensor) -> Result<*Tensor, i32> {
+    let copy: *Tensor = tensor_zeros(tensor.rank, &tensor.shape[0] as *u64)?;
+    let mut i: u64 = 0;
+    while i < tensor.len { copy.storage.data[i] = tensor.storage.data[physical(tensor, i)]; i += 1; }
+    Result::Ok(copy)
 }
-
-// ==================== 1D Tensor (Vector) ====================
-
-pub type Vector<T> = Tensor<T, 1>
-
-impl Vector<f32> {
-    /// Create a new 1D tensor filled with zeros
-    pub fn zeros(len: u64) -> Vector<f32> {
-        let size: u64 = len * 4;  // sizeof(f32) = 4
-        let data: *f32 = malloc(size) as *f32;
-        memset(data as *u8, 0, size);
-        return Tensor {
-            data: data,
-            shape: [len],
-            strides: [1],
-            len: len,
-            device: DEVICE_CPU,
-            owns_data: true,
-        };
-    }
-
-    /// Create a new 1D tensor filled with ones
-    pub fn ones(len: u64) -> Vector<f32> {
-        let size: u64 = len * 4;
-        let data: *f32 = malloc(size) as *f32;
-        let mut i: u64 = 0;
-        while i < len {
-            *((data as u64 + i * 4) as *f32) = 1.0;
-            i = i + 1;
-        }
-        return Tensor {
-            data: data,
-            shape: [len],
-            strides: [1],
-            len: len,
-            device: DEVICE_CPU,
-            owns_data: true,
-        };
-    }
-
-    /// Create from raw data (does not take ownership)
-    pub fn from_ptr(data: *f32, len: u64) -> Vector<f32> {
-        return Tensor {
-            data: data,
-            shape: [len],
-            strides: [1],
-            len: len,
-            device: DEVICE_CPU,
-            owns_data: false,
-        };
-    }
-
-    /// Get element at index
-    pub fn get(self: *Vector<f32>, i: u64) -> f32 {
-        return *(((*self).data as u64 + i * 4) as *f32);
-    }
-
-    /// Set element at index
-    pub fn set(self: *Vector<f32>, i: u64, value: f32) {
-        *(((*self).data as u64 + i * 4) as *f32) = value;
-    }
-
-    /// Dot product with another vector
-    pub fn dot(self: *Vector<f32>, other: *Vector<f32>) -> f32 {
-        let mut sum: f32 = 0.0;
-        let mut i: u64 = 0;
-        while i < (*self).len {
-            let a: f32 = *(((*self).data as u64 + i * 4) as *f32);
-            let b: f32 = *(((*other).data as u64 + i * 4) as *f32);
-            sum = sum + a * b;
-            i = i + 1;
-        }
-        return sum;
-    }
-
-    /// Scale by scalar: self = alpha * self
-    pub fn scale(self: *Vector<f32>, alpha: f32) {
-        let mut i: u64 = 0;
-        while i < (*self).len {
-            let ptr: *f32 = ((*self).data as u64 + i * 4) as *f32;
-            *ptr = *ptr * alpha;
-            i = i + 1;
-        }
-    }
-
-    /// Free memory (if owned)
-    pub fn drop(self: *Vector<f32>) {
-        if (*self).owns_data {
-            free((*self).data as *u8);
-        }
-    }
+fn view(tensor: *Tensor) -> Result<*Tensor, i32> {
+    if tensor.storage.owners == 9223372036854775807 { return Result::Err(TENSOR_OVERFLOW); }
+    let result: *Tensor = malloc(size_of(Tensor) as u64) as *Tensor;
+    if result == 0 as *Tensor { return Result::Err(TENSOR_ALLOC); }
+    *result = *tensor;
+    tensor.storage.owners += 1;
+    Result::Ok(result)
 }
-
-// ==================== 2D Tensor (Matrix) ====================
-
-pub type Matrix<T> = Tensor<T, 2>
-
-impl Matrix<f32> {
-    /// Create a new 2D tensor filled with zeros
-    pub fn zeros(rows: u64, cols: u64) -> Matrix<f32> {
-        let len: u64 = rows * cols;
-        let size: u64 = len * 4;
-        let data: *f32 = malloc(size) as *f32;
-        memset(data as *u8, 0, size);
-        return Tensor {
-            data: data,
-            shape: [rows, cols],
-            strides: [cols, 1],
-            len: len,
-            device: DEVICE_CPU,
-            owns_data: true,
-        };
+pub fn tensor_transpose(tensor: *Tensor) -> Result<*Tensor, i32> {
+    if tensor.rank != 2 { return Result::Err(TENSOR_SHAPE); }
+    let result: *Tensor = view(tensor)?;
+    result.shape[0] = tensor.shape[1]; result.shape[1] = tensor.shape[0];
+    result.strides[0] = tensor.strides[1]; result.strides[1] = tensor.strides[0];
+    Result::Ok(result)
+}
+// Half-open [start,end), positive step only. Empty slices are valid.
+pub fn tensor_slice(tensor: *Tensor, axis: u64, start: u64, end: u64, step: u64) -> Result<*Tensor, i32> {
+    if axis >= tensor.rank || step == 0 { return Result::Err(TENSOR_SHAPE); }
+    if start > end || end > tensor.shape[axis] { return Result::Err(TENSOR_BOUNDS); }
+    if tensor.strides[axis] != 0 && step > 9223372036854775807 / tensor.strides[axis] {
+        return Result::Err(TENSOR_OVERFLOW);
     }
-
-    /// Create identity matrix
-    pub fn eye(n: u64) -> Matrix<f32> {
-        let mut m: Matrix<f32> = Matrix::zeros(n, n);
-        let mut i: u64 = 0;
-        while i < n {
-            m.set(i, i, 1.0);
-            i = i + 1;
-        }
-        return m;
+    let mut extent: u64 = 0;
+    if end > start { extent = 1 + (end - start - 1) / step; }
+    let result: *Tensor = view(tensor)?;
+    if tensor.shape[axis] != 0 { result.len = tensor.len / tensor.shape[axis] * extent; }
+    result.shape[axis] = extent;
+    result.strides[axis] = tensor.strides[axis] * step;
+    // Empty views never dereference storage; keep a representable base offset.
+    if result.len > 0 { result.offset += start * tensor.strides[axis]; }
+    Result::Ok(result)
+}
+pub fn tensor_same_shape(a: *Tensor, b: *Tensor) -> bool {
+    if a.rank != b.rank { return false; }
+    let mut axis: u64 = 0;
+    while axis < a.rank { if a.shape[axis] != b.shape[axis] { return false; } axis += 1; }
+    true
+}
+fn binary(a: *Tensor, b: *Tensor, op: i32) -> Result<*Tensor, i32> {
+    if !tensor_same_shape(a, b) { return Result::Err(TENSOR_SHAPE); }
+    let out: *Tensor = tensor_zeros(a.rank, &a.shape[0] as *u64)?;
+    let mut i: u64 = 0;
+    while i < a.len {
+        let x: f64 = a.storage.data[physical(a, i)]; let y: f64 = b.storage.data[physical(b, i)];
+        let mut value: f64 = x + y;
+        if op == 1 { value = x - y; }
+        if op == 2 { value = x * y; }
+        out.storage.data[i] = value;
+        i += 1;
     }
-
-    /// Get element at (row, col)
-    pub fn get(self: *Matrix<f32>, row: u64, col: u64) -> f32 {
-        let idx: u64 = row * (*self).strides[0] + col * (*self).strides[1];
-        return *(((*self).data as u64 + idx * 4) as *f32);
-    }
-
-    /// Set element at (row, col)
-    pub fn set(self: *Matrix<f32>, row: u64, col: u64, value: f32) {
-        let idx: u64 = row * (*self).strides[0] + col * (*self).strides[1];
-        *(((*self).data as u64 + idx * 4) as *f32) = value;
-    }
-
-    /// Matrix multiplication: C = self @ other
-    pub fn matmul(self: *Matrix<f32>, other: *Matrix<f32>) -> Matrix<f32> {
-        let m: u64 = (*self).shape[0];
-        let k: u64 = (*self).shape[1];
-        let n: u64 = (*other).shape[1];
-
-        let mut result: Matrix<f32> = Matrix::zeros(m, n);
-
-        let mut i: u64 = 0;
-        while i < m {
-            let mut j: u64 = 0;
-            while j < n {
-                let mut sum: f32 = 0.0;
-                let mut l: u64 = 0;
-                while l < k {
-                    let a: f32 = (*self).get(i, l);
-                    let b: f32 = (*other).get(l, j);
-                    sum = sum + a * b;
-                    l = l + 1;
-                }
-                result.set(i, j, sum);
-                j = j + 1;
+    Result::Ok(out)
+}
+pub fn tensor_add(a: *Tensor, b: *Tensor) -> Result<*Tensor, i32> { binary(a, b, 0) }
+pub fn tensor_sub(a: *Tensor, b: *Tensor) -> Result<*Tensor, i32> { binary(a, b, 1) }
+pub fn tensor_mul(a: *Tensor, b: *Tensor) -> Result<*Tensor, i32> { binary(a, b, 2) }
+pub fn tensor_tanh(a: *Tensor) -> Result<*Tensor, i32> {
+    let out: *Tensor = tensor_zeros(a.rank, &a.shape[0] as *u64)?;
+    let mut i: u64 = 0;
+    while i < a.len { out.storage.data[i] = tanh(a.storage.data[physical(a, i)]); i += 1; }
+    Result::Ok(out)
+}
+pub fn tensor_sum(a: *Tensor) -> Result<*Tensor, i32> {
+    let out: *Tensor = tensor_zeros(0, 0 as *u64)?;
+    let mut sum: f64 = 0.0; let mut i: u64 = 0;
+    while i < a.len { sum += a.storage.data[physical(a, i)]; i += 1; }
+    out.storage.data[0] = sum;
+    Result::Ok(out)
+}
+pub fn tensor_matmul(a: *Tensor, b: *Tensor) -> Result<*Tensor, i32> {
+    if a.rank != 2 || b.rank != 2 { return Result::Err(TENSOR_SHAPE); }
+    if a.shape[1] != b.shape[0] { return Result::Err(TENSOR_SHAPE); }
+    let shape: [u64; 2] = [a.shape[0], b.shape[1]];
+    let out: *Tensor = tensor_zeros(2, &shape[0] as *u64)?;
+    let mut row: u64 = 0;
+    while row < a.shape[0] {
+        let mut col: u64 = 0;
+        while col < b.shape[1] {
+            let mut sum: f64 = 0.0; let mut k: u64 = 0;
+            while k < a.shape[1] {
+                sum += a.storage.data[a.offset + row * a.strides[0] + k * a.strides[1]] *
+                       b.storage.data[b.offset + k * b.strides[0] + col * b.strides[1]];
+                k += 1;
             }
-            i = i + 1;
+            out.storage.data[row * b.shape[1] + col] = sum;
+            col += 1;
         }
-        return result;
+        row += 1;
     }
-
-    /// Transpose (returns new matrix)
-    pub fn transpose(self: *Matrix<f32>) -> Matrix<f32> {
-        let rows: u64 = (*self).shape[0];
-        let cols: u64 = (*self).shape[1];
-        let mut result: Matrix<f32> = Matrix::zeros(cols, rows);
-        let mut i: u64 = 0;
-        while i < rows {
-            let mut j: u64 = 0;
-            while j < cols {
-                let val: f32 = (*self).get(i, j);
-                result.set(j, i, val);
-                j = j + 1;
-            }
-            i = i + 1;
-        }
-        return result;
-    }
-
-    /// Free memory (if owned)
-    pub fn drop(self: *Matrix<f32>) {
-        if (*self).owns_data {
-            free((*self).data as *u8);
-        }
-    }
-}
-
-// ==================== Broadcasting ====================
-
-/// Check if two shapes are broadcast-compatible
-pub fn shapes_broadcast_compatible(
-    shape_a: *u64, ndim_a: u64,
-    shape_b: *u64, ndim_b: u64
-) -> bool {
-    let max_ndim: u64 = if ndim_a > ndim_b { ndim_a } else { ndim_b };
-    let mut i: u64 = 0;
-    while i < max_ndim {
-        let dim_a: u64 = if i < ndim_a {
-            *((shape_a as u64 + (ndim_a - 1 - i) * 8) as *u64)
-        } else { 1 };
-        let dim_b: u64 = if i < ndim_b {
-            *((shape_b as u64 + (ndim_b - 1 - i) * 8) as *u64)
-        } else { 1 };
-        if dim_a != dim_b && dim_a != 1 && dim_b != 1 {
-            return false;
-        }
-        i = i + 1;
-    }
-    return true;
-}
-
-// ==================== Activation Functions ====================
-
-/// Apply ReLU element-wise: max(0, x)
-pub fn relu_inplace(data: *f32, len: u64) {
-    let mut i: u64 = 0;
-    while i < len {
-        let ptr: *f32 = (data as u64 + i * 4) as *f32;
-        if *ptr < 0.0 {
-            *ptr = 0.0;
-        }
-        i = i + 1;
-    }
-}
-
-/// Apply Sigmoid element-wise (approximation)
-pub fn sigmoid_inplace(data: *f32, len: u64) {
-    let mut i: u64 = 0;
-    while i < len {
-        let ptr: *f32 = (data as u64 + i * 4) as *f32;
-        let x: f32 = *ptr;
-        let half_x: f32 = x * 0.5;
-        let abs_x: f32 = if half_x < 0.0 { 0.0 - half_x } else { half_x };
-        let tanh_approx: f32 = half_x / (1.0 + abs_x + half_x * half_x / 3.0);
-        *ptr = 0.5 + 0.5 * tanh_approx;
-        i = i + 1;
-    }
-}
-
-fn main() {
-    // Test Vector
-    let mut v: Vector<f32> = Vector::zeros(4);
-    v.set(0, 1.0);
-    v.set(1, 2.0);
-
-    // Test Matrix  
-    let mut m: Matrix<f32> = Matrix::eye(3);
-
-    v.drop();
-    m.drop();
+    Result::Ok(out)
 }
