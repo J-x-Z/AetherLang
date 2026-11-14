@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real JXZ command tests. All projects and artifacts stay under --work-dir."""
 import argparse
+import json
 import os
 import resource
 import signal
@@ -50,6 +51,176 @@ class LocalCommands(unittest.TestCase):
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(text)
         return file
+
+    def build_settings(self, text):
+        with (self.root / 'Jxz.toml').open('a') as manifest:
+            manifest.write(text + '\n')
+
+    def capturing_compiler(self):
+        compiler = self.root / 'compiler stub Ω ; touch INJECTED'
+        compiler.write_text('''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ['JXZ_CAPTURE_ARGS'], 'w') as output:
+    json.dump(sys.argv[1:], output)
+sys.exit(23)
+''')
+        compiler.chmod(0o755)
+        capture = self.root / 'compiler-argv.json'
+        return capture, {'AETHC': str(compiler), 'JXZ_CAPTURE_ARGS': str(capture)}
+
+    def assert_compiler_args(self, actual, source, output, module_paths, link_objects):
+        self.assertEqual(actual[0], 'build')
+        self.assertEqual(actual[-2:], ['--', source])
+        options = actual[1:-2]
+        self.assertEqual(len(options) % 2, 0, actual)
+        pairs = list(zip(options[::2], options[1::2]))
+        # Compare every argument, allowing unrelated option groups to move.
+        # Each configured path must remain one argument, in its array's order.
+        def normalized(path):
+            return './' + path if path.startswith(('-', '@')) else path
+        modules = [normalized(path) for path in module_paths]
+        objects = [normalized(path) for path in link_objects]
+        expected = [('-O', '0'), ('-o', output)]
+        if ENV.get('AETHER_BACKEND'):
+            expected.append(('--backend', ENV['AETHER_BACKEND']))
+        expected += [('-I', path) for path in modules]
+        expected += [('--link-object', path) for path in objects]
+        self.assertCountEqual(pairs, expected)
+        self.assertEqual([value for flag, value in pairs if flag == '-I'], modules)
+        self.assertEqual([value for flag, value in pairs if flag == '--link-object'], objects)
+
+    def test_configured_modules_and_native_object_build_run_test(self):
+        first = '-modules α ; touch INJECTED'
+        second = 'modules β [$HOME]*'
+        native = '@native 物件 $(touch INJECTED) [*].o'
+        self.manifest()
+        self.build_settings(
+            f'module_paths = ["{first}", \'{second}\',] # independent roots\n'
+            'link_objects = [\n'
+            '  # A real object, resolved relative to this project.\n'
+            f'  "{native}", # trailing comma and raw Unicode\n'
+            ']')
+        self.source(first + '/answer.aeth', '''use value::number;
+pub fn answer() -> i32 { number() + 20 }
+''')
+        self.source(second + '/value.aeth', '''extern "C" { fn native_number() -> i32; }
+pub fn number() -> i32 { native_number() }
+''')
+        c_source = self.source('native source.c', '#include <stdint.h>\nint32_t native_number(void) { return 22; }\n')
+        native_build = subprocess.run([ENV.get('CC', 'cc'), '-c', str(c_source),
+                                       '-o', str(self.root / native)],
+                                      cwd=self.root, env=ENV, capture_output=True,
+                                      text=True, timeout=30)
+        self.assertEqual(native_build.returncode, 0, native_build.stderr)
+        self.source(text='''use answer::answer;
+extern "C" { fn printf(format: *u8, ...) -> i32; }
+fn main() -> i32 {
+    let value: i32 = answer();
+    printf("configured=%d\\n\\0" as *u8, value);
+    if value == 42 { 0 } else { 9 }
+}''')
+        self.source('tests/test_配置 空格.aeth', '''use answer::answer;
+fn main() -> i32 { if answer() == 42 { 0 } else { 9 } }
+''')
+        self.run_jxz('build')
+        self.assertTrue((self.root / 'target/program').is_file())
+        self.assertIn('configured=42\n', self.run_jxz('run').stdout)
+        tested = self.run_jxz('test')
+        self.assertIn('tests/test_配置 空格.aeth', tested.stdout)
+        self.assertFalse((self.root / 'INJECTED').exists())
+
+    def test_build_arrays_preserve_exact_argv_and_compiler_failure(self):
+        self.source()
+        test_source = 'tests/test_配置 空格.aeth'
+        self.source(test_source)
+        capture, env = self.capturing_compiler()
+        modules = ['-root α', '~/$HOME/[a]* ; touch INJECTED', 'quoted "root"\\name']
+        objects = ['-native Ω.o', '@response [*].o',
+                   str(self.root / 'absolute object ; $(touch INJECTED).o')]
+        cases = [
+            ('empty', [], [], 'module_paths = []\nlink_objects = [ # empty\n]\n'),
+            ('inline', modules, objects,
+             'module_paths = ' + json.dumps(modules, ensure_ascii=False) + '\n'
+             'link_objects = ' + json.dumps(objects, ensure_ascii=False) + '\n'),
+            ('multiline', modules, objects,
+             'module_paths = [ # roots\n'
+             + ''.join('  ' + json.dumps(path, ensure_ascii=False) + ', # root\n' for path in modules)
+             + ']\nlink_objects = [\n'
+             + ''.join("  '" + path + "', # literal object\n" for path in objects)
+             + '] # final trailing comma accepted\n'),
+        ]
+        # Cross several parser reallocations and the former fixed argv capacity.
+        many_roots = [f'module {i} Ω' for i in range(21)]
+        many_objects = [f'object {i} Ω.o' for i in range(17)]
+        cases.append(('growth', many_roots, many_objects,
+                      'module_paths = ' + json.dumps(many_roots, ensure_ascii=False) + '\n'
+                      'link_objects = ' + json.dumps(many_objects, ensure_ascii=False) + '\n'))
+        for name, roots, native_objects, settings in cases:
+            with self.subTest(syntax=name):
+                self.manifest()
+                self.build_settings(settings)
+                for command in ('build', 'run', 'test'):
+                    with self.subTest(command=command):
+                        capture.unlink(missing_ok=True)
+                        # test aggregates failed tests as 1; build/run preserve
+                        # the compiler's precise nonzero exit status.
+                        self.run_jxz(command, expected=1 if command == 'test' else 23, env=env)
+                        self.assertTrue(capture.is_file(), 'compiler was not invoked')
+                        self.assert_compiler_args(
+                            json.loads(capture.read_text()),
+                            test_source if command == 'test' else 'src/main.aeth',
+                            './target/.jxz-test' if command == 'test' else 'target/program',
+                            roots, native_objects)
+                        self.assertFalse((self.root / 'INJECTED').exists())
+
+    def test_invalid_build_arrays_rejected_before_compiler(self):
+        self.source()
+        capture, env = self.capturing_compiler()
+        invalid = {
+            'scalar': '"single path"',
+            'number': '[1]',
+            'valid-then-number': '["allocated first", 1]',
+            'boolean': '[true]',
+            'nested-array': '[["first"]]',
+            'empty-basic-path': '[""]',
+            'empty-literal-path': "['']",
+            'escaped-newline': '["line\\nbreak"]',
+            'escaped-tab': '["tab\\tpath"]',
+            'escaped-carriage-return': '["carriage\\rreturn"]',
+            'raw-del': '["bad\x7fpath"]',
+            'missing-comma': '["first" "second"]',
+            'unclosed-array': '["first",',
+            'unclosed-string': '["first]',
+            'extra-token': '["first"] garbage',
+        }
+        for key in ('module_paths', 'link_objects'):
+            declarations = [(label, f'{key} = {value}') for label, value in invalid.items()]
+            declarations.append(('duplicate-key', f'{key} = []\n{key} = [\n]'))
+            for label, declaration in declarations:
+                with self.subTest(key=key, syntax=label):
+                    self.manifest()
+                    other = 'link_objects' if key == 'module_paths' else 'module_paths'
+                    self.build_settings(other + ' = ["already allocated"]')
+                    self.build_settings(declaration)
+                    self.run_jxz('build', expected=1, env=env)
+                    self.assertFalse(capture.exists(), 'invalid config reached the compiler')
+                    self.assertFalse((self.root / 'target').exists())
+
+    def test_missing_and_corrupt_link_objects_fail_real_link(self):
+        self.source()
+        self.source('tests/test_link.aeth')
+        for name in ('missing object Ω.o', 'corrupt object Ω.o'):
+            with self.subTest(object=name):
+                self.manifest()
+                self.build_settings('module_paths = []\nlink_objects = ["' + name + '"]')
+                if name.startswith('corrupt'):
+                    (self.root / name).write_bytes(b'this is not a native object\n')
+                for command in ('build', 'test'):
+                    with self.subTest(command=command):
+                        result = self.run_jxz(command, expected=1)
+                        self.assertIn(name, result.stdout + result.stderr)
+                        self.assertFalse((self.root / 'target/program').exists())
+                        self.assertFalse((self.root / 'target/.jxz-test').exists())
 
     def test_init_build_run_clean_preserve_source(self):
         (self.root / '.gitignore').write_text('keep-me\n')

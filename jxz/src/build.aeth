@@ -22,20 +22,70 @@ extern "C" {
     fn strlen(s: *u8) -> u64;
 }
 
-pub fn compile_source(source: *u8, output: *u8, release: bool) -> i32 {
+// Option/response-file-looking relative paths need an owned ./ prefix. Other
+// paths are borrowed directly from the manifest, with no shell interpretation.
+fn compiler_path_needs_prefix(path: *u8) -> bool {
+    return path[0] == 45 || path[0] == 64;
+}
+
+fn compiler_path(path: *u8) -> *u8 {
+    if compiler_path_needs_prefix(path) { return path_join(".\0" as *u8, path); }
+    return path;
+}
+
+fn compiler_args_free(cfg: *Config, args: **u8) {
+    let mut i: u64 = 0;
+    while i < cfg.module_path_count {
+        if compiler_path_needs_prefix(cfg.module_paths[i]) { free(args[7 + 2 * i] as *void); }
+        i = i + 1;
+    }
+    i = 0;
+    while i < cfg.link_object_count {
+        if compiler_path_needs_prefix(cfg.link_objects[i]) { free(args[7 + 2 * (cfg.module_path_count + i)] as *void); }
+        i = i + 1;
+    }
+    free(args as *void);
+}
+
+pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool) -> i32 {
     let compiler: *u8 = environment_tool("AETHC\0" as *u8, "aethc\0" as *u8);
     let backend: *u8 = environment_tool("AETHER_BACKEND\0" as *u8, "\0" as *u8);
     let mut optimization: *u8 = "0\0" as *u8;
     if release { optimization = "2\0" as *u8; }
-    let mut args: [*u8; 11] = [compiler, "build\0" as *u8,
-        "-O\0" as *u8, optimization, "-o\0" as *u8, output,
-        "--backend\0" as *u8, backend, "--\0" as *u8, source, 0 as *u8];
-    if backend[0] == 0 {
-        args[6] = "--\0" as *u8;
-        args[7] = source;
-        args[8] = 0 as *u8;
+    // Counts are bounded by the 1 MiB manifest; no fixed argv capacity truncates
+    // project dependencies. Zeroing permits cleanup after any path allocation.
+    let capacity: u64 = 11 + 2 * (cfg.module_path_count + cfg.link_object_count);
+    let args: **u8 = malloc(capacity * size_of(*u8) as u64) as **u8;
+    if args == (0 as **u8) { puts("jxz: cannot allocate compiler arguments\0" as *u8); return 1; }
+    let mut i: u64 = 0;
+    while i < capacity { args[i] = 0 as *u8; i = i + 1; }
+    args[0] = compiler; args[1] = "build\0" as *u8;
+    args[2] = "-O\0" as *u8; args[3] = optimization;
+    args[4] = "-o\0" as *u8; args[5] = output;
+    let mut count: u64 = 6;
+    i = 0;
+    while i < cfg.module_path_count {
+        args[count] = "-I\0" as *u8;
+        args[count + 1] = compiler_path(cfg.module_paths[i]);
+        if args[count + 1] == (0 as *u8) { compiler_args_free(cfg, args); return 1; }
+        count = count + 2; i = i + 1;
     }
-    return process_run(&args[0] as **u8, 0 as *u8);
+    i = 0;
+    while i < cfg.link_object_count {
+        args[count] = "--link-object\0" as *u8;
+        args[count + 1] = compiler_path(cfg.link_objects[i]);
+        if args[count + 1] == (0 as *u8) { compiler_args_free(cfg, args); return 1; }
+        count = count + 2; i = i + 1;
+    }
+    if backend[0] != 0 {
+        args[count] = "--backend\0" as *u8;
+        args[count + 1] = backend;
+        count = count + 2;
+    }
+    args[count] = "--\0" as *u8; args[count + 1] = source;
+    let status: i32 = process_run(args, 0 as *u8);
+    compiler_args_free(cfg, args);
+    return status;
 }
 
 pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
@@ -51,7 +101,7 @@ pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
     if source != (0 as *u8) && output != (0 as *u8) {
         puts("jxz: compiling\0" as *u8);
         puts(source);
-        status = compile_source(source, output, release);
+        status = compile_source(cfg, source, output, release);
         if status == 0 {
             if !record_output(cfg.target_dir, cfg.name) { status = 1; }
         }

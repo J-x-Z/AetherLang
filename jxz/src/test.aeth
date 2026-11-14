@@ -23,7 +23,7 @@ fn test_discover(list: *u8) -> i32 {
     return process_run(&args[0] as **u8, list);
 }
 
-fn test_execute(file: *void, executable: *u8) -> i32 {
+fn test_execute(cfg: *Config, file: *void, executable: *u8) -> i32 {
     let mut capacity: u64 = 256;
     let mut path: *u8 = malloc(capacity) as *u8;
     if path == (0 as *u8) { return 1; }
@@ -45,7 +45,7 @@ fn test_execute(file: *void, executable: *u8) -> i32 {
                 puts(path);
                 // Never run a previous executable after a compile/link error.
                 remove(executable);
-                let compiled: i32 = compile_source(path, executable, false);
+                let compiled: i32 = compile_source(cfg, path, executable, false);
                 if compiled == 0 {
                     let mut args: [*u8; 2] = [executable, 0 as *u8];
                     if process_run(&args[0] as **u8, 0 as *u8) != 0 { failed = true; }
@@ -84,7 +84,7 @@ pub fn run_tests() -> i32 {
                 if test_discover(list) == 0 {
                     let file: *void = fopen(list, "rb\0" as *u8);
                     if file != (0 as *void) {
-                        status = test_execute(file, executable);
+                        status = test_execute(&cfg as *Config, file, executable);
                         if fclose(file) != 0 { status = 1; }
                     }
                 }

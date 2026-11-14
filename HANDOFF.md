@@ -53,3 +53,11 @@ Core自举是明确子集，不是全Rust/LLVM编译器自举。当前资源owne
 下一项具体任务：以B2/F05/B3为一组，让已定型表达式、已解析方法签名和callee成为IR的唯一输入事实，加入两后端O0/O2/O3回归；可独立并行修B1窄整数ABI与I05深表达式崩溃。之后实施资源owner规则与清理、标准库/项目工具，再完成真实程序和自举完整复验。无需重新全面审计；复用现有探针。
 
 范围已收敛：本阶段不再扩展统一异构张量引擎、Metal/Adreno、稀疏/大模型/PDE框架。保留现有系统、CPU数学及CUDA/量子接口，按受影响范围回归。8GiB/16GiB和16q作为后续异构工作的约束保留。最小Core自举要持续成立，不把整个Rust/LLVM编译器重写成Aether作为本阶段条件。未来Shell用小型命令执行负载验证基础能力，不在本轮实现完整产品。
+
+## 2026-11-15 JXZ项目原生输入接口
+
+Shell提出的独立项目接口缺口已实现：`[build] module_paths` / `link_objects` 支持有序quoted路径数组、跨行/注释/尾逗号，build/run/test共用argv；相对路径按当前Jxz.toml项目目录解释，不做shell/env/glob展开，`-`/`@`开头规范化为`./`。build/run保留编译器退出码，test保留聚合失败1。现有native对象由项目提供，JXZ不编译C桥接源码。
+
+版本为 `jxz 0.3.0-dev.1`。冻结aethc与stdlib均未修改。LLVM/C构建各19项集成通过，含真实跨模块C对象执行42、精确argv和32个错误配置子例；3项ASan/UBSan定向通过。首轮新增fixture漏写`test_`前缀导致4个test子例失败，修正后复验通过；初始失败证据保留，未削弱测试。证据 `WORK/jxz-native-inputs/results.json` 与各integration日志；旧版新增能力基线失败在 `WORK/jxz-build-arrays/baseline/new-test-baseline.json`。
+
+独立版本目录 `WORK/releases/jxz-0.3.0-dev.1/` 保存jxz、jxz-c与manifest（源码提交、二进制SHA、冻结编译器及stdlib身份、验证命令）。原WORK/release不覆盖。此接口只完成主线项目工具任务的一部分，旧审计的JXZ测试目录权限/产物事务问题仍未闭合；没有修改Shell源码或更新其pin。

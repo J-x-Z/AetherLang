@@ -1,5 +1,7 @@
 # JXZ local project driver
 
+Local development version: `0.3.0-dev.1` (module and native link inputs).
+
 JXZ's active implementation is `src/main.aeth` and its imported Aether modules.
 Build it with the upgraded Rust compiler (historical checked-in `.c` files are
 not build inputs):
@@ -32,10 +34,39 @@ src = "src"
 target = "target"
 # If omitted, main defaults to <src>/main.aeth.
 main = "src/application.aeth"
+# Additional search roots, in order; relative to this project directory.
+module_paths = ["src", "build/generated", "/external/pinned-stdlib"]
+# Existing native objects/archives. JXZ does not compile these files.
+link_objects = [
+    "build/native/platform.o",
+    "build/native/ui.o", # comments and trailing commas are supported
+    "build/native/events.o",
+]
 ```
 
 The manifest reader supports quoted basic/literal strings, whitespace, comments,
-and the fields above. It is a deliberately limited project schema, not a full
+and the fields above. `module_paths` and `link_objects` are optional arrays of
+nonempty quoted path strings, defaulting to `[]`. Arrays may span lines and use
+comments and a trailing comma; nested arrays, non-string entries, duplicate keys,
+control characters and trailing garbage are rejected before the compiler runs.
+The existing basic-string escapes (`\\`, `\"`, `\n`, `\r`, `\t`) are decoded;
+control characters are then rejected in paths. Raw UTF-8 is preserved; TOML
+Unicode escape sequences and multiline strings are not supported.
+
+`build`, `run` and every `test` compilation forward these arrays as repeated
+`-I PATH` and `--link-object PATH` arguments, preserving each array's order.
+Paths are relative to the directory containing the current `Jxz.toml`, or may be
+absolute. Spaces, Unicode, quotes and shell metacharacters remain literal; no
+glob, environment or shell expansion occurs. A relative path beginning with `-` or `@`
+is prefixed with `./` so neither the compiler nor linker interprets it as an
+option or response file. `src` still selects the default main file; add it to `module_paths` when
+other entry points (including tests) need that search root. Native files must
+already exist, match the target, and expose the declared ABI. Their build policy
+remains with the project; this setting does not introduce arbitrary build hooks.
+`build` and the build phase of `run` preserve compiler exit codes. `test` retains
+its existing aggregate status: 1 if any compilation or test program fails.
+
+This is a deliberately limited project schema, not a full
 TOML implementation. Known duplicate keys, invalid paths, malformed quoted
 values, unknown tables/keys and dependency declarations fail. The only accepted
 tables are `[package]`, `[build]`, and an empty `[dependencies]`; dotted, quoted,
