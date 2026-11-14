@@ -1,0 +1,14 @@
+use declared::{via_extern, via_c, notice_via_extern, notice_via_c};
+use defined::via_definition;
+use another::via_another;
+extern "C" { fn puts(text: *u8) -> i32; }
+fn main() -> i32 {
+    if via_definition(17) != 52 { return 1; }
+    if via_extern(13) != 40 { return 2; }
+    if via_c(-14) != -41 { return 3; }
+    if via_another(7) != 22 { return 4; }
+    notice_via_extern();
+    if notice_via_c() != 2 { return 5; }
+    puts("extern-merge=ok\0" as *u8);
+    0
+}

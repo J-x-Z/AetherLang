@@ -1,0 +1,10 @@
+extern "C" {
+    @pure fn native_callback(value: i32) -> i32;
+    fn puts(text: *u8) -> i32;
+}
+#[no_mangle]
+pub fn native_callback(value: i32) -> i32 {
+    puts("actual body performs I/O\0" as *u8);
+    value
+}
+fn main() -> i32 pure { native_callback(0) }

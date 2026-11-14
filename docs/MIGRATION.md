@@ -2,6 +2,17 @@
 
 > **Purpose**: Guide for migrating existing C/Rust codebases to AetherLang
 
+## C ABI callbacks defined in Aether (2026-11-15)
+
+Matching `extern "C"` declarations can now resolve to one non-generic
+`#[no_mangle]` Aether definition in the same or another loaded module. A pure
+forwarding C trampoline is no longer required for this case; applications should
+switch only after validating their chosen compiler snapshot. Signatures must
+match after alias resolution, including variadic status; duplicate bodies still
+fail. Generic functions cannot export one fixed `#[no_mangle]` symbol: write a
+concrete non-generic wrapper that calls the generic implementation instead.
+See [C ABI declaration rules](LANGUAGE.md).
+
 ## Literal escape correction (2026-11-15)
 
 Unknown escapes now fail instead of silently discarding the backslash. Write

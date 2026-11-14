@@ -1,0 +1,7 @@
+pub type DefinedValue = i32;
+extern "C" { fn record_notice(); }
+#[no_mangle]
+fn native_callback(actual_value: DefinedValue) -> DefinedValue { actual_value * 3 + 1 }
+#[no_mangle]
+fn native_notice() { record_notice(); }
+pub fn via_definition(value: i32) -> i32 { native_callback(value) }

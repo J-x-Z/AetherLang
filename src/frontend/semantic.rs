@@ -379,6 +379,9 @@ pub struct SemanticAnalyzer {
     constant_defs: HashMap<String, ConstDef>,
     facts: SemanticFacts,
     foreign_signatures: HashMap<String, String>,
+    /// C ABI symbols whose single body is supplied by this program. Declarations
+    /// may share their identity, but must never replace the body's semantics.
+    c_abi_definitions: HashSet<String>,
     check_entrypoint: bool,
     /// Whether we're in strict mode (@production) or lenient mode (@prototype)
     strict_mode: bool,
@@ -404,6 +407,7 @@ impl SemanticAnalyzer {
             constant_defs: HashMap::new(),
             facts: SemanticFacts::default(),
             foreign_signatures: HashMap::new(),
+            c_abi_definitions: HashSet::new(),
             check_entrypoint: true,
             strict_mode: false, // Default: lenient mode
             module_resolver: ModuleResolver::new(),
@@ -534,13 +538,21 @@ impl SemanticAnalyzer {
         }
     }
 
-    fn register_foreign(&mut self, name: &str, signature: String) -> Result<bool> {
+    fn register_foreign(&mut self, name: &str, signature: String, span: Span) -> Result<bool> {
         if let Some(previous) = self.foreign_signatures.get(name) {
-            if previous != &signature { return Err(Error::ModuleError(format!("conflicting foreign declarations for '{}'", name))); }
+            if previous != &signature {
+                return Err(Error::Semantic { code: "E2202", span,
+                    message: format!("conflicting foreign declarations or definition for '{}': {} versus {}", name, previous, signature) });
+            }
             return Ok(false);
         }
         self.foreign_signatures.insert(name.into(), signature);
         Ok(true)
+    }
+
+    fn c_function_signature(params: &[ResolvedType], ret: &ResolvedType, variadic: bool) -> String {
+        format!("C:fn({})->{}:{}", params.iter().map(Self::type_identity).collect::<Vec<_>>().join(","),
+            Self::type_identity(ret), variadic)
     }
 
     fn type_identity(ty: &ResolvedType) -> String {
@@ -659,7 +671,14 @@ impl SemanticAnalyzer {
                     .unwrap_or(ResolvedType::unit());
                 self.symbols.exit_scope();
 
-                self.symbols.define(Symbol {
+                let is_c_abi = func.annotations.iter().any(|annotation| annotation.name.name == "no_mangle");
+                let replaces_declaration = if is_c_abi {
+                    if !self.c_abi_definitions.insert(func.name.name.clone()) {
+                        return Err(Error::DuplicateDefinition { name: func.name.name.clone(), span: func.span });
+                    }
+                    !self.register_foreign(&func.name.name, Self::c_function_signature(&params, &ret, false), func.name.span)?
+                } else { false };
+                let symbol = Symbol {
                     name: func.name.name.clone(),
                     kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: func.type_params.iter().map(|p| p.name.clone()).collect(), const_params: vec![], effects: func.effects.clone() },
                     ty: ResolvedType::Function {
@@ -668,7 +687,15 @@ impl SemanticAnalyzer {
                     },
                     span: func.span,
                     mutable: false,
-                })?;
+                };
+                if replaces_declaration {
+                    // The linkage registry has checked the exact resolved signature
+                    // and the unique body. Do not relax duplicate checking for locals
+                    // or ordinary language functions in SymbolTable::define.
+                    self.symbols.scopes[0].symbols.insert(symbol.name.clone(), symbol);
+                } else {
+                    self.symbols.define(symbol)?;
+                }
             }
             Item::Struct(s) => {
                 self.symbols.enter_scope();
@@ -842,12 +869,13 @@ impl SemanticAnalyzer {
                             if crate::intrinsics::platform(&name.name).is_some() {return Err(Error::Expected("platform intrinsic is compiler-defined, not an extern symbol".into(),name.span));}
                             if crate::intrinsics::vector(&name.name).is_some() {return Err(Error::Expected("SIMD intrinsic is compiler-defined, not an extern symbol".into(),name.span));}
                             let effects = self.foreign_effects(&name.name, annotations);
-                            let signature = format!("{}:fn({})->{}:{}", ext.abi.as_deref().unwrap_or("C"),
-                                param_types.iter().map(Self::type_identity).collect::<Vec<_>>().join(","), Self::type_identity(&ret), variadic);
-                            if !self.register_foreign(&name.name, signature)? {
-                                if let Some(Symbol {kind:SymbolKind::Function {effects:previous,..},..})=self.symbols.scopes[0].symbols.get_mut(&name.name) {
-                                    for effect in &effects.effects {if !previous.effects.contains(effect){previous.effects.push(*effect);}}
-                                    previous.is_pure=previous.effects.is_empty();
+                            let signature = Self::c_function_signature(&param_types, &ret, *variadic);
+                            if !self.register_foreign(&name.name, signature, name.span)? {
+                                if !self.c_abi_definitions.contains(&name.name) {
+                                    if let Some(Symbol {kind:SymbolKind::Function {effects:previous,..},..})=self.symbols.scopes[0].symbols.get_mut(&name.name) {
+                                        for effect in &effects.effects {if !previous.effects.contains(effect){previous.effects.push(*effect);}}
+                                        previous.is_pure=previous.effects.is_empty();
+                                    }
                                 }
                                 continue;
                             }
@@ -863,7 +891,7 @@ impl SemanticAnalyzer {
                             let resolved = self.resolve_type(ty)?;
                             self.facts.global_types.insert(name.name.clone(), resolved.clone());
                             let signature = format!("static:{}:{}", Self::type_identity(&resolved), is_mut);
-                            if !self.register_foreign(&name.name, signature)? { continue; }
+                            if !self.register_foreign(&name.name, signature, name.span)? { continue; }
                             self.symbols.define(Symbol { name: name.name.clone(), kind: SymbolKind::Variable,
                                 ty: resolved, span: name.span, mutable: *is_mut })?;
                         }
@@ -2520,6 +2548,25 @@ mod tests {
         let program = parser.parse_program()?;
         let mut analyzer = SemanticAnalyzer::new();
         analyzer.analyze(&program)
+    }
+
+    #[test]
+    fn c_abi_declaration_and_unique_body_share_a_signature_in_either_order() {
+        let declaration = r#"extern "C" { fn callback(input: i32) -> i32; }"#;
+        let definition = "#[no_mangle] fn callback(value: i32) -> i32 { value + 1 }";
+        for source in [format!("{declaration} {definition}"), format!("{definition} {declaration}")] {
+            analyze(&format!("{source} fn main() -> i32 {{ callback(1) - 2 }}")).unwrap();
+        }
+        for definition in [
+            "#[no_mangle] fn callback(value: i64) -> i32 { 1 }",
+            "#[no_mangle] fn callback(value: i32) -> i64 { 1 }",
+            "#[no_mangle] fn callback() -> i32 { 1 }",
+        ] {
+            for source in [format!("{declaration} {definition}"), format!("{definition} {declaration}")] {
+                assert!(matches!(analyze(&source), Err(Error::Semantic { code: "E2202", .. })), "{source}");
+            }
+        }
+        assert!(matches!(analyze(&format!("{declaration} {definition} {definition}")), Err(Error::DuplicateDefinition { .. })));
     }
 
     #[test]

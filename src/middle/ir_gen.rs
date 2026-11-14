@@ -126,8 +126,44 @@ impl IRGenerator {
         for item in &program.items {
             if !matches!(item, Item::Struct(_) | Item::Union(_) | Item::Static(_) | Item::Enum(_) | Item::Extern(_)) { self.generate_item(item)?; }
         }
+        self.coalesce_defined_externs()?;
         self.order_struct_layouts()?;
         Ok(self.module.clone())
+    }
+
+    fn function_has_c_abi(func: &ast::Function, name: &str) -> bool {
+        name == "main" || func.annotations.iter().any(|annotation| annotation.name.name == "no_mangle")
+    }
+
+    /// Unit remains a language value, but a C ABI function has no result slot
+    /// for it. Omitted and explicit unit returns must produce the same signature.
+    fn function_return_type(&self, ty: Option<&AstType>, c_abi: bool) -> IRType {
+        let ty = ty.map(|ty| self.ast_type_to_ir(ty)).unwrap_or(IRType::Void);
+        if c_abi && ty == IRType::Unit { IRType::Void } else { ty }
+    }
+
+    /// Semantic analysis permits compatible declarations plus one C ABI body.
+    /// Emit one definition, retaining a consistency check at the IR boundary so
+    /// a stale signature (including an implicit libc default) cannot be hidden.
+    fn coalesce_defined_externs(&mut self) -> Result<()> {
+        let mut definitions = HashMap::new();
+        for function in self.module.functions.iter().filter(|function| function.c_abi) {
+            let signature = (function.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>(), function.ret_type.clone());
+            if definitions.insert(function.name.clone(), signature).is_some() {
+                return Err(crate::utils::Error::CodeGen(format!("duplicate C ABI definition for '{}'", function.name)));
+            }
+        }
+        for declaration in &self.module.externs {
+            if let Some((params, ret)) = definitions.get(&declaration.name) {
+                if declaration.variadic || declaration.ret_type != *ret
+                    || !declaration.params.iter().map(|(_, ty)| ty).eq(params.iter()) {
+                    return Err(crate::utils::Error::CodeGen(format!(
+                        "inconsistent C ABI declaration and definition for '{}'", declaration.name)));
+                }
+            }
+        }
+        self.module.externs.retain(|declaration| !definitions.contains_key(&declaration.name));
+        Ok(())
     }
     
     /// By-value fields need complete layouts; pointer cycles need only names.
@@ -205,11 +241,7 @@ impl IRGenerator {
         match item {
             Item::Function(func) => {
                 let func_name = func.name.name.clone();
-                let ret_type = if let Some(ref ty) = func.ret_type {
-                    self.ast_type_to_ir(ty)
-                } else {
-                    IRType::Void
-                };
+                let ret_type = self.function_return_type(func.ret_type.as_ref(), Self::function_has_c_abi(func, &func_name));
                 
                 self.function_parameters.insert(func_name.clone(), func.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect());
                 self.function_signatures.insert(func_name, ret_type);
@@ -218,11 +250,7 @@ impl IRGenerator {
                 let type_name = &impl_block.target.name;
                 for method in &impl_block.methods {
                     let func_name = format!("{}_{}", type_name, method.name.name);
-                    let ret_type = if let Some(ref ty) = method.ret_type {
-                        self.ast_type_to_ir(ty)
-                    } else {
-                        IRType::Void
-                    };
+                    let ret_type = self.function_return_type(method.ret_type.as_ref(), Self::function_has_c_abi(method, &func_name));
                     
                     self.function_parameters.insert(func_name.clone(), method.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect());
                     self.function_signatures.insert(func_name, ret_type);
@@ -299,9 +327,7 @@ impl IRGenerator {
                             let ir_params: Vec<(String, IRType)> = params.iter()
                                 .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
                                 .collect();
-                            let ir_ret = ret_type.as_ref()
-                                .map(|t| self.ast_type_to_ir(t))
-                                .unwrap_or(IRType::Void);
+                            let ir_ret = self.function_return_type(ret_type.as_ref(), true);
                             
                             if let Some(existing) = self.module.externs.iter_mut().find(|ext| ext.name == name.name) {
                                 // Explicit validated ABI declarations override implicit libc defaults.
@@ -365,7 +391,7 @@ impl IRGenerator {
         self.reg_types.clear();
         self.loop_targets.clear();
         let params: Vec<_> = func.params.iter().map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty))).collect();
-        let ret_type = func.ret_type.as_ref().map(|ty| self.ast_type_to_ir(ty)).unwrap_or(IRType::Void);
+        let ret_type = self.function_return_type(func.ret_type.as_ref(), Self::function_has_c_abi(func, name));
         let mut ir_func = IRFunction::new(name, params.clone(), ret_type);
         for annotation in &func.annotations {
             match annotation.name.name.as_str() {
@@ -1640,6 +1666,69 @@ mod tests {
         let program = parser.parse_program()?;
         let mut gen = IRGenerator::new("test");
         gen.generate(&program)
+    }
+
+    #[test]
+    fn c_abi_declaration_and_definition_emit_one_function() {
+        let declaration = "extern \"C\" { fn callback(argument: i32) -> i32; fn other() -> i32; }";
+        let definition = "#[no_mangle] pub fn callback(value: i32) -> i32 { value + 1 }";
+        for source in [format!("{declaration} {definition}"), format!("{definition} {declaration}")] {
+            let module = generate(&source).unwrap();
+            assert_eq!(module.functions.iter().filter(|function| function.name == "callback").count(), 1);
+            assert!(!module.externs.iter().any(|declaration| declaration.name == "callback"));
+            assert!(module.externs.iter().any(|declaration| declaration.name == "other"));
+            let function = module.functions.iter().find(|function| function.name == "callback").unwrap();
+            assert!(function.c_abi);
+            assert_eq!(function.params, vec![("value".into(), IRType::I32)]);
+            assert_eq!(function.ret_type, IRType::I32);
+        }
+    }
+
+    #[test]
+    fn c_abi_unit_return_spelling_does_not_change_calls_or_declarations() {
+        for declaration_return in ["", "-> ()"] {
+            for definition_return in ["", "-> ()"] {
+                let source = format!(
+                    "extern \"C\" {{ fn callback() {declaration_return}; }}
+                     #[no_mangle] fn callback() {definition_return} {{ return; }}
+                     fn caller() {{ callback(); }} fn language_unit() -> () {{ () }}");
+                let module = generate(&source).unwrap();
+                assert!(!module.externs.iter().any(|declaration| declaration.name == "callback"));
+                let callback = module.functions.iter().find(|function| function.name == "callback").unwrap();
+                assert_eq!(callback.ret_type, IRType::Void);
+                assert!(callback.blocks.iter().any(|block| matches!(block.terminator, Some(Terminator::Return { value: None }))));
+                let caller = module.functions.iter().find(|function| function.name == "caller").unwrap();
+                assert!(caller.blocks.iter().flat_map(|block| &block.instructions)
+                    .any(|instruction| matches!(instruction, Instruction::Call { dest: None, func, .. } if func == "callback")));
+                assert_eq!(module.functions.iter().find(|function| function.name == "language_unit").unwrap().ret_type, IRType::Unit);
+            }
+        }
+        for source in [
+            "extern \"C\" { fn callback(); fn callback() -> (); }",
+            "extern \"C\" { fn callback() -> (); fn callback(); }",
+        ] {
+            let module = generate(source).unwrap();
+            let declarations: Vec<_> = module.externs.iter().filter(|declaration| declaration.name == "callback").collect();
+            assert_eq!(declarations.len(), 1);
+            assert_eq!(declarations[0].ret_type, IRType::Void);
+        }
+    }
+
+    #[test]
+    fn inconsistent_c_abi_ir_cannot_hide_behind_a_definition() {
+        // These inputs bypass semantic checking deliberately: the IR boundary
+        // must reject stale or hand-built signatures rather than erase them.
+        for source in [
+            "extern \"C\" { fn callback(value: i32) -> i32; } #[no_mangle] fn callback(value: i64) -> i32 { 0 }",
+            "extern \"C\" { fn callback() -> i64; } #[no_mangle] fn callback() -> i32 { 0 }",
+            "extern \"C\" { fn callback(value: i32, ...) -> i32; } #[no_mangle] fn callback(value: i32) -> i32 { value }",
+            "#[no_mangle] fn malloc(size: i32) -> i32 { 0 }",
+        ] {
+            let error = generate(source).unwrap_err();
+            assert!(error.to_string().contains("inconsistent C ABI declaration and definition"), "{error}");
+        }
+        let error = generate("#[no_mangle] fn callback() {} #[no_mangle] fn callback() {}").unwrap_err();
+        assert!(error.to_string().contains("duplicate C ABI definition"), "{error}");
     }
 
     #[test]

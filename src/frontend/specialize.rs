@@ -68,6 +68,9 @@ impl Specializer {
                     Some(&d.name)
                 }
                 Item::Function(d) => {
+                    if !d.type_params.is_empty() && d.annotations.iter().any(|a| a.name.name == "no_mangle") {
+                        return Err(Error::semantic_expected("E2202", "non-generic function for a fixed #[no_mangle] C ABI symbol", d.name.span));
+                    }
                     this.functions.insert(d.name.name.clone(), d.clone());
                     Some(&d.name)
                 }

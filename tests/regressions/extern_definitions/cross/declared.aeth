@@ -1,0 +1,11 @@
+pub type DeclaredValue = i32;
+extern "C" {
+    fn native_callback(foreign_argument: DeclaredValue) -> DeclaredValue;
+    fn native_notice() -> ();
+    fn call_from_c(value: i32) -> i32;
+    fn call_notice_from_c() -> i32;
+}
+pub fn via_extern(value: i32) -> i32 { native_callback(value) }
+pub fn via_c(value: i32) -> i32 { call_from_c(value) }
+pub fn notice_via_extern() { native_notice(); }
+pub fn notice_via_c() -> i32 { call_notice_from_c() }

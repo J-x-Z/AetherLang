@@ -1,0 +1,4 @@
+// Even without an instantiation, this cannot name one concrete C ABI symbol.
+#[no_mangle]
+pub fn native_callback<T>(value: T) -> T { value }
+fn main() -> i32 { 0 }

@@ -1,0 +1,4 @@
+pub type AnotherValue = i32;
+// Repeated compatible extern declarations name the same process-wide symbol.
+extern "C" { fn native_callback(another_argument: AnotherValue) -> AnotherValue; }
+pub fn via_another(value: i32) -> i32 { native_callback(value) }

@@ -1,0 +1,21 @@
+extern "C" {
+    fn native_callback(declared_argument: i32) -> i32;
+    fn native_notice();
+    fn call_from_c(value: i32) -> i32;
+    fn record_notice();
+    fn call_notice_from_c() -> i32;
+    fn puts(text: *u8) -> i32;
+}
+#[no_mangle]
+pub fn native_callback(actual_value: i32) -> i32 { actual_value * 3 + 1 }
+// An omitted extern return and an explicit unit definition are equivalent.
+#[no_mangle]
+pub fn native_notice() -> () { record_notice(); }
+fn main() -> i32 {
+    if native_callback(17) != 52 { return 1; }
+    if call_from_c(-14) != -41 { return 2; }
+    native_notice();
+    if call_notice_from_c() != 2 { return 3; }
+    puts("extern-merge=ok\0" as *u8);
+    0
+}

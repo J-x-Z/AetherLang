@@ -1,0 +1,8 @@
+mod declared {
+    extern "C" { fn native_callback(value: i64) -> i32; }
+}
+mod defined {
+    #[no_mangle]
+    pub fn native_callback(value: i32) -> i32 { value }
+}
+fn main() -> i32 { 0 }
