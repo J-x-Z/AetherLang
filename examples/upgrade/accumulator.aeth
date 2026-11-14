@@ -32,9 +32,9 @@ fn main(argc: i32, argv: **u8) -> i32 {
     let mut total: i64 = 0;
     let mut accepted: i64 = 0;
     let mut status: i32 = 0;
-    printf("READY\n\0" as *u8);
-    fflush(0 as *void);
-    while true {
+    if printf("READY\n\0" as *u8) < 0 { status = 8; }
+    if fflush(0 as *void) != 0 && status == 0 { status = 8; }
+    while status == 0 {
         if fgets(buffer, 4096, input) == (0 as *u8) {
             if ferror(input) != 0 { status = 6; }
             break;
@@ -46,22 +46,23 @@ fn main(argc: i32, argv: **u8) -> i32 {
                 let n: u64 = strlen(buffer);
                 if n < 4095 || buffer[n - 1] == 10 { break; }
             }
-            printf("ERR too-long\n\0" as *u8);
+            if ferror(input) != 0 { status = 6; break; }
+            if printf("ERR too-long\n\0" as *u8) < 0 { status = 8; break; }
         } else if same_command(buffer, "quit\0" as *u8, "quit\n\0" as *u8) {
-            printf("BYE %lld %lld\n\0" as *u8, total, accepted);
+            if printf("BYE %lld %lld\n\0" as *u8, total, accepted) < 0 { status = 8; break; }
             break;
         } else if same_command(buffer, "get\0" as *u8, "get\n\0" as *u8) {
-            printf("VALUE %lld %lld\n\0" as *u8, total, accepted);
+            if printf("VALUE %lld %lld\n\0" as *u8, total, accepted) < 0 { status = 8; break; }
         } else if same_command(buffer, "reset\0" as *u8, "reset\n\0" as *u8) {
             total = 0;
             accepted = 0;
-            printf("RESET\n\0" as *u8);
+            if printf("RESET\n\0" as *u8) < 0 { status = 8; break; }
         } else if strncmp(buffer, "add \0" as *u8, 4) == 0 {
             let mut value: i64 = 0;
             if !parse_bounded_i64(buffer + 4, 1000000000, &value as *i64) {
-                printf("ERR number\n\0" as *u8);
+                if printf("ERR number\n\0" as *u8) < 0 { status = 8; break; }
             } else if total + value > 1000000000000 || total + value < -1000000000000 {
-                printf("ERR limit\n\0" as *u8);
+                if printf("ERR limit\n\0" as *u8) < 0 { status = 8; break; }
             } else {
                 if fwrite(buffer as *void, 1, length, journal) != length || fflush(journal) != 0 {
                     status = 7;
@@ -69,15 +70,17 @@ fn main(argc: i32, argv: **u8) -> i32 {
                 }
                 total = total + value;
                 accepted = accepted + 1;
-                printf("OK %lld\n\0" as *u8, total);
+                if printf("OK %lld\n\0" as *u8, total) < 0 { status = 8; break; }
             }
         } else {
-            printf("ERR command\n\0" as *u8);
+            if printf("ERR command\n\0" as *u8) < 0 { status = 8; break; }
         }
         if fflush(0 as *void) != 0 { status = 8; break; }
     }
-    if fclose(input) != 0 { status = 9; }
-    if fclose(journal) != 0 { status = 10; }
+    // Every exit path flushes output; cleanup never replaces the first failure.
+    if fflush(0 as *void) != 0 && status == 0 { status = 8; }
+    if fclose(input) != 0 && status == 0 { status = 9; }
+    if fclose(journal) != 0 && status == 0 { status = 10; }
     free(buffer as *void);
     return status;
 }
