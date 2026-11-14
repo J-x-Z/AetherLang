@@ -1,0 +1,447 @@
+// Recursive-descent declarations/statements and a Pratt expression parser.
+// Every accepted construct produces a real AST node; unsupported syntax fails.
+fn boot_p_kind(ctx:*BootContext)->i32 {
+ if ctx.cursor==0 as *BootToken {return BT_EOF;}
+ return ctx.cursor.kind;
+}
+fn boot_p_word(ctx:*BootContext,text:*u8)->bool {
+ if boot_p_kind(ctx)!=BT_IDENT {return false;}
+ return strcmp(ctx.cursor.text,text)==0;
+}
+fn boot_p_advance(ctx:*BootContext) {
+ if ctx.cursor!=0 as *BootToken && ctx.cursor.kind!=BT_EOF {ctx.cursor=ctx.cursor.next;}
+ return;
+}
+fn boot_p_take(ctx:*BootContext,kind:i32)->bool {
+ if ctx.failed || boot_p_kind(ctx)!=kind {return false;}
+ boot_p_advance(ctx);return true;
+}
+fn boot_p_expect(ctx:*BootContext,kind:i32,message:*u8)->bool {
+ if boot_p_take(ctx,kind) {return true;}
+ boot_error(ctx,ctx.cursor,message);return false;
+}
+fn boot_p_reserved(text:*u8)->bool {
+ if strcmp(text,"fn")==0 || strcmp(text,"let")==0 || strcmp(text,"mut")==0 || strcmp(text,"if")==0 || strcmp(text,"else")==0 {return true;}
+ if strcmp(text,"while")==0 || strcmp(text,"return")==0 || strcmp(text,"break")==0 || strcmp(text,"continue")==0 {return true;}
+ if strcmp(text,"struct")==0 || strcmp(text,"extern")==0 || strcmp(text,"const")==0 || strcmp(text,"unsafe")==0 {return true;}
+ if strcmp(text,"as")==0 || strcmp(text,"true")==0 || strcmp(text,"false")==0 || strcmp(text,"size_of")==0 {return true;}
+ if strcmp(text,"pub")==0 || strcmp(text,"use")==0 || strcmp(text,"enum")==0 || strcmp(text,"impl")==0 {return true;}
+ if strcmp(text,"for")==0 || strcmp(text,"loop")==0 || strcmp(text,"match")==0 || strcmp(text,"type")==0 {return true;}
+ return false;
+}
+fn boot_p_name(ctx:*BootContext)->*BootToken {
+ let token:*BootToken=ctx.cursor;
+ if boot_p_kind(ctx)!=BT_IDENT {boot_error(ctx,token,"expected identifier");return 0 as *BootToken;}
+ if boot_p_reserved(token.text) {boot_error(ctx,token,"keyword cannot be used as an identifier");return 0 as *BootToken;}
+ boot_p_advance(ctx);return token;
+}
+fn boot_p_type(ctx:*BootContext)->*BootType {
+ if ctx.failed {return 0 as *BootType;}
+ ctx.depth=ctx.depth+1;
+ if ctx.depth>256 {boot_error(ctx,ctx.cursor,"type nesting exceeds 256");ctx.depth=ctx.depth-1;return 0 as *BootType;}
+ let ty:*BootType=boot_p_type_inner(ctx);
+ ctx.depth=ctx.depth-1;return ty;
+}
+fn boot_p_type_inner(ctx:*BootContext)->*BootType {
+ if boot_p_take(ctx,42) {
+  let inner:*BootType=boot_p_type(ctx);
+  if inner==0 as *BootType {return inner;}
+  return boot_ptr_type(ctx,inner);
+ }
+ if boot_p_take(ctx,40) {
+  if !boot_p_expect(ctx,41,"only unit () is supported in a parenthesized type") {return 0 as *BootType;}
+  return boot_type(ctx,BY_VOID);
+ }
+ let token:*BootToken=boot_p_name(ctx);
+ if token==0 as *BootToken {return 0 as *BootType;}
+ let name:*u8=token.text;
+ if strcmp(name,"void")==0 {return boot_type(ctx,BY_VOID);}
+ if strcmp(name,"bool")==0 {return boot_type(ctx,BY_BOOL);}
+ if strcmp(name,"i8")==0 {return boot_type(ctx,BY_I8);}
+ if strcmp(name,"u8")==0 {return boot_type(ctx,BY_U8);}
+ if strcmp(name,"i16")==0 {return boot_type(ctx,BY_I16);}
+ if strcmp(name,"u16")==0 {return boot_type(ctx,BY_U16);}
+ if strcmp(name,"i32")==0 {return boot_type(ctx,BY_I32);}
+ if strcmp(name,"u32")==0 {return boot_type(ctx,BY_U32);}
+ if strcmp(name,"i64")==0 || strcmp(name,"isize")==0 {return boot_type(ctx,BY_I64);}
+ if strcmp(name,"u64")==0 || strcmp(name,"usize")==0 {return boot_type(ctx,BY_U64);}
+ if strcmp(name,"f32")==0 {return boot_type(ctx,BY_F32);}
+ if strcmp(name,"f64")==0 {return boot_type(ctx,BY_F64);}
+ return boot_named_type(ctx,name);
+}
+fn boot_p_bp(kind:i32)->i32 {
+ if kind==BT_OR {return 1;}
+ if kind==BT_AND {return 2;}
+ if kind==124 {return 3;}
+ if kind==94 {return 4;}
+ if kind==38 {return 5;}
+ if kind==BT_EQ || kind==BT_NE {return 6;}
+ if kind==60 || kind==62 || kind==BT_LE || kind==BT_GE {return 7;}
+ if kind==BT_SHL || kind==BT_SHR {return 8;}
+ if kind==43 || kind==45 {return 9;}
+ if kind==42 || kind==47 || kind==37 {return 10;}
+ return 0;
+}
+// Pratt parsing uses a loop for left-associative and postfix operations, but
+// the resulting AST still nests. Bound the actual tree consumed recursively
+// by checking/emission, not only the parser's own call stack.
+fn boot_p_tree_depth(ctx:*BootContext,node:*BootNode)->bool {
+ if node==0 as *BootNode {return false;}
+ let mut depth:i32=0;
+ if node.left!=0 as *BootNode {depth=node.left.tree_depth;}
+ if node.right!=0 as *BootNode && node.right.tree_depth>depth {depth=node.right.tree_depth;}
+ let mut argument:*BootNode=node.params;
+ while argument!=0 as *BootNode {
+  if argument.tree_depth>depth {depth=argument.tree_depth;}
+  argument=argument.next;
+ }
+ node.tree_depth=depth+1;
+ if node.tree_depth>256 {
+  boot_error(ctx,node.token,"expression tree depth exceeds 256");return false;
+ }
+ return true;
+}
+fn boot_p_expression(ctx:*BootContext,minimum:i32)->*BootNode {
+ if ctx.failed {return 0 as *BootNode;}
+ ctx.depth=ctx.depth+1;
+ if ctx.depth>256 {boot_error(ctx,ctx.cursor,"expression nesting exceeds 256");ctx.depth=ctx.depth-1;return 0 as *BootNode;}
+ let expression:*BootNode=boot_p_expression_inner(ctx,minimum);
+ ctx.depth=ctx.depth-1;return expression;
+}
+fn boot_p_primary(ctx:*BootContext)->*BootNode {
+ let token:*BootToken=ctx.cursor;
+ let kind:i32=boot_p_kind(ctx);
+ if kind==BT_INT || kind==BT_FLOAT || kind==BT_STRING {
+  let mut node_kind:i32=BN_INT;
+  if kind==BT_FLOAT {node_kind=BN_FLOAT;} else if kind==BT_STRING {node_kind=BN_STRING;}
+  let node:*BootNode=boot_node(ctx,node_kind,token);
+  if node==0 as *BootNode {return node;}
+  node.name=token.text;boot_p_advance(ctx);return node;
+ }
+ if boot_p_word(ctx,"true") || boot_p_word(ctx,"false") {
+  let node:*BootNode=boot_node(ctx,BN_BOOL,token);
+  if node==0 as *BootNode {return node;}
+  if boot_p_word(ctx,"true") {node.value=1;}
+  boot_p_advance(ctx);return node;
+ }
+ if boot_p_word(ctx,"size_of") {
+  boot_p_advance(ctx);
+  if !boot_p_expect(ctx,40,"expected '(' after size_of") {return 0 as *BootNode;}
+  let ty:*BootType=boot_p_type(ctx);
+  if ty==0 as *BootType {return 0 as *BootNode;}
+  if !boot_p_expect(ctx,41,"expected ')' after size_of type") {return 0 as *BootNode;}
+  let node:*BootNode=boot_node(ctx,BN_SIZEOF,token);
+  if node!=0 as *BootNode {node.aux=ty;}
+  return node;
+ }
+ if kind==45 || kind==33 || kind==126 || kind==42 || kind==38 {
+  boot_p_advance(ctx);
+  let mut flags:i32=0;
+  if kind==38 && boot_p_word(ctx,"mut") {flags=1;boot_p_advance(ctx);}
+  let operand:*BootNode=boot_p_expression(ctx,13);
+  if operand==0 as *BootNode {return operand;}
+  let node:*BootNode=boot_node(ctx,BN_UNARY,token);
+  if node!=0 as *BootNode {node.op=kind;node.flags=flags;node.left=operand;}
+  return node;
+ }
+ if boot_p_take(ctx,40) {
+  let expression:*BootNode=boot_p_expression(ctx,0);
+  if expression==0 as *BootNode {return expression;}
+  if !boot_p_expect(ctx,41,"expected ')' after expression") {return 0 as *BootNode;}
+  return expression;
+ }
+ if kind==BT_IDENT {
+  let name:*BootToken=boot_p_name(ctx);
+  if name==0 as *BootToken {return 0 as *BootNode;}
+  let node:*BootNode=boot_node(ctx,BN_IDENT,token);
+  if node!=0 as *BootNode {node.name=name.text;}
+  return node;
+ }
+ boot_error(ctx,token,"expected expression (literal, name, unary operator or parentheses)");
+ return 0 as *BootNode;
+}
+fn boot_p_call(ctx:*BootContext,callee:*BootNode)->*BootNode {
+ if callee.kind!=BN_IDENT {boot_error(ctx,ctx.cursor,"Core calls require a function name");return 0 as *BootNode;}
+ let node:*BootNode=boot_node(ctx,BN_CALL,callee.token);
+ if node==0 as *BootNode {return node;}
+ node.name=callee.name;boot_p_advance(ctx);
+ let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed && boot_p_kind(ctx)!=41 {
+  let argument:*BootNode=boot_p_expression(ctx,0);
+  if argument==0 as *BootNode {return argument;}
+  if tail==0 as *BootNode {node.params=argument;} else {tail.next=argument;}
+  tail=argument;
+  if !boot_p_take(ctx,44) {break;}
+ }
+ if !boot_p_expect(ctx,41,"expected ')' after call arguments") {return 0 as *BootNode;}
+ return node;
+}
+fn boot_p_expression_inner(ctx:*BootContext,minimum:i32)->*BootNode {
+ let mut left:*BootNode=boot_p_primary(ctx);
+ if left==0 as *BootNode {return left;}
+ if !boot_p_tree_depth(ctx,left) {return 0 as *BootNode;}
+ while !ctx.failed {
+  let token:*BootToken=ctx.cursor;
+  let kind:i32=boot_p_kind(ctx);
+  if kind==40 {
+   left=boot_p_call(ctx,left);
+   if left==0 as *BootNode {return left;}
+  } else if kind==46 {
+   boot_p_advance(ctx);
+   let field:*BootToken=boot_p_name(ctx);
+   if field==0 as *BootToken {return 0 as *BootNode;}
+   let node:*BootNode=boot_node(ctx,BN_MEMBER,token);
+   if node==0 as *BootNode {return node;}
+   node.left=left;node.name=field.text;left=node;
+  } else if kind==91 {
+   boot_p_advance(ctx);
+   let index:*BootNode=boot_p_expression(ctx,0);
+   if index==0 as *BootNode {return index;}
+   if !boot_p_expect(ctx,93,"expected ']' after index") {return 0 as *BootNode;}
+   let node:*BootNode=boot_node(ctx,BN_INDEX,token);
+   if node==0 as *BootNode {return node;}
+   node.left=left;node.right=index;left=node;
+  } else if boot_p_word(ctx,"as") {
+   if minimum>12 {break;}
+   boot_p_advance(ctx);
+   let ty:*BootType=boot_p_type(ctx);
+   if ty==0 as *BootType {return 0 as *BootNode;}
+   let node:*BootNode=boot_node(ctx,BN_CAST,token);
+   if node==0 as *BootNode {return node;}
+   node.left=left;node.ty=ty;left=node;
+  } else {
+   let power:i32=boot_p_bp(kind);
+   if power==0 || power<minimum {break;}
+   boot_p_advance(ctx);
+   let right:*BootNode=boot_p_expression(ctx,power+1);
+   if right==0 as *BootNode {return right;}
+   let node:*BootNode=boot_node(ctx,BN_BINARY,token);
+   if node==0 as *BootNode {return node;}
+   node.op=kind;node.left=left;node.right=right;left=node;
+  }
+  if !boot_p_tree_depth(ctx,left) {return 0 as *BootNode;}
+ }
+ return left;
+}
+fn boot_p_if(ctx:*BootContext)->*BootNode {
+ if ctx.failed {return 0 as *BootNode;}
+ ctx.depth=ctx.depth+1;
+ if ctx.depth>256 {boot_error(ctx,ctx.cursor,"conditional nesting exceeds 256");ctx.depth=ctx.depth-1;return 0 as *BootNode;}
+ let node:*BootNode=boot_p_if_inner(ctx);
+ ctx.depth=ctx.depth-1;return node;
+}
+fn boot_p_if_inner(ctx:*BootContext)->*BootNode {
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);
+ let condition:*BootNode=boot_p_expression(ctx,0);
+ if condition==0 as *BootNode {return condition;}
+ let body:*BootNode=boot_p_block(ctx);
+ if body==0 as *BootNode {return body;}
+ let node:*BootNode=boot_node(ctx,BN_IF,token);
+ if node==0 as *BootNode {return node;}
+ node.left=condition;node.body=body;
+ if boot_p_word(ctx,"else") {
+  boot_p_advance(ctx);
+  if boot_p_word(ctx,"if") {node.third=boot_p_if(ctx);} else {node.third=boot_p_block(ctx);}
+ }
+ return node;
+}
+fn boot_p_statement(ctx:*BootContext)->*BootNode {
+ let token:*BootToken=ctx.cursor;
+ if boot_p_word(ctx,"let") {
+  boot_p_advance(ctx);let mut flags:i32=0;
+  if boot_p_word(ctx,"mut") {flags=1;boot_p_advance(ctx);}
+  let name:*BootToken=boot_p_name(ctx);
+  if name==0 as *BootToken {return 0 as *BootNode;}
+  if !boot_p_expect(ctx,58,"let requires an explicit ': Type'") {return 0 as *BootNode;}
+  let ty:*BootType=boot_p_type(ctx);
+  if ty==0 as *BootType {return 0 as *BootNode;}
+  if !boot_p_expect(ctx,61,"Core let requires an initializer") {return 0 as *BootNode;}
+  let value:*BootNode=boot_p_expression(ctx,0);
+  if value==0 as *BootNode {return value;}
+  if !boot_p_expect(ctx,59,"expected ';' after let") {return 0 as *BootNode;}
+  let node:*BootNode=boot_node(ctx,BN_LET,token);
+  if node!=0 as *BootNode {node.name=name.text;node.ty=ty;node.left=value;node.flags=flags;}
+  return node;
+ }
+ if boot_p_word(ctx,"if") {return boot_p_if(ctx);}
+ if boot_p_word(ctx,"while") {
+  boot_p_advance(ctx);
+  let condition:*BootNode=boot_p_expression(ctx,0);
+  if condition==0 as *BootNode {return condition;}
+  let body:*BootNode=boot_p_block(ctx);
+  if body==0 as *BootNode {return body;}
+  let node:*BootNode=boot_node(ctx,BN_WHILE,token);
+  if node!=0 as *BootNode {node.left=condition;node.body=body;}
+  return node;
+ }
+ if boot_p_word(ctx,"return") {
+  boot_p_advance(ctx);let mut value:*BootNode=0 as *BootNode;
+  if boot_p_kind(ctx)!=59 {value=boot_p_expression(ctx,0);}
+  if !boot_p_expect(ctx,59,"expected ';' after return") {return 0 as *BootNode;}
+  let node:*BootNode=boot_node(ctx,BN_RETURN,token);
+  if node!=0 as *BootNode {node.left=value;}
+  return node;
+ }
+ if boot_p_word(ctx,"break") || boot_p_word(ctx,"continue") {
+  let mut kind:i32=BN_BREAK;
+  if boot_p_word(ctx,"continue") {kind=BN_CONTINUE;}
+  boot_p_advance(ctx);
+  if !boot_p_expect(ctx,59,"expected ';' after loop control") {return 0 as *BootNode;}
+  return boot_node(ctx,kind,token);
+ }
+ if boot_p_word(ctx,"unsafe") {boot_p_advance(ctx);return boot_p_block(ctx);}
+ if boot_p_kind(ctx)==123 {return boot_p_block(ctx);}
+ let left:*BootNode=boot_p_expression(ctx,0);
+ if left==0 as *BootNode {return left;}
+ if boot_p_take(ctx,61) {
+  let right:*BootNode=boot_p_expression(ctx,0);
+  if right==0 as *BootNode {return right;}
+  if !boot_p_expect(ctx,59,"expected ';' after assignment") {return 0 as *BootNode;}
+  let node:*BootNode=boot_node(ctx,BN_ASSIGN,token);
+  if node!=0 as *BootNode {node.left=left;node.right=right;}
+  return node;
+ }
+ if !boot_p_expect(ctx,59,"expected ';' after expression; use explicit return for values") {return 0 as *BootNode;}
+ let node:*BootNode=boot_node(ctx,BN_EXPR,token);
+ if node!=0 as *BootNode {node.left=left;}
+ return node;
+}
+fn boot_p_block(ctx:*BootContext)->*BootNode {
+ let token:*BootToken=ctx.cursor;
+ if !boot_p_expect(ctx,123,"expected '{' to start block") {return 0 as *BootNode;}
+ ctx.depth=ctx.depth+1;
+ if ctx.depth>256 {boot_error(ctx,token,"block nesting exceeds 256");ctx.depth=ctx.depth-1;return 0 as *BootNode;}
+ let node:*BootNode=boot_node(ctx,BN_BLOCK,token);
+ let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed && boot_p_kind(ctx)!=125 {
+  if boot_p_kind(ctx)==BT_EOF {boot_error(ctx,ctx.cursor,"unterminated block");break;}
+  if boot_p_take(ctx,59) {continue;}
+  let statement:*BootNode=boot_p_statement(ctx);
+  if statement==0 as *BootNode {break;}
+  if tail==0 as *BootNode {node.body=statement;} else {tail.next=statement;}
+  tail=statement;
+ }
+ let closed:bool=boot_p_expect(ctx,125,"expected '}' to end block");
+ ctx.depth=ctx.depth-1;
+ if !closed {return 0 as *BootNode;}
+ return node;
+}
+fn boot_p_function(ctx:*BootContext,foreign:bool)->*BootNode {
+ let token:*BootToken=ctx.cursor;
+ if !boot_p_word(ctx,"fn") {boot_error(ctx,token,"expected function declaration");return 0 as *BootNode;}
+ boot_p_advance(ctx);
+ let name:*BootToken=boot_p_name(ctx);
+ if name==0 as *BootToken {return 0 as *BootNode;}
+ let node:*BootNode=boot_node(ctx,BN_FN,token);
+ if node==0 as *BootNode {return node;}
+ node.name=name.text;
+ if foreign {node.flags=2;}
+ if !boot_p_expect(ctx,40,"expected '(' after function name") {return 0 as *BootNode;}
+ let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed && boot_p_kind(ctx)!=41 {
+  if boot_p_take(ctx,BT_ELLIPSIS) {
+   if !foreign {boot_error(ctx,ctx.cursor,"only foreign functions may be variadic");return 0 as *BootNode;}
+   if tail==0 as *BootNode {boot_error(ctx,ctx.cursor,"variadic function needs a fixed parameter");return 0 as *BootNode;}
+   node.flags=node.flags|4;
+   if boot_p_kind(ctx)!=41 {boot_error(ctx,ctx.cursor,"variadic marker must be last");return 0 as *BootNode;}
+   break;
+  }
+  let mut flags:i32=0;
+  if boot_p_word(ctx,"mut") {flags=1;boot_p_advance(ctx);}
+  let parameter:*BootToken=boot_p_name(ctx);
+  if parameter==0 as *BootToken {return 0 as *BootNode;}
+  if !boot_p_expect(ctx,58,"expected ':' in parameter") {return 0 as *BootNode;}
+  let ty:*BootType=boot_p_type(ctx);
+  if ty==0 as *BootType {return 0 as *BootNode;}
+  let param:*BootNode=boot_node(ctx,BN_PARAM,parameter);
+  if param==0 as *BootNode {return param;}
+  param.name=parameter.text;param.ty=ty;param.flags=flags;
+  if tail==0 as *BootNode {node.params=param;} else {tail.next=param;}
+  tail=param;
+  if !boot_p_take(ctx,44) {break;}
+ }
+ if !boot_p_expect(ctx,41,"expected ')' after parameters") {return 0 as *BootNode;}
+ node.ty=boot_type(ctx,BY_VOID);
+ if boot_p_take(ctx,BT_ARROW) {node.ty=boot_p_type(ctx);}
+ if ctx.failed {return 0 as *BootNode;}
+ if foreign {
+  if !boot_p_expect(ctx,59,"foreign function requires ';', not a body") {return 0 as *BootNode;}
+ } else {node.body=boot_p_block(ctx);}
+ return node;
+}
+fn boot_p_struct(ctx:*BootContext)->*BootNode {
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);
+ let name:*BootToken=boot_p_name(ctx);
+ if name==0 as *BootToken {return 0 as *BootNode;}
+ let ty:*BootType=boot_named_type(ctx,name.text);
+ if ty==0 as *BootType {return 0 as *BootNode;}
+ if ty.complete {boot_error(ctx,name,"duplicate struct definition");return 0 as *BootNode;}
+ let node:*BootNode=boot_node(ctx,BN_STRUCT,token);
+ if node==0 as *BootNode {return node;}
+ node.name=name.text;node.ty=ty;
+ if !boot_p_expect(ctx,123,"expected '{' after struct name") {return 0 as *BootNode;}
+ let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed && boot_p_kind(ctx)!=125 {
+  let field:*BootToken=boot_p_name(ctx);
+  if field==0 as *BootToken {return 0 as *BootNode;}
+  if !boot_p_expect(ctx,58,"expected ':' after field name") {return 0 as *BootNode;}
+  let field_type:*BootType=boot_p_type(ctx);
+  if field_type==0 as *BootType {return 0 as *BootNode;}
+  let member:*BootNode=boot_node(ctx,BN_FIELD,field);
+  if member==0 as *BootNode {return member;}
+  member.name=field.text;member.ty=field_type;
+  if tail==0 as *BootNode {node.body=member;} else {tail.next=member;}
+  tail=member;
+  if !boot_p_take(ctx,44) {break;}
+ }
+ if !boot_p_expect(ctx,125,"expected '}' after fields") {return 0 as *BootNode;}
+ ty.fields=node.body;ty.complete=true;return node;
+}
+fn boot_p_constant(ctx:*BootContext)->*BootNode {
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);
+ let name:*BootToken=boot_p_name(ctx);
+ if name==0 as *BootToken {return 0 as *BootNode;}
+ if !boot_p_expect(ctx,58,"constant requires an explicit type") {return 0 as *BootNode;}
+ let ty:*BootType=boot_p_type(ctx);
+ if ty==0 as *BootType {return 0 as *BootNode;}
+ if !boot_p_expect(ctx,61,"expected '=' in constant") {return 0 as *BootNode;}
+ let value:*BootNode=boot_p_expression(ctx,0);
+ if value==0 as *BootNode {return value;}
+ if !boot_p_expect(ctx,59,"expected ';' after constant") {return 0 as *BootNode;}
+ let node:*BootNode=boot_node(ctx,BN_CONST,token);
+ if node!=0 as *BootNode {node.name=name.text;node.ty=ty;node.left=value;}
+ return node;
+}
+fn boot_parse(ctx:*BootContext)->bool {
+ ctx.cursor=ctx.tokens;ctx.depth=0;
+ let program:*BootNode=boot_node(ctx,BN_PROGRAM,ctx.cursor);
+ if program==0 as *BootNode {return false;}
+ ctx.program=program;
+ let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed && boot_p_kind(ctx)!=BT_EOF {
+  let mut node:*BootNode=0 as *BootNode;
+  if boot_p_word(ctx,"extern") {
+   boot_p_advance(ctx);
+   if boot_p_kind(ctx)!=BT_STRING {boot_error(ctx,ctx.cursor,"expected foreign ABI string \"C\"");return false;}
+   if ctx.cursor.length!=1 || strcmp(ctx.cursor.text,"C")!=0 {boot_error(ctx,ctx.cursor,"Core supports only extern \"C\"");return false;}
+   boot_p_advance(ctx);
+   if !boot_p_expect(ctx,123,"expected '{' after foreign ABI") {return false;}
+   while !ctx.failed && boot_p_kind(ctx)!=125 {
+    node=boot_p_function(ctx,true);
+    if node==0 as *BootNode {return false;}
+    if tail==0 as *BootNode {program.body=node;} else {tail.next=node;}
+    tail=node;
+   }
+   if !boot_p_expect(ctx,125,"expected '}' after foreign declarations") {return false;}
+  } else {
+   if boot_p_word(ctx,"fn") {node=boot_p_function(ctx,false);}
+   else if boot_p_word(ctx,"struct") {node=boot_p_struct(ctx);}
+   else if boot_p_word(ctx,"const") {node=boot_p_constant(ctx);}
+   else {boot_error(ctx,ctx.cursor,"expected fn, struct, const or extern \"C\"; construct outside Core v1");return false;}
+   if node==0 as *BootNode {return false;}
+   if tail==0 as *BootNode {program.body=node;} else {tail.next=node;}
+   tail=node;
+  }
+ }
+ return !ctx.failed;
+}

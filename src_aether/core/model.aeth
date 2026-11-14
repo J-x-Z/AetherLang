@@ -1,0 +1,64 @@
+// Shared model of the self-hosting Core compiler. The build concatenates these
+// modules verbatim; all lexing, parsing, checking and emission runs in Aether.
+// No generics/modules/method syntax is needed to compile the compiler itself.
+extern "C" {
+ fn malloc(size:u64)->*void; fn free(pointer:*void);
+ fn memset(pointer:*void,value:i32,size:u64)->*void;
+ fn memcpy(dest:*void,source:*void,size:u64)->*void;
+ fn strlen(text:*u8)->u64; fn strcmp(a:*u8,b:*u8)->i32;
+ fn fopen(path:*u8,mode:*u8)->*void; fn fclose(file:*void)->i32;
+ fn fread(data:*u8,size:u64,count:u64,file:*void)->u64;
+ fn fwrite(data:*u8,size:u64,count:u64,file:*void)->u64;
+ fn fseek(file:*void,offset:i64,whence:i32)->i32; fn ftell(file:*void)->i64;
+ fn ferror(file:*void)->i32; fn remove(path:*u8)->i32;
+ fn printf(format:*u8,...)->i32; fn fprintf(file:*void,format:*u8,...)->i32;
+ fn fputs(text:*u8,file:*void)->i32; fn fputc(value:i32,file:*void)->i32;
+}
+const BT_EOF:i32=0; const BT_IDENT:i32=1; const BT_INT:i32=2;
+const BT_FLOAT:i32=3; const BT_STRING:i32=4;
+const BT_ARROW:i32=256; const BT_EQ:i32=257; const BT_NE:i32=258;
+const BT_LE:i32=259; const BT_GE:i32=260; const BT_AND:i32=261;
+const BT_OR:i32=262; const BT_SHL:i32=263; const BT_SHR:i32=264;
+const BT_ELLIPSIS:i32=265;
+// Primitive type kinds; pointer/struct types are interned in BootContext.types.
+const BY_VOID:i32=0; const BY_BOOL:i32=1; const BY_I8:i32=2; const BY_U8:i32=3;
+const BY_I16:i32=4; const BY_U16:i32=5; const BY_I32:i32=6; const BY_U32:i32=7;
+const BY_I64:i32=8; const BY_U64:i32=9; const BY_F32:i32=10; const BY_F64:i32=11;
+const BY_PTR:i32=12; const BY_STRUCT:i32=13;
+// Node fields by kind:
+// PROGRAM: body=top-level list. STRUCT: name, body=FIELD list, ty.
+// FN: name, params=PARAM list, ty=return type, body=BLOCK or null (extern).
+// BLOCK: body=statement list. LET: name,ty annotation,left=initializer.
+// IF: left=condition,body=then BLOCK,third=else BLOCK/IF. WHILE: left,body.
+// RETURN/EXPR: left=expression. ASSIGN: left=place,right=value (statement only).
+// CALL: name,params=argument list,decl=FN after resolution.
+// BINARY: op=token kind,left,right. UNARY: op=ASCII - ! ~ * &,left.
+// FIELD: left=base,name,decl=FIELD after resolution. INDEX: left=base,right=index.
+// CAST: left=expr,ty=destination. SIZEOF: aux=queried type, ty=i64 after checking.
+// INT/FLOAT/STRING/IDENT/BOOL: token/text (BOOL.value=0/1), IDENT.decl=binding.
+// Struct literals and implicit coercions are intentionally outside Core v1.
+const BN_PROGRAM:i32=1; const BN_STRUCT:i32=2; const BN_FIELD:i32=3;
+const BN_FN:i32=4; const BN_PARAM:i32=5; const BN_BLOCK:i32=6;
+const BN_LET:i32=7; const BN_IF:i32=8; const BN_WHILE:i32=9;
+const BN_RETURN:i32=10; const BN_BREAK:i32=11; const BN_CONTINUE:i32=12;
+const BN_EXPR:i32=13; const BN_ASSIGN:i32=14; const BN_CALL:i32=15;
+const BN_BINARY:i32=16; const BN_UNARY:i32=17; const BN_MEMBER:i32=18;
+const BN_INDEX:i32=19; const BN_CAST:i32=20; const BN_SIZEOF:i32=21;
+const BN_INT:i32=22; const BN_FLOAT:i32=23; const BN_STRING:i32=24;
+const BN_IDENT:i32=25; const BN_BOOL:i32=26; const BN_CONST:i32=27;
+// flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic.
+struct BootArena { next:*BootArena, reserved:u64 }
+struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,next:*BootToken }
+struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32 }
+struct BootNode {
+ kind:i32,id:i32,op:i32,flags:i32,tree_depth:i32,value:i64,name:*u8,token:*BootToken,
+ ty:*BootType,aux:*BootType,decl:*BootNode,left:*BootNode,right:*BootNode,
+ third:*BootNode,body:*BootNode,params:*BootNode,next:*BootNode
+}
+struct BootBinding { name:*u8,node:*BootNode,depth:i32,next:*BootBinding }
+struct BootContext {
+ arena:*BootArena,allocated:u64,source:*u8,length:u64,path:*u8,
+ tokens:*BootToken,cursor:*BootToken,types:*BootType,program:*BootNode,
+ failed:bool,next_id:i32,depth:i32,bindings:*BootBinding,
+ function:*BootNode,loop_depth:i32,output:*void,temporary:i32,indent:i32
+}

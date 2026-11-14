@@ -1,0 +1,63 @@
+extern "C" {
+ fn malloc(size:u64)->*void;
+ fn free(pointer:*void);
+ fn printf(format:*u8,...)->i32;
+}
+const FALSE_VALUE:bool=!true;
+const TRUE_VALUE:bool=!!true;
+const MASK:i32=~1;
+const ONE:i32=-(-1);
+const MINIMUM:i64=-9223372036854775808;
+const MAXIMUM:u64=18446744073709551615;
+const BYTE_MASK:u8=~0;
+struct Inner { value:i32 }
+struct Outer { inner:Inner, other:i32 }
+fn copy_outer(source:*Outer)->Outer { return *source; }
+fn copy_inner(source:*Outer)->Inner { return source.inner; }
+fn locate(trace:*i32,destination:*i32)->*i32 {
+ *trace=*trace*10+1;
+ return destination;
+}
+fn value(trace:*i32)->i32 {
+ *trace=*trace*10+2;
+ return 73;
+}
+fn observe(trace:*i32,source:*Outer)->*Outer {
+ *trace=*trace+1;
+ return source;
+}
+fn main()->i32 {
+ if FALSE_VALUE || !TRUE_VALUE || MASK!=-2 || ONE!=1 { return 1; }
+ if MINIMUM!=-9223372036854775808 || MAXIMUM!=18446744073709551615 || BYTE_MASK!=255 { return 2; }
+ let source:*Outer=malloc(size_of(Outer) as u64) as *Outer;
+ if source==0 as *Outer { return 3; }
+ source.inner.value=37;
+ source.other=91;
+ // Field reads from struct temporaries are values, not assignable places.
+ if copy_outer(source).inner.value!=37 || copy_inner(source).value!=37 { return 4; }
+ let copied:Outer=copy_outer(source);
+ source.inner.value=38;
+ if copied.inner.value!=37 || source.inner.value!=38 { return 5; }
+ let mut trace:i32=0;
+ let mut destination:i32=0;
+ *locate(&trace,&destination)=value(&trace);
+ if trace!=12 || destination!=73 { return 6; }
+ trace=0;
+ observe(&trace,source).inner.value=46;
+ if trace!=1 || source.inner.value!=46 { return 7; }
+ trace=0;
+ if observe(&trace,source).inner.value!=46 || trace!=1 { return 8; }
+ let mut index:i32=0;
+ let mut sum:i32=0;
+ while index<4 {
+  let value:i32=index+1;
+  { let value:i32=value*2;sum=sum+value; }
+  index=index+1;
+  if index==2 { continue; }
+  if index==4 { break; }
+ }
+ if sum!=20 { return 9; }
+ free(source as *void);
+ printf("typed-values=ok\n");
+ return 0;
+}

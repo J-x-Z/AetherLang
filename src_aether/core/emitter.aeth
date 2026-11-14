@@ -1,0 +1,247 @@
+// Typed AST -> C11. Every effectful operand is sequenced into a temporary;
+// assignment evaluates its place first, calls evaluate arguments left-to-right.
+fn boot_c_text(ctx:*BootContext,text:*u8) {fputs(text,ctx.output);}
+fn boot_c_number(ctx:*BootContext,value:i32) {fprintf(ctx.output,"%d",value);}
+fn boot_c_type(ctx:*BootContext,ty:*BootType) {
+ if ty==0 as *BootType {boot_error(ctx,ctx.cursor,"emitter received an untyped node");return;}
+ if ty.kind==BY_PTR {boot_c_type(ctx,ty.inner);boot_c_text(ctx,"*");return;}
+ if ty.kind==BY_STRUCT {boot_c_text(ctx,"s");boot_c_number(ctx,ty.id);return;}
+ if ty.kind==BY_VOID {boot_c_text(ctx,"void");return;}
+ if ty.kind==BY_BOOL {boot_c_text(ctx,"bool");return;}
+ if ty.kind==BY_I8 {boot_c_text(ctx,"int8_t");return;}
+ if ty.kind==BY_U8 {boot_c_text(ctx,"uint8_t");return;}
+ if ty.kind==BY_I16 {boot_c_text(ctx,"int16_t");return;}
+ if ty.kind==BY_U16 {boot_c_text(ctx,"uint16_t");return;}
+ if ty.kind==BY_I32 {boot_c_text(ctx,"int32_t");return;}
+ if ty.kind==BY_U32 {boot_c_text(ctx,"uint32_t");return;}
+ if ty.kind==BY_I64 {boot_c_text(ctx,"int64_t");return;}
+ if ty.kind==BY_U64 {boot_c_text(ctx,"uint64_t");return;}
+ if ty.kind==BY_F32 {boot_c_text(ctx,"float");return;}
+ if ty.kind==BY_F64 {boot_c_text(ctx,"double");return;}
+ boot_error(ctx,ctx.cursor,"unsupported C type");
+}
+fn boot_c_function(ctx:*BootContext,node:*BootNode) {
+ if (node.flags&2)!=0 {boot_c_text(ctx,node.name);return;}
+ boot_c_text(ctx,"f");boot_c_number(ctx,node.id);
+}
+fn boot_c_binding(ctx:*BootContext,node:*BootNode) {
+ if node.kind==BN_CONST {boot_c_text(ctx,"c");}else{boot_c_text(ctx,"v");}
+ boot_c_number(ctx,node.id);
+}
+fn boot_c_temp(ctx:*BootContext,node:*BootNode) {boot_c_text(ctx,"t");boot_c_number(ctx,node.id);}
+fn boot_c_place(ctx:*BootContext,node:*BootNode) {boot_c_text(ctx,"p");boot_c_number(ctx,node.id);}
+fn boot_c_field(ctx:*BootContext,node:*BootNode) {boot_c_text(ctx,"m");boot_c_number(ctx,node.id);}
+fn boot_c_string(ctx:*BootContext,token:*BootToken) {
+ boot_c_text(ctx,"(uint8_t*)\"");let mut i:u64=0;
+ while i<token.length {
+  let c:u8=token.text[i];
+  // Exactly three octal digits avoid adjacency ambiguities of C hex escapes.
+  fprintf(ctx.output,"\\%03o",c as u32);i=i+1;
+ }
+ boot_c_text(ctx,"\"");
+}
+fn boot_c_decl(ctx:*BootContext,node:*BootNode) {
+ boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_temp(ctx,node);boot_c_text(ctx," = ");
+}
+fn boot_c_op(ctx:*BootContext,op:i32) {
+ if op==BT_EQ{boot_c_text(ctx,"==");return;}if op==BT_NE{boot_c_text(ctx,"!=");return;}
+ if op==BT_LE{boot_c_text(ctx,"<=");return;}if op==BT_GE{boot_c_text(ctx,">=");return;}
+ if op==BT_SHL{boot_c_text(ctx,"<<");return;}if op==BT_SHR{boot_c_text(ctx,">>");return;}
+ fputc(op,ctx.output);
+}
+fn boot_c_integer(ty:*BootType)->bool {return ty.kind>=BY_I8&&ty.kind<=BY_U64;}
+fn boot_c_bits(ty:*BootType)->i32 {
+ if ty.kind==BY_I8||ty.kind==BY_U8{return 8;}if ty.kind==BY_I16||ty.kind==BY_U16{return 16;}
+ if ty.kind==BY_I32||ty.kind==BY_U32{return 32;}return 64;
+}
+fn boot_emit_place(ctx:*BootContext,node:*BootNode) {
+ if ctx.failed{return;}
+ if node.kind==BN_IDENT {
+  boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = &");boot_c_binding(ctx,node.decl);boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_UNARY&&node.op==42 {
+  boot_emit_expr(ctx,node.left);boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_MEMBER {
+  if node.left.ty.kind==BY_PTR{boot_emit_expr(ctx,node.left);}else{boot_emit_place(ctx,node.left);}
+  boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = &(");
+  if node.left.ty.kind==BY_PTR{boot_c_temp(ctx,node.left);}else{boot_c_place(ctx,node.left);}
+  boot_c_text(ctx,"->");boot_c_field(ctx,node.decl);boot_c_text(ctx,");\n");return;
+ }
+ if node.kind==BN_INDEX {
+  boot_emit_expr(ctx,node.left);boot_emit_expr(ctx,node.right);
+  boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = &(");
+  boot_c_temp(ctx,node.left);boot_c_text(ctx,"[");boot_c_temp(ctx,node.right);boot_c_text(ctx,"]);\n");return;
+ }
+ boot_error(ctx,node.token,"expression has no address");
+}
+fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
+ if ctx.failed||node==0 as *BootNode{return;}
+ if node.kind==BN_INT||node.kind==BN_FLOAT {
+  boot_c_decl(ctx,node);boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")(");if node.kind==BN_INT {fprintf(ctx.output,"%lluULL",node.value as u64);}else{boot_c_text(ctx,node.token.text);}boot_c_text(ctx,");\n");return;
+ }
+ if node.kind==BN_BOOL {boot_c_decl(ctx,node);if node.value==0{boot_c_text(ctx,"false");}else{boot_c_text(ctx,"true");}boot_c_text(ctx,";\n");return;}
+ if node.kind==BN_STRING {boot_c_decl(ctx,node);boot_c_string(ctx,node.token);boot_c_text(ctx,";\n");return;}
+ if node.kind==BN_IDENT {boot_c_decl(ctx,node);boot_c_binding(ctx,node.decl);boot_c_text(ctx,";\n");return;}
+ if node.kind==BN_SIZEOF {boot_c_decl(ctx,node);boot_c_text(ctx,"(int64_t)sizeof(");boot_c_type(ctx,node.aux);boot_c_text(ctx,");\n");return;}
+ if node.kind==BN_MEMBER&&node.left.ty.kind==BY_STRUCT {
+  boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);boot_c_temp(ctx,node.left);boot_c_text(ctx,".");boot_c_field(ctx,node.decl);boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_MEMBER||node.kind==BN_INDEX||(node.kind==BN_UNARY&&node.op==42) {
+  boot_emit_place(ctx,node);boot_c_decl(ctx,node);boot_c_text(ctx,"*");boot_c_place(ctx,node);boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_UNARY&&node.op==38 {
+  boot_emit_place(ctx,node.left);boot_c_decl(ctx,node);boot_c_place(ctx,node.left);boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_UNARY {
+  boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);
+  if node.op==45&&boot_c_integer(node.ty) {
+   boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")(0ULL-(uint64_t)");boot_c_temp(ctx,node.left);boot_c_text(ctx,")");
+  }else{boot_c_op(ctx,node.op);boot_c_temp(ctx,node.left);}
+  boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_CAST {
+  boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")");
+  if (node.left.ty.kind==BY_F32||node.left.ty.kind==BY_F64)&&boot_c_integer(node.ty) {
+   if (node.ty.kind&1)==0{boot_c_text(ctx,"aeth_ftos(");}else{boot_c_text(ctx,"aeth_ftou(");}
+   boot_c_temp(ctx,node.left);boot_c_text(ctx,",");boot_c_number(ctx,boot_c_bits(node.ty));boot_c_text(ctx,");\n");return;
+  }
+  if node.left.ty.kind==BY_PTR&&node.ty.kind!=BY_PTR {boot_c_text(ctx,"(uintptr_t)");}
+  if node.ty.kind==BY_PTR&&node.left.ty.kind!=BY_PTR {boot_c_text(ctx,"(uintptr_t)");}
+  boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_CALL {
+  let mut arg:*BootNode=node.params;
+  while arg!=0 as *BootNode {boot_emit_expr(ctx,arg);arg=arg.next;}
+  if node.ty.kind!=BY_VOID{boot_c_decl(ctx,node);}
+  boot_c_function(ctx,node.decl);boot_c_text(ctx,"(");arg=node.params;
+  while arg!=0 as *BootNode {
+   boot_c_temp(ctx,arg);arg=arg.next;if arg!=0 as *BootNode{boot_c_text(ctx,",");}
+  }
+  boot_c_text(ctx,");\n");return;
+ }
+ if node.kind==BN_BINARY {
+  boot_emit_expr(ctx,node.left);
+  if node.op==BT_AND||node.op==BT_OR {
+   boot_c_decl(ctx,node);boot_c_temp(ctx,node.left);boot_c_text(ctx,";\nif (");if node.op==BT_OR{boot_c_text(ctx,"!");}
+   boot_c_temp(ctx,node);boot_c_text(ctx,") {\n");boot_emit_expr(ctx,node.right);boot_c_temp(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.right);boot_c_text(ctx,";\n}\n");return;
+  }
+  boot_emit_expr(ctx,node.right);boot_c_decl(ctx,node);
+  let integer:bool=boot_c_integer(node.left.ty);
+  if integer&&(node.op==43||node.op==45||node.op==42||node.op==BT_SHL) {
+   boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")((uint64_t)");boot_c_temp(ctx,node.left);boot_c_op(ctx,node.op);
+   if node.op==BT_SHL{boot_c_text(ctx,"((uint64_t)");boot_c_temp(ctx,node.right);boot_c_text(ctx," & ");boot_c_number(ctx,boot_c_bits(node.ty)-1);boot_c_text(ctx,")");}
+   else{boot_c_text(ctx,"(uint64_t)");boot_c_temp(ctx,node.right);}
+   boot_c_text(ctx,")");
+  }else if integer&&(node.op==47||node.op==37){
+   // Helpers define division overflow and trap zero consistently at every -O.
+   let signed:bool=(node.left.ty.kind&1)==0;
+   boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")");
+   if signed{boot_c_text(ctx,"aeth_sdiv(");}else{boot_c_text(ctx,"aeth_udiv(");}
+   boot_c_temp(ctx,node.left);boot_c_text(ctx,",");boot_c_temp(ctx,node.right);boot_c_text(ctx,",");boot_c_number(ctx,boot_c_bits(node.ty));boot_c_text(ctx,",");
+   if node.op==37{boot_c_text(ctx,"1)");}else{boot_c_text(ctx,"0)");}
+  }else if integer&&node.op==BT_SHR {
+   boot_c_temp(ctx,node.left);boot_c_text(ctx," >> ((uint64_t)");boot_c_temp(ctx,node.right);boot_c_text(ctx," & ");boot_c_number(ctx,boot_c_bits(node.ty)-1);boot_c_text(ctx,")");
+  }else{
+   boot_c_temp(ctx,node.left);boot_c_op(ctx,node.op);boot_c_temp(ctx,node.right);
+  }
+  boot_c_text(ctx,";\n");return;
+ }
+ boot_error(ctx,node.token,"unsupported expression in C emitter");
+}
+fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
+ if ctx.failed||node==0 as *BootNode{return;}
+ if node.kind==BN_BLOCK {
+  boot_c_text(ctx,"{\n");let mut stmt:*BootNode=node.body;
+  while stmt!=0 as *BootNode {boot_emit_stmt(ctx,stmt);stmt=stmt.next;}
+  boot_c_text(ctx,"}\n");return;
+ }
+ if node.kind==BN_LET {
+  boot_emit_expr(ctx,node.left);boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_ASSIGN {
+  boot_emit_place(ctx,node.left);boot_emit_expr(ctx,node.right);boot_c_text(ctx,"*");boot_c_place(ctx,node.left);boot_c_text(ctx," = ");boot_c_temp(ctx,node.right);boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_EXPR {boot_emit_expr(ctx,node.left);return;}
+ if node.kind==BN_RETURN {
+  if node.left!=0 as *BootNode {boot_emit_expr(ctx,node.left);boot_c_text(ctx,"return ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");}
+  else{boot_c_text(ctx,"return;\n");}return;
+ }
+ if node.kind==BN_IF {
+  boot_emit_expr(ctx,node.left);boot_c_text(ctx,"if (");boot_c_temp(ctx,node.left);boot_c_text(ctx,") ");boot_emit_stmt(ctx,node.body);
+  if node.third!=0 as *BootNode{boot_c_text(ctx,"else {\n");boot_emit_stmt(ctx,node.third);boot_c_text(ctx,"}\n");}return;
+ }
+ if node.kind==BN_WHILE {
+  boot_c_text(ctx,"while (true) {\n");boot_emit_expr(ctx,node.left);boot_c_text(ctx,"if (!");boot_c_temp(ctx,node.left);boot_c_text(ctx,") break;\n");boot_emit_stmt(ctx,node.body);boot_c_text(ctx,"}\n");return;
+ }
+ if node.kind==BN_BREAK{boot_c_text(ctx,"break;\n");return;}
+ if node.kind==BN_CONTINUE{boot_c_text(ctx,"continue;\n");return;}
+ boot_error(ctx,node.token,"unsupported statement in C emitter");
+}
+fn boot_emit_signature(ctx:*BootContext,node:*BootNode) {
+ if (node.flags&2)!=0{boot_c_text(ctx,"extern ");}
+ boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_function(ctx,node);boot_c_text(ctx,"(");
+ let mut param:*BootNode=node.params;
+ if param==0 as *BootNode{boot_c_text(ctx,"void");}
+ while param!=0 as *BootNode{
+  boot_c_type(ctx,param.ty);boot_c_text(ctx," ");boot_c_binding(ctx,param);param=param.next;
+  if param!=0 as *BootNode{boot_c_text(ctx,",");}
+ }
+ if (node.flags&4)!=0{boot_c_text(ctx,",...");}boot_c_text(ctx,")");
+}
+fn boot_emit_struct(ctx:*BootContext,ty:*BootType) {
+ if ctx.failed||ty.emitted==2{return;}
+ if ty.emitted==1 {boot_error(ctx,ctx.cursor,"recursive struct value layout");return;}
+ ty.emitted=1;let mut field:*BootNode=ty.fields;
+ while field!=0 as *BootNode {if field.ty.kind==BY_STRUCT{boot_emit_struct(ctx,field.ty);}field=field.next;}
+ boot_c_text(ctx,"struct s");boot_c_number(ctx,ty.id);boot_c_text(ctx," {\n");field=ty.fields;
+ while field!=0 as *BootNode {
+  boot_c_type(ctx,field.ty);boot_c_text(ctx," ");boot_c_field(ctx,field);boot_c_text(ctx,";\n");field=field.next;
+ }
+ boot_c_text(ctx,"};\n");ty.emitted=2;
+}
+fn boot_emit_float_constant(ctx:*BootContext,node:*BootNode) {
+ if node.kind==BN_UNARY {boot_c_text(ctx,"-(");boot_emit_float_constant(ctx,node.left);boot_c_text(ctx,")");return;}
+ boot_c_text(ctx,node.token.text);
+}
+fn boot_emit_constant(ctx:*BootContext,node:*BootNode) {
+ boot_c_text(ctx,"static const ");boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx," = ");
+ if node.ty.kind==BY_BOOL {if node.value==0{boot_c_text(ctx,"false");}else{boot_c_text(ctx,"true");}}
+ else if boot_c_integer(node.ty) {boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")");fprintf(ctx.output,"%lluULL",node.value as u64);}
+ else {boot_emit_float_constant(ctx,node.left);}
+ boot_c_text(ctx,";\n");
+}
+fn boot_emit(ctx:*BootContext)->bool {
+ if ctx.failed||ctx.program==0 as *BootNode||ctx.output==0 as *void{return false;}
+ boot_c_text(ctx,"/* Aether Core compiler output. */\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n");
+ boot_c_text(ctx,"static int64_t aeth_sdiv(int64_t a,int64_t b,unsigned bits,int rem){if(!b)__builtin_trap();int64_t m=bits==64?INT64_MIN:-(INT64_C(1)<<(bits-1));if(a==m&&b==-1)__builtin_trap();return rem?a%b:a/b;}\n");
+ boot_c_text(ctx,"static uint64_t aeth_udiv(uint64_t a,uint64_t b,unsigned bits,int rem){(void)bits;if(!b)__builtin_trap();return rem?a%b:a/b;}\n");
+ boot_c_text(ctx,"static uint64_t aeth_ftou(double x,unsigned bits){if(!(x>0.0))return 0;double lim=bits==64?18446744073709551616.0:(double)(UINT64_C(1)<<bits);if(x>=lim)return bits==64?UINT64_MAX:((UINT64_C(1)<<bits)-1);return (uint64_t)x;}\n");
+ boot_c_text(ctx,"static int64_t aeth_ftos(double x,unsigned bits){if(x!=x)return 0;double lim=bits==64?9223372036854775808.0:(double)(UINT64_C(1)<<(bits-1));int64_t min=bits==64?INT64_MIN:-(INT64_C(1)<<(bits-1));if(x<=-lim)return min;if(x>=lim)return bits==64?INT64_MAX:-min-1;return (int64_t)x;}\n");
+ let mut ty:*BootType=ctx.types;
+ while ty!=0 as *BootType {
+  if ty.kind==BY_STRUCT {boot_c_text(ctx,"typedef struct s");boot_c_number(ctx,ty.id);boot_c_text(ctx," s");boot_c_number(ctx,ty.id);boot_c_text(ctx,";\n");}
+  ty=ty.next;
+ }
+ ty=ctx.types;while ty!=0 as *BootType{if ty.kind==BY_STRUCT{boot_emit_struct(ctx,ty);}ty=ty.next;}
+ let mut item:*BootNode=ctx.program.body;
+ while item!=0 as *BootNode {if item.kind==BN_CONST{boot_emit_constant(ctx,item);}item=item.next;}
+ item=ctx.program.body;
+ while item!=0 as *BootNode{if item.kind==BN_FN{boot_emit_signature(ctx,item);boot_c_text(ctx,";\n");}item=item.next;}
+ item=ctx.program.body;
+ while item!=0 as *BootNode{
+  if item.kind==BN_FN&&(item.flags&2)==0{boot_emit_signature(ctx,item);boot_c_text(ctx," ");boot_emit_stmt(ctx,item.body);}
+  item=item.next;
+ }
+ item=ctx.program.body;
+ while item!=0 as *BootNode {
+  if item.kind==BN_FN&&(item.flags&2)==0&&strcmp(item.name,"main")==0 {
+   boot_c_text(ctx,"int main(int argc,char **argv){");if item.ty.kind!=BY_VOID{boot_c_text(ctx,"return (int)");}
+   boot_c_function(ctx,item);boot_c_text(ctx,"(");if item.params!=0 as *BootNode{boot_c_text(ctx,"argc,(uint8_t**)argv");}
+   boot_c_text(ctx,");");if item.ty.kind==BY_VOID{boot_c_text(ctx,"return 0;");}boot_c_text(ctx,"}\n");
+  }
+  item=item.next;
+ }
+ if ferror(ctx.output)!=0{boot_error(ctx,ctx.cursor,"failed writing generated C");}
+ return !ctx.failed;
+}
