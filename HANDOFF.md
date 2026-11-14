@@ -67,3 +67,9 @@ Shell提出的独立项目接口缺口已实现：`[build] module_paths` / `link
 用户要求的主线文档是根目录 `MAINLINE_TASKS.md`。原20项保持T01–T20及详细验收，T21–T28为此前暂缓扩张的后段正式任务，T29是整体最终收束；旧ROADMAP仅保留导航。JXZ数组接口记为T13/T18的已完成子项，整项尚未完成。
 
 Shell追加的N01已由本线复现：`Node { children: Vec<Node> }` 的data元素仍是空fields占位Node，合法引用转*Node报E2100。最小源码和双方receipt保存在 `WORK/language-blockers/recursive-value/`，挂T02/T04，未修复。Shell保持其已验pin和应用绕过；本线不修改Shell源码。下一项实现仍为统一类型/方法/callee事实，并把此递归泛型占位回填加入回归。
+
+## Shell平台反馈：N02与Linux宿主包
+
+N02已独立复现：本机macOS27.2、SDK27.0，冻结aethc LLVM native对象LC_BUILD_VERSION minos28.0，最终binary为27.0；显式aarch64-apple-macosx27.0对象与binary均为27.0。直接Clang链接返回0但警告object更新；aethc native_compile成功路径丢弃stderr。源码native codegen读取LLVMGetDefaultTargetTriple，native link让C驱动自行选目标，两者没有共享effective target。证据 `WORK/language-blockers/darwin-native-target/results.json`；本次只编译/链接/查对象元数据，没有运行程序、没有修复。T07/T18已补统一目标与deployment/SDK政策、Mach-O回归及链接诊断验收。
+
+Shell报告当前冻结LLVM-O2主执行链已运行；这属于Shell线程报告，本线未独立重跑其产品。Shell将显式部署目标作为临时adapter策略，继续保持pin。语言侧稳定后需提供Linux x86_64可运行aethc/JXZ宿主包、匹配stdlib和manifest/SHA256，并在真实Linux验收后供Shell联验；已列T18/T28。Linux对象或已有GPU应用运行不能替代冻结宿主工具链交付。本次没有下载工具链、创建Linux发布包或改动Shell。
