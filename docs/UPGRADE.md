@@ -1,5 +1,7 @@
 # AetherLang 集中升级交付
 
+> 状态更新（2026-11-15）：本文记录2026-11-14快照及当时测试结果。追加多代理审计发现了数值/ABI、名称捕获、效果、分配对齐、JXZ错误处理等未修缺陷，不能将本文的通过记录解释为完整正确性保证。当前执行任务及证据入口见 [PROJECT_ROADMAP.md](PROJECT_ROADMAP.md)，交接见 [HANDOFF.md](../HANDOFF.md)。本次仅更新审计与任务状态，没有生成新的编译器发布。
+
 2026-11-14，仓库 `J-x-Z/AetherLang`，本地分支 `work/aetherlang-upgrade`。原始起点为 `aceff1522790df3edfe5c711db5884350ab1b44a`。全部源码、工具链、缓存、产物和证据在 `/Volumes/WINDOWS/work`，没有推送远端。最终功能源码为 `0709b33`，主编译器源码为 `a017d18`；交付提交和产物 SHA 见外置 `release/manifest.json`。
 
 这轮完成了主编译器正确性修复、系统与数学基础库重构、真实 Core 自举，以及 CUDA/cuBLAS 和 CUDA-Q 的实际运行。LLVM 仍是主后端；C 后端提供无 LLVM 的独立编译器、可移植实现和差分参照，并承担 Core 自举的机器码落地。没有把语言限定为 Shell 或插件语言。

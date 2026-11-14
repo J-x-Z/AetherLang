@@ -1,124 +1,80 @@
-# AetherLang Project Roadmap
+# AetherLang：成为可靠语言的执行清单
 
-> **AI-Native Systems Programming Language**  
-> **Last Updated**: 2026-01-21  
-> **Status**: P0 Self-Hosting Complete, P1 Core Extensions Complete
+更新：2026-11-15。当前目标是让开发者能够安装工具链、编写多模块程序、得到可信诊断与执行结果、管理资源、测试和交付项目。本清单取代旧的阶段完成率和小时估算；不以统一异构计算引擎的实现作为语言成熟的前提。
 
-## 1. Executive Summary
+## 当前事实与范围
 
-AetherLang is the first **AI-Native Systems Language**, designed for AI to **read, understand, and iterate upon safely**.
+审计基线为本地分支 `work/aetherlang-upgrade` 的 `a6cc268977129a5e69c57de501e04586fabc6060`；主编译器源码 `a017d18`。使用外置冻结的 LLVM+C 编译器 `aetherlang-upgrade-work/release/aethc`，SHA256 `b4d0d036575aa0db02ded37375ba9bdc754c15b5e1a991c22daef3840bc1eecd`。当前 Cargo target 中的二进制是 C-only，不能混作 LLVM 验收对象。
 
-### Dual-Layer Architecture
-- **Layer 0 (Aether Core `.aeth`)**: Rust-like explicit systems programming
-- **Layer 1 (Aether Script `.ath`)**: Python-like syntax, transpiles 1:1 to Core
+三名子代理分别审查前端/自举、IR/后端、标准库/JXZ，主代理补充安装、输出失败、LSP 和编译器健壮性。本轮进行了定向源码检查、真实编译/链接/运行和失败注入；没有修改编译器、运行库源码，没有重跑 Cargo、全量回归、自举完整链或 GPU 验收。
 
----
+已整理 29 组可复现缺陷或能力不一致，**均仍待处理**；这不是29个独立根因，也不表示其他部分无缺陷。只有源码线索、未实现的长期能力、正向对照另行记录。旧测试通过依然是对应样例的有效证据，不能据此断言语言已经完整或正确。
 
-## 2. Completed Milestones
+资产与证据根目录为 `/Volumes/WINDOWS/work/aetherlang-upgrade-work`（下称 WORK）。完整审计索引为 `WORK/audit-normal-language/index.json`，每项含分类、证据路径、适用边界及任务映射。各探针的 `results.json` 保留实际命令、退出状态和输出。
 
-### ✅ P0: Self-Hosting (Complete)
+## 最需要先修的问题
 
-**5/5 compiler modules written in AetherLang:**
+| 证据编号 | 已观察结果 | 归并任务 |
+| --- | --- | --- |
+| B2、F05、B3 | 已定为 f32 的表达式按 f64 计算；`&Self` 在后端失去解析结果；用户 `.add()` 被误当指针 intrinsic | T02：前端到 IR 的语义事实 |
+| B1、B4 | Apple arm64 LLVM 窄整数 C 互调在不同优化级别出错；32 位对象中的 usize 仍为64位 | T07：目标布局与 ABI |
+| F03、C01 | Script 隐藏变量把应为300的结果变成3，参数生成名还会误报重复定义；Core helper 抢占真实外部函数 | T03：生成名称与符号身份 |
+| F01、F02、F06 | pure 漏掉投影写入、同名方法互相污染；requires/ensures 未被实施 | T05：效果与契约 |
+| P01–P03、F04 | 非空 tuple、closure 检查/生成不一致；非法 interface/impl 被接受；跨模块私有方法可调用 | T01、T04：能力边界与核心语义 |
+| R01 | 合法基本对齐分配器下，Vec 的元素要求32字节对齐，实际地址只满足16字节 | T06：分配与资源所有权 |
+| I05 | 约8 KiB、4096项加法的合法输入使主编译器栈溢出；Core 对同类深度有正常诊断 | T09：输入健壮性 |
+| B5、B6 | `@interrupt` 静默生成普通返回；纯整数 no_std C 程序仍依赖 hosted 头文件 | T08：系统能力检查 |
+| R02–R04 | JXZ 测试目录无权限却成功；pipeline 参数校验不同于 spawn；构建产物与登记部分提交 | T11、T12：错误与事务 |
+| I01、I02 | 安装前缀的 stdlib 未被搜索；生成文件失败已破坏原产物 | T14：安装与输出 |
+| I03、I04 | 同名跨模块结构体字段跳转混淆；引用查询漏掉已打开的导入方 | T15：编辑器语义索引 |
+| R05–R07、C02 | 标准库 FFI 声明无法真实链接、文档入口不可导入、旧模块不能解析；Core 错拒合法 u64 cast | T10、T16：库与自举一致性 |
 
-| Module | Functions | Status |
-|--------|-----------|--------|
-| Lexer | 23 | ✅ |
-| Parser | 76 | ✅ |
-| Semantic Analyzer | 68 | ✅ |
-| IR Generator | 52 | ✅ |
-| Code Generator | 40 | ✅ |
-| **Total** | **259** | ✅ |
+上述对齐探针没有解引用错位地址；32位、裸机、中断结论来自编译/IR/对象检查，不是目标机运行。主编译器栈溢出的精确递归根因尚待最小化。普通泛型、C变参提升、部分引用与布局正向对照通过，不能把它们泛化成整个子系统失效。
 
-### ✅ P1: Core Language Extensions (Complete)
+## 执行任务与完成标准
 
-| Phase | Features | Status |
-|-------|----------|--------|
-| **A: Numerics** | `f32`/`f64` support, type inference | ✅ |
-| **B: Generics** | `Vec<T>`, type erasure codegen | ✅ |
-| **C: Closures** | `\|x, y\| x + y` lambda syntax | ✅ |
-| **D: Traits** | `trait Display { fn display(&self); }` | ✅ |
-| **E: Lifetimes** | `&'a T`, `&'static T` annotations | ✅ |
-| **F: Type Aliases** | `type Int = i64;` | ✅ |
-| **G: Modules** | `use foo::{A, B}`, ModuleLoader | ✅ |
+以下全部为待办。P0 是当前阻止可信交付的问题；P1 是最小可用语言工程的补齐项；P2 是完成后交付验证。优先级不等于旧探针的严重性标签。任务完成须有对应代码、回归样例和证据；完成文档不代表完成实现。
 
----
+| ID | 优先级 / 任务 | 具体工作与边界 | 验收条件 |
+| --- | --- | --- | --- |
+| T01 | P0 / 冻结稳定语义与支持集 | 对 `.ath`、`.aeth` 的值、求值顺序、整数/浮点转换、错误、资源、模块及目标能力给出共同规则；列出语法/检查/生成/链接/运行矩阵；校正旧完成声明。`.ath` 保持可读性，`.aeth` 优先明确、稳定、易生成，不维持两套语义。 | 每项稳定能力有正反例；选定后端/目标不支持的功能在检查阶段明确诊断；不能把拒绝功能记为实现功能。 |
+| T02 | P0 / 统一已解析、已定型的语义事实 | 沿现有 Session 管线传递表达式类型、绑定/模块/方法身份、调用目标和投影信息；IR 不再从原始 AST 或名字另猜类型；修 f32、Self、add 和同名符号问题，移除不再使用的模块加载占位旁路。 | B2/F05/B3及相关效果、导航回归通过；两后端 O0/O2/O3 按语言语义计算；名称变化不改变行为；缺失语义事实应报内部错误，不能静默生成 Unit。 |
+| T03 | P0 / 生成代码名称卫生 | Script 临时绑定、主编译器内部符号、Core C helper 均使用不会捕获用户声明的绑定身份/名称分配；真实外部符号保持 ABI 名称。 | 故意使用生成前缀、嵌套作用域、同名外部函数均正确；F03期望300、C01真正调用返回99的 C 实现。 |
+| T04 | P0 / 核心类型、模块与接口规则 | 补齐非空 tuple 的布局/投影/传参/返回；校验 interface/impl 的类型、方法签名、缺失和冲突实现及最小静态分派；保留模块身份并执行私有性；核实泛型实例化及未实例化模板检查政策。普通泛型实现继续使用。 | P01/P03/F04修复，合法组合两后端可执行，非法声明在语义阶段拒绝。Closure 在捕获/生命周期完整实现前明确标实验并诊断，不宣称已支持；其完整实现仍留在后续清单。 |
+| T05 | P0 / 效果与契约真实执行 | 基于精确 callee 和 place 投影传播效果；写字段/索引/解引用一致；明确 requires/ensures 的静态检查、运行检查和失败语义，再实现；未证明契约不能成为优化假设。 | pure 非法写入被拒绝、不同类型同名方法互不干扰；契约失败在规定模式下可观察，O0/O2/O3遵守同一政策，不再静默忽略。 |
+| T06 | P0 / 对齐分配与最小资源所有权 | 先修 Vec 对齐、溢出及扩容回滚；为资源 owner 明确 move/copy、借用和析构/显式转移边界，实施作用域退出清理；贯通 Vec、fd、Tensor、QuantumLease、提前 return 和 `?`。保留 raw pointer、unsafe 与低层分配能力。 | 超对齐元素实际读写正确；safe 使用不能复制 owner 后重复释放或逃逸失效引用；正常/错误/嵌套退出恰好释放一次，失败保留原对象；ASan/UBSan及资源计数通过。仅更换包装API不算闭合。 |
+| T07 | P0 / 目标布局与完整 ABI 规则 | 共享 target data layout，修 usize/isize；按目标在声明、定义及调用点实施标量扩展、聚合布局和调用约定；保留 C 后端作为独立可运行参照。 | 主机双向 C ABI 独立 oracle覆盖 signed/unsigned 窄整数、float、聚合及变参，O0/O2/O3一致；32位编译/链接/运行分别记录；不支持目标明确拒绝。 |
+| T08 | P0 / 系统编程能力诚实落地 | 检查 interrupt/naked/asm 等目标属性；拆分 hosted 与 freestanding runtime/头文件；延续 volatile、atomic、FFI 的可控低层行为。 | 纯计算 no_std 能生成可链接对象；目标属性有正确对象级证据，未支持必须报错；对象成功不等于内核启动成功。中断功能完整支持需另有目标运行验收，不能以拒绝代替实现。 |
+| T09 | P0 / 编译器健壮性与诊断 | 最小化深表达式崩溃；限制或消除危险递归，处理语法深度、递归实例化和诊断恢复；对词法、解析、类型边界做有界变异/模糊测试。 | I05及畸形输入得到有位置的诊断和非零退出，无 abort/挂死；限额前合法输入正常；主编译器与 LSP 不因单文件崩溃；保留最小回归。 |
+| T10 | P1 / 可用的基础标准库 | 形成稳定模块清单；补齐持有长度的 Bytes/String、Vec、Option/Result、最小 Map 及必要迭代操作，统一分配/所有权/错误契约；修 LLVM FFI 和公开示例；迁移有实际消费者的旧模块。 | 每个稳定公开模块有消费者编译、链接、运行和失败测试；二进制/NUL、UTF-8、空值、容量边界可用；历史模块单列，不以语法通过冒充能力。JNI等可选集成未实测前保持实验状态且保留待办。 |
+| T11 | P1 / 文件、目录与进程错误链 | 文件长度、短读写、EOF与错误分离；文件/目录/路径返回可区分错误；pipeline 先验证所有命令，再创建资源，统一 spawn 参数语义；保留 argv、fd 和退出状态。 | R03修复；权限、丢失文件、无效fd、exec失败、提前退出和中断测试无误报、无FD/子进程泄漏；含NUL文件往返正确。 |
+| T12 | P0 / JXZ 失败可靠与构建事务 | 测试发现不能吞权限/类型/I/O错误；构建二进制与产物登记一致发布或回滚；clean只清理已拥有产物；把实际进程失败传播到命令退出码。 | R02/R04故障注入回归；发现不到测试与无法读取测试严格区分；每个提交失败点保留旧有效产物和用户文件，不遗留未登记构建结果。 |
+| T13 | P1 / 最小多包项目管理 | 统一配置、模块根和工具链选择；实现本地路径依赖、循环/重名检查、确定性解析及记录；核实缓存失效和测试入口。暂不建在线注册表或自动执行依赖脚本。 | 独立目录中创建→依赖→构建→测试→修改依赖→重建→clean完整运行；错误配置与依赖冲突准确拒绝；机器可读结果和退出码一致。 |
+| T14 | P0 / 可搬移安装与输出保护 | 从安装前缀/sysroot发现匹配版本stdlib；安装器版本与校验、失败回滚；主编译器以同目录临时产物+原子发布替代直接覆盖，并传播链接/写入失败。 | 独立临时前缀、任意cwd、无开发树依赖地编译真实库程序；升级中断可恢复；I01/I02及写满、链接失败保留原产物，全部测试资产留外置盘。 |
+| T15 | P1 / CLI与LSP共用项目语义 | 用模块/声明身份索引字段和方法，查询覆盖已打开的依赖及导入方；统一项目配置、未保存文件、诊断映射；校准 hover/definition/references 的声明能力。 | I03/I04复现转为通过；同名跨模块、UTF-8、Script映射、编辑后查询正确；CLI和LSP诊断一致。补全/重命名等新增功能另按真实需求排期。 |
+| T16 | P0 / 最小自举持续成立 | 修 Core helper 名称和 u64 cast；主编译器与 Core 共享子集的语义测试；维持真实 stage0→1→2→3→4链，不强制本阶段迁移整个 Rust/LLVM 主编译器。 | C01/C02通过；相关修改后完整链、生成C固定点、真实工作负载及sanitizer通过；确认后代没有偷偷调用Rust种子；子集外能力明确拒绝。 |
+| T17 | P1 / 三类真实程序验收 | JXZ与多模块文件工具；持续运行/事件驱动的小服务；计算和数据结构组合。用小型命令执行器验证未来Shell需要的参数/管道/退出码，不在本阶段实现完整Shell产品。 | 核心逻辑在Aether；合法/错误/重复调用/长期资源使用都验证；CPU数学和已有量子/CUDA能力保留相关回归，应用缺口与编译器缺陷分别定位。 |
+| T18 | P1 / 可复现构建与平台验证 | 把新回归接入现有统一测试入口；固定编译器/stdlib/工具链身份；主机优先、逐个平台实际运行CI；串行全量构建，小型独立测试才并行。 | LLVM/C及O0/O2关键对照，数字/ABI定向O3；现有套件与新增样例可一键复现；Mac arm64先验收，Linux等单列编译/链接/运行状态，CI配置存在不算运行通过。 |
+| T19 | P2 / 基于正确性的性能改进 | 正确性修复后测编译耗时、编译器RSS、产物大小、程序耗时和长期资源曲线；只优化有数据的瓶颈，必要时去掉重复遍历/复制，保持语义。 | 固定输入、期望结果、工具链和多次样本，与已冻结版本比较；报告回退及测量边界；不以牺牲检查或数值精度换分数。 |
+| T20 | P2 / 独立复审与交付 | 将探针收录为仓库回归；实现者以外代理复核高风险差异；处理交叉影响，再做一次最终集成；更新示例、迁移说明、支持矩阵、HANDOFF及源码/产物清单。 | 本阶段承诺的稳定能力与发布阻断项全部闭合；保留未实现实验项的明确状态；本地逻辑提交可追溯，无未说明失败；不把测试全绿表述成不存在任何缺陷。 |
 
-## 3. Current Roadmap
+## 执行顺序与并行边界
 
-### 🚧 P2: Cross-Platform Support (4h estimated)
+1. **先阻止错误结果**：T01快速定界；核心集成负责T02，独立代理可做T07、T09和T12。同步处理T03、T05的已证实故障，避免继续靠名称特殊分支补洞。
+2. **补完整资源和系统基础**：T04/T05的规则落定后推进T06；T07与T08共用目标描述。T10/T11等待稳定所有权与错误接口再迁移公开库，避免反复改调用方。
+3. **让项目可安装、可维护**：T14可独立先修；T12之后推进T13，T02/T13支持T15。T16的两个新回归可先修，受影响的语义改动落定后执行完整自举链。
+4. **真实负载、性能和最终复审**：T17贯穿实施，T18持续收录；最后T19/T20。每个修复先跑有区分力的定向测试，最终统一验收；只有新变化或新证据才重复既有全量测试。
 
-| Task | Target | Status |
-|------|--------|--------|
-| Linux x86_64 | ELF64 output | 📋 Planned |
-| Windows | MSVC/MinGW | 📋 Planned |
-| Cross-compilation | `--target` flag | 📋 Planned |
+主机同时最多一个全量编译，Cargo并发沿用3；所有工具链和资产继续放外置卷。按逻辑本地提交，不推送。每个关键改进报告改动、验证和下一项；HANDOFF记录实际进度。以上是工程任务清单，不再沿用“52小时全部完成”等未经拆解的估算。
 
-### 📋 P3: SIMD & Matrix (12h estimated)
+**下一项具体实施**：以B2/F05/B3为第一组，统一typed表达式、方法签名和callee向IR的传递并加入回归；可并行处理B1窄整数ABI和I05深表达式崩溃。复用已保存探针，先确认失效点后修改，不重新全面审计。
 
-| Task | Description | Status |
-|------|-------------|--------|
-| `#[simd]` annotation | Auto-vectorization hints | 📋 Planned |
-| Vector types | `f32x4`, `f64x2`, `i32x8` | 📋 Planned |
-| Matrix library | `Matrix<T, M, N>` generic type | 📋 Planned |
-| BLAS FFI | Basic linear algebra bindings | 📋 Planned |
+## 本阶段暂缓，保留设计入口
 
-### 📋 P4: Kernel Development (16h estimated)
+- 通用异构张量/算子编译器、设备调度器与统一内存管理平台；Metal、Adreno/Vulkan的新执行后端。
+- 稀疏张量/张量网络、完整JAX式JIT/vmap、大模型压缩、组合优化、流体或金融PDE框架。
+- 扩大CUDA-Q/量子算法范围；现有接口维护，未来仍遵守8GiB优先、16GiB扩展和首个16q验证约束。
+- 完整捕获闭包、动态trait、const generics、async生态、在线包注册表、整个主编译器全量自举；这些不是“正常语言”的通用必备项，但现有语法不能假装已完整实现。
+- Shell完整产品及内核/驱动工程。保留系统接口与命令执行能力，用小程序验证，不借应用范围再次扩大语言升级。
 
-| Task | Description | Status |
-|------|-------------|--------|
-| `asm!` macro | Inline assembly | 📋 Planned |
-| `#[naked]` | Naked functions | 📋 Planned |
-| `#[interrupt]` | Interrupt handlers | 📋 Planned |
-| `#[repr(C)]` | C-compatible layout | 📋 Planned |
-| `#![no_std]` | Freestanding mode | 📋 Planned |
-
-### 📋 P5: AI/GPU Compute (20h estimated)
-
-| Task | Description | Status |
-|------|-------------|--------|
-| CUDA FFI | NVIDIA GPU binding | 📋 Planned |
-| Metal FFI | Apple GPU binding | 📋 Planned |
-| `Tensor<T, Shape>` | Tensor type with shape inference | 📋 Planned |
-| Autodiff | Automatic differentiation | 📋 Planned |
-
----
-
-## 4. Future Stages
-
-### Stage 16: Package Manager
-- `apm` package manager
-- Dependency resolution
-- Central registry
-
-### Stage 17: IDE Support
-- Language Server Protocol (LSP)
-- Syntax highlighting
-- Code completion
-
-### Stage 18: AI-Native Features
-- AI-IR semantic graph
-- Intent propagation
-- AI-guided optimization
-
----
-
-## 5. Platform Support
-
-| Platform | Arch | Status |
-|----------|------|--------|
-| macOS | ARM64 | ✅ Complete |
-| macOS | x86_64 | ✅ Complete |
-| Linux | x86_64 | 📋 P2 |
-| Windows | x86_64 | 📋 P2 |
-
----
-
-## 6. Time Estimates
-
-| Phase | Estimated Time | Dependencies |
-|-------|----------------|--------------|
-| P2 Platform | 4h | None |
-| P3 SIMD/Matrix | 12h | P1 |
-| P4 Kernel | 16h | P1 |
-| P5 AI/GPU | 20h | P3, P4 |
-| **Total Remaining** | **52h** | |
+暂缓功能的“明确不支持”只能关闭误接受问题，不能关闭其实现任务；稳定集中的合法程序误编译必须真正修复。后续扩展应建立在可用类型、模块、内存、ABI和项目工具之上。
