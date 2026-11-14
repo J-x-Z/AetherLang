@@ -61,6 +61,7 @@ impl Session {
         } else { (source, None) };
         let mut resolver = Resolver::new(paths).with_overlays(overlays);
         let program = resolver.resolve(path, core).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
+        let program = super::specialize::specialize(program).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
         Ok(Self { program, resolver, script_map })
     }
     pub fn check(&self) -> Result<SemanticFacts, Diagnostic> {
@@ -85,6 +86,7 @@ impl Session {
 
 fn error_code(error: &Error) -> &'static str {
     match error {
+        Error::Semantic { code, .. } => code,
         Error::UnexpectedToken { .. } | Error::Expected(_, _) | Error::ExpectedIdent { .. }
         | Error::ExpectedType { .. } | Error::ExpectedExpr { .. } | Error::ExpectedPattern { .. }
         | Error::ExpectedArraySize { .. } | Error::InvalidOperator { .. } => "E1000",

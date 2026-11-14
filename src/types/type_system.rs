@@ -54,6 +54,8 @@ impl PrimitiveType {
 pub enum ResolvedType {
     Primitive(PrimitiveType),
     Pointer(Box<ResolvedType>),
+    /// Qualifies pointee storage, not the value produced by a read.
+    Volatile(Box<ResolvedType>),
     Reference { mutable: bool, inner: Box<ResolvedType> },
     Array { elem: Box<ResolvedType>, size: usize },
     Slice(Box<ResolvedType>),
@@ -131,6 +133,10 @@ impl ConstValue {
 }
 
 impl ResolvedType {
+    pub fn unqualified(&self) -> &Self {
+        match self { Self::Volatile(inner) => inner.unqualified(), other => other }
+    }
+
     pub fn unit() -> Self {
         Self::Primitive(PrimitiveType::Unit)
     }

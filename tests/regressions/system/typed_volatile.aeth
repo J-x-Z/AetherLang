@@ -1,0 +1,38 @@
+type Register = *volatile u32;
+struct Bank { counter: u32, values: [u32;2], indirect: Register }
+@repr(packed) struct Packed { tag: u8, value: u32 }
+#[no_mangle] fn typed_read_twice(pointer: Register) -> u32 {
+    unsafe { let a: u32 = *pointer; let b: u32 = *pointer; return a + b; }
+}
+#[no_mangle] @volatile fn annotated_read_twice(pointer: *u32) -> u32 {
+    unsafe { return *pointer + *pointer; }
+}
+fn update(pointer: *volatile Bank) -> u32 {
+    unsafe {
+        pointer.counter += 1;
+        pointer.values[1] += 2;
+        let element: Register = &mut pointer.values[1] as Register;
+        *element += 1;
+        *pointer.indirect += 3;
+        return pointer.counter + pointer.values[1];
+    }
+}
+fn main() -> i32 {
+    let mut value: u32 = 10;
+    let pointer: Register = &mut value as Register;
+    if typed_read_twice(pointer) != (20 as u32) { return 1; }
+    let mut bank: Bank = Bank { counter: 1, values: [2,3], indirect: pointer };
+    if update(&mut bank as *volatile Bank) != (8 as u32) { return 2; }
+    if value != (13 as u32) || bank.values[1] != (6 as u32) { return 3; }
+    if annotated_read_twice(&mut value as *u32) != (26 as u32) { return 4; }
+    let mut packed: Packed = Packed { tag: 1, value: 9 };
+    let packed_pointer: *volatile Packed = &mut packed as *volatile Packed;
+    unsafe {
+        packed_pointer.value += 2;
+        if packed_pointer.value != (11 as u32) { return 5; }
+        let zero: *volatile () = 1 as *volatile ();
+        *zero = ();
+        let unit: () = *zero;
+    }
+    return 0;
+}

@@ -1,0 +1,13 @@
+// Type-only layout queries: these declarations allocate no large object.
+struct Huge { bytes: [u8;4294967297], tail: u64 }
+union HugeUnion { bytes: [u8;4294967297], aligned: u64 }
+@repr(packed) union HugePacked { bytes: [u8;4294967297], aligned: u64 }
+fn main()->i32 {
+    if size_of([u8;4294967296]) != (4294967296 as usize) { return 1; }
+    if size_of([u8;4294967297]) != (4294967297 as usize) { return 2; }
+    if size_of([[u16;2147483649];2]) != (8589934596 as usize) { return 3; }
+    if size_of(Huge) != (4294967312 as usize) || offset_of(Huge,tail) != (4294967304 as usize) { return 4; }
+    if size_of(HugeUnion) != (4294967304 as usize) || align_of(HugeUnion) != (8 as usize) { return 5; }
+    if size_of(HugePacked) != (4294967297 as usize) || align_of(HugePacked) != (1 as usize) { return 6; }
+    return 0;
+}

@@ -12,6 +12,7 @@ use crate::utils::{Span, Error, Result};
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    allow_struct_literal: bool,
 }
 
 impl Parser {
@@ -20,12 +21,13 @@ impl Parser {
         Self {
             tokens: lexer.tokenize(),
             pos: 0,
+            allow_struct_literal: true,
         }
     }
 
     /// Create a parser from pre-tokenized input
     pub fn from_tokens(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self { tokens, pos: 0, allow_struct_literal: true }
     }
 
     /// Parse generic parameters: <T, U> or <T, const N: usize>
@@ -49,7 +51,7 @@ impl Parser {
                 params.push(GenericParam::Type(name));
             }
 
-            if self.check(&TokenKind::Gt) {
+            if self.at_type_close() {
                 break;
             }
             self.expect(TokenKind::Comma)?;
@@ -64,7 +66,7 @@ impl Parser {
         let mut params = Vec::new();
         loop {
             params.push(self.parse_ident()?);
-            if self.check(&TokenKind::Gt) {
+            if self.at_type_close() {
                 break;
             }
             self.expect(TokenKind::Comma)?;
@@ -91,37 +93,8 @@ impl Parser {
             return Ok(GenericArg::Const(Expr::Literal(Literal::Int(n, span))));
         }
 
-        // Check for identifier - could be type or const param
-        // Heuristic: if followed by < or ::, it's a type; if it's uppercase single letter, assume type param
-        // Otherwise, try to parse as type first
-        if let TokenKind::Ident(name) = self.current_kind().clone() {
-            // Look ahead to determine if this is a type or const
-            if let Some(next) = self.peek() {
-                match &next.kind {
-                    // Definitely a type: Vec<T>, std::io::Result
-                    TokenKind::Lt | TokenKind::ColonColon => {
-                        let ty = self.parse_type()?;
-                        return Ok(GenericArg::Type(ty));
-                    }
-                    // If followed by comma or >, could be either
-                    TokenKind::Comma | TokenKind::Gt => {
-                        // Heuristic: lowercase single-char or ALL_CAPS likely const param
-                        // Otherwise treat as type
-                        if name.chars().all(|c| c.is_ascii_uppercase() || c == '_') && name.len() > 1 {
-                            // Likely a const param name like SIZE, N, M
-                            let span = self.current().span;
-                            self.advance();
-                            return Ok(GenericArg::Const(Expr::Ident(Ident { name: name.clone(), span })));
-                        }
-                        // Treat as type
-                        let ty = self.parse_type()?;
-                        return Ok(GenericArg::Type(ty));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
+        // Bare identifiers are types. Const arguments use literals or braces;
+        // capitalization never changes the meaning of a user-defined type.
         // Default: parse as type
         let ty = self.parse_type()?;
         Ok(GenericArg::Type(ty))
@@ -160,6 +133,24 @@ impl Parser {
     }
 
     fn expect(&mut self, expected: TokenKind) -> Result<Token> {
+        // In a type context one closing angle may be the first byte of >=,
+        // >> or >>=. Keep the remaining operator and its exact source span.
+        if matches!(expected, TokenKind::Gt) && !self.check(&TokenKind::Gt) {
+            let rest = match self.current_kind() {
+                TokenKind::Ge => Some(TokenKind::Eq),
+                TokenKind::Shr => Some(TokenKind::Gt),
+                TokenKind::ShrEq => Some(TokenKind::Ge),
+                _ => None,
+            };
+            if let Some(rest) = rest {
+                let mut token = self.current().clone();
+                token.kind = TokenKind::Gt;
+                token.span.end = token.span.start + 1;
+                self.tokens[self.pos].kind = rest;
+                self.tokens[self.pos].span.start += 1;
+                return Ok(token);
+            }
+        }
         if self.check(&expected) {
             Ok(self.advance())
         } else {
@@ -178,6 +169,18 @@ impl Parser {
         } else {
             false
         }
+    }
+
+    fn at_type_close(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Gt | TokenKind::Ge | TokenKind::Shr | TokenKind::ShrEq)
+    }
+
+    fn parse_control_expr(&mut self) -> Result<Expr> {
+        let previous = self.allow_struct_literal;
+        self.allow_struct_literal = false;
+        let result = self.parse_expr();
+        self.allow_struct_literal = previous;
+        result
     }
 
     // ==================== Parsing Methods ====================
@@ -230,15 +233,10 @@ impl Parser {
 
     /// Parse a top-level item
     fn parse_item(&mut self) -> Result<Item> {
-        // Collect attributes (#[...])
+        // Both annotation spellings may be mixed without changing their meaning.
         let mut attributes = Vec::new();
-        while self.check(&TokenKind::Hash) {
-            attributes.push(self.parse_attribute()?);
-        }
-        
-        // Collect @annotations (@simd, @inline, etc.)
-        while self.check(&TokenKind::At) {
-            attributes.push(self.parse_annotation()?);
+        while self.check(&TokenKind::Hash) || self.check(&TokenKind::At) {
+            attributes.push(if self.check(&TokenKind::Hash) { self.parse_attribute()? } else { self.parse_annotation()? });
         }
         
         // Handle pub modifier - peek ahead to see what comes next
@@ -247,7 +245,11 @@ impl Parser {
                 // pub can precede fn, struct, enum, impl, interface, etc.
                 if let Some(next) = self.peek() {
                     match &next.kind {
-                        TokenKind::Fn => Ok(Item::Function(self.parse_function()?)),
+                        TokenKind::Fn => {
+                            let mut function = self.parse_function()?;
+                            function.annotations = attributes;
+                            Ok(Item::Function(function))
+                        },
                         TokenKind::Struct => Ok(Item::Struct(self.parse_struct_with_attrs(attributes)?)),
                         TokenKind::Enum => {
                             self.advance(); // consume 'pub'
@@ -267,6 +269,8 @@ impl Parser {
                             alias.is_pub = true;
                             Ok(Item::TypeAlias(alias))
                         },
+                        TokenKind::Static => Ok(Item::Static(self.parse_static_item()?)),
+                        TokenKind::Union => Ok(Item::Union(self.parse_union_with_attrs(attributes)?)),
                         _ => Err(Error::UnexpectedToken {
                             expected: "fn, struct, enum, impl, interface or type after pub".to_string(),
                             got: format!("{:?}", next.kind),
@@ -294,7 +298,7 @@ impl Parser {
             // Phase 8: System features
             TokenKind::Extern => Ok(Item::Extern(self.parse_extern_block()?)),
             TokenKind::Static => Ok(Item::Static(self.parse_static_item()?)),
-            TokenKind::Union => Ok(Item::Union(self.parse_union_def()?)),
+            TokenKind::Union => Ok(Item::Union(self.parse_union_with_attrs(attributes)?)),
             // P1 Phase B: Trait and Type alias
             TokenKind::Trait => Ok(Item::Trait(self.parse_trait_def()?)),
             TokenKind::Type => Ok(Item::TypeAlias(self.parse_type_alias()?)),
@@ -310,13 +314,37 @@ impl Parser {
         }
     }
     
+    fn parse_annotation_name(&mut self) -> Result<Ident> {
+        if self.current_kind().is_keyword() {
+            let name = format!("{:?}", self.current_kind()).to_ascii_lowercase();
+            let span = self.current().span;
+            self.advance();
+            Ok(Ident { name, span })
+        } else { self.parse_ident() }
+    }
+
+    fn parse_union_with_attrs(&mut self, attributes: Vec<Annotation>) -> Result<UnionDef> {
+        let mut definition = self.parse_union_def()?;
+        for annotation in attributes {
+            if annotation.name.name == "repr" {
+                let repr = match annotation.args.as_slice() {
+                    [Expr::Ident(name)] if name.name == "C" => Repr::C,
+                    [Expr::Ident(name)] if name.name == "packed" => Repr::Packed,
+                    _ => return Err(Error::Expected("union repr(C) or repr(packed)".into(), annotation.span)),
+                };
+                definition.repr = Some(repr);
+            }
+        }
+        Ok(definition)
+    }
+
     /// Parse an attribute: #[name] or #[name(args)]
     fn parse_attribute(&mut self) -> Result<Annotation> {
         let start_span = self.current().span;
         self.expect(TokenKind::Hash)?;
         self.expect(TokenKind::LBracket)?;
         
-        let name = self.parse_ident()?;
+        let name = self.parse_annotation_name()?;
         
         let mut args = Vec::new();
         if self.check(&TokenKind::LParen) {
@@ -349,14 +377,10 @@ impl Parser {
         let name = self.parse_ident()?;
 
         let type_params = if self.check(&TokenKind::Lt) {
-            // parse_generic_params returns Vec<GenericParam>, extract only Type params as Ident
-            self.parse_generic_params()?
-                .into_iter()
-                .filter_map(|p| match p {
-                    GenericParam::Type(ident) => Some(ident),
-                    GenericParam::Const { .. } => None,
-                })
-                .collect()
+            self.parse_generic_params()?.into_iter().map(|parameter| match parameter {
+                GenericParam::Type(ident) => Ok(ident),
+                GenericParam::Const { name, .. } => Err(Error::Expected("type generic parameter; function const generics are not implemented".into(), name.span)),
+            }).collect::<Result<Vec<_>>>()?
         } else {
             Vec::new()
         };
@@ -547,7 +571,7 @@ impl Parser {
         let start = self.current().span;
         self.expect(TokenKind::At)?;
         
-        let name = self.parse_ident()?;
+        let name = self.parse_annotation_name()?;
         
         // Parse optional arguments: @name(arg1, arg2)
         let args = if self.consume(&TokenKind::LParen) {
@@ -596,11 +620,11 @@ impl Parser {
 
         // Pointer type
         if self.consume(&TokenKind::Star) {
+            let volatile = self.consume(&TokenKind::Volatile);
             let inner = self.parse_type()?;
-            return Ok(Type::Pointer(
-                Box::new(inner),
-                start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
-            ));
+            let span = start.merge(&self.tokens[self.pos.saturating_sub(1)].span);
+            return Ok(if volatile { Type::Volatile(Box::new(inner), span) }
+                else { Type::Pointer(Box::new(inner), span) });
         }
 
         // Reference type with optional lifetime: &T or &'a T or &'a mut T
@@ -695,7 +719,7 @@ impl Parser {
                      let arg = self.parse_generic_arg()?;
                      generic_args.push(arg);
 
-                     if self.check(&TokenKind::Gt) {
+                     if self.at_type_close() {
                          break;
                      }
                      self.expect(TokenKind::Comma)?;
@@ -907,6 +931,20 @@ impl Parser {
     }
 
     fn parse_call_rest(&mut self, func: Expr) -> Result<Expr> {
+        if let Expr::Ident(name) = &func {
+            let query = match name.name.as_str() {
+                "size_of" => Some(LayoutQuery::Size), "align_of" => Some(LayoutQuery::Align),
+                "offset_of" => Some(LayoutQuery::Offset), _ => None,
+            };
+            if let Some(query) = query {
+                let ty = self.parse_type()?;
+                let field = if query == LayoutQuery::Offset { self.expect(TokenKind::Comma)?; Some(self.parse_ident()?) } else { None };
+                let end = self.expect(TokenKind::RParen)?.span;
+                return Ok(Expr::Layout { query, ty, field, span: name.span.merge(&end) });
+            }
+        }
+        let previous = self.allow_struct_literal;
+        self.allow_struct_literal = true;
         let mut args = Vec::new();
         if !self.check(&TokenKind::RParen) {
             loop {
@@ -920,6 +958,7 @@ impl Parser {
             }
         }
         self.expect(TokenKind::RParen)?;
+        self.allow_struct_literal = previous;
         
         // Calculate span
         let start_span = func.span();
@@ -966,18 +1005,9 @@ impl Parser {
             TokenKind::Ident(_) => {
                 let ident = self.parse_ident()?;
                 
-                // Check if this is a struct literal: TypeName { field: value, ... }
-                // Use lookahead: only parse as struct lit if { is followed by ident:
-                // This avoids ambiguity with `if cond { ... }`
-                let is_struct_lit = if self.check(&TokenKind::LBrace) {
-                    // Look ahead: check if next token after { is Ident followed by Colon
-                    self.pos + 1 < self.tokens.len() && 
-                    matches!(&self.tokens[self.pos + 1].kind, TokenKind::Ident(_)) &&
-                    self.pos + 2 < self.tokens.len() &&
-                    matches!(&self.tokens[self.pos + 2].kind, TokenKind::Colon)
-                } else {
-                    false
-                };
+                // A control-flow head reserves the following brace for its body.
+                // Parentheses restore the ordinary expression grammar.
+                let is_struct_lit = self.allow_struct_literal && self.check(&TokenKind::LBrace);
 
                 if is_struct_lit {
                     let start_span = ident.span;
@@ -1032,7 +1062,10 @@ impl Parser {
                     });
                 }
 
+                let previous = self.allow_struct_literal;
+                self.allow_struct_literal = true;
                 let first = self.parse_expr()?;
+                self.allow_struct_literal = previous;
                 if self.consume(&TokenKind::Comma) {
                     let mut elements = vec![first];
                     while !self.check(&TokenKind::RParen) && !self.is_at_end() {
@@ -1074,7 +1107,7 @@ impl Parser {
             // While
             TokenKind::While => {
                 self.advance();
-                let cond = self.parse_expr()?;
+                let cond = self.parse_control_expr()?;
                 let body = self.parse_block()?;
                 Expr::While {
                     cond: Box::new(cond),
@@ -1088,7 +1121,7 @@ impl Parser {
                 self.advance();
                 let var = self.parse_ident()?;
                 self.expect(TokenKind::In)?;
-                let iter = self.parse_expr()?;
+                let iter = self.parse_control_expr()?;
                 let body = self.parse_block()?;
                 Expr::For {
                     var,
@@ -1359,20 +1392,7 @@ impl Parser {
     fn parse_postfix(&mut self, mut expr: Expr) -> Result<Expr> {
         loop {
             if self.consume(&TokenKind::LParen) {
-                // Function call
-                let mut args = Vec::new();
-                while !self.check(&TokenKind::RParen) && !self.is_at_end() {
-                    args.push(self.parse_expr()?);
-                    if !self.consume(&TokenKind::Comma) {
-                        break;
-                    }
-                }
-                self.expect(TokenKind::RParen)?;
-                expr = Expr::Call {
-                    span: expr.span().merge(&self.tokens[self.pos.saturating_sub(1)].span),
-                    func: Box::new(expr),
-                    args,
-                };
+                expr = self.parse_call_rest(expr)?;
             } else if self.consume(&TokenKind::Dot) {
                 let field = self.parse_ident()?;
                 if self.consume(&TokenKind::LParen) {
@@ -1425,7 +1445,7 @@ impl Parser {
         let start = self.current().span;
         self.expect(TokenKind::If)?;
 
-        let cond = self.parse_expr()?;
+        let cond = self.parse_control_expr()?;
         let then_block = self.parse_block()?;
 
         let else_block = if self.consume(&TokenKind::Else) {
@@ -1458,7 +1478,7 @@ impl Parser {
         let start = self.current().span;
         self.expect(TokenKind::Match)?;
 
-        let expr = self.parse_expr()?;
+        let expr = self.parse_control_expr()?;
         self.expect(TokenKind::LBrace)?;
 
         let mut arms = Vec::new();
@@ -1808,7 +1828,7 @@ impl Parser {
         // Optional type parameters: trait Name<T, U>
         let type_params = if self.consume(&TokenKind::Lt) {
             let mut params = Vec::new();
-            while !self.check(&TokenKind::Gt) && !self.is_at_end() {
+            while !self.at_type_close() && !self.is_at_end() {
                 params.push(self.parse_ident()?);
                 if !self.consume(&TokenKind::Comma) {
                     break;
@@ -1852,7 +1872,7 @@ impl Parser {
         // Optional type parameters: type Name<T>
         let type_params = if self.consume(&TokenKind::Lt) {
             let mut params = Vec::new();
-            while !self.check(&TokenKind::Gt) && !self.is_at_end() {
+            while !self.at_type_close() && !self.is_at_end() {
                 params.push(self.parse_ident()?);
                 if !self.consume(&TokenKind::Comma) {
                     break;
@@ -2162,6 +2182,7 @@ impl Expr {
     pub fn span(&self) -> Span {
         match self {
             Expr::Literal(lit) => lit.span(),
+            Expr::Layout { span, .. } => *span,
             Expr::Ident(ident) => ident.span,
             Expr::Path { span, .. } => *span,
             Expr::Binary { span, .. } => *span,
@@ -2346,6 +2367,52 @@ mod tests {
         assert!(!private.is_pub);
         assert_eq!(public.name.name, "Number");
         assert!(matches!(&public.ty, Type::Named(name, _) if name == "i32"));
+    }
+
+    #[test]
+    fn system_annotations_and_public_items_keep_their_meaning() {
+        let program = parse("@volatile #[no_mangle] pub fn read(p: *volatile i32) -> i32 { return *p; }");
+        assert!(program.is_ok());
+        let program = parse("#[no_mangle] @volatile pub fn read(p: *volatile i32) -> i32 { return *p; } pub static mut X:i32=0; @repr(C) pub union U { a:i32, b:f32 }").unwrap();
+        let Item::Function(f) = &program.items[0] else { panic!("function") };
+        assert_eq!(f.annotations.iter().map(|a| a.name.name.as_str()).collect::<Vec<_>>(), vec!["no_mangle","volatile"]);
+        assert!(matches!(f.params[0].ty, Type::Volatile(_, _)));
+        assert!(matches!(&program.items[1], Item::Static(s) if s.is_pub));
+        assert!(matches!(&program.items[2], Item::Union(u) if u.is_pub && u.repr == Some(Repr::C)));
+        let program = parse("extern \"C\" { @pure fn abs(x:i32)->i32; }").unwrap();
+        let Item::Extern(ext) = &program.items[0] else {panic!("extern")};
+        assert!(matches!(&ext.items[0], ForeignItem::Fn { annotations, .. } if annotations[0].name.name == "pure"));
+    }
+
+    #[test]
+    fn empty_aggregates_and_control_braces_are_unambiguous() {
+        let p = parse("struct Empty {} fn f(b:bool) { let x:Empty=Empty{}; if b {} while b {} if test(Empty{}) {} match x {} if (Empty{}).ok {} }").unwrap();
+        let Item::Function(f)=&p.items[1] else {panic!("function")};
+        let statements:Vec<_>=f.body.stmts.iter().filter(|s|!matches!(s,Stmt::Empty{..})).collect();
+        assert_eq!(statements.len(),6);
+        assert!(matches!(statements[1],Stmt::Expr(Expr::If{cond,..}) if matches!(cond.as_ref(),Expr::Ident(_))));
+    }
+
+    #[test]
+    fn adjacent_generic_closers_do_not_consume_assignment_or_shift() {
+        let p=parse("type Link<T>=*T; fn f() { let x:Box<Box<i64>>=make(); let b:bool=4>=3; let n:i64=8>>1; }").unwrap();
+        let Item::Function(f)=&p.items[1] else {panic!("function")};
+        let statements:Vec<_>=f.body.stmts.iter().filter(|s|!matches!(s,Stmt::Empty{..})).collect();
+        assert_eq!(statements.len(),3);
+        assert!(matches!(statements[1],Stmt::Let{value:Some(Expr::Binary{op:BinOp::Ge,..}),..}));
+        assert!(matches!(statements[2],Stmt::Let{value:Some(Expr::Binary{op:BinOp::Shr,..}),..}));
+        assert!(parse("fn f<const N:usize>() {}").is_err());
+        let p=parse("fn f(x:Box<UUID>) {}").unwrap();
+        let Item::Function(f)=&p.items[0] else {panic!("function")};
+        assert!(matches!(&f.params[0].ty,Type::Generic(_,args,_) if matches!(&args[0],Type::Named(name,_) if name=="UUID")));
+    }
+
+    #[test]
+    fn layout_queries_take_types_not_value_expressions() {
+        let program = parse("fn main() { size_of([u8;16]); align_of(*i64); offset_of(Packet, tail); }").unwrap();
+        let Item::Function(f)=&program.items[0] else {panic!("function")};
+        assert!(matches!(&f.body.stmts[0],Stmt::Semi(Expr::Layout {query:LayoutQuery::Size,ty:Type::Array {size:16,..},..})));
+        assert!(matches!(&f.body.stmts[2],Stmt::Semi(Expr::Layout {query:LayoutQuery::Offset,field:Some(field),..}) if field.name=="tail"));
     }
 
 }

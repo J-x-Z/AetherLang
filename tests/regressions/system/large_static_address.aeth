@@ -1,0 +1,5 @@
+// External declarations and address constants need no backing allocation here.
+extern "C" { static mut external_bytes: [u8;4294967297]; }
+static HIGH_BIT: *u8 = &mut external_bytes[2147483648] as *u8;
+static ABOVE_U32: *u8 = &mut external_bytes[4294967296] as *u8;
+fn main()->i32 { return 0; }

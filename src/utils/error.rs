@@ -42,6 +42,9 @@ pub enum Error {
     InvalidOperator { span: Span },
     
     // ==================== Semantic Errors ====================
+    /// Stable code for semantic analyses that share one diagnostic shape.
+    #[error("{message}")]
+    Semantic { code: &'static str, message: String, span: Span },
     
     #[error("Undefined variable: {name}")]
     UndefinedVariable { name: String, span: Span },
@@ -124,10 +127,13 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn semantic_expected(code: &'static str, message: impl Into<String>, span: Span) -> Self {
+        Self::Semantic {code,message:format!("Expected {}",message.into()),span}
+    }
     /// Get the span associated with this error
     pub fn span(&self) -> Option<Span> {
         match self {
-            Self::UnexpectedToken { span, .. } => Some(*span),
+            Self::UnexpectedToken { span, .. } | Self::Semantic {span, ..} => Some(*span),
             Self::Expected(_, span) => Some(*span),
             Self::ExpectedIdent { span } => Some(*span),
             Self::ExpectedType { span } => Some(*span),

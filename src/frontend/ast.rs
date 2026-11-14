@@ -477,6 +477,8 @@ pub enum Stmt {
 /// Expression
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
+    /// Target layout query. The type operand is never evaluated as a value.
+    Layout { query: LayoutQuery, ty: Type, field: Option<Ident>, span: Span },
     /// Literal value
     Literal(Literal),
     /// Identifier
@@ -624,6 +626,9 @@ pub enum Expr {
         span: Span,
     },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutQuery { Size, Align, Offset }
 
 /// Match arm
 #[derive(Debug, Clone, PartialEq)]

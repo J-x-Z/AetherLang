@@ -30,6 +30,8 @@ pub struct IRStruct {
     pub name: String,
     pub fields: Vec<(String, IRType)>,
     pub repr: StructRepr,
+    /// Union fields overlap at offset zero; the type keeps maximum field size/alignment.
+    pub is_union: bool,
 }
 
 /// IR Enum variant
@@ -55,11 +57,34 @@ pub struct IRModule {
     pub structs: Vec<IRStruct>,
     pub enums: Vec<IREnum>,
     pub externs: Vec<IRExtern>,
+    pub globals: Vec<IRGlobal>,
     /// #![no_std] - disable standard library
     pub no_std: bool,
     /// #![no_main] - no default main entry point
     pub no_main: bool,
 }
+
+/// Static storage is distinct from a function-local value. None denotes an
+/// external declaration; Zero is a definition with zero-initialized storage.
+#[derive(Debug, Clone)]
+pub struct IRGlobal {
+    pub name: String,
+    pub ty: IRType,
+    pub mutable: bool,
+    pub initializer: Option<IRInitializer>,
+}
+
+#[derive(Debug, Clone)]
+pub enum IRInitializer {
+    Zero,
+    Scalar(Constant),
+    Aggregate(Vec<(usize, IRInitializer)>),
+    Address { global: String, path: Vec<usize> },
+    Layout { query: IRLayoutQuery, ty: IRType, field: Option<usize> },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IRLayoutQuery { Size, Align, Offset }
 
 /// External function declaration
 #[derive(Debug, Clone)]
@@ -78,6 +103,7 @@ impl IRModule {
             structs: Vec::new(),
             enums: Vec::new(),
             externs: Vec::new(),
+            globals: Vec::new(),
             no_std: false,
             no_main: false,
         }
@@ -88,6 +114,7 @@ impl IRModule {
             name: name.to_string(),
             fields,
             repr,
+            is_union: false,
         });
     }
 }
@@ -99,6 +126,8 @@ pub struct IRFunction {
     pub name: String,
     pub params: Vec<(String, IRType)>,
     pub ret_type: IRType,
+    /// Explicit C ABI export (main or #[no_mangle]); ordinary calls use the language ABI.
+    pub c_abi: bool,
     pub blocks: Vec<BasicBlock>,
     pub entry_block: BlockId,
     /// Canonical types assigned by lowering, shared by every backend.
@@ -132,6 +161,7 @@ impl IRFunction {
             name: name.to_string(),
             params,
             ret_type,
+            c_abi: name == "main",
             blocks: Vec::new(),
             entry_block: BlockId(0),
             register_types: std::collections::HashMap::new(),
@@ -199,6 +229,10 @@ impl fmt::Display for Register {
 /// IR Instruction (non-terminating)
 #[derive(Debug, Clone)]
 pub enum Instruction {
+    /// Typed volatile/atomic operations, with checked compile-time ordering.
+    Memory { dest: Option<Register>, kind: crate::intrinsics::MemoryKind,
+        ty: IRType, args: Vec<Value>, order: crate::intrinsics::MemoryOrder,
+        failure_order: crate::intrinsics::MemoryOrder },
     /// dest = value
     Assign { dest: Register, value: Value },
     
@@ -217,6 +251,9 @@ pub enum Instruction {
     /// dest = load ptr (with explicit element type for LLVM opaque pointers)
     Load { dest: Register, ptr: Value, ty: IRType },
     
+    /// Initialize object representation bytes before assigning active fields.
+    ZeroInitialize { ptr: Value, ty: IRType },
+
     /// store value, ptr
     Store { ptr: Value, value: Value },
     
@@ -231,6 +268,9 @@ pub enum Instruction {
 
     /// dest = phi [(val1, block1), (val2, block2), ...]
     Phi { dest: Register, incoming: Vec<(Value, BlockId)> },
+
+    /// Target-dependent object layout, evaluated after the target is selected.
+    Layout { dest: Register, query: IRLayoutQuery, ty: IRType, field: Option<usize> },
 
     /// dest = cast value to ty
     Cast { dest: Register, value: Value, ty: IRType },
@@ -392,12 +432,17 @@ pub enum UnaryOp {
 /// IR Type
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IRType {
+    /// No ABI result; never a stored language value.
     Void,
+    /// The language unit value: zero bytes with alignment one.
+    Unit,
     Bool,
     I8, I16, I32, I64,
     U8, U16, U32, U64,
     F32, F64,
     Ptr(Box<IRType>),
+    /// Volatile storage qualifier; loads produce the unqualified value type.
+    Volatile(Box<IRType>),
     Array(Box<IRType>, usize),
     Struct(String),
     Function { params: Vec<IRType>, ret: Box<IRType> },
@@ -407,8 +452,11 @@ pub enum IRType {
 }
 
 impl IRType {
+    pub fn unqualified(&self) -> &Self { match self { Self::Volatile(inner) => inner.unqualified(), other => other } }
+
     pub fn integer_bits(&self) -> Option<u32> {
         match self {
+            Self::Volatile(inner) => inner.integer_bits(),
             Self::I8 | Self::U8 => Some(8), Self::I16 | Self::U16 => Some(16),
             Self::I32 | Self::U32 => Some(32), Self::I64 | Self::U64 => Some(64),
             _ => None,
@@ -416,16 +464,17 @@ impl IRType {
     }
 
     pub fn is_signed_integer(&self) -> bool {
-        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64)
+        matches!(self.unqualified(), Self::I8 | Self::I16 | Self::I32 | Self::I64)
     }
 
     pub fn size_bytes(&self) -> usize {
         match self {
-            IRType::Void => 0,
+            IRType::Void | IRType::Unit => 0,
             IRType::Bool | IRType::I8 | IRType::U8 => 1,
             IRType::I16 | IRType::U16 => 2,
             IRType::I32 | IRType::U32 | IRType::F32 => 4,
             IRType::I64 | IRType::U64 | IRType::F64 | IRType::Ptr(_) => 8,
+            IRType::Volatile(inner) => inner.size_bytes(),
             IRType::Array(elem, count) => elem.size_bytes() * count,
             IRType::Struct(_) => 8, // Placeholder
             IRType::Function { .. } => 8,

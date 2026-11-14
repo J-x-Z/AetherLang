@@ -39,6 +39,8 @@ pub struct LLVMCodeGen {
     abi: HashMap<String, FunctionAbi>,
     current_abi: Option<FunctionAbi>,
     return_slot: Option<LLVMValueRef>,
+    type_definitions: HashMap<String, IRStruct>,
+    global_types: HashMap<String, IRType>,
     
     // Mapping from IR values to LLVM values
     value_map: HashMap<Register, LLVMValueRef>,
@@ -72,6 +74,8 @@ impl LLVMCodeGen {
                 abi: HashMap::new(),
                 current_abi: None,
                 return_slot: None,
+                type_definitions: HashMap::new(),
+                global_types: HashMap::new(),
                 value_map: HashMap::new(),
                 block_map: HashMap::new(),
                 current_function: None,
@@ -168,6 +172,8 @@ impl LLVMCodeGen {
         unsafe {
             match ty {
                 IRType::Void => LLVMVoidTypeInContext(self.context),
+                IRType::Unit => LLVMStructTypeInContext(self.context, ptr::null_mut(), 0, 0),
+                IRType::Volatile(inner) => self.ir_type_to_llvm(inner),
                 IRType::Bool => LLVMInt1TypeInContext(self.context),
                 IRType::I8 | IRType::U8 => LLVMInt8TypeInContext(self.context),
                 IRType::I16 | IRType::U16 => LLVMInt16TypeInContext(self.context),
@@ -181,7 +187,7 @@ impl LLVMCodeGen {
                 }
                 IRType::Array(elem, size) => {
                     let elem_ty = self.ir_type_to_llvm(elem);
-                    LLVMArrayType(elem_ty, *size as u32)
+                    LLVMArrayType2(elem_ty, *size as u64)
                 }
                 IRType::Struct(name) => {
                     let name_c = CString::new(name.as_str()).unwrap();
@@ -424,6 +430,14 @@ impl LLVMCodeGen {
         }
     }
 
+    fn asm_constraint(&self, constraint: &str) -> String {
+        if !self.target_triple.contains("x86") { return constraint.into(); }
+        let base = constraint.trim_start_matches(['=', '+', '&', '%']);
+        let prefix = &constraint[..constraint.len() - base.len()];
+        let register = match base { "a" => "ax", "b" => "bx", "c" => "cx", "d" => "dx", "S" => "si", "D" => "di", _ => return constraint.into() };
+        format!("{}{{{}}}", prefix, register)
+    }
+
     /// Generate LLVM IR for an instruction
     fn generate_instruction(&mut self, inst: &Instruction) -> Result<()> {
         unsafe {
@@ -546,6 +560,10 @@ impl LLVMCodeGen {
                     self.value_map.insert(*dest, result);
                 }
                 
+                Instruction::Memory {dest,kind,ty,args,order,failure_order} => {
+                    self.generate_memory(*dest,*kind,ty,args,*order,*failure_order)?;
+                }
+
                 Instruction::Call { dest, func, args } => {
                     let name = CString::new(func.as_str()).unwrap();
                     let callee = LLVMGetNamedFunction(self.module, name.as_ptr());
@@ -585,8 +603,8 @@ impl LLVMCodeGen {
                     let name = CString::new("").unwrap();
                     // Use the actual element type from IR
                     let elem_ty = self.ir_type_to_llvm(ty);
-                    let result = LLVMBuildLoad2(self.builder, elem_ty, ptr_val, name.as_ptr());
-                    LLVMSetAlignment(result, 1);
+                    let result = if LLVMABISizeOfType(self.target_data, elem_ty) == 0 { LLVMConstNull(elem_ty) }
+                        else { let load = LLVMBuildLoad2(self.builder, elem_ty, ptr_val, name.as_ptr()); LLVMSetAlignment(load, 1); load };
                     self.value_map.insert(*dest, result);
                 }
 
@@ -601,8 +619,10 @@ impl LLVMCodeGen {
                         let ptr_type = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
                         ptr_val = LLVMBuildIntToPtr(self.builder, ptr_val, ptr_type, name.as_ptr());
                     }
-                    let store_inst = LLVMBuildStore(self.builder, store_val, ptr_val);
-                    LLVMSetAlignment(store_inst, 1);
+                    if LLVMABISizeOfType(self.target_data, LLVMTypeOf(store_val)) != 0 {
+                        let store_inst = LLVMBuildStore(self.builder, store_val, ptr_val);
+                        LLVMSetAlignment(store_inst, 1);
+                    }
                 }
                 
                 Instruction::ArrayElementPtr { dest, ptr, index, array_ty } => {
@@ -620,13 +640,24 @@ impl LLVMCodeGen {
                 }
                 Instruction::GetFieldPtr { dest, ptr, field, struct_ty } => {
                     let ptr_val = self.get_value(ptr)?;
-                    let result = LLVMBuildStructGEP2(self.builder, self.ir_type_to_llvm(struct_ty), ptr_val,
-                        *field as u32, c"".as_ptr());
+                    let is_union = matches!(struct_ty, IRType::Struct(name) if self.type_definitions.get(name).is_some_and(|definition| definition.is_union));
+                    let zero_offset = is_union || LLVMOffsetOfElement(self.target_data, self.ir_type_to_llvm(struct_ty), *field as u32) == 0;
+                    let result = if zero_offset { ptr_val } else { LLVMBuildStructGEP2(self.builder, self.ir_type_to_llvm(struct_ty), ptr_val,
+                        *field as u32, c"".as_ptr()) };
                     self.value_map.insert(*dest, result);
                 }
 
                 Instruction::Phi { .. } => { /* emitted in the two-phase CFG pass */ }
 
+                Instruction::Layout { dest, query, ty, field } => {
+                    let value = self.layout_value(*query, ty, *field)?;
+                    self.value_map.insert(*dest, LLVMConstInt(LLVMInt64TypeInContext(self.context), value, 0));
+                }
+                Instruction::ZeroInitialize { ptr, ty } => {
+                    let ptr = self.get_value(ptr)?;
+                    let size = LLVMABISizeOfType(self.target_data, self.ir_type_to_llvm(ty));
+                    if size > 0 { LLVMBuildMemSet(self.builder, ptr, LLVMConstInt(LLVMInt8TypeInContext(self.context), 0, 0), LLVMConstInt(LLVMInt64TypeInContext(self.context), size, 0), 1); }
+                }
                 Instruction::Cast { dest, value, ty } => {
                     let val = self.get_value(value)?;
                     let result = self.cast_scalar(val, value, ty)?;
@@ -648,7 +679,7 @@ impl LLVMCodeGen {
                                 if let Some(ref val) = op.input {
                                     let llvm_val = self.get_value(val)?;
                                     inputs.push(llvm_val);
-                                    input_constraints.push(op.constraint.clone());
+                                    input_constraints.push(self.asm_constraint(&op.constraint));
                                 }
                             }
                             IRAsmOperandKind::Output => {
@@ -658,14 +689,14 @@ impl LLVMCodeGen {
                                     } else {
                                         op.constraint.clone()
                                     };
-                                    output_constraints.push(constraint);
+                                    output_constraints.push(self.asm_constraint(&constraint));
                                     output_regs.push(reg);
                                 }
                             }
                             IRAsmOperandKind::InOut => {
                                 if let Some(reg) = op.output {
                                     let constraint = format!("={}", op.constraint.trim_start_matches(['+', '=']));
-                                    output_constraints.push(constraint);
+                                    output_constraints.push(self.asm_constraint(&constraint));
                                     let tied_index = output_regs.len();
                                     output_regs.push(reg);
                                     if let Some(ref val) = op.input {
@@ -823,8 +854,10 @@ impl LLVMCodeGen {
 
     fn value_type(&self, value: &Value) -> Option<IRType> {
         match value {
+            Value::Global(name) => self.global_types.get(name).map(|ty| IRType::Ptr(Box::new(ty.clone()))),
             Value::Register(reg) => self.register_types.get(reg).cloned(),
             Value::Parameter(i) => self.parameter_types.get(*i).cloned(),
+            Value::Unit => Some(IRType::Unit),
             Value::Constant(Constant::Int(_)) => Some(IRType::I64),
             Value::Constant(Constant::Float(_)) => Some(IRType::F64),
             Value::Constant(Constant::Bool(_)) => Some(IRType::Bool),
@@ -933,11 +966,7 @@ impl LLVMCodeGen {
                     if global.is_null() { Err(Error::CodeGen(format!("Unknown global: {}", name))) }
                     else { Ok(global) }
                 }
-                Value::Unit => {
-                    // Unit type represented as i32 0 for compatibility with enum types
-                    let i32_ty = LLVMInt32TypeInContext(self.context);
-                    Ok(LLVMConstInt(i32_ty, 0, 0))
-                }
+                Value::Unit => Ok(LLVMConstNull(self.ir_type_to_llvm(&IRType::Unit)))
             }
         }
     }
@@ -1020,8 +1049,7 @@ impl LLVMCodeGen {
         Ok(())
     }
 
-    /// Emit object file
-    fn emit_object(&self) -> Result<Vec<u8>> {
+    fn optimize_module(&self) -> Result<()> {
         unsafe {
             let target_machine = self.target_machine;
             if self.opt_level > 0 {
@@ -1041,6 +1069,21 @@ impl LLVMCodeGen {
                 }
             }
 
+        }
+        self.verify_module()
+    }
+
+    /// Return verified target-layout IR before machine emission can rewrite it.
+    pub fn generate_llvm_ir(&mut self, module: &IRModule) -> Result<String> {
+        self.prepare_module(module)?;
+        self.optimize_module()?;
+        Ok(self.print_ir())
+    }
+
+    /// Emit object file
+    fn emit_object(&self) -> Result<Vec<u8>> {
+        unsafe {
+            let target_machine = self.target_machine;
             // Emit to memory buffer
             let mut mem_buf: LLVMMemoryBufferRef = ptr::null_mut();
             let mut error_msg: *mut i8 = ptr::null_mut();
@@ -1087,10 +1130,12 @@ impl LLVMCodeGen {
     }
 }
 
-impl CodeGen for LLVMCodeGen {
-    fn generate(&mut self, module: &IRModule) -> Result<Vec<u8>> {
+impl LLVMCodeGen {
+    fn prepare_module(&mut self, module: &IRModule) -> Result<()> {
         Self::init_targets();
         self.initialize_target()?;
+        self.type_definitions = module.structs.iter().map(|definition| (definition.name.clone(), definition.clone())).collect();
+        self.global_types = module.globals.iter().map(|global| (global.name.clone(), global.ty.clone())).collect();
         
         // Set module name
         unsafe {
@@ -1118,6 +1163,20 @@ impl CodeGen for LLVMCodeGen {
                     let mut field_types: Vec<LLVMTypeRef> = ir_struct.fields.iter()
                         .map(|(_, ty)| self.ir_type_to_llvm(ty))
                         .collect();
+                    if ir_struct.is_union {
+                        let size = field_types.iter().map(|ty| LLVMABISizeOfType(self.target_data, *ty)).max().unwrap_or(0);
+                        if ir_struct.repr == StructRepr::Packed {
+                            field_types = vec![LLVMArrayType2(LLVMInt8TypeInContext(self.context), size)];
+                        } else {
+                            let carrier = field_types.iter().copied().max_by_key(|ty| (LLVMABIAlignmentOfType(self.target_data, *ty), LLVMABISizeOfType(self.target_data, *ty)))
+                                .unwrap_or(LLVMArrayType2(LLVMInt8TypeInContext(self.context), 0));
+                            let align = LLVMABIAlignmentOfType(self.target_data, carrier) as u64;
+                            let size = size.div_ceil(align) * align;
+                            let padding = size - LLVMABISizeOfType(self.target_data, carrier);
+                            field_types = vec![carrier];
+                            if padding > 0 { field_types.push(LLVMArrayType2(LLVMInt8TypeInContext(self.context), padding)); }
+                        }
+                    }
                     // Set struct body with appropriate packing based on repr
                     let packed = match ir_struct.repr {
                         StructRepr::Packed => 1,  // packed (no padding)
@@ -1133,12 +1192,14 @@ impl CodeGen for LLVMCodeGen {
             }
         }
         
+        self.generate_globals(&module.globals)?;
+
         // Layouts are complete before target ABI classification.
         for function in &module.externs {
-            self.declare_abi(&function.name, &function.params, &function.ret_type, function.variadic)?;
+            self.declare_abi(&function.name, &function.params, &function.ret_type, function.variadic, true)?;
         }
         for function in &module.functions {
-            self.declare_abi(&function.name, &function.params, &function.ret_type, false)?;
+            self.declare_abi(&function.name, &function.params, &function.ret_type, false, function.c_abi)?;
         }
         // Generate code for each function
         for func in &module.functions {
@@ -1148,10 +1209,18 @@ impl CodeGen for LLVMCodeGen {
         // Verify
         self.verify_module()?;
         
-        // Emit object code
-        self.emit_object()
+        Ok(())
     }
     
+
+}
+
+impl CodeGen for LLVMCodeGen {
+    fn generate(&mut self, module: &IRModule) -> Result<Vec<u8>> {
+        self.prepare_module(module)?;
+        self.optimize_module()?;
+        self.emit_object()
+    }
     fn target_triple(&self) -> &str {
         &self.target_triple
     }
@@ -1162,6 +1231,7 @@ impl CodeGen for LLVMCodeGen {
 }
 
 include!("llvm_abi.rs");
+include!("llvm_globals.rs");
 
 impl Drop for LLVMCodeGen {
     fn drop(&mut self) {
@@ -1234,3 +1304,6 @@ mod tests {
         assert!(result.is_ok());
     }
 }
+
+#[path = "llvm_memory.rs"]
+mod memory;

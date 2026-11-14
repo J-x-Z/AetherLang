@@ -25,6 +25,8 @@ pub struct CCodeGen {
     
     // Structure layouts (struct name -> fields)
     struct_layouts: HashMap<String, Vec<(String, IRType)>>,
+    union_names: HashSet<String>,
+    global_types: HashMap<String, IRType>,
     
     // Type tracking
     reg_types: HashMap<Register, IRType>,
@@ -52,6 +54,8 @@ impl CCodeGen {
             var_counter: 0,
             block_labels: HashMap::new(),
             struct_layouts: HashMap::new(),
+            union_names: HashSet::new(),
+            global_types: HashMap::new(),
             reg_types: HashMap::new(),
             param_types: HashMap::new(),
             func_ret_types: HashMap::new(),
@@ -124,6 +128,7 @@ impl CCodeGen {
             match ty {
                 IRType::Array(elem, len) => format!("a{}_{}", len, key(elem)),
                 IRType::Ptr(elem) => format!("p_{}", key(elem)),
+                IRType::Volatile(elem) => format!("v_{}", key(elem)),
                 IRType::Struct(name) => format!("s{}_{}", name.len(), name),
                 other => format!("{:?}", other).to_lowercase(),
             }
@@ -133,6 +138,7 @@ impl CCodeGen {
 
     fn emit_layout(&mut self, ty: &IRType, module: &IRModule, emitted: &mut HashSet<String>) -> Result<()> {
         match ty {
+            IRType::Volatile(inner) => self.emit_layout(inner, module, emitted)?,
             IRType::Ptr(inner) => { // Pointer targets need a tag, but no complete layout.
                 if matches!(inner.as_ref(), IRType::Array(_, _)) {
                     self.writeln(&format!("struct {};", Self::array_name(inner)));
@@ -151,7 +157,7 @@ impl CCodeGen {
                     .ok_or_else(|| Error::CodeGen(format!("missing struct layout for {}", name)))?;
                 for (_, field) in &definition.fields { self.emit_layout(field, module, emitted)?; }
                 let attr = if definition.repr == StructRepr::Packed { " __attribute__((packed))" } else { "" };
-                self.writeln(&format!("struct{} {} {{", attr, name));
+                self.writeln(&format!("{}{} {} {{", if definition.is_union { "union" } else { "struct" }, attr, name));
                 for (name, field) in &definition.fields { self.writeln(&format!("    {} {};", self.ir_type_to_c(field), name)); }
                 self.writeln("};");
                 emitted.insert(name.clone());
@@ -161,10 +167,70 @@ impl CCodeGen {
         Ok(())
     }
 
+    fn layout_expression(&self, query: IRLayoutQuery, ty: &IRType, field: Option<usize>) -> Result<String> {
+        if *ty == IRType::Void { return Ok(match query { IRLayoutQuery::Size => "0", IRLayoutQuery::Align => "1", IRLayoutQuery::Offset => return Err(Error::CodeGen("unit has no field offsets".into())) }.into()); }
+        Ok(match query {
+            IRLayoutQuery::Size => format!("sizeof({})", self.ir_type_to_c(ty)),
+            IRLayoutQuery::Align => format!("_Alignof({})", self.ir_type_to_c(ty)),
+            IRLayoutQuery::Offset => {
+                let name = match ty { IRType::Struct(name) => name, _ => return Err(Error::CodeGen("offset_of requires an aggregate".into())) };
+                let field = &self.struct_layouts.get(name).and_then(|fields| fields.get(field.unwrap_or(usize::MAX)))
+                    .ok_or_else(|| Error::CodeGen("offset_of unknown field".into()))?.0;
+                format!("offsetof({}, {})", self.ir_type_to_c(ty), field)
+            }
+        })
+    }
+
+    fn initializer_to_c(&mut self, value: &IRInitializer, ty: &IRType) -> Result<String> {
+        Ok(match value {
+            IRInitializer::Zero => if matches!(ty, IRType::Unit) { "{}".into() } else if matches!(ty, IRType::Struct(_) | IRType::Array(_, _)) { "{0}".into() } else { "0".into() },
+            IRInitializer::Scalar(value) => format!("({})({})", self.ir_type_to_c(ty), self.value_to_c(&Value::Constant(value.clone()))),
+            IRInitializer::Layout { query, ty, field } => self.layout_expression(*query, ty, *field)?,
+            IRInitializer::Address { global, path } => {
+                let mut current = self.global_types.get(global).cloned().ok_or_else(|| Error::CodeGen(format!("unknown static {}", global)))?;
+                let mut offsets = Vec::new();
+                for index in path {
+                    match current {
+                        IRType::Array(element, _) => {
+                            offsets.push(format!("{} * sizeof({})", index, self.ir_type_to_c(&element)));
+                            current = *element;
+                        }
+                        IRType::Struct(ref name) => {
+                            let (field, field_ty) = self.struct_layouts[name][*index].clone();
+                            offsets.push(format!("offsetof({}, {})", self.ir_type_to_c(&current), field));
+                            current = field_ty;
+                        }
+                        _ => return Err(Error::CodeGen("invalid static address path".into())),
+                    }
+                }
+                format!("({})((unsigned char*)&{} + ({}))", self.ir_type_to_c(ty), global, if offsets.is_empty() { "0".into() } else { offsets.join(" + ") })
+            }
+            IRInitializer::Aggregate(values) => {
+                let mut fields = Vec::new();
+                match ty {
+                    IRType::Array(element, _) => {
+                        for (index, value) in values { fields.push(format!("[{}] = {}", index, self.initializer_to_c(value, element)?)); }
+                        format!("{{ .data = {{ {} }} }}", fields.join(", "))
+                    }
+                    IRType::Struct(name) => {
+                        for (index, value) in values {
+                            let (name, ty) = self.struct_layouts[name][*index].clone();
+                            fields.push(format!(".{} = {}", name, self.initializer_to_c(value, &ty)?));
+                        }
+                        format!("{{ {} }}", fields.join(", "))
+                    }
+                    _ => return Err(Error::CodeGen("non-aggregate static initializer".into())),
+                }
+            }
+        })
+    }
+
     /// Convert IR type to C type
     fn ir_type_to_c(&self, ty: &IRType) -> String {
         match ty {
             IRType::Void => "void".to_string(),
+            IRType::Unit => "struct __aeth_unit".to_string(),
+            IRType::Volatile(inner) => self.ir_type_to_c(inner),
             IRType::Bool => "bool".to_string(),
             IRType::I8 => "int8_t".to_string(),
             IRType::I16 => "int16_t".to_string(),
@@ -178,7 +244,7 @@ impl CCodeGen {
             IRType::F64 => "double".to_string(),
             IRType::Ptr(inner) => format!("{}*", self.ir_type_to_c(inner)),
             IRType::Array(_, _) => format!("struct {}", Self::array_name(ty)),
-            IRType::Struct(name) => format!("struct {}", name),
+            IRType::Struct(name) => format!("{} {}", if self.union_names.contains(name) { "union" } else { "struct" }, name),
             IRType::Function { params, ret } => {
                 let params_str: Vec<_> = params.iter().map(|p| self.ir_type_to_c(p)).collect();
                 format!("{}(*)({})", self.ir_type_to_c(ret), params_str.join(", "))
@@ -263,9 +329,9 @@ impl CCodeGen {
             Value::Global(name) => {
                 // Track this global for later definition generation
                 self.globals_used.insert(name.clone());
-                name.clone()
+                format!("&{}", name)
             },
-            Value::Unit => "NULL".to_string(),  // NULL is compatible with pointer casts
+            Value::Unit => "(struct __aeth_unit){}".to_string(),
         }
     }
 
@@ -433,6 +499,7 @@ impl CCodeGen {
                     Instruction::ArrayElementPtr { dest, .. } |
                     Instruction::GetFieldPtr { dest, .. } |
                     Instruction::Phi { dest, .. } |
+                    Instruction::Layout { dest, .. } |
                     Instruction::Cast { dest, .. } => {
                         let var = self.get_var(*dest);
                         let c_type = self.reg_types.get(dest)
@@ -440,7 +507,7 @@ impl CCodeGen {
                             .unwrap_or("int64_t".to_string());
                         declarations.push(format!("{} {};", c_type, var));
                     }
-                    Instruction::Call { dest: Some(dest), .. } => {
+                    Instruction::Call { dest: Some(dest), .. } | Instruction::Memory { dest: Some(dest), .. } => {
                         let var = self.get_var(*dest);
                         let c_type = self.reg_types.get(dest)
                             .map(|t| self.ir_type_to_c(t))
@@ -508,34 +575,18 @@ impl CCodeGen {
         match val {
             Value::Register(reg) => self.reg_types.get(reg).cloned(),
             Value::Parameter(idx) => self.param_types.get(idx).cloned(),
+            Value::Global(name) => self.global_types.get(name).map(|ty| IRType::Ptr(Box::new(ty.clone()))),
             Value::Constant(Constant::Int(_)) => Some(IRType::I64),
             Value::Constant(Constant::Float(_)) => Some(IRType::F64),
             Value::Constant(Constant::Bool(_)) => Some(IRType::Bool),
             Value::Constant(Constant::String(_)) => Some(IRType::Ptr(Box::new(IRType::U8))),
             Value::Constant(Constant::Null) => Some(IRType::Ptr(Box::new(IRType::Void))),
-            Value::Unit => Some(IRType::Void),
+            Value::Unit => Some(IRType::Unit),
             _ => None,
         }
     }
 
-    /// Check if a type is volatile (for MMIO/hardware register access)
-    fn is_volatile_type(&self, ty: &IRType) -> bool {
-        match ty {
-            IRType::Ptr(inner) => {
-                // Check if the inner type name contains "volatile"
-                if let IRType::Struct(name) = &**inner {
-                    name.to_lowercase().contains("volatile")
-                } else {
-                    self.is_volatile_type(inner)
-                }
-            }
-            IRType::Struct(name) => name.to_lowercase().contains("volatile"),
-            _ => false,
-        }
-    }
-
-    /// Generate C code for an instruction
-
+    /// Emit one typed instruction.
     fn generate_instruction(&mut self, inst: &Instruction) -> Result<()> {
         match inst {
             Instruction::Assign { dest, value } => {
@@ -593,6 +644,10 @@ impl CCodeGen {
                 }
             }
             
+            Instruction::Memory {dest,kind,ty,args,order,failure_order} => {
+                self.generate_memory(*dest,*kind,ty,args,*order,*failure_order);
+            }
+
             Instruction::Call { dest, func, args } => {
                 let args_str: Vec<_> = args.iter().map(|a| self.value_to_c(a)).collect();
                 
@@ -676,7 +731,7 @@ impl CCodeGen {
                 let var = self.get_var(*dest);
                 let pointer = self.value_to_c(ptr);
                 // memcpy preserves unaligned packed fields and strict aliasing.
-                self.writeln(&format!("memcpy((void*)&{}, (const void*){}, sizeof({}));", var, pointer, var));
+                self.writeln(&format!("if (sizeof({0}) != 0) memcpy((void*)&{0}, (const void*){1}, sizeof({2})); else memset(&{0}, 0, sizeof({0}));", var, pointer, var));
                 self.reg_types.insert(*dest, ty.clone());
             }
             Instruction::Store { ptr, value } => {
@@ -686,14 +741,14 @@ impl CCodeGen {
                     Some(IRType::Ptr(inner)) => *inner,
                     _ => return Err(Error::CodeGen("store requires pointer type".into())),
                 };
-                self.writeln(&format!("{{ {} _store = {}; memcpy((void*){}, (const void*)&_store, sizeof(_store)); }}", self.ir_type_to_c(&ty), value_str, pointer));
+                self.writeln(&format!("{{ {} _store = {}; if (sizeof(_store) != 0) memcpy((void*){}, (const void*)&_store, sizeof(_store)); }}", self.ir_type_to_c(&ty), value_str, pointer));
             }
             Instruction::ArrayElementPtr { dest, ptr, index, array_ty } => {
                 let var = self.get_var(*dest);
                 let p = self.value_to_c(ptr);
                 let idx = self.value_to_c(index);
                 let element = match array_ty { IRType::Array(element, _) => element.as_ref(), _ => return Err(Error::CodeGen("array address requires fixed array".into())) };
-                self.writeln(&format!("{} = (void*)((unsigned char*){} + ({}) * sizeof({}));", var, p, idx, self.ir_type_to_c(element)));
+                self.writeln(&format!("{0} = sizeof({3}) == 0 ? (void*){1} : (void*)((unsigned char*){1} + (ptrdiff_t)({2}) * (ptrdiff_t)sizeof({3}));", var, p, idx, self.ir_type_to_c(element)));
                 if let IRType::Array(elem, _) = array_ty { self.reg_types.insert(*dest, IRType::Ptr(elem.clone())); }
             }
             Instruction::GetElementPtr { dest, ptr, index, elem_ty } => {
@@ -701,7 +756,7 @@ impl CCodeGen {
                 let p = self.value_to_c(ptr);
                 let idx = self.value_to_c(index);
                 let ty = self.ir_type_to_c(elem_ty);
-                self.writeln(&format!("{} = (void*)((unsigned char*){} + ({}) * sizeof({}));", var, p, idx, ty));
+                self.writeln(&format!("{0} = sizeof({3}) == 0 ? (void*){1} : (void*)((unsigned char*){1} + (ptrdiff_t)({2}) * (ptrdiff_t)sizeof({3}));", var, p, idx, ty));
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(elem_ty.clone())));
             }
             Instruction::GetFieldPtr { dest, ptr, field, struct_ty } => {
@@ -711,10 +766,19 @@ impl CCodeGen {
                 }.ok_or_else(|| Error::CodeGen("invalid struct field address".into()))?;
                 let var = self.get_var(*dest);
                 let p = self.value_to_c(ptr);
-                self.writeln(&format!("{} = (void*)((unsigned char*){} + offsetof({}, {}));", var, p, self.ir_type_to_c(struct_ty), name));
+                self.writeln(&format!("{0} = offsetof({2}, {3}) == 0 ? (void*){1} : (void*)((unsigned char*){1} + offsetof({2}, {3}));", var, p, self.ir_type_to_c(struct_ty), name));
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty)));
             }
 
+            Instruction::Layout { dest, query, ty, field } => {
+                let var = self.get_var(*dest);
+                let expression = self.layout_expression(*query, ty, *field)?;
+                self.writeln(&format!("{} = {};", var, expression));
+            }
+            Instruction::ZeroInitialize { ptr, ty } => {
+                let pointer = self.value_to_c(ptr);
+                self.writeln(&format!("if (sizeof({1}) != 0) memset((void*){0}, 0, sizeof({1}));", pointer, self.ir_type_to_c(ty)));
+            }
             Instruction::Cast { dest, value, ty } => {
                 let var = self.get_var(*dest);
                 let val = self.value_to_c(value);
@@ -912,6 +976,9 @@ impl CCodeGen {
     /// Generate the complete C source file
     pub fn generate_source(&mut self, module: &IRModule) -> Result<String> {
         self.output.clear();
+        self.union_names = module.structs.iter().filter(|definition| definition.is_union).map(|definition| definition.name.clone()).collect();
+        self.struct_layouts = module.structs.iter().map(|definition| (definition.name.clone(), definition.fields.clone())).collect();
+        self.global_types = module.globals.iter().map(|global| (global.name.clone(), global.ty.clone())).collect();
         
         // Header
         self.writeln("/* Generated by AetherLang C Backend */");
@@ -922,6 +989,7 @@ impl CCodeGen {
         self.writeln("#include <stdlib.h>");
         self.writeln("#include <string.h>");
         self.writeln("#include <math.h>");
+        self.writeln("struct __aeth_unit { }; /* zero-sized language unit */");
         // SIMD headers (platform-specific)
         if self.target_triple.contains("aarch64") || self.target_triple.contains("arm64") || self.target_triple.contains("arm") {
             self.writeln("#include <arm_neon.h>");
@@ -958,24 +1026,52 @@ impl CCodeGen {
         
         // Struct definitions
         self.writeln("/* Struct Definitions */");
-        for definition in &module.structs { self.writeln(&format!("struct {};", definition.name)); }
+        for definition in &module.structs { self.writeln(&format!("{} {};", if definition.is_union { "union" } else { "struct" }, definition.name)); }
         let mut emitted = HashSet::new();
         for definition in &module.structs { self.emit_layout(&IRType::Struct(definition.name.clone()), module, &mut emitted)?; }
         for function in &module.functions {
             for (_, ty) in &function.params { self.emit_layout(ty, module, &mut emitted)?; }
             self.emit_layout(&function.ret_type, module, &mut emitted)?;
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Layout { ty, .. } = instruction { self.emit_layout(ty, module, &mut emitted)?; }
+                }
+            }
             for ty in function.register_types.values() {
                 let ty = match ty { IRType::Ptr(inner) => inner.as_ref(), other => other };
                 self.emit_layout(ty, module, &mut emitted)?;
             }
         }
+        fn initializer_layouts(codegen: &mut CCodeGen, value: &IRInitializer, module: &IRModule, emitted: &mut HashSet<String>) -> Result<()> {
+            match value {
+                IRInitializer::Layout { ty, .. } => codegen.emit_layout(ty, module, emitted)?,
+                IRInitializer::Aggregate(fields) => for (_, value) in fields { initializer_layouts(codegen, value, module, emitted)?; },
+                _ => {}
+            }
+            Ok(())
+        }
+        for global in &module.globals {
+            self.emit_layout(&global.ty, module, &mut emitted)?;
+            if let Some(value) = &global.initializer { initializer_layouts(self, value, module, &mut emitted)?; }
+        }
         for function in &module.externs {
             for (_, ty) in &function.params { self.emit_layout(ty, module, &mut emitted)?; }
             self.emit_layout(&function.ret_type, module, &mut emitted)?;
         }
+        // Declarations precede initializers, allowing forward symbol addresses.
+        for global in &module.globals {
+            self.writeln(&format!("extern {}{} {};", self.ir_type_to_c(&global.ty), if global.mutable { "" } else { " const" }, global.name));
+        }
+        for global in &module.globals {
+            if let Some(initializer) = &global.initializer {
+                let value = self.initializer_to_c(initializer, &global.ty)?;
+                self.writeln(&format!("{}{} {} = {};", self.ir_type_to_c(&global.ty), if global.mutable { "" } else { " const" }, global.name, value));
+            }
+        }
         // Enum definitions (tagged unions)
         self.writeln("/* Enum Definitions (Tagged Unions) */");
         for enum_def in &module.enums {
+            if module.structs.iter().any(|definition| definition.name == enum_def.name) { continue; }
             let enum_name = &enum_def.name;
             
             // Generate tag enum
@@ -1258,3 +1354,6 @@ mod tests {
         assert!(c.contains("goto"));
     }
 }
+
+#[path = "c_memory.rs"]
+mod memory;

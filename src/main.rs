@@ -1,4 +1,5 @@
 //! AetherLang compiler driver: one frontend for checking and building.
+mod intrinsics;
 mod frontend;
 mod middle;
 mod backend;
@@ -34,13 +35,16 @@ struct Cli {
     /// Output file (also applies to --emit-ir and --emit-c)
     #[arg(short, long, global = true)]
     output: Option<PathBuf>,
-    #[arg(long, global = true, conflicts_with_all = ["emit_ir", "emit_obj"])]
+    #[arg(long, global = true, conflicts_with_all = ["emit_ir", "emit_obj", "emit_llvm"])]
     emit_c: bool,
-    #[arg(long, global = true, conflicts_with = "emit_obj")]
+    #[arg(long, global = true, conflicts_with_all = ["emit_obj", "emit_llvm"])]
     emit_ir: bool,
     /// Emit an object file without linking
     #[arg(long, global = true)]
     emit_obj: bool,
+    /// Emit verified LLVM IR after optimization (requires the LLVM backend)
+    #[arg(long, global = true, conflicts_with = "emit_obj")]
+    emit_llvm: bool,
     #[arg(short = 'O', default_value_t = 0, global = true, value_parser = clap::value_parser!(u8).range(0..=3))]
     opt_level: u8,
     #[arg(long, value_enum, default_value = default_backend(), global = true)]
@@ -130,9 +134,13 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
     let output = cli.output.clone().unwrap_or_else(|| {
         if cli.emit_c { input.with_extension("c") }
         else if cli.emit_obj { input.with_extension("o") }
+        else if cli.emit_llvm { input.with_extension("ll") }
         else { input.with_extension(if cfg!(windows) { "exe" } else { "" }) }
     });
     protect_sources(&resolver, &output)?;
+    if cli.emit_llvm && matches!(cli.backend, Backend::C) {
+        return Err("--emit-llvm requires --backend llvm".into());
+    }
     if cli.emit_c || matches!(cli.backend, Backend::C) {
         let c = CCodeGen::new(&cli.target).generate_source(&ir).map_err(|e| e.to_string())?;
         if cli.emit_c { write(&output, c.as_bytes())?; }
@@ -145,11 +153,16 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
         {
             let target = target_triple(&cli.target);
             let mut codegen = backend::llvm::LLVMCodeGen::new(&target).with_opt_level(cli.opt_level);
-            let bytes = codegen.generate(&ir).map_err(|e| e.to_string())?;
-            if cli.emit_obj { write(&output, &bytes)?; }
-            else {
-                let temp = Temporary::new("o", &bytes)?;
-                native_compile(cli, &temp.path, &output, false)?;
+            if cli.emit_llvm {
+                let text = codegen.generate_llvm_ir(&ir).map_err(|e| e.to_string())?;
+                write(&output, text.as_bytes())?;
+            } else {
+                let bytes = codegen.generate(&ir).map_err(|e| e.to_string())?;
+                if cli.emit_obj { write(&output, &bytes)?; }
+                else {
+                    let temp = Temporary::new("o", &bytes)?;
+                    native_compile(cli, &temp.path, &output, false)?;
+                }
             }
         }
         #[cfg(not(feature = "llvm"))]

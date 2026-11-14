@@ -1,15 +1,24 @@
 extern "C" {
+    @allocs
     fn malloc(size: u64) -> *u8;
+    @allocs
     fn free(pointer: *u8);
+    @reads @writes
     fn snprintf(buffer: *u8, size: u64, format: *u8, ...) -> i32;
+    @io @reads @writes
     fn fprintf(file: *u8, format: *u8, ...) -> i32;
+    @io @allocs
     fn tmpfile() -> *u8;
+    @io @writes @allocs
     fn fclose(file: *u8) -> i32;
+    @io @writes
     fn rewind(file: *u8);
+    @io @reads @writes
     fn fgets(buffer: *u8, size: i32, file: *u8) -> *u8;
+    @reads
     fn strcmp(left: *u8, right: *u8) -> i32;
 }
-fn main() -> i32 effect[io, alloc] {
+fn main() -> i32 effect[read, write, io, alloc] {
     let buffer: *u8 = malloc(64);
     if buffer == (0 as *u8) { return 1; }
     let number: i8 = -7;

@@ -15,21 +15,21 @@ Floats c_floats(Floats x) { return (Floats){{x.values[0]+1,x.values[1]+2,x.value
 Doubles c_doubles(Doubles x) { return (Doubles){{{x.values[0][0]+1,x.values[0][1]+2},{x.values[1][0]+3,x.values[1][1]+4}}}; }
 Large c_large(Large x) { x.values[0]++; x.values[1]+=2; x.values[2]+=3; return x; }
 Pair c_spill(int64_t a,int64_t b,int64_t c,int64_t d,int64_t e,int64_t f,int64_t g,Pair x) { return (Pair){x.a+a+b+c+d+e+f+g,x.b+2}; }
-extern Pair __aeth_m0_aeth_pair(Pair);
-extern Tiny __aeth_m0_aeth_tiny(Tiny);
-extern Odd __aeth_m0_aeth_odd(Odd);
-extern Floats __aeth_m0_aeth_floats(Floats);
-extern Doubles __aeth_m0_aeth_doubles(Doubles);
-extern Large __aeth_m0_aeth_large(Large);
-extern Pair __aeth_m0_aeth_spill(int64_t,int64_t,int64_t,int64_t,int64_t,int64_t,int64_t,Pair);
+extern Pair aeth_pair(Pair);
+extern Tiny aeth_tiny(Tiny);
+extern Odd aeth_odd(Odd);
+extern Floats aeth_floats(Floats);
+extern Doubles aeth_doubles(Doubles);
+extern Large aeth_large(Large);
+extern Pair aeth_spill(int64_t,int64_t,int64_t,int64_t,int64_t,int64_t,int64_t,Pair);
 int32_t abi_check(void) {
-    Pair p=__aeth_m0_aeth_pair((Pair){10,20});
-    Tiny t=__aeth_m0_aeth_tiny((Tiny){10,20,30});
-    Odd o=__aeth_m0_aeth_odd((Odd){10,1000});
-    Floats f=__aeth_m0_aeth_floats((Floats){{10,20,30}});
-    Doubles d=__aeth_m0_aeth_doubles((Doubles){{{10,20},{30,40}}});
-    Large input={{10,20,30}}, l=__aeth_m0_aeth_large(input);
-    Pair s=__aeth_m0_aeth_spill(1,2,3,4,5,6,7,(Pair){10,20});
+    Pair p=aeth_pair((Pair){10,20});
+    Tiny t=aeth_tiny((Tiny){10,20,30});
+    Odd o=aeth_odd((Odd){10,1000});
+    Floats f=aeth_floats((Floats){{10,20,30}});
+    Doubles d=aeth_doubles((Doubles){{{10,20},{30,40}}});
+    Large input={{10,20,30}}, l=aeth_large(input);
+    Pair s=aeth_spill(1,2,3,4,5,6,7,(Pair){10,20});
     if(p.a!=11||p.b!=22) return 11;
     if(t.a!=11||t.b!=22||t.c!=33) return 12;
     if(o.tag!=11||o.value!=1010) return 13;

@@ -1,0 +1,58 @@
+// Legal declaration, borrowing, shadowing, and aggregate reference paths.
+struct Pair { left: i32, right: i32 }
+struct View { item: &i32 }
+enum MaybeRef { Some(&i32), None }
+
+fn forward(value: &i32) -> &i32 { value }
+fn view(pair: &Pair) -> View { View { item: &pair.right } }
+fn wrapped(value: &i32) -> MaybeRef { MaybeRef::Some(forward(value)) }
+fn choose(flag: bool) -> i32 {
+    let result: i32;
+    if flag { result = 11; } else { result = 31; }
+    return result;
+}
+fn early() -> i32 { let unused: i32 = { return 9; }; }
+fn unit_value()->() { () }
+fn unit_join(flag:bool)->() { match flag {true=>unit_value(),false=>()} }
+fn sum(a:i32,b:i32)->i32 { a+b }
+fn exit_argument()->i32 { sum({return 17;}, {exit(99); 0}) }
+fn exit_array()->i32 { let unused:[i32;2]=[{return 18;},0]; }
+fn exit_condition()->i32 { if {return 19;} {1} else {2} }
+fn exit_loop()->i32 { let unused:i32=loop {return 20;}; }
+fn exit_nested_return()->i32 { return {return 21;}; }
+fn main() -> i32 {
+    unit_join(true); unit_join(false);
+    let mut pair: Pair = Pair { left: 0, right: 0 };
+    let left: &mut i32 = &mut pair.left;
+    let right: &mut i32 = &mut pair.right;
+    *left = choose(true);
+    *right = choose(false);
+    let first: View = view(&pair);
+    if *first.item != 31 { return 1; }
+    let second: MaybeRef = wrapped(&pair.left);
+    let observed: i32 = match second {
+        MaybeRef::Some(value) => *value,
+        MaybeRef::None => 0
+    };
+    if observed != 11 { return 2; }
+    let items: [i32; 2];
+    items[0] = pair.left;
+    items[1] = pair.right;
+    let index: usize = 1;
+    if items[index] != 31 { return 3; }
+    let delayed: i32;
+    loop { delayed = items[0] + items[1]; break; }
+    if delayed != 42 || early() != 9 { return 4; }
+    let mut value: i32 = 1;
+    let reference: &mut i32 = &mut value;
+    {
+        let mut value: i32 = 8;
+        let reference: &mut i32 = &mut value;
+        *reference = 10;
+        if value != 10 { return 5; }
+    }
+    *reference = 12;
+    if value != 12 { return 6; }
+    if exit_argument()!=17 || exit_array()!=18 || exit_condition()!=19 || exit_loop()!=20 || exit_nested_return()!=21 { return 7; }
+    return 0;
+}

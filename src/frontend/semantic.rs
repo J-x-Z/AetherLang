@@ -2,9 +2,9 @@
 //!
 //! Performs:
 //! - Symbol table management (scopes, definitions)
-//! - Type checking
-//! - Type checking
-//! - Ownership analysis (own/ref/mut)
+//! - Contextual type checking and canonical constant facts
+//! - Definite assignment, scoped loans, and reference provenance
+//! - Transitive effect inference and explicit effect bounds
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
@@ -16,7 +16,15 @@ use crate::utils::{Span, Error, Result};
 
 #[path = "semantic_constants.rs"]
 mod constants;
-pub use constants::{ScalarConstant, SemanticFacts, TypedConstant};
+#[path = "semantic_flow.rs"]
+mod flow;
+#[path = "semantic_effects.rs"]
+mod effects;
+#[path = "semantic_enums.rs"]
+mod enums;
+#[path = "semantic_memory.rs"]
+mod memory;
+pub use constants::{ScalarConstant, SemanticFacts, TypedConstant, TypedInitializer, InitializerValue};
 
 // ==================== Symbol Table ====================
 
@@ -132,123 +140,6 @@ impl SymbolTable {
 }
 
 impl Default for SymbolTable {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ==================== Ownership State ====================
-
-/// Tracks ownership state of variables
-#[derive(Debug, Clone)]
-pub struct OwnershipState {
-    /// Variables that are currently owned
-    owned: HashMap<String, Span>,
-    /// Variables that have been moved
-    moved: HashMap<String, Span>,
-    /// Variables that are immutably borrowed (with count)
-    borrowed: HashMap<String, usize>,
-    /// Variables that are mutably borrowed
-    mut_borrowed: HashMap<String, Span>,
-}
-
-impl OwnershipState {
-    pub fn new() -> Self {
-        Self {
-            owned: HashMap::new(),
-            moved: HashMap::new(),
-            borrowed: HashMap::new(),
-            mut_borrowed: HashMap::new(),
-        }
-    }
-
-    /// Mark a variable as owned
-    pub fn add_owned(&mut self, name: String, span: Span) {
-        self.owned.insert(name, span);
-    }
-
-    /// Check if a variable is owned and not moved
-    pub fn is_available(&self, name: &str) -> bool {
-        self.owned.contains_key(name) && !self.moved.contains_key(name)
-    }
-
-    /// Move a variable (transfer ownership)
-    pub fn move_var(&mut self, name: &str, span: Span) -> Result<()> {
-        if self.moved.contains_key(name) {
-            return Err(Error::UseAfterMove {
-                var: name.to_string(),
-                span,
-            });
-        }
-        if self.borrowed.contains_key(name) || self.mut_borrowed.contains_key(name) {
-            return Err(Error::CannotMoveWhileBorrowed {
-                var: name.to_string(),
-                span,
-            });
-        }
-        self.moved.insert(name.to_string(), span);
-        Ok(())
-    }
-
-    /// Borrow a variable immutably
-    pub fn borrow(&mut self, name: &str, span: Span) -> Result<()> {
-        if self.moved.contains_key(name) {
-            return Err(Error::UseAfterMove {
-                var: name.to_string(),
-                span,
-            });
-        }
-        if self.mut_borrowed.contains_key(name) {
-            return Err(Error::CannotBorrowWhileMutBorrowed {
-                var: name.to_string(),
-                span,
-            });
-        }
-        *self.borrowed.entry(name.to_string()).or_insert(0) += 1;
-        Ok(())
-    }
-
-    /// Borrow a variable mutably
-    pub fn borrow_mut(&mut self, name: &str, span: Span) -> Result<()> {
-        if self.moved.contains_key(name) {
-            return Err(Error::UseAfterMove {
-                var: name.to_string(),
-                span,
-            });
-        }
-        if self.borrowed.contains_key(name) {
-            return Err(Error::CannotMutBorrowWhileBorrowed {
-                var: name.to_string(),
-                span,
-            });
-        }
-        if self.mut_borrowed.contains_key(name) {
-            return Err(Error::CannotMutBorrowTwice {
-                var: name.to_string(),
-                span,
-            });
-        }
-        self.mut_borrowed.insert(name.to_string(), span);
-        Ok(())
-    }
-
-    /// Release an immutable borrow
-    pub fn release_borrow(&mut self, name: &str) {
-        if let Some(count) = self.borrowed.get_mut(name) {
-            *count -= 1;
-            if *count == 0 {
-                self.borrowed.remove(name);
-            }
-        }
-    }
-
-    /// Release a mutable borrow
-    pub fn release_mut_borrow(&mut self, name: &str) {
-        self.mut_borrowed.remove(name);
-    }
-}
-
-impl Default for OwnershipState {
     fn default() -> Self {
         Self::new()
     }
@@ -474,11 +365,10 @@ impl ModuleResolver {
 pub struct SemanticAnalyzer {
     pub symbols: SymbolTable,
     pub errors: Vec<Error>,
-    ownership: OwnershipState,
     // AI-Native extensions
-    /// Current function's declared effects (for effect propagation checking)
-    current_effects: Option<EffectSet>,
     current_return: Option<ResolvedType>,
+    current_function_name: Option<String>,
+    unsafe_depth: usize,
     loop_depth: usize,
     loop_breaks: Vec<bool>,
     variadic_functions: HashSet<String>,
@@ -501,9 +391,9 @@ impl SemanticAnalyzer {
         let mut analyzer = Self {
             symbols: SymbolTable::new(),
             errors: Vec::new(),
-            ownership: OwnershipState::new(),
-            current_effects: None,
             current_return: None,
+            current_function_name: None,
+            unsafe_depth: 0,
             loop_depth: 0,
             loop_breaks: Vec::new(),
             variadic_functions: HashSet::new(),
@@ -528,6 +418,7 @@ impl SemanticAnalyzer {
     
     /// Register built-in functions
     fn register_builtins(&mut self) {
+        self.register_memory_intrinsics();
         // Create effect sets for builtins
         let io_effects = EffectSet { is_pure: false, effects: vec![Effect::IO] };
         let alloc_effects = EffectSet { is_pure: false, effects: vec![Effect::Alloc] };
@@ -666,6 +557,9 @@ impl SemanticAnalyzer {
             self.collect_definition(item)?;
         }
 
+        self.collect_enum_facts(program)?;
+        self.collect_methods(program)?;
+        self.infer_effects(program)?;
         self.prepare_constant_facts()?;
 
         // Pass 2: Type check all items
@@ -673,6 +567,7 @@ impl SemanticAnalyzer {
             self.check_item(item)?;
         }
 
+        self.analyze_flows(program)?;
         if self.errors.is_empty() {
             Ok(())
         } else {
@@ -694,6 +589,7 @@ impl SemanticAnalyzer {
             ResolvedType::Struct { name, .. } => format!("struct {}", name),
             ResolvedType::Enum { name } => format!("enum {}", name),
             ResolvedType::Pointer(inner) => format!("*{}", Self::type_identity(inner)),
+            ResolvedType::Volatile(inner) => format!("volatile {}", Self::type_identity(inner)),
             ResolvedType::Reference { mutable, inner } => format!("&{}{}", mutable, Self::type_identity(inner)),
             ResolvedType::Array { elem, size } => format!("[{};{}]", Self::type_identity(elem), size),
             ResolvedType::Slice(inner) => format!("[{}]", Self::type_identity(inner)),
@@ -717,7 +613,8 @@ impl SemanticAnalyzer {
             Type::Pointer(inner, _) | Type::Slice(inner, _) | Type::Ref { inner, .. } => {
                 if behind_pointer { Self::type_names(inner, true, names); }
             }
-            Type::Array { elem, .. } | Type::Owned { inner: elem, .. } | Type::Volatile(elem, _) => Self::type_names(elem, behind_pointer, names),
+            Type::Volatile(inner, _) => Self::type_names(inner, true, names),
+            Type::Array { elem, .. } | Type::Owned { inner: elem, .. } => Self::type_names(elem, behind_pointer, names),
             Type::Tuple(elements, _) => for elem in elements { Self::type_names(elem, behind_pointer, names); },
             Type::Generic(name, args, _) => {
                 names.push(name.clone());
@@ -768,6 +665,13 @@ impl SemanticAnalyzer {
             for field in fields { dependencies(self, &field.ty, &mut deps); }
             graph.insert(name.clone(), (deps, span));
         }
+        for item in &program.items {
+            if let Item::Enum(def) = item {
+                let mut deps = Vec::new();
+                for variant in &def.variants {for ty in &variant.fields {dependencies(self,ty,&mut deps);}}
+                graph.insert(def.name.name.clone(),(deps,def.span));
+            }
+        }
         fn visit(name: &str, graph: &HashMap<String, (Vec<String>, Span)>, visiting: &mut HashSet<String>, done: &mut HashSet<String>) -> Result<()> {
             if done.contains(name) { return Ok(()); }
             let Some((deps, span)) = graph.get(name) else { return Ok(()); };
@@ -784,6 +688,7 @@ impl SemanticAnalyzer {
     fn collect_definition(&mut self, item: &Item) -> Result<()> {
         match item {
             Item::Function(func) => {
+                if crate::intrinsics::memory(&func.name.name).is_some(){return Err(Error::Expected("non-reserved function name".into(),func.name.span));}
                 self.symbols.enter_scope();
                 self.define_type_parameters(&func.type_params)?;
                 let params: Vec<ResolvedType> = func.params.iter()
@@ -874,6 +779,20 @@ impl SemanticAnalyzer {
                     mutable: false,
                 })?;
             }
+            Item::Union(definition) => {
+                if definition.fields.is_empty() { return Err(Error::Expected("at least one union field".into(), definition.span)); }
+                let fields = definition.fields.iter().map(|field| Ok((field.name.name.clone(), self.resolve_type(&field.ty)?))).collect::<Result<Vec<_>>>()?;
+                self.facts.unions.insert(definition.name.name.clone());
+                self.symbols.define(Symbol { name: definition.name.name.clone(),
+                    kind: SymbolKind::Struct { fields: fields.clone(), type_params: vec![], const_params: vec![] },
+                    ty: ResolvedType::Struct { name: definition.name.name.clone(), fields }, span: definition.span, mutable: false })?;
+            }
+            Item::Static(definition) => {
+                let ty = self.resolve_type(&definition.ty)?;
+                self.facts.global_types.insert(definition.name.name.clone(), ty.clone());
+                self.symbols.define(Symbol { name: definition.name.name.clone(), kind: SymbolKind::Variable, ty,
+                    span: definition.span, mutable: definition.is_mut })?;
+            }
             Item::Enum(e) => {
                 self.symbols.enter_scope();
 
@@ -950,24 +869,38 @@ impl SemanticAnalyzer {
                 })?;
             }
             Item::Extern(ext) => {
+                if ext.abi.as_deref().is_some_and(|abi| abi != "C") {
+                    return Err(Error::semantic_expected("E2202","supported foreign ABI \"C\"", ext.span));
+                }
                 for foreign_item in &ext.items {
                     match foreign_item {
-                        ForeignItem::Fn { name, params, ret_type, variadic, .. } => {
+                        ForeignItem::Fn { name, params, ret_type, variadic, annotations, .. } => {
                             let param_types = params.iter().map(|param| self.resolve_type(&param.ty)).collect::<Result<Vec<_>>>()?;
                             let ret = ret_type.as_ref().map(|ty| self.resolve_type(ty)).transpose()?.unwrap_or(ResolvedType::UNIT);
+                            if let Some(spec)=crate::intrinsics::memory(&name.name) {
+                                if spec.params()!=param_types || spec.result()!=ret {return Err(Error::Expected("canonical memory intrinsic signature".into(),name.span));}
+                            }
+                            let effects = self.foreign_effects(&name.name, annotations);
                             let signature = format!("{}:fn({})->{}:{}", ext.abi.as_deref().unwrap_or("C"),
                                 param_types.iter().map(Self::type_identity).collect::<Vec<_>>().join(","), Self::type_identity(&ret), variadic);
-                            if !self.register_foreign(&name.name, signature)? { continue; }
+                            if !self.register_foreign(&name.name, signature)? {
+                                if let Some(Symbol {kind:SymbolKind::Function {effects:previous,..},..})=self.symbols.scopes[0].symbols.get_mut(&name.name) {
+                                    for effect in &effects.effects {if !previous.effects.contains(effect){previous.effects.push(*effect);}}
+                                    previous.is_pure=previous.effects.is_empty();
+                                }
+                                continue;
+                            }
                             if *variadic { self.variadic_functions.insert(name.name.clone()); }
                             self.symbols.define(Symbol {
                                 name: name.name.clone(),
-                                kind: SymbolKind::Function { params: param_types.clone(), ret: ret.clone(), type_params: vec![], const_params: vec![], effects: EffectSet::default() },
+                                kind: SymbolKind::Function { params: param_types.clone(), ret: ret.clone(), type_params: vec![], const_params: vec![], effects },
                                 ty: ResolvedType::Function { params: param_types, ret: Box::new(ret) },
                                 span: name.span, mutable: false,
                             })?;
                         }
                         ForeignItem::Static { name, ty, is_mut, .. } => {
                             let resolved = self.resolve_type(ty)?;
+                            self.facts.global_types.insert(name.name.clone(), resolved.clone());
                             let signature = format!("static:{}:{}", Self::type_identity(&resolved), is_mut);
                             if !self.register_foreign(&name.name, signature)? { continue; }
                             self.symbols.define(Symbol { name: name.name.clone(), kind: SymbolKind::Variable,
@@ -1217,8 +1150,8 @@ impl SemanticAnalyzer {
             Item::Use(_) => Ok(()), // Import resolution handled elsewhere
             // Phase 8: FFI and System features
             Item::Extern(_) => Ok(()), // FFI - external symbols registered elsewhere
-            Item::Static(_) => Ok(()), // TODO: Check static variable type
-            Item::Union(_) => Ok(()), // TODO: Check union field types
+            Item::Static(definition) => self.check_static_initializer(definition),
+            Item::Union(_) => Ok(()),
             Item::Trait(_) => Ok(()), // Trait definitions checked in collect phase
             Item::TypeAlias(_) => Ok(()), // Type aliases resolved in collect phase
         }
@@ -1226,15 +1159,18 @@ impl SemanticAnalyzer {
 
     /// Type check a function
     fn check_function(&mut self, func: &Function) -> Result<()> {
+        let previous=self.current_function_name.replace(func.name.name.clone());
+        let result=self.check_function_inner(func);
+        self.current_function_name=previous;
+        result
+    }
+    fn check_function_inner(&mut self, func: &Function) -> Result<()> {
         self.symbols.enter_scope();
         self.define_type_parameters(&func.type_params)?;
-        self.ownership = OwnershipState::new();
         
-        // Set effect context for this function (for effect propagation checking)
-        self.current_effects = Some(func.effects.clone());
-
         // Add parameters to scope
         for param in &func.params {
+            if crate::intrinsics::memory(&param.name.name).is_some(){return Err(Error::Expected("non-reserved parameter name".into(),param.name.span));}
             let ty = self.resolve_type(&param.ty)?;
             self.symbols.define(Symbol {
                 name: param.name.name.clone(),
@@ -1243,7 +1179,6 @@ impl SemanticAnalyzer {
                 span: param.span,
                 mutable: param.ownership == Ownership::Mut,
             })?;
-            self.ownership.add_owned(param.name.name.clone(), param.span);
         }
         
         // Resolve return type for 'result' variable in ensures contracts
@@ -1316,8 +1251,6 @@ impl SemanticAnalyzer {
         self.check_function_body(&func.body, &return_type)?;
         self.current_return = None;
         
-        // Clear effect context
-        self.current_effects = None;
 
         self.symbols.exit_scope();
         Ok(())
@@ -1329,7 +1262,10 @@ impl SemanticAnalyzer {
         self.symbols.enter_scope();
         self.symbols.define(Symbol { name: "Self".into(), kind: SymbolKind::TypeAlias { target: target.clone() },
             ty: target, span: impl_block.span, mutable: false })?;
-        for method in &impl_block.methods { self.check_function(method)?; }
+        for method in &impl_block.methods {
+            let mut lowered=method.clone();lowered.name.name=format!("{}_{}",impl_block.target.name,method.name.name);
+            self.check_function(&lowered)?;
+        }
         self.symbols.exit_scope();
         Ok(())
     }
@@ -1339,7 +1275,9 @@ impl SemanticAnalyzer {
         let mut last_ty = ResolvedType::unit();
 
         for stmt in &block.stmts {
+            let saved = self.loop_breaks.clone();
             let ty = self.check_stmt(stmt)?;
+            if last_ty == ResolvedType::NEVER { self.loop_breaks = saved; }
             // A trailing semicolon or unreachable statement cannot make a return fall through.
             if last_ty != ResolvedType::NEVER && !matches!(stmt, Stmt::Empty { .. }) {
                 last_ty = ty;
@@ -1353,17 +1291,19 @@ impl SemanticAnalyzer {
     fn check_stmt(&mut self, stmt: &Stmt) -> Result<ResolvedType> {
         match stmt {
             Stmt::Let { name, mutable, ty, value, span } => {
+                if crate::intrinsics::memory(&name.name).is_some(){return Err(Error::Expected("non-reserved binding name".into(),name.span));}
                 let declared_ty = ty.as_ref()
                     .map(|t| self.resolve_type(t))
                     .transpose()?;
 
+                let mut diverges = false;
                 let final_ty = match (declared_ty, value) {
                     (Some(expected), Some(value)) => {
-                        self.check_expected_expr(value, &expected)?;
+                        diverges = self.check_expected_expr(value, &expected)? == ResolvedType::NEVER;
                         expected
                     }
                     (Some(expected), None) => expected,
-                    (None, Some(value)) => self.check_expr(value)?,
+                    (None, Some(value)) => { let ty = self.check_expr(value)?; diverges = ty == ResolvedType::NEVER; ty },
                     (None, None) => ResolvedType::Unknown,
                 };
 
@@ -1375,9 +1315,8 @@ impl SemanticAnalyzer {
                     mutable: *mutable,
                 })?;
 
-                self.ownership.add_owned(name.name.clone(), *span);
 
-                Ok(ResolvedType::unit())
+                Ok(if diverges { ResolvedType::NEVER } else { ResolvedType::UNIT })
             }
             Stmt::Expr(expr) => self.check_expr(expr),
             Stmt::Semi(expr) => {
@@ -1411,12 +1350,34 @@ impl SemanticAnalyzer {
     }
 
     /// Type check an expression
+    fn remember_expr_type(&mut self, expr:&Expr, ty:&ResolvedType) {
+        if let Some(name)=&self.current_function_name {self.facts.expr_types.insert((name.clone(),expr.span()),ty.clone());}
+    }
     fn check_expr(&mut self, expr: &Expr) -> Result<ResolvedType> {
+        let ty=self.check_expr_inner(expr)?;
+        self.remember_expr_type(expr,&ty);
+        Ok(ty)
+    }
+    fn check_expr_inner(&mut self, expr: &Expr) -> Result<ResolvedType> {
         match expr {
             Expr::Literal(lit) => Ok(self.literal_type(lit)),
+            Expr::Layout { query, ty, field, span } => {
+                let resolved = self.resolve_type(ty)?;
+                if *query == LayoutQuery::Offset {
+                    let ResolvedType::Struct { name, fields } = &resolved else { return Err(Error::Expected("struct or union for offset_of".into(), *span)); };
+                    let fields = self.symbols.lookup(name).and_then(|symbol| if let SymbolKind::Struct {fields,..}=&symbol.kind {Some(fields)}else{None}).unwrap_or(fields);
+                    if !field.as_ref().is_some_and(|field| fields.iter().any(|(name,_)|name==&field.name)) {
+                        return Err(Error::UnknownField {field:field.as_ref().map(|f|f.name.clone()).unwrap_or_default(),span:*span});
+                    }
+                }
+                Ok(ResolvedType::Primitive(PrimitiveType::Usize))
+            }
             
             Expr::Ident(ident) => {
                 if let Some(symbol) = self.symbols.lookup(&ident.name) {
+                    if matches!(symbol.kind, SymbolKind::Struct {..}|SymbolKind::Enum {..}|SymbolKind::TypeAlias {..}|SymbolKind::TypeParam) {
+                        return Err(Error::semantic_expected("E2104",format!("value expression; '{}' names a type",ident.name),ident.span));
+                    }
                     // For functions, return the function type from SymbolKind
                     if let SymbolKind::Function { params, ret, .. } = &symbol.kind {
                         Ok(ResolvedType::Function {
@@ -1461,20 +1422,13 @@ impl SemanticAnalyzer {
                     }
                     
                     // Also check qualified name lookup (module::symbol registered in symbol table)
-                    let qualified_name = format!("{}::{}", type_name, symbol_name);
+                    let qualified_name = segments.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join("::");
                     if let Some(symbol) = self.symbols.lookup(&qualified_name) {
                         return Ok(symbol.ty.clone());
                     }
                     
-                    if let Some(symbol) = self.symbols.lookup(type_name) {
-                         // Enum variant (e.g., TokenKind::Eof)
-                         if matches!(symbol.kind, SymbolKind::Enum { .. }) {
-                             return Ok(ResolvedType::Unknown);
-                         }
-                         // Struct static method (e.g., String::new)
-                         if matches!(symbol.kind, SymbolKind::Struct { .. }) {
-                             return Ok(ResolvedType::Unknown);
-                         }
+                    if let Some(Symbol { kind: SymbolKind::Enum { variants, .. }, ty, .. }) = self.symbols.lookup(type_name) {
+                        if segments.len() == 2 && variants.contains(symbol_name) { return Ok(ty.clone()); }
                     }
                 }
                 
@@ -1501,90 +1455,30 @@ impl SemanticAnalyzer {
                         };
                         self.check_binary_op(&left_ty, arithmetic, &right_ty, *span)?;
                     }
-                    return Ok(ResolvedType::UNIT);
+                    return Ok(if left_ty == ResolvedType::NEVER || right_ty == ResolvedType::NEVER { ResolvedType::NEVER } else { ResolvedType::UNIT });
                 }
+                let saved_breaks=self.loop_breaks.clone();
                 let right_ty = self.check_expr(right)?;
+                let skips=matches!((op,left.as_ref()),(BinOp::And,Expr::Literal(Literal::Bool(false,_)))|(BinOp::Or,Expr::Literal(Literal::Bool(true,_))));
+                let mandatory=matches!((op,left.as_ref()),(BinOp::And,Expr::Literal(Literal::Bool(true,_)))|(BinOp::Or,Expr::Literal(Literal::Bool(false,_))));
+                if left_ty==ResolvedType::NEVER || skips {self.loop_breaks=saved_breaks;}
+                if left_ty == ResolvedType::NEVER || (right_ty == ResolvedType::NEVER && (!matches!(op, BinOp::And | BinOp::Or)||mandatory)) { return Ok(ResolvedType::NEVER); }
+                if matches!(op,BinOp::And|BinOp::Or) && right_ty==ResolvedType::NEVER {self.require_type(&ResolvedType::BOOL,&left_ty,left.span())?;return Ok(ResolvedType::BOOL);}
                 let (left_ty, right_ty) = self.common_operand_types(left, left_ty, right, right_ty);
                 self.check_binary_op(&left_ty, *op, &right_ty, *span)
             }
 
-            Expr::Try { expr, .. } => {
-                // Determine the error type (basic check: expr must be Result)
-                let _ty = self.check_expr(expr)?;
-                // TODO: Verify type is Result<T, E> and return T
-                // For now, return the inner type blindly or assume ok
-                Ok(_ty) 
-            }
+            Expr::Try { expr, span } => self.check_try(expr, *span),
 
             Expr::Unary { op, expr, span } => {
                 let ty = self.check_expr(expr)?;
+                if ty == ResolvedType::NEVER {return Ok(ty);}
                 self.check_unary_op(*op, &ty, *span)
             }
 
             Expr::Call { func, args, span } => {
                 let func_ty = self.check_expr(func)?;
 
-                // P5.2: Effect propagation - HARD ERROR if caller doesn't declare required effects
-                if let Some(ref caller_effects) = self.current_effects {
-                    // Get callee's effects from symbol table
-                    if let Expr::Ident(ident) = func.as_ref() {
-                        if let Some(symbol) = self.symbols.lookup(&ident.name) {
-                            if let SymbolKind::Function { effects: callee_effects, .. } = &symbol.kind {
-                                // Check each effect the callee requires
-                                for effect in &callee_effects.effects {
-                                    // If caller is pure, it cannot call any effectful function
-                                    if caller_effects.is_pure {
-                                        return Err(Error::EffectViolation {
-                                            message: format!(
-                                                "pure function cannot call '{}' which has effect {:?}",
-                                                ident.name, effect
-                                            ),
-                                            span: *span,
-                                        });
-                                    }
-                                    // If caller doesn't have this effect, error
-                                    if !caller_effects.effects.contains(effect) {
-                                        return Err(Error::EffectViolation {
-                                            message: format!(
-                                                "function with effect[{:?}] called from function without that effect. Add 'effect[{:?}]' to caller's signature.",
-                                                effect, effect
-                                            ),
-                                            span: *span,
-                                        });
-                                    }
-                                }
-                                // If callee is pure but caller is not - that's fine (pure is subset of any effect)
-                            }
-                        } else {
-                            // Check built-in impure functions
-                            let io_builtins = ["print", "println", "print_i64", "println_i64", "puts", "printf", "exit"];
-                            let alloc_builtins = ["malloc", "free", "realloc", "alloc"];
-
-                            if caller_effects.is_pure {
-                                if io_builtins.contains(&ident.name.as_str()) || alloc_builtins.contains(&ident.name.as_str()) {
-                                    return Err(Error::EffectViolation {
-                                        message: format!("pure function cannot call impure builtin '{}'", ident.name),
-                                        span: *span,
-                                    });
-                                }
-                            } else {
-                                // Check specific effects for builtins
-                                if io_builtins.contains(&ident.name.as_str()) && !caller_effects.effects.contains(&Effect::IO) {
-                                    return Err(Error::EffectViolation {
-                                        message: format!("calling '{}' requires effect[IO]. Add 'effect[io]' to function signature.", ident.name),
-                                        span: *span,
-                                    });
-                                }
-                                if alloc_builtins.contains(&ident.name.as_str()) && !caller_effects.effects.contains(&Effect::Alloc) {
-                                    return Err(Error::EffectViolation {
-                                        message: format!("calling '{}' requires effect[Alloc]. Add 'effect[alloc]' to function signature.", ident.name),
-                                        span: *span,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
 
                 match func_ty {
                     ResolvedType::Function { params, ret } => {
@@ -1613,71 +1507,39 @@ impl SemanticAnalyzer {
                             });
                         }
                         
+                        let mut diverges = false;
                         let mut type_substitutions: HashMap<String, ResolvedType> = HashMap::new();
                         for (index, arg) in args.iter().enumerate() {
                             if let Some(param_ty) = params.get(index) {
                                 let expected = self.substitute_type(param_ty, &type_substitutions);
                                 if let ResolvedType::GenericParam(name) = &expected {
                                     let arg_ty = self.check_expr(arg)?;
+                                    diverges |= arg_ty == ResolvedType::NEVER;
                                     type_substitutions.insert(name.clone(), arg_ty);
                                 } else {
-                                    self.check_expected_expr(arg, &expected)?;
+                                    diverges |= self.check_expected_expr(arg, &expected)? == ResolvedType::NEVER;
                                 }
                             } else {
                                 // Variadic arguments still need semantic checking.
-                                self.check_expr(arg)?;
+                                diverges |= self.check_expr(arg)? == ResolvedType::NEVER;
                             }
                         }
 
+                        if let Expr::Ident(name)=func.as_ref(){self.validate_memory_call(&name.name,args,*span)?;}
                         // Substitute generic params in return type
                         let actual_ret = self.substitute_type(&ret, &type_substitutions);
-                        Ok(actual_ret)
+                        Ok(if diverges {ResolvedType::NEVER}else{actual_ret})
                     }
-                    ResolvedType::Unknown => {
-                        // Allow calling unknown functions (e.g. enum constructors for now)
-                        for arg in args {
-                            let _ = self.check_expr(arg)?;
-                        }
-                        Ok(ResolvedType::Unknown)
-                    }
+                    ty if ty==ResolvedType::NEVER => {for arg in args {self.check_expr(arg)?;} Ok(ResolvedType::NEVER)}
                     _ => Err(Error::NotCallable { span: *span }),
                 }
             }
 
-            Expr::Field { expr, field, span } => {
-                let expr_ty = self.check_expr(expr)?;
-                
-                let struct_ty = if let ResolvedType::Pointer(inner) = &expr_ty {
-                    inner.as_ref()
-                } else if let ResolvedType::Reference { inner, .. } = &expr_ty {
-                    inner.as_ref()
-                } else {
-                    &expr_ty
-                };
-
-                match struct_ty {
-                    ResolvedType::Struct { name, fields } => {
-                        let fields = match self.symbols.lookup(name) {
-                            Some(Symbol { kind: SymbolKind::Struct { fields, .. }, .. }) => fields,
-                            _ => fields,
-                        };
-                        for (fname, fty) in fields {
-                            if fname == &field.name {
-                                return Ok(fty.clone());
-                            }
-                        }
-                        Err(Error::UnknownField {
-                            field: field.name.clone(),
-                            span: *span,
-                        })
-                    }
-                    _ => Err(Error::NotAStruct { span: *span }),
-                }
-            }
+            Expr::Field { .. } => Ok(self.check_place_type(expr)?.unqualified().clone()),
 
             Expr::If { cond, then_block, else_block, .. } => {
                 let cond_ty = self.check_expr(cond)?;
-                if cond_ty != ResolvedType::bool() && cond_ty != ResolvedType::Unknown {
+                if cond_ty != ResolvedType::bool() && cond_ty != ResolvedType::Unknown && cond_ty != ResolvedType::NEVER {
                     self.errors.push(Error::TypeMismatch {
                         expected: "bool".to_string(),
                         got: format!("{:?}", cond_ty),
@@ -1689,6 +1551,7 @@ impl SemanticAnalyzer {
                 let then_ty = self.check_block(then_block)?;
                 self.symbols.exit_scope();
 
+                if cond_ty == ResolvedType::NEVER {return Ok(cond_ty);}
                 if let Some(else_block) = else_block {
                     self.symbols.enter_scope();
                     let else_ty = self.check_block(else_block)?;
@@ -1715,15 +1578,15 @@ impl SemanticAnalyzer {
 
             Expr::While { cond, body, .. } => {
                 let cond_ty = self.check_expr(cond)?;
-                if cond_ty != ResolvedType::bool() && cond_ty != ResolvedType::Unknown {
+                if cond_ty != ResolvedType::bool() && cond_ty != ResolvedType::Unknown && cond_ty != ResolvedType::NEVER {
                     self.errors.push(Error::TypeMismatch {
                         expected: "bool".to_string(),
                         got: format!("{:?}", cond_ty),
                         span: cond.span(),
                     });
                 }
-                self.check_loop_body(body)?;
-                Ok(ResolvedType::unit())
+                let has_break = self.check_loop_body(body)?;
+                Ok(if cond_ty == ResolvedType::NEVER || (!has_break && matches!(cond.as_ref(),Expr::Literal(Literal::Bool(true,_)))) {ResolvedType::NEVER}else{ResolvedType::UNIT})
             }
 
             Expr::For { var, iter, body, span } => {
@@ -1768,21 +1631,14 @@ impl SemanticAnalyzer {
                 let types: Vec<ResolvedType> = elements.iter()
                     .map(|e| self.check_expr(e))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(ResolvedType::Tuple(types))
+                Ok(if types.is_empty(){ResolvedType::UNIT}else{ResolvedType::Tuple(types)})
             }
 
             Expr::Ref { mutable, expr, span } => {
-                let inner_ty = self.check_expr(expr)?;
+                let inner_ty = self.check_place_type(expr)?;
+                if inner_ty==ResolvedType::NEVER {return Ok(inner_ty);}
                 
                 if *mutable { self.check_assignable(expr)?; }
-                // Check ownership for borrowing
-                if let Expr::Ident(ident) = expr.as_ref() {
-                    if *mutable {
-                        self.ownership.borrow_mut(&ident.name, *span)?;
-                    } else {
-                        self.ownership.borrow(&ident.name, *span)?;
-                    }
-                }
 
                 Ok(ResolvedType::Reference {
                     mutable: *mutable,
@@ -1790,72 +1646,42 @@ impl SemanticAnalyzer {
                 })
             }
 
-            Expr::Deref { expr, span } => {
-                let ty = self.check_expr(expr)?;
-                match ty {
-                    ResolvedType::Pointer(inner) => Ok(*inner),
-                    ResolvedType::Reference { inner, .. } => Ok(*inner),
-                    _ => Err(Error::CannotDeref { span: *span }),
-                }
-            }
-
-            Expr::Index { expr, index, span } => {
-                let expr_ty = self.check_expr(expr)?;
-                let index_ty = self.check_expr(index)?;
-
-                if !Self::is_integer(&index_ty) {
-                    return Err(Error::TypeMismatch {
-                        expected: "integer".to_string(), got: format!("{:?}", index_ty), span: index.span(),
-                    });
-                }
-
-                match expr_ty {
-                    ResolvedType::Array { elem, .. } => Ok(*elem),
-                    ResolvedType::Slice(elem) => Ok(*elem),
-                    // Support pointer indexing: ptr[i] dereferences and offsets
-                    ResolvedType::Pointer(elem) => Ok(*elem),
-                    _ => Err(Error::NotIndexable { span: *span }),
-                }
-            }
+            Expr::Deref { .. } | Expr::Index { .. } => Ok(self.check_place_type(expr)?.unqualified().clone()),
 
             Expr::Match { expr, arms, span } => self.check_match(expr, arms, *span, None),
 
             Expr::Unsafe { body, .. } => {
-                self.symbols.enter_scope();
-                let ty = self.check_block(body)?;
-                self.symbols.exit_scope();
-                Ok(ty)
+                self.symbols.enter_scope(); self.unsafe_depth+=1;
+                let result = self.check_block(body);
+                self.unsafe_depth-=1; self.symbols.exit_scope();
+                result
             }
 
             Expr::MethodCall { expr, method, args, span } => {
                 let receiver_ty = self.check_expr(expr)?;
-                
-                match &receiver_ty {
-                    ResolvedType::Pointer(inner) => {
-                        if method.name == "add" {
-                            if args.len() != 1 {
-                                return Err(Error::ArgCountMismatch { func_name: "ptr.add".to_string(), expected: 1, got: args.len(), span: *span });
-                            }
-                            let offset_ty = self.check_expr(&args[0])?;
-                            // Check offset is integer
-                            match offset_ty {
-                                ResolvedType::Primitive(p) if p.is_integer() => {},
-                                _ => return Err(Error::TypeMismatch { 
-                                    expected: "integer".to_string(), 
-                                    got: format!("{:?}", offset_ty), 
-                                    span: args[0].span() 
-                                }),
-                            }
-                            // Returns same pointer type
-                            Ok(ResolvedType::Pointer(inner.clone()))
-                        } else {
-                            Ok(ResolvedType::Unknown)
-                        }
-                    },
-                    _ => Ok(ResolvedType::Unknown)
+                if let ResolvedType::Pointer(inner) = &receiver_ty {
+                    if method.name == "add" {
+                        if args.len()!=1 {return Err(Error::ArgCountMismatch {func_name:"ptr.add".into(),expected:1,got:args.len(),span:*span});}
+                        let offset=self.check_expr(&args[0])?;
+                        if !Self::is_integer(&offset) {return Err(Error::TypeMismatch {expected:"integer".into(),got:format!("{:?}",offset),span:args[0].span()});}
+                        return Ok(ResolvedType::Pointer(inner.clone()));
+                    }
                 }
+                let base = match &receiver_ty {ResolvedType::Reference {inner,..}|ResolvedType::Pointer(inner)=>inner.as_ref(),other=>other};
+                let name = match base {ResolvedType::Struct {name,..}|ResolvedType::Enum {name}=>format!("{}::{}",name,method.name),_=>return Err(Error::UndefinedVariable {name:method.name.clone(),span:*span})};
+                let signature=self.symbols.lookup(&name).map(|s|s.ty.clone()).ok_or_else(||Error::UndefinedVariable {name:name.clone(),span:*span})?;
+                let ResolvedType::Function {params,ret}=signature else {return Err(Error::Expected("method function".into(),*span));};
+                if params.is_empty() || params.len()!=args.len()+1 {return Err(Error::ArgCountMismatch {func_name:name,expected:params.len().saturating_sub(1),got:args.len(),span:*span});}
+                if let ResolvedType::Reference {mutable,inner}=&params[0] {
+                    if !matches!(receiver_ty,ResolvedType::Reference {..}) {
+                        self.require_type(inner,&receiver_ty,*span)?;
+                        if *mutable {self.check_assignable(expr)?;}
+                    } else {self.require_type(&params[0],&receiver_ty,*span)?;}
+                } else {self.require_type(&params[0],&receiver_ty,*span)?;}
+                for (arg,ty) in args.iter().zip(&params[1..]) {self.check_expected_expr(arg,ty)?;}
+                Ok(*ret)
             }
-            
+
             Expr::StructLit { name, fields, span } => {
                 // First, check struct exists and get field info
                 let symbol = self.symbols.lookup(&name.name)
@@ -1871,9 +1697,11 @@ impl SemanticAnalyzer {
                             return Err(Error::DuplicateDefinition { name: fname.name.clone(), span: fname.span });
                         }
                     }
-                    for (field, _) in def_fields {
-                        if !seen.contains(field) {
-                            return Err(Error::Expected(format!("initializer for field {}", field), *span));
+                    if self.facts.unions.contains(&name.name) {
+                        if fields.len() != 1 { return Err(Error::Expected("exactly one active union field".into(), *span)); }
+                    } else {
+                        for (field, _) in def_fields {
+                            if !seen.contains(field) { return Err(Error::Expected(format!("initializer for field {}", field), *span)); }
                         }
                     }
                     for (fname, fvalue) in fields {
@@ -1928,6 +1756,7 @@ impl SemanticAnalyzer {
 
             Expr::Cast { expr, ty, span } => {
                 let source_ty = self.check_expr(expr)?;
+                if source_ty==ResolvedType::NEVER {return Ok(source_ty);}
                 let target_ty = self.resolve_type(ty)?;
                 
                 // Allow explicit casts in the following cases:
@@ -1959,7 +1788,7 @@ impl SemanticAnalyzer {
                     
                     // Reference to Pointer (same inner type or compatible)
                     (ResolvedType::Reference { inner, .. }, ResolvedType::Pointer(ptr_inner)) => {
-                        inner.as_ref() == ptr_inner.as_ref()
+                        inner.unqualified() == ptr_inner.unqualified()
                     },
                     
                     // Unknown source (permissive for now)
@@ -1979,7 +1808,21 @@ impl SemanticAnalyzer {
                 Ok(target_ty)
             }
             Expr::Range { .. } => Ok(ResolvedType::Unknown),
-            Expr::Asm { .. } => Ok(ResolvedType::unit()),
+            Expr::Asm { operands, span, .. } => {
+                if self.unsafe_depth==0 {return Err(Error::semantic_expected("E2401","unsafe block for inline assembly",*span));}
+                let mut diverges=false;
+                for operand in operands {
+                    if let Some(expr)=&operand.expr {
+                        let ty=self.check_expr(expr)?;
+                        diverges |= ty==ResolvedType::NEVER;
+                        if matches!(operand.kind,AsmOperandKind::Output|AsmOperandKind::InOut) {self.check_assignable(expr)?;}
+                        let reference=matches!(ty,ResolvedType::Reference {..});
+                        if reference && !matches!(operand.kind,AsmOperandKind::Input) {return Err(Error::Expected("raw pointer output; assembly cannot establish a reference lifetime".into(),expr.span()));}
+                        if !matches!(ty,ResolvedType::Primitive(_)|ResolvedType::Pointer(_)|ResolvedType::Reference {..}|ResolvedType::Vector(..)) {return Err(Error::Expected("scalar or vector assembly operand".into(),expr.span()));}
+                    }
+                }
+                Ok(if diverges {ResolvedType::NEVER}else{ResolvedType::UNIT})
+            },
             
             Expr::Closure { params, ret_type, body, .. } => {
                 // Enter a new scope for closure parameters
@@ -2109,6 +1952,11 @@ impl SemanticAnalyzer {
     }
 
     fn check_expected_expr(&mut self, expr: &Expr, expected: &ResolvedType) -> Result<ResolvedType> {
+        let ty=self.check_expected_expr_inner(expr,expected)?;
+        self.remember_expr_type(expr,&ty);
+        Ok(ty)
+    }
+    fn check_expected_expr_inner(&mut self, expr: &Expr, expected: &ResolvedType) -> Result<ResolvedType> {
         // Propagate context into aggregate elements and branch values.
         match (expr, expected) {
             (Expr::Match { expr: value, arms, span }, _) => {
@@ -2118,29 +1966,36 @@ impl SemanticAnalyzer {
                 if elements.len() != *size {
                     return Err(Error::TypeMismatch { expected: format!("array of length {}", size), got: format!("array of length {}", elements.len()), span: *span });
                 }
-                for value in elements { self.check_expected_expr(value, elem)?; }
-                return Ok(expected.clone());
+                let mut diverges=false;for value in elements { diverges |= self.check_expected_expr(value, elem)? == ResolvedType::NEVER; }
+                return Ok(if diverges {ResolvedType::NEVER}else{expected.clone()});
             }
             (Expr::Tuple { elements, .. }, ResolvedType::Tuple(types)) if elements.len() == types.len() => {
-                for (value, ty) in elements.iter().zip(types) { self.check_expected_expr(value, ty)?; }
-                return Ok(expected.clone());
+                let mut diverges=false;for (value, ty) in elements.iter().zip(types) { diverges |= self.check_expected_expr(value, ty)? == ResolvedType::NEVER; }
+                return Ok(if diverges {ResolvedType::NEVER}else{expected.clone()});
             }
             (Expr::If { cond, then_block, else_block: Some(else_block), .. }, _) => {
-                self.check_expected_expr(cond, &ResolvedType::BOOL)?;
+                if self.check_expected_expr(cond, &ResolvedType::BOOL)?==ResolvedType::NEVER {
+                    let saved=self.loop_breaks.clone();
+                    for block in [then_block,else_block] {self.symbols.enter_scope();let result=self.check_block(block);self.symbols.exit_scope();result?;}
+                    self.loop_breaks=saved;return Ok(ResolvedType::NEVER);
+                }
+                let mut diverges = true;
                 for block in [then_block, else_block] {
                     self.symbols.enter_scope();
                     let result = self.check_value_block(block, expected);
                     self.symbols.exit_scope();
-                    result?;
+                    diverges &= result? == ResolvedType::NEVER;
                 }
-                return Ok(expected.clone());
+                return Ok(if diverges { ResolvedType::NEVER } else { expected.clone() });
             }
             (Expr::Block(block), _) | (Expr::Unsafe { body: block, .. }, _) => {
                 self.symbols.enter_scope();
+                let unsafe_block=matches!(expr,Expr::Unsafe {..});
+                if unsafe_block {self.unsafe_depth+=1;}
                 let result = self.check_value_block(block, expected);
+                if unsafe_block {self.unsafe_depth-=1;}
                 self.symbols.exit_scope();
-                result?;
-                return Ok(expected.clone());
+                return result;
             }
             _ => {}
         }
@@ -2155,6 +2010,7 @@ impl SemanticAnalyzer {
         let mut catch_all = false;
         let mut true_case = false;
         let mut false_case = false;
+        let mut covered_variants = HashSet::new();
         let mut result = ResolvedType::NEVER;
         let mut first_value: Option<&Expr> = None;
         for arm in arms {
@@ -2176,7 +2032,11 @@ impl SemanticAnalyzer {
                             if let Literal::Bool(value, _) = literal { if *value { true_case = true; } else { false_case = true; } }
                         }
                     }
-                    _ => return Err(Error::Expected("scalar literal, binding, or wildcard pattern; aggregate/enum patterns are not implemented".into(), arm.span)),
+                    Pattern::Variant { variant, fields, .. } => {
+                        self.bind_pattern(&arm.pattern, &scrutinee)?;
+                        if arm.guard.is_none() && fields.iter().all(enums::irrefutable) { covered_variants.insert(variant.name.clone()); }
+                    }
+                    _ => return Err(Error::Expected("scalar or enum variant pattern".into(), arm.span)),
                 }
                 if let Some(guard) = &arm.guard { self.check_expected_expr(guard, &ResolvedType::BOOL)?; }
                 if let Some(expected) = expected { self.check_expected_expr(&arm.body, expected) }
@@ -2194,35 +2054,41 @@ impl SemanticAnalyzer {
                 result = left;
             }
         }
-        if !catch_all && !(scrutinee == ResolvedType::BOOL && true_case && false_case) {
+        let enum_complete = if let ResolvedType::Enum { name } = &scrutinee {
+            self.facts.enum_variants.get(name).is_some_and(|variants|variants.iter().all(|(name,_)|covered_variants.contains(name)))
+        } else { false };
+        if !catch_all && !enum_complete && !(scrutinee == ResolvedType::BOOL && true_case && false_case) {
             return Err(Error::Expected("exhaustive match: add an unguarded wildcard or binding arm".into(), span));
         }
         Ok(result)
     }
 
-    fn check_value_block(&mut self, body: &Block, expected: &ResolvedType) -> Result<()> {
+    fn check_value_block(&mut self, body: &Block, expected: &ResolvedType) -> Result<ResolvedType> {
         if *expected == ResolvedType::UNIT {
             let got = self.check_block(body)?;
-            self.require_type(expected, &got, body.span)
+            self.require_type(expected, &got, body.span)?; Ok(got)
         } else { self.check_function_body(body, expected) }
     }
 
-    fn check_function_body(&mut self, body: &Block, expected: &ResolvedType) -> Result<()> {
+    fn check_function_body(&mut self, body: &Block, expected: &ResolvedType) -> Result<ResolvedType> {
         let last = body.stmts.iter().rposition(|stmt| !matches!(stmt, Stmt::Empty { .. }));
         let mut diverges = false;
         let mut last_ty = ResolvedType::UNIT;
         for (index, stmt) in body.stmts.iter().enumerate() {
+            let saved = self.loop_breaks.clone();
+            let was_diverging = diverges;
             let ty = if !diverges && Some(index) == last && *expected != ResolvedType::UNIT {
                 if let Stmt::Expr(expr) = stmt { self.check_expected_expr(expr, expected)? }
                 else { self.check_stmt(stmt)? }
             } else { self.check_stmt(stmt)? };
+            if was_diverging { self.loop_breaks = saved; }
             if ty == ResolvedType::NEVER { diverges = true; }
             if Some(index) == last { last_ty = ty; }
         }
         if !diverges && *expected != ResolvedType::UNIT {
             self.require_type(expected, &last_ty, body.span)?;
         }
-        Ok(())
+        Ok(if diverges { ResolvedType::NEVER } else { last_ty })
     }
 
     fn check_loop_body(&mut self, body: &Block) -> Result<bool> {
@@ -2236,10 +2102,51 @@ impl SemanticAnalyzer {
         result.map(|_| has_break)
     }
 
+    /// Storage qualifiers survive projections/reborrows. Reading a place removes
+    /// only its outer qualifier; pointer-valued fields retain their pointee type.
+    fn check_place_type(&mut self, expr: &Expr) -> Result<ResolvedType> {
+        match expr {
+            Expr::Deref { expr, span } => match self.check_expr(expr)? {
+                ResolvedType::Pointer(inner) | ResolvedType::Reference { inner, .. } => Ok(*inner),
+                ty if ty == ResolvedType::NEVER => Ok(ty),
+                _ => Err(Error::CannotDeref { span: *span }),
+            },
+            Expr::Index { expr, index, span } => {
+                let base = self.check_place_type(expr)?;
+                let index_ty = self.check_expr(index)?;
+                if base == ResolvedType::NEVER || index_ty == ResolvedType::NEVER { return Ok(ResolvedType::NEVER); }
+                if !Self::is_integer(&index_ty) { return Err(Error::TypeMismatch { expected: "integer".into(), got: format!("{:?}", index_ty), span: index.span() }); }
+                match base.unqualified() {
+                    ResolvedType::Array { elem, .. } | ResolvedType::Slice(elem) => Ok(if matches!(base, ResolvedType::Volatile(_)) { ResolvedType::Volatile(elem.clone()) } else { (**elem).clone() }),
+                    ResolvedType::Pointer(elem) => Ok((**elem).clone()),
+                    _ => Err(Error::NotIndexable { span: *span }),
+                }
+            }
+            Expr::Field { expr, field, span } => {
+                let mut base = self.check_place_type(expr)?;
+                if base == ResolvedType::NEVER { return Ok(base); }
+                loop {
+                    match base.unqualified() {
+                        ResolvedType::Pointer(inner) | ResolvedType::Reference { inner, .. } => base = (**inner).clone(),
+                        _ => break,
+                    }
+                }
+                let volatile = matches!(base, ResolvedType::Volatile(_));
+                let ResolvedType::Struct { name, fields } = base.unqualified() else { return Err(Error::NotAStruct { span: *span }); };
+                if self.facts.unions.contains(name) && self.unsafe_depth == 0 { return Err(Error::semantic_expected("E2401","unsafe block for union field access", *span)); }
+                let fields = match self.symbols.lookup(name) { Some(Symbol { kind: SymbolKind::Struct { fields, .. }, .. }) => fields, _ => fields };
+                let ty = fields.iter().find(|(name, _)| *name == field.name).map(|(_, ty)| ty.clone())
+                    .ok_or_else(|| Error::UnknownField { field: field.name.clone(), span: field.span })?;
+                Ok(if volatile { ResolvedType::Volatile(Box::new(ty)) } else { ty })
+            }
+            _ => self.check_expr(expr),
+        }
+    }
+
     fn check_assignable(&mut self, expr: &Expr) -> Result<()> {
         match expr {
             Expr::Ident(ident) => {
-                if self.symbols.lookup(&ident.name).is_some_and(|symbol| symbol.mutable) { return Ok(()); }
+                if self.symbols.lookup(&ident.name).is_some_and(|symbol| symbol.mutable || (matches!(symbol.kind, SymbolKind::Variable) && !self.constant_defs.contains_key(&ident.name))) { return Ok(()); }
                 Err(Error::Expected(format!("mutable binding for '{}'", ident.name), ident.span))
             }
             Expr::Deref { expr: pointer, span } => match self.check_expr(pointer)? {
@@ -2446,7 +2353,7 @@ impl SemanticAnalyzer {
             Type::Owned { inner, .. } => self.resolve_type(inner),
             // Volatile type (Phase 8) - resolve inner type, volatile semantics handled at IR level
             Type::Volatile(inner, _) => {
-                Ok(ResolvedType::Pointer(Box::new(self.resolve_type(inner)?)))
+                Ok(ResolvedType::Pointer(Box::new(ResolvedType::Volatile(Box::new(self.resolve_type(inner)?)))))
             }
         }
     }
@@ -2523,6 +2430,7 @@ impl SemanticAnalyzer {
         match (expected, got) {
             (ResolvedType::Primitive(a), ResolvedType::Primitive(b)) => a == b,
             (ResolvedType::Pointer(a), ResolvedType::Pointer(b)) => self.types_compatible(a, b),
+            (ResolvedType::Volatile(a), ResolvedType::Volatile(b)) => self.types_compatible(a, b),
             (ResolvedType::Reference { mutable: ma, inner: ia, .. }, 
              ResolvedType::Reference { mutable: mb, inner: ib, .. }) => {
                 // Mutable reference can be used where immutable is expected

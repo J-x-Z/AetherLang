@@ -24,11 +24,14 @@ compiler = args.compiler.resolve()
 records = []
 cc = os.environ.get('CC', 'clang')
 
-def run(label, command, environment=env):
+def run(label, command, environment=env, unsupported=None):
     result = subprocess.run(list(map(str, command)), env=environment, capture_output=True, text=True, timeout=30)
     records.append(dict(label=label, command=list(map(str, command)), status=result.returncode,
-                        stdout=result.stdout, stderr=result.stderr))
+                        stdout=result.stdout, stderr=result.stderr, unsupported=unsupported))
     (work / 'results.json').write_text(json.dumps(records, indent=2))
+    if unsupported:
+        assert result.returncode != 0 and unsupported in result.stderr, f'{label}: expected target ABI diagnostic, got {result.stderr}'
+        return result
     if result.returncode:
         raise AssertionError(f'{label}: exit {result.returncode}\n{result.stdout}\n{result.stderr}')
     return result
@@ -42,11 +45,12 @@ for backend in args.backends:
     for opt in [0, 2]:
         for name in ['values', 'packed', 'saturating_casts', 'abi']:
             # LLVM's target ABI classifier is intentionally target-specific.
-            if backend == 'llvm' and name != 'saturating_casts' and not (platform.system() == 'Darwin' and platform.machine() == 'arm64'):
-                continue
             binary = work / f'{name}-{backend}-O{opt}'
             extra = ['--link-object', obj] if name == 'abi' else []
-            run(f'{name}/{backend}/O{opt}/build', [compiler, 'build', root / f'{name}.aeth', '--backend', backend, f'-O{opt}', '-o', binary, *extra])
+            unsupported = 'aggregate C ABI lowering is currently implemented for Apple arm64' if backend == 'llvm' and name == 'abi' and not (platform.system() == 'Darwin' and platform.machine() == 'arm64') else None
+            run(f'{name}/{backend}/O{opt}/build', [compiler, 'build', root / f'{name}.aeth', '--backend', backend, f'-O{opt}', '-o', binary, *extra], unsupported=unsupported)
+            if unsupported:
+                continue
             output = run(f'{name}/{backend}/O{opt}/run', [binary])
             assert output.stdout == '' and output.stderr == '', f'{binary}: unexpected output'
 

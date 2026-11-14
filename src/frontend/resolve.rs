@@ -359,6 +359,7 @@ impl Rewriter<'_> {
             Expr::Range { start, end, .. } => { if let Some(e) = start { self.expr(e)?; } if let Some(e) = end { self.expr(e)?; } }
             Expr::Asm { operands, .. } => for op in operands { if let Some(e) = &mut op.expr { self.expr(e)?; } },
             Expr::Closure { params, ret_type, body, .. } => { let saved = self.locals.clone(); let saved_zero_status = self.zero_status_returns; self.zero_status_returns = false; for p in params { self.locals.insert(p.name.name.clone()); if let Some(t) = &mut p.ty { self.ty(t)?; } } if let Some(t) = ret_type { self.ty(t)?; } self.expr(body)?; self.locals = saved; self.zero_status_returns = saved_zero_status; }
+            Expr::Layout { ty, .. } => self.ty(ty)?,
             Expr::Literal(_) => {}
         }
         Ok(())

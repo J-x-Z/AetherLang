@@ -12,3 +12,5 @@ pub mod resolve;
 pub mod session;
 
 pub mod symbols;
+
+pub mod specialize;

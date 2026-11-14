@@ -3,8 +3,14 @@ use super::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct SemanticFacts {
+    pub expr_types: HashMap<(String, Span), ResolvedType>,
+    pub memory_orders: HashMap<Span, (crate::intrinsics::MemoryOrder, crate::intrinsics::MemoryOrder)>,
+    pub enum_variants: HashMap<String, Vec<(String, Vec<ResolvedType>)>>,
     pub aliases: HashMap<String, ResolvedType>,
     pub constants: HashMap<String, TypedConstant>,
+    pub global_types: HashMap<String, ResolvedType>,
+    pub globals: HashMap<String, TypedInitializer>,
+    pub unions: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -20,6 +26,21 @@ pub enum ScalarConstant {
     Bool(bool),
     Char(char),
     String(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedInitializer {
+    pub ty: ResolvedType,
+    pub value: InitializerValue,
+}
+
+#[derive(Debug, Clone)]
+pub enum InitializerValue {
+    Zero,
+    Scalar(ScalarConstant),
+    Aggregate(Vec<(usize, TypedInitializer)>),
+    Address { global: String, path: Vec<usize> },
+    Layout { query: LayoutQuery, ty: ResolvedType, field: Option<usize> },
 }
 
 impl SemanticAnalyzer {
@@ -51,7 +72,7 @@ impl SemanticAnalyzer {
         Ok(result)
     }
 
-    fn evaluate_scalar(&mut self, expr: &Expr, expected: Option<&ResolvedType>, visiting: &mut HashSet<String>) -> Result<TypedConstant> {
+    pub(super) fn evaluate_scalar(&mut self, expr: &Expr, expected: Option<&ResolvedType>, visiting: &mut HashSet<String>) -> Result<TypedConstant> {
         let span = expr.span();
         let value = match expr {
             Expr::Literal(literal) => TypedConstant { ty: self.literal_type(literal), value: match literal {
@@ -170,7 +191,12 @@ impl SemanticAnalyzer {
             }
             (ScalarConstant::Int(_), ResolvedType::Primitive(p)) if p.is_float() => self.normalize_constant(TypedConstant { ty: target.clone(), value: ScalarConstant::Float(Self::integer_value(&value).unwrap() as f64) }, span),
             (ScalarConstant::Float(number), ResolvedType::Primitive(p)) if p.is_float() => self.normalize_constant(TypedConstant { ty: target.clone(), value: ScalarConstant::Float(*number) }, span),
-            (ScalarConstant::Float(number), ResolvedType::Primitive(p)) if p.is_integer() => Self::integer_result(number.trunc() as i128, target, span),
+            (ScalarConstant::Float(number), ResolvedType::Primitive(p)) if p.is_integer() => {
+                let bits = p.size_of() * 8;
+                let (min, max) = if p.is_signed() { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) };
+                let integer = if number.is_nan() { 0 } else { (number.trunc() as i128).clamp(min, max) };
+                Self::integer_result(integer, target, span)
+            },
             _ => Err(Self::constant_error("unsupported constant cast", span)),
         }
     }
@@ -211,5 +237,120 @@ impl SemanticAnalyzer {
             return match op { BinOp::Eq => Ok(comparison(a == b)), BinOp::Ne => Ok(comparison(a != b)), _ => Err(Self::constant_error("invalid bool operator", span)) };
         }
         Err(Self::constant_error("unsupported scalar operands", span))
+    }
+}
+
+impl SemanticAnalyzer {
+    fn initializer_fields(&self, ty: &ResolvedType, span: Span) -> Result<Vec<(String, ResolvedType)>> {
+        let ResolvedType::Struct { name, .. } = ty else { return Err(Self::constant_error("aggregate initializer needs a nominal type", span)); };
+        match self.symbols.lookup(name).map(|symbol| &symbol.kind) {
+            Some(SymbolKind::Struct { fields, .. }) => Ok(fields.clone()),
+            _ => Err(Self::constant_error("missing aggregate declaration", span)),
+        }
+    }
+
+    pub(super) fn check_static_initializer(&mut self, definition: &StaticDef) -> Result<()> {
+        let ty = self.resolve_type(&definition.ty)?;
+        let value = if let Some(value) = &definition.value {
+            self.check_expected_expr(value, &ty)?;
+            self.evaluate_initializer(value, &ty)?
+        } else {
+            if !self.zero_initialized_type(&ty, definition.span)? {
+                return Err(Self::constant_error("this type requires an explicit valid initializer", definition.span));
+            }
+            TypedInitializer { ty: ty.clone(), value: InitializerValue::Zero }
+        };
+        self.facts.globals.insert(definition.name.name.clone(), value);
+        Ok(())
+    }
+
+    fn zero_initialized_type(&self, ty: &ResolvedType, span: Span) -> Result<bool> {
+        Ok(match ty {
+            ResolvedType::Primitive(_) | ResolvedType::Pointer(_) => true,
+            ResolvedType::Array { elem, .. } => self.zero_initialized_type(elem, span)?,
+            ResolvedType::Struct { name, .. } if self.facts.unions.contains(name) => true,
+            ResolvedType::Struct { .. } => {
+                let mut valid = true;
+                for (_, field) in self.initializer_fields(ty, span)? { valid &= self.zero_initialized_type(&field, span)?; }
+                valid
+            }
+            _ => false,
+        })
+    }
+
+    fn initializer_address(&mut self, expr: &Expr) -> Result<(String, Vec<usize>, ResolvedType)> {
+        match expr {
+            Expr::Ident(name) => {
+                let ty = self.facts.global_types.get(&name.name).cloned().ok_or_else(|| Self::constant_error("address initializer requires static storage", name.span))?;
+                Ok((name.name.clone(), Vec::new(), ty))
+            }
+            Expr::Field { expr, field, span } => {
+                let (name, mut path, ty) = self.initializer_address(expr)?;
+                let fields = self.initializer_fields(&ty, *span)?;
+                let (index, (_, ty)) = fields.into_iter().enumerate().find(|(_, (name, _))| *name == field.name)
+                    .ok_or_else(|| Error::UnknownField { field: field.name.clone(), span: field.span })?;
+                path.push(index);
+                Ok((name, path, ty))
+            }
+            Expr::Index { expr, index, span } => {
+                let (name, mut path, ty) = self.initializer_address(expr)?;
+                let ResolvedType::Array { elem, size } = ty else { return Err(Self::constant_error("static address indexing requires an array", *span)); };
+                let value = self.evaluate_scalar(index, None, &mut HashSet::new())?;
+                let index = Self::integer_value(&value).ok_or_else(|| Self::constant_error("constant integer array index", *span))?;
+                if index < 0 || index >= size as i128 { return Err(Self::constant_error("static address index is out of bounds", *span)); }
+                path.push(index as usize);
+                Ok((name, path, *elem))
+            }
+            _ => Err(Self::constant_error("address initializer requires a static field or element", expr.span())),
+        }
+    }
+
+    fn evaluate_initializer(&mut self, expr: &Expr, expected: &ResolvedType) -> Result<TypedInitializer> {
+        let value = match expr {
+            Expr::Tuple { elements, .. } if elements.is_empty() => InitializerValue::Zero,
+            Expr::Array { elements, span } => {
+                let ResolvedType::Array { elem, size } = expected else { return Err(Self::constant_error("array initializer type", *span)); };
+                if elements.len() != *size { return Err(Self::constant_error("array initializer length", *span)); }
+                let mut values = Vec::new();
+                for (index, element) in elements.iter().enumerate() { values.push((index, self.evaluate_initializer(element, elem)?)); }
+                InitializerValue::Aggregate(values)
+            }
+            Expr::StructLit { name, fields, span } => {
+                let ResolvedType::Struct { name: target, .. } = expected else { return Err(Self::constant_error("aggregate initializer type", *span)); };
+                if name.name != *target { return Err(Self::constant_error("aggregate initializer nominal type mismatch", *span)); }
+                let definitions = self.initializer_fields(expected, *span)?;
+                let mut values = Vec::new();
+                for (field, value) in fields {
+                    let (index, (_, ty)) = definitions.iter().enumerate().find(|(_, (name, _))| *name == field.name)
+                        .ok_or_else(|| Error::UnknownField { field: field.name.clone(), span: field.span })?;
+                    values.push((index, self.evaluate_initializer(value, ty)?));
+                }
+                values.sort_by_key(|(index, _)| *index);
+                InitializerValue::Aggregate(values)
+            }
+            Expr::Cast { expr: value, ty, .. } if matches!(self.resolve_type(ty)?, ResolvedType::Pointer(_)) && matches!(value.as_ref(), Expr::Ref { .. }) => {
+                let Expr::Ref { expr, .. } = value.as_ref() else { unreachable!() };
+                let (global, path, _) = self.initializer_address(expr)?;
+                InitializerValue::Address { global, path }
+            }
+            Expr::Ref { expr, .. } => {
+                let (global, path, pointee) = self.initializer_address(expr)?;
+                match expected {
+                    ResolvedType::Pointer(inner) | ResolvedType::Reference { inner, .. } => self.require_type(inner, &pointee, expr.span())?,
+                    _ => return Err(Self::constant_error("address initializer needs a pointer or reference", expr.span())),
+                }
+                InitializerValue::Address { global, path }
+            }
+            Expr::Layout { query, ty, field, span } => {
+                let ty = self.resolve_type(ty)?;
+                let field = if let Some(field) = field {
+                    Some(self.initializer_fields(&ty, *span)?.iter().position(|(name, _)| *name == field.name)
+                        .ok_or_else(|| Error::UnknownField { field: field.name.clone(), span: field.span })?)
+                } else { None };
+                InitializerValue::Layout { query: *query, ty, field }
+            }
+            _ => InitializerValue::Scalar(self.evaluate_scalar(expr, Some(expected), &mut HashSet::new())?.value),
+        };
+        Ok(TypedInitializer { ty: expected.clone(), value })
     }
 }

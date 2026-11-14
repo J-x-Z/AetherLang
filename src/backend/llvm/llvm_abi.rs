@@ -1,49 +1,49 @@
 // Target ABI lowering. Aether IR keeps aggregate values intact; this module
 // alone translates them to the register/indirect convention at function edges.
 impl LLVMCodeGen {
-    unsafe fn homogeneous_float(&self, ty: LLVMTypeRef) -> Option<(LLVMTypeRef, usize)> {
-        use llvm_sys::LLVMTypeKind::*;
-        match LLVMGetTypeKind(ty) {
-            LLVMFloatTypeKind | LLVMDoubleTypeKind => Some((ty, 1)),
-            LLVMArrayTypeKind => {
-                let (element, count) = self.homogeneous_float(LLVMGetElementType(ty))?;
-                let total = count * LLVMGetArrayLength(ty) as usize;
-                (total > 0 && total <= 4).then_some((element, total))
+    unsafe fn homogeneous_float(&self, ty: &IRType) -> Option<(LLVMTypeRef, usize)> {
+        match ty {
+            IRType::F32 | IRType::F64 => Some((self.ir_type_to_llvm(ty), 1)),
+            IRType::Array(element, length) => {
+                let (kind, count) = self.homogeneous_float(element)?;
+                let total = count * length;
+                (total > 0 && total <= 4).then_some((kind, total))
             }
-            LLVMStructTypeKind => {
-                let mut fields = vec![ptr::null_mut(); LLVMCountStructElementTypes(ty) as usize];
-                LLVMGetStructElementTypes(ty, fields.as_mut_ptr());
+            IRType::Struct(name) => {
+                let definition = self.type_definitions.get(name)?;
                 let mut result = None;
-                for field in fields {
-                    let (element, count) = self.homogeneous_float(field)?;
+                for (_, field) in &definition.fields {
+                    let (kind, count) = self.homogeneous_float(field)?;
                     match result {
-                        None => result = Some((element, count)),
-                        Some((previous, total)) if previous == element => result = Some((element, total + count)),
+                        None => result = Some((kind, count)),
+                        Some((previous, total)) if previous == kind => result = Some((kind, if definition.is_union { total.max(count) } else { total + count })),
                         _ => return None,
                     }
                 }
-                let (element, count) = result?;
-                (count <= 4 && LLVMABISizeOfType(self.target_data, ty) == count as u64 * LLVMABISizeOfType(self.target_data, element)).then_some((element, count))
+                let (kind, count) = result?;
+                (count <= 4 && LLVMABISizeOfType(self.target_data, self.ir_type_to_llvm(ty)) == count as u64 * LLVMABISizeOfType(self.target_data, kind)).then_some((kind, count))
             }
             _ => None,
         }
     }
 
-    unsafe fn classify_abi(&self, ty: &IRType, result: bool) -> Result<AbiValue> {
+    unsafe fn classify_abi(&self, ty: &IRType, result: bool, c_abi: bool) -> Result<AbiValue> {
         let native = self.ir_type_to_llvm(ty);
+        if *ty == IRType::Unit { return Ok(AbiValue::Ignore); }
+        if !c_abi { return Ok(AbiValue::Direct(native)); }
         if !matches!(ty, IRType::Array(_, _) | IRType::Struct(_)) { return Ok(AbiValue::Direct(native)); }
         if !(self.target_triple.contains("apple") && (self.target_triple.contains("aarch64") || self.target_triple.contains("arm64"))) {
             return Err(Error::CodeGen(format!("aggregate C ABI lowering is currently implemented for Apple arm64; target '{}' requires its own ABI classifier", self.target_triple)));
         }
         let size = LLVMABISizeOfType(self.target_data, native);
         if size == 0 { return Ok(AbiValue::Ignore); }
-        if let Some((float, count)) = self.homogeneous_float(native) {
-            return Ok(if result { AbiValue::Direct(native) } else { AbiValue::Coerce(LLVMArrayType(float, count as u32)) });
+        if let Some((float, count)) = self.homogeneous_float(ty) {
+            return Ok(if result { AbiValue::Direct(native) } else { AbiValue::Coerce(LLVMArrayType2(float, count as u64)) });
         }
         if size > 16 { return Ok(AbiValue::Indirect); }
         Ok(AbiValue::Coerce(if size <= 8 {
             LLVMIntTypeInContext(self.context, if result { (size * 8) as u32 } else { 64 })
-        } else { LLVMArrayType(LLVMInt64TypeInContext(self.context), 2) }))
+        } else { LLVMArrayType2(LLVMInt64TypeInContext(self.context), 2) }))
     }
 
     unsafe fn abi_type(&self, ty: &AbiValue) -> Option<LLVMTypeRef> {
@@ -54,11 +54,11 @@ impl LLVMCodeGen {
         }
     }
 
-    fn declare_abi(&mut self, name: &str, params: &[(String, IRType)], ret: &IRType, variadic: bool) -> Result<()> {
+    fn declare_abi(&mut self, name: &str, params: &[(String, IRType)], ret: &IRType, variadic: bool, c_abi: bool) -> Result<()> {
         unsafe {
             let abi = FunctionAbi {
-                params: params.iter().map(|(_, ty)| Ok((ty.clone(), self.classify_abi(ty, false)?))).collect::<Result<_>>()?,
-                result: (ret.clone(), self.classify_abi(ret, true)?),
+                params: params.iter().map(|(_, ty)| Ok((ty.clone(), self.classify_abi(ty, false, c_abi)?))).collect::<Result<_>>()?,
+                result: (ret.clone(), self.classify_abi(ret, true, c_abi)?),
                 variadic,
             };
             let mut parameter_types = Vec::new();
@@ -114,7 +114,7 @@ impl LLVMCodeGen {
         let source = LLVMTypeOf(value);
         if source == destination { return value; }
         let size = LLVMABISizeOfType(self.target_data, source).max(LLVMABISizeOfType(self.target_data, destination));
-        let bytes = LLVMArrayType(LLVMInt8TypeInContext(self.context), size as u32);
+        let bytes = LLVMArrayType2(LLVMInt8TypeInContext(self.context), size);
         let slot = self.entry_alloca(bytes);
         let zero = LLVMBuildStore(self.builder, LLVMConstNull(bytes), slot);
         LLVMSetAlignment(zero, 1);

@@ -62,7 +62,7 @@ fn native_inline_assembly_uses_typed_places_and_source_operand_order() {
         fn main() -> i32 {{
             let mut value: i64 = 10;
             let input: i64 = 7;
-            let mut output: i64 = 0;
+            let output: i64;
             unsafe {{ {assembly} asm!("nop", clobber("memory")); }}
             if value != 15 || output != 10 {{ return 1; }}
             return 0;

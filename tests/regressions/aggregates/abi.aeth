@@ -14,12 +14,19 @@ extern "C" {
     fn c_spill(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, value: Pair) -> Pair;
     fn abi_check() -> i32;
 }
+#[no_mangle]
 fn aeth_pair(value: Pair) -> Pair { return Pair { a: value.a + 1, b: value.b + 2 }; }
+#[no_mangle]
 fn aeth_tiny(value: Tiny) -> Tiny { return Tiny { a: value.a + (1 as u8), b: value.b + (2 as u8), c: value.c + (3 as u8) }; }
+#[no_mangle]
 fn aeth_odd(value: Odd) -> Odd { return Odd { tag: value.tag + (1 as u8), value: value.value + 10 }; }
+#[no_mangle]
 fn aeth_floats(value: Floats) -> Floats { return Floats { values: [value.values[0] + (1.0 as f32), value.values[1] + (2.0 as f32), value.values[2] + (3.0 as f32)] }; }
+#[no_mangle]
 fn aeth_doubles(value: Doubles) -> Doubles { return Doubles { values: [[value.values[0][0] + 1.0, value.values[0][1] + 2.0], [value.values[1][0] + 3.0, value.values[1][1] + 4.0]] }; }
+#[no_mangle]
 fn aeth_large(value: Large) -> Large { return Large { values: [value.values[0] + 1, value.values[1] + 2, value.values[2] + 3] }; }
+#[no_mangle]
 fn aeth_spill(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, value: Pair) -> Pair { return Pair { a: value.a + a + b + c + d + e + f + g, b: value.b + 2 }; }
 fn main() -> i32 {
     unsafe {

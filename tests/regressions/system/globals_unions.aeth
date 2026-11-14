@@ -1,0 +1,45 @@
+@repr(C) union Word { bits: u32, number: f32, bytes: [u8; 4] }
+@repr(C) union Wide { word: u64, bytes: [u8; 12] }
+@repr(packed) union Compact { byte: u8, word: u64 }
+@repr(C) struct Record { tag: u8, word: Word, data: [i32; 3] }
+@repr(C) struct Padded { first: u8, data: Wide, tail: u8 }
+@repr(C) struct PackedHolder { first: u8, value: Compact, tail: u8 }
+static ELEMENT: *i32 = &mut BUFFER[1] as *i32;
+static mut COUNTER: i64 = 7;
+static mut BUFFER: [i32; 3] = [1,2,3];
+static mut RECORD: Record = Record { tag: 4, word: Word { number: 1.0 }, data: [5,6,7] };
+static mut ZERO: Record;
+static WORD_POINTER: *Word = &mut RECORD.word as *Word;
+static LABEL: *u8 = "static bytes" as *u8;
+static LAYOUT: usize = size_of(Padded);
+extern "C" {
+    static mut native_counter: i64;
+    static mut native_word: Word;
+    fn globals_check() -> i32;
+    fn word_flip(value: Word) -> Word;
+}
+fn next() -> i64 { unsafe { COUNTER = COUNTER + 1; return COUNTER; } }
+fn main() -> i32 {
+    unsafe {
+        if next() != 8 || next() != 9 || COUNTER != 9 { return 1; }
+        if BUFFER[2] != 3 || *ELEMENT != 2 { return 2; }
+        *ELEMENT = 22;
+        if BUFFER[1] != 22 { return 3; }
+        if RECORD.word.bits != (1065353216 as u32) || (*WORD_POINTER).number != (1.0 as f32) { return 4; }
+        RECORD.word = Word { bits: 1073741824 };
+        if RECORD.word.number != (2.0 as f32) || RECORD.data[2] != 7 || RECORD.tag != (4 as u8) { return 5; }
+        if ZERO.word.bits != (0 as u32) || ZERO.data[2] != 0 { return 6; }
+        if native_counter != 40 { return 7; }
+        native_counter = native_counter + 2;
+        if native_word.number != (4.0 as f32) { return 8; }
+        native_word.bits = 1084227584;
+        let flipped: Word = word_flip(Word { number: 1.0 });
+        if flipped.number != (-1.0 as f32) { return 9; }
+        if size_of(Word) != (4 as usize) || align_of(Word) != (4 as usize) || offset_of(Word, bytes) != (0 as usize) { return 10; }
+        if size_of(Wide) != (16 as usize) || align_of(Wide) != (8 as usize) { return 11; }
+        if size_of(Padded) != (32 as usize) || offset_of(Padded, data) != (8 as usize) || offset_of(Padded, tail) != (24 as usize) || LAYOUT != (32 as usize) { return 12; }
+        if size_of(Compact) != (8 as usize) || align_of(Compact) != (1 as usize) || size_of(PackedHolder) != (10 as usize) { return 13; }
+        if size_of([[i16; 3]; 2]) != (12 as usize) || align_of([i64; 2]) != (8 as usize) { return 14; }
+        return globals_check();
+    }
+}

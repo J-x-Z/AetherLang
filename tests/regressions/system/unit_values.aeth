@@ -1,0 +1,30 @@
+enum Option<T> { Some(T), None }
+enum Result<T,E> { Ok(T), Err(E) }
+struct Marker { first: u8, value: (), last: u8 }
+static UNIT: () = ();
+fn identity<T>(value: T) -> T { return value; }
+fn unit() -> () { }
+fn explicit_unit() -> () { return; }
+fn discard() { return (); }
+fn mixed(a: i64, ignored: (), b: i64) -> i64 { return a + b; }
+fn ok() -> Result<(),i32> { return Result::Ok(()); }
+fn propagate() -> Result<(),i32> { let value: () = ok()?; return Result::Ok(identity(value)); }
+fn main() -> i32 {
+    let value: () = identity(());
+    let another: () = unit();
+    explicit_unit();
+    discard();
+    if mixed(3, value, 8) != 11 { return 1; }
+    let mut values: [();3] = [(),(),()];
+    values[1] = another;
+    let copied: [();3] = values;
+    let selected: () = identity(copied[2]);
+    let marker: Marker = Marker { first: 1, value: selected, last: 2 };
+    if marker.first != (1 as u8) || marker.last != (2 as u8) { return 2; }
+    if size_of(()) != (0 as usize) || align_of(()) != (1 as usize) || size_of([();3]) != (0 as usize) { return 3; }
+    if size_of(Marker) != (2 as usize) || offset_of(Marker,last) != (1 as usize) { return 4; }
+    let maybe: Option<()> = Option::Some(UNIT);
+    let status: i32 = match maybe { Option::Some(payload) => mixed(0,payload,0) as i32, Option::None => 5 };
+    if status != 0 { return status; }
+    return match propagate() { Result::Ok(payload) => mixed(0,payload,0) as i32, Result::Err(code) => code };
+}

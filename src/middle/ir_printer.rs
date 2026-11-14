@@ -28,6 +28,7 @@ impl IRPrinter {
         writeln!(self.output, "; Functions: {}", module.functions.len()).unwrap();
         writeln!(self.output).unwrap();
 
+        for global in &module.globals { writeln!(self.output, "global {}: {} = {:?}", global.name, self.type_str(&global.ty), global.initializer).unwrap(); }
         for func in &module.functions {
             self.print_function(func);
             writeln!(self.output).unwrap();
@@ -78,6 +79,9 @@ impl IRPrinter {
     /// Print an instruction
     fn print_instruction(&mut self, inst: &Instruction) {
         match inst {
+            Instruction::Memory {dest,kind,ty,args,order,failure_order} => {
+                write!(self.output, "{:?} = {:?} {:?} {:?}, {:?}/{:?}",dest,kind,ty,args,order,failure_order).unwrap();
+            }
             Instruction::Assign { dest, value } => {
                 write!(self.output, "{} = {}", dest, self.value_str(value)).unwrap();
             }
@@ -90,6 +94,9 @@ impl IRPrinter {
                     self.value_str(left), 
                     self.value_str(right)
                 ).unwrap();
+            }
+            Instruction::Layout { dest, query, ty, field } => {
+                write!(self.output, "{} = {:?} {:?} {:?}", dest, query, ty, field).unwrap();
             }
             Instruction::Cast { dest, value, ty } => {
                 write!(self.output, "{} = cast {} to {:?}", dest, self.value_str(value), ty).unwrap();
@@ -120,6 +127,9 @@ impl IRPrinter {
             }
             Instruction::Load { dest, ptr, ty: _ } => {
                 write!(self.output, "{} = load {}", dest, self.value_str(ptr)).unwrap();
+            }
+            Instruction::ZeroInitialize { ptr, ty } => {
+                write!(self.output, "zero {}, {:?}", self.value_str(ptr), ty).unwrap();
             }
             Instruction::Store { ptr, value } => {
                 write!(self.output, "store {}, {}", self.value_str(value), self.value_str(ptr)).unwrap();
@@ -224,6 +234,8 @@ impl IRPrinter {
     fn type_str(&self, ty: &IRType) -> String {
         match ty {
             IRType::Void => "void".to_string(),
+            IRType::Unit => "()".to_string(),
+            IRType::Volatile(inner) => format!("volatile {}", self.type_str(inner)),
             IRType::Bool => "bool".to_string(),
             IRType::I8 => "i8".to_string(),
             IRType::I16 => "i16".to_string(),
