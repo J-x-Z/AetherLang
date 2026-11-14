@@ -9,6 +9,7 @@ import subprocess
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--compiler', type=Path, required=True)
 parser.add_argument('--work-dir', type=Path, required=True)
+parser.add_argument('--cc', default=os.environ.get('CC', 'clang'))
 args = parser.parse_args()
 compiler = args.compiler.resolve()
 work = args.work_dir.resolve()
@@ -30,6 +31,25 @@ positive = {
     'foreign_varargs': 'extern "C"{fn printf(format:*u8,...)->i32;}fn main()->i32{printf("%d %f",1,2.0);return 0;}',
     'sizeof_forward': 'struct A{next:*A,value:i32}fn main()->i32{let bytes:i64=size_of(A);return 0;}',
 }
+# These bytes are an independent Unicode/ASCII oracle, including embedded NUL.
+# The same program is executed below so acceptance alone cannot hide bad UTF-8
+# encoding, token-length truncation, or C string emission errors.
+escape_scalars = [0, 0x7f, 0x80, 0x7ff, 0x800, 0xd7ff, 0xe000,
+                  0xffff, 0x10000, 0x10ffff]
+escape_source = (r'\x00\x7f\x414\n\r\t\0\\\"\''
+                 + ''.join(r'\u{' + f'{value:x}' + '}' for value in escape_scalars)
+                 + r'\u{000041}\u{e9}')
+escape_bytes = (bytes([0, 127, 65, 52, 10, 13, 9, 0, 92, 34, 39])
+                + ''.join(chr(value) for value in escape_scalars).encode('utf-8')
+                + 'Aé'.encode('utf-8'))
+escape_program = 'fn main()->i32{let data:*u8="' + escape_source + '";'
+escape_program += ''.join(f'if data[{index}]!={value}{{return 1;}}'
+                          for index, value in enumerate(escape_bytes + b'\0'))
+escape_program += 'let raw:*u8="é中😀";'
+escape_program += ''.join(f'if raw[{index}]!={value}{{return 2;}}'
+                          for index, value in enumerate('é中😀'.encode('utf-8') + b'\0'))
+escape_program += 'return 0;}'
+positive['string_escape_bytes'] = escape_program
 negative = {
     'main_bad_return': ('fn main()->f64{return 1.0;}', 'main requires'),
     'main_bad_parameters': ('fn main(x:i32)->i32{return x;}', 'main parameters'),
@@ -84,6 +104,24 @@ negative = {
     'outside_continue': ('fn main()->i32{continue;return 0;}', 'outside a loop'),
     'function_shadow': ('fn f()->i32{return 0;}fn main()->i32{let f:i32=1;return f();}', 'shadows function'),
 }
+for name, escape, message in [
+    ('unknown', r'\q', 'unknown string escape'),
+    ('hex_high_80', r'\x80', 'hex string escape must be ASCII'),
+    ('hex_high_ff', r'\xff', 'hex string escape must be ASCII'),
+    ('hex_short', r'\x0', 'hex escape requires two digits'),
+    ('hex_nondigit', r'\xgg', 'hex escape requires two digits'),
+    ('unicode_missing_brace', r'\u1234', 'Unicode escape requires braces'),
+    ('unicode_empty', r'\u{}', 'Unicode escape requires 1..6 hex digits'),
+    ('unicode_long', r'\u{0000000}', 'Unicode escape requires 1..6 hex digits'),
+    ('unicode_separator', r'\u{1_2}', 'Unicode escape requires 1..6 hex digits'),
+    ('unicode_nondigit', r'\u{xyz}', 'Unicode escape requires 1..6 hex digits'),
+    ('unicode_unclosed', r'\u{41', 'Unicode escape requires 1..6 hex digits'),
+    ('unicode_surrogate_start', r'\u{d800}', 'Unicode escape is not a scalar value'),
+    ('unicode_surrogate_end', r'\u{DFFF}', 'Unicode escape is not a scalar value'),
+    ('unicode_out_of_range', r'\u{110000}', 'Unicode escape is not a scalar value'),
+]:
+    negative['string_escape_' + name] = (
+        'fn main()->i32{let text:*u8="' + escape + '";return 0;}', message)
 # Malformed source must fail normally, including bounded recursion diagnostics.
 negative.update({'parser_no_initializer': ('fn f(){let x:i32;}', 'Core let requires an initializer'),
  'parser_missing_type': ('fn f(){let x=1;}', "let requires an explicit ': Type'"),
@@ -190,4 +228,18 @@ for success, cases in [(True, positive), (False, negative)]:
             diagnostic = result.stdout + result.stderr
             assert message in diagnostic, f'{name}: expected {message!r}: {diagnostic}'
             assert str(path) in diagnostic, f'{name}: missing source location: {diagnostic}'
-print(f'{len(records)} Core semantic cases passed')
+source = work / 'string_escape_bytes.aeth'
+generated = work / 'string_escape_bytes.c'
+executable = work / 'string_escape_bytes'
+for phase, command in [
+    ('emit', [str(compiler), str(source), '-o', str(generated)]),
+    ('native-build', [args.cc, '-std=c11', '-O2', str(generated), '-o', str(executable)]),
+    ('native-run', [str(executable)]),
+]:
+    result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=20)
+    records.append(dict(name='string_escape_bytes-' + phase, command=command,
+                        expected_success=True, status=result.returncode,
+                        stdout=result.stdout, stderr=result.stderr))
+    (work / 'results.json').write_text(json.dumps(records, indent=2))
+    assert result.returncode == 0, f'{phase}: {result.returncode}\n{result.stdout}\n{result.stderr}'
+print(f'{len(positive) + len(negative)} Core semantic cases and Unicode byte execution passed')

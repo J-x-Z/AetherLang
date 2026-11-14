@@ -105,7 +105,9 @@ impl CCodeGen {
         let mut result = String::new();
         for c in s.chars() {
             match c {
-                '\0' => result.push_str("\\0"),
+                // C octal escapes consume up to three digits: a short \0
+                // would absorb a following source byte in the range 0..7.
+                '\0' => result.push_str("\\000"),
                 '\n' => result.push_str("\\n"),
                 '\r' => result.push_str("\\r"),
                 '\t' => result.push_str("\\t"),
@@ -113,7 +115,7 @@ impl CCodeGen {
                 '"' => result.push_str("\\\""),
                 c if c.is_ascii() && !c.is_control() => result.push(c),
                 c => {
-                    // Fixed-width octal cannot absorb following hexadecimal characters
+                    // Fixed-width octal cannot absorb any following digit.
                     for b in c.to_string().bytes() {
                         result.push_str(&format!("\\{:03o}", b));
                     }
@@ -1268,6 +1270,23 @@ mod tests {
         let ir_module = compile_to_ir(source);
         let mut codegen = CCodeGen::new("x86_64-pc-windows-msvc");
         codegen.generate_source(&ir_module).unwrap()
+    }
+
+    #[test]
+    fn string_nul_does_not_absorb_adjacent_octal_digits() {
+        for digit in '0'..='7' {
+            assert_eq!(CCodeGen::escape_for_c(&format!("\0{digit}")), format!("\\000{digit}"));
+        }
+        assert_eq!(CCodeGen::escape_for_c("\0\0"), "\\000\\000");
+    }
+
+    #[test]
+    fn string_unicode_preserves_utf8_bytes_and_adjacent_ascii() {
+        assert_eq!(
+            CCodeGen::escape_for_c("éA中7🦀f\0"),
+            "\\303\\251A\\344\\270\\2557\\360\\237\\246\\200f\\000"
+        );
+        assert_eq!(CCodeGen::escape_for_c("\u{1}7\u{7f}F"), "\\0017\\177F");
     }
 
     #[test]

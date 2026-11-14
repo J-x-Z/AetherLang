@@ -155,7 +155,7 @@ for level in ['0', '2']:
         run(f'{mode}-O{level}', [binary, selector], expected=[-signal.SIGILL, -signal.SIGTRAP], preexec_fn=no_core_dump)
 
 run('semantic-corpus-stage2', [sys.executable, root / 'tests' / 'core_semantics.py',
-                              '--compiler', stages[2], '--work-dir', work / 'semantics-stage2'], timeout=180)
+                              '--compiler', stages[2], '--work-dir', work / 'semantics-stage2', '--cc', cc], timeout=180)
 
 bad_lexemes = [b'0x', b'1e+', b'1__2', b'1_', b'123abc', b'"\\q"', b'"\\x0"',
                b'"unterminated', b'/* unfinished', b'/* /* */', b'@', b'\0']
@@ -205,7 +205,7 @@ if not args.skip_sanitizers:
     run('sanitized-emit-self', [sanitized, source, '-o', work / 'sanitized-self.c'], env=sanitizer_env)
     check('sanitized-self-identical', (work / 'sanitized-self.c').read_bytes() == (work / 'stage2.c').read_bytes())
     run('semantic-corpus-sanitized', [sys.executable, root / 'tests' / 'core_semantics.py',
-                                    '--compiler', sanitized, '--work-dir', work / 'semantics-sanitized'],
+                                    '--compiler', sanitized, '--work-dir', work / 'semantics-sanitized', '--cc', cc],
         env=sanitizer_env, timeout=180)
     for name, expected in fixtures.items():
         generated = work / f'{name}-sanitized.c'

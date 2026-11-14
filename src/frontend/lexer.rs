@@ -43,9 +43,9 @@ impl Lexer {
     
     /// Advance to the next character
     fn advance(&mut self) -> Option<char> {
-        let c = self.peek();
+        let c = self.peek()?;
         self.pos += 1;
-        c
+        Some(c)
     }
     
     /// Check if we've reached the end of input
@@ -220,43 +220,44 @@ impl Lexer {
         }
     }
     
-    /// Read a string literal
-    fn read_string(&mut self) -> Token {
-        self.advance(); // consume opening quote
-        
-        let mut value = String::new();
-        let mut terminated = false;
-
+    /// Keep one bad literal from turning its closing quote into a new string.
+    fn recover_literal(&mut self, quote: char) {
         while let Some(c) = self.peek() {
-            if c == '"' {
-                self.advance(); // consume closing quote
-                terminated = true;
-                break;
-            } else if c == '\\' {
-                self.advance();
-                match self.peek() {
-                    Some('n') => { value.push('\n'); self.advance(); }
-                    Some('r') => { value.push('\r'); self.advance(); }
-                    Some('t') => { value.push('\t'); self.advance(); }
-                    Some('\\') => { value.push('\\'); self.advance(); }
-                    Some('"') => { value.push('"'); self.advance(); }
-                    Some('0') => { value.push('\0'); self.advance(); }
-                    Some(c) => { value.push(c); self.advance(); }
-                    None => break,
+            if matches!(c, '\n' | '\r') { break; }
+            self.advance();
+            if c == quote { break; }
+            if c == '\\' && !matches!(self.peek(), None | Some('\n' | '\r')) { self.advance(); }
+        }
+    }
+
+    fn invalid_escape(&mut self, start: usize, quote: char, message: &str) -> Token {
+        let span = Span::new(self.byte_offsets[start], self.byte_offsets[self.pos], self.file_id);
+        self.recover_literal(quote);
+        Token::new(TokenKind::Invalid(message.into()), span)
+    }
+
+    /// Read a UTF-8 string literal, with the same escapes as Script/characters.
+    fn read_string(&mut self) -> Token {
+        self.advance(); // opening quote
+        let mut value = String::new();
+        while let Some(c) = self.peek() {
+            match c {
+                '"' => { self.advance(); return self.make_token(TokenKind::StringLit(value)); }
+                '\\' => {
+                    let escape_start = self.pos;
+                    self.advance();
+                    match super::escape::decode_escape(&self.source, &mut self.pos) {
+                        Ok(c) => value.push(c),
+                        Err(message) => return self.invalid_escape(escape_start, '"', message),
+                    }
                 }
-            } else if c == '\n' {
-                // Unterminated string
-                break;
-            } else {
-                value.push(c);
-                self.advance();
+                '\n' | '\r' => break,
+                _ => { value.push(c); self.advance(); }
             }
         }
-        
-        if terminated { self.make_token(TokenKind::StringLit(value)) }
-        else { self.make_token(TokenKind::Invalid("unterminated string literal".into())) }
+        self.make_token(TokenKind::Invalid("unterminated string literal".into()))
     }
-    
+
     /// Read a character literal or lifetime parameter
     fn read_char(&mut self) -> Token {
         self.advance(); // consume opening quote
@@ -280,9 +281,11 @@ impl Lexer {
                 }
                 
                 // Check if there's a closing quote (char literal) or not (lifetime)
-                if self.peek() == Some('\'') && name.chars().count() == 1 {
-                    // It's a character literal like 'a'
-                    self.advance(); // consume closing quote
+                if self.peek() == Some('\'') {
+                    self.advance(); // closing quote
+                    if name.chars().count() != 1 {
+                        return self.make_token(TokenKind::Invalid("character literal must contain exactly one Unicode scalar".into()));
+                    }
                     return self.make_token(TokenKind::CharLit(name.chars().next().unwrap()));
                 } else {
                     // It's a lifetime like 'a or 'static
@@ -291,23 +294,24 @@ impl Lexer {
             }
         }
         
-        // Handle escape sequences for char literals
-        let c = if self.peek() == Some('\\') {
+        if self.peek() == Some('\'') {
             self.advance();
-            match self.peek() {
-                Some('n') => { self.advance(); '\n' }
-                Some('r') => { self.advance(); '\r' }
-                Some('t') => { self.advance(); '\t' }
-                Some('\\') => { self.advance(); '\\' }
-                Some('\'') => { self.advance(); '\'' }
-                Some('0') => { self.advance(); '\0' }
-                Some(c) => { self.advance(); c }
-                None => '\0',
+            return self.make_token(TokenKind::Invalid("empty character literal".into()));
+        }
+        let c = if self.peek() == Some('\\') {
+            let escape_start = self.pos;
+            self.advance();
+            match super::escape::decode_escape(&self.source, &mut self.pos) {
+                Ok(c) => c,
+                Err(message) => return self.invalid_escape(escape_start, '\'', message),
             }
         } else {
-            self.advance().unwrap_or('\0')
+            match self.peek() {
+                None | Some('\n' | '\r') => return self.make_token(TokenKind::Invalid("unterminated character literal".into())),
+                Some(c) => { self.advance(); c }
+            }
         };
-        
+
         // Consume closing quote
         if self.peek() == Some('\'') {
             self.advance();
@@ -600,6 +604,34 @@ mod tests {
         assert_eq!(&source[tokens[1].span.start..tokens[1].span.end], "'界'");
         assert_eq!(&source[tokens[2].span.start..tokens[2].span.end], "xyz");
         assert_eq!(tokens[2].span.file_id, 3);
+    }
+
+    #[test]
+    fn strings_and_characters_share_escape_semantics() {
+        let tokens = Lexer::new(r#""\x1b\u{4e2d}\0A" '\x1b' '\u{1f680}' '\'' '\"'"#, 0).tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::StringLit("\u{1b}中\0A".into()));
+        for (token, expected) in tokens[1..5].iter().zip(['\u{1b}', '🚀', '\'', '"']) {
+            assert_eq!(token.kind, TokenKind::CharLit(expected));
+        }
+    }
+
+    #[test]
+    fn bad_escape_has_byte_span_and_recovers_at_literal_end() {
+        let source = r#""中文\q" next"#;
+        let tokens = Lexer::new(source, 4).tokenize();
+        assert!(matches!(tokens[0].kind, TokenKind::Invalid(_)));
+        assert_eq!(&source[tokens[0].span.start..tokens[0].span.end], "\\q");
+        assert_eq!(tokens[0].span.file_id, 4);
+        assert_eq!(tokens[1].kind, TokenKind::Ident("next".into()));
+        for source in ["'", "'\\", "\"\\", "''", "'ab'", r#"'\q'"#, r#"'\u{d800}'"#] {
+            let tokens = Lexer::new(source, 0).tokenize();
+            assert!(matches!(tokens[0].kind, TokenKind::Invalid(_)), "{source}");
+            assert_eq!(tokens.last().unwrap().kind, TokenKind::Eof);
+            assert!(tokens.iter().all(|t| t.span.end <= source.len()), "{source}");
+        }
+        let tokens = Lexer::new("'a 'static", 0).tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::Lifetime("a".into()));
+        assert_eq!(tokens[1].kind, TokenKind::Lifetime("static".into()));
     }
 
 }

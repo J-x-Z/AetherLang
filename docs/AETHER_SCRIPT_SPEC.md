@@ -1,5 +1,8 @@
 # Aether Script Language Specification (`.ath`)
 
+> 字符串转义现与Core共用规则：支持ASCII `\xHH` 和Unicode `\u{...}`，未知/畸形转义报错。准确规则及运行验证见 [语言规范1.4](LANGUAGE.md)。
+
+
 > **"Syntactic Simplicity, System-Level Truth"**
 
 Aether Script is the high-level, "Layer 1" language of the Aether ecosystem. It is designed to be **approachable** (using indentation-based syntax) but **truthful** (transpiles to explicit, zero-magic Aether Core code).

@@ -315,15 +315,27 @@ impl Lexer {
         let mut terminated = false;
         while let Some(c) = self.peek() {
             if c == '"' { self.advance(); terminated = true; break; }
-            if c == '\n' { break; }
+            if matches!(c, '\n' | '\r') { break; }
+            let escape_start = self.pos;
+            let escape_column = self.col;
             self.advance();
             if c == '\\' {
-                let escaped = match self.advance() {
-                    Some('n') => '\n', Some('t') => '\t', Some('r') => '\r',
-                    Some('0') => '\0', Some('"') => '"', Some('\\') => '\\',
-                    _ => return self.make_token(TokenKind::Invalid("invalid string escape".into())),
-                };
-                text.push(escaped);
+                let mut end = self.pos;
+                let decoded = crate::frontend::escape::decode_escape(&self.input, &mut end);
+                while self.pos < end { self.advance(); }
+                match decoded {
+                    Ok(c) => text.push(c),
+                    Err(message) => {
+                        let span = Span::new(escape_start, self.pos, self.line, escape_column);
+                        while let Some(c) = self.peek() {
+                            if matches!(c, '\n' | '\r') { break; }
+                            self.advance();
+                            if c == '"' { break; }
+                            if c == '\\' && !matches!(self.peek(), None | Some('\n' | '\r')) { self.advance(); }
+                        }
+                        return Token { kind: TokenKind::Invalid(message.into()), span };
+                    }
+                }
             } else { text.push(c); }
         }
         let kind = if terminated { TokenKind::String(text) }
@@ -342,6 +354,21 @@ impl Lexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_escapes_match_core_and_keep_error_location() {
+        let mut lexer = Lexer::new(r#""\x1b\u{4e2d}\0A""#);
+        assert!(matches!(lexer.next_token().kind, TokenKind::String(ref s) if s == "\u{1b}中\0A"));
+        let source = r#""中\q" next"#;
+        let mut lexer = Lexer::new(source);
+        let bad = lexer.next_token();
+        assert!(matches!(bad.kind, TokenKind::Invalid(_)));
+        assert_eq!(source.chars().skip(bad.span.start).take(bad.span.end - bad.span.start).collect::<String>(), "\\q");
+        assert!(matches!(lexer.next_token().kind, TokenKind::Identifier(ref s) if s == "next"));
+        for text in [r#""\x80""#, r#""\u{}""#, r#""\u{110000}""#, "\"\\"] {
+            assert!(matches!(Lexer::new(text).next_token().kind, TokenKind::Invalid(_)), "{text}");
+        }
+    }
 
     #[test]
     fn test_indentation() {

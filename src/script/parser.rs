@@ -83,7 +83,7 @@ impl Parser {
 
     fn parse_inner(&mut self) -> Result<ScriptModule, String> {
         for token in &self.tokens {
-            if let TokenKind::Invalid(message) = &token.kind { return Err(format!("line {}: {}", token.span.line, message)); }
+            if let TokenKind::Invalid(message) = &token.kind { return Err(format!("line {}:{}: {}", token.span.line, token.span.column, message)); }
         }
         let mut stmts = Vec::new();
         while self.peek().kind != TokenKind::Eof {

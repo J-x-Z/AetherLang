@@ -98,6 +98,68 @@ fn boot_lex_escape(value:i32)->i32 {
  if value==92 || value==34 || value==39 { return value; }
  return -1;
 }
+// Consume the text after a backslash and return one Unicode scalar. Hex byte
+// escapes are ASCII only; arbitrary binary data belongs in numeric u8 storage.
+fn boot_lex_string_escape(lexer:*BootLexer)->i32 {
+ let escape:i32=boot_lex_peek(lexer,0);
+ if escape==120 {
+  boot_lex_advance(lexer);
+  let high:i32=boot_lex_hex(boot_lex_peek(lexer,0));
+  let low:i32=boot_lex_hex(boot_lex_peek(lexer,1));
+  if high<0 || low<0 { boot_lex_problem(lexer,"hex escape requires two digits\0" as *u8);return -1; }
+  let scalar:i32=high*16+low;
+  if scalar>127 { boot_lex_problem(lexer,"hex string escape must be ASCII (00..7f)\0" as *u8);return -1; }
+  boot_lex_advance(lexer);boot_lex_advance(lexer);
+  return scalar;
+ }
+ if escape==117 {
+  boot_lex_advance(lexer);
+  if boot_lex_peek(lexer,0)!=123 { boot_lex_problem(lexer,"Unicode escape requires braces\0" as *u8);return -1; }
+  boot_lex_advance(lexer);
+  let mut scalar:i32=0;let mut digits:i32=0;
+  while boot_lex_peek(lexer,0)!=125 {
+   let digit:i32=boot_lex_hex(boot_lex_peek(lexer,0));
+   if digit<0 || digits==6 { boot_lex_problem(lexer,"Unicode escape requires 1..6 hex digits and a closing brace\0" as *u8);return -1; }
+   scalar=scalar*16+digit;digits=digits+1;
+   boot_lex_advance(lexer);
+  }
+  if digits==0 { boot_lex_problem(lexer,"Unicode escape requires 1..6 hex digits\0" as *u8);return -1; }
+  if scalar>1114111 || (scalar>=55296 && scalar<=57343) {
+   boot_lex_problem(lexer,"Unicode escape is not a scalar value\0" as *u8);return -1;
+  }
+  boot_lex_advance(lexer);
+  return scalar;
+ }
+ let scalar:i32=boot_lex_escape(escape);
+ if scalar<0 { boot_lex_problem(lexer,"unknown string escape\0" as *u8);return -1; }
+ boot_lex_advance(lexer);
+ return scalar;
+}
+fn boot_lex_utf8_size(scalar:i32)->u64 {
+ if scalar<128 { return 1; }
+ if scalar<2048 { return 2; }
+ if scalar<65536 { return 3; }
+ return 4;
+}
+fn boot_lex_utf8_write(text:*u8,scalar:i32)->u64 {
+ if scalar<128 { text[0]=scalar as u8;return 1; }
+ if scalar<2048 {
+  text[0]=(192|(scalar>>6)) as u8;
+  text[1]=(128|(scalar&63)) as u8;
+  return 2;
+ }
+ if scalar<65536 {
+  text[0]=(224|(scalar>>12)) as u8;
+  text[1]=(128|((scalar>>6)&63)) as u8;
+  text[2]=(128|(scalar&63)) as u8;
+  return 3;
+ }
+ text[0]=(240|(scalar>>18)) as u8;
+ text[1]=(128|((scalar>>12)&63)) as u8;
+ text[2]=(128|((scalar>>6)&63)) as u8;
+ text[3]=(128|(scalar&63)) as u8;
+ return 4;
+}
 fn boot_lex_string(lexer:*BootLexer)->bool {
  boot_lex_advance(lexer);
  let start:u64=lexer.position;let mut length:u64=0;
@@ -106,36 +168,28 @@ fn boot_lex_string(lexer:*BootLexer)->bool {
   if value<0 || value==10 || value==13 || value==0 { return boot_lex_problem(lexer,"unterminated string\0" as *u8); }
   boot_lex_advance(lexer);
   if value==92 {
-   let escape:i32=boot_lex_peek(lexer,0);
-   if escape==120 {
-    boot_lex_advance(lexer);
-    if boot_lex_hex(boot_lex_peek(lexer,0))<0 || boot_lex_hex(boot_lex_peek(lexer,1))<0 {
-     return boot_lex_problem(lexer,"hex escape requires two digits\0" as *u8);
-    }
-    boot_lex_advance(lexer);boot_lex_advance(lexer);
-   } else {
-    if boot_lex_escape(escape)<0 { return boot_lex_problem(lexer,"unknown string escape\0" as *u8); }
-    boot_lex_advance(lexer);
-   }
-  }
-  length=length+1;
+   let scalar:i32=boot_lex_string_escape(lexer);
+   if scalar<0 { return false; }
+   length=length+boot_lex_utf8_size(scalar);
+  } else { length=length+1; }
  }
  let end:u64=lexer.position;
  boot_lex_advance(lexer);
  let text:*u8=boot_alloc(lexer.context,length+1) as *u8;
  if text==(0 as *u8) { return false; }
- let mut index:u64=start;let mut output:u64=0;
- while index<end {
-  let mut value:i32=lexer.context.source[index] as i32;index=index+1;
+ // Reuse the validated decoder in the second pass. Strings have no physical
+ // newline, so restoring this byte column reproduces the first pass exactly.
+ lexer.position=start;lexer.column=lexer.token_column+1;
+ let mut output:u64=0;
+ while lexer.position<end {
+  let value:i32=boot_lex_peek(lexer,0);boot_lex_advance(lexer);
   if value==92 {
-   value=lexer.context.source[index] as i32;index=index+1;
-   if value==120 {
-    value=boot_lex_hex(lexer.context.source[index] as i32)*16+boot_lex_hex(lexer.context.source[index+1] as i32);
-    index=index+2;
-   } else { value=boot_lex_escape(value); }
-  }
-  text[output]=value as u8;output=output+1;
+   let scalar:i32=boot_lex_string_escape(lexer);
+   if scalar<0 { return false; }
+   output=output+boot_lex_utf8_write(text+output,scalar);
+  } else { text[output]=value as u8;output=output+1; }
  }
+ boot_lex_advance(lexer);
  text[length]=0;
  return boot_lex_token(lexer,BT_STRING,text,length);
 }

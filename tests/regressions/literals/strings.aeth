@@ -1,0 +1,14 @@
+// Byte counts are explicit: embedded NUL is data, not a write terminator.
+extern "C" { fn write(fd: i32, data: *u8, count: u64) -> i64; }
+fn main() -> i32 {
+    if write(1, "\n\r\t\\\"\'\0" as *u8, 7) != 7 { return 1; }
+    if write(1, "\x1b" as *u8, 1) != 1 { return 2; }
+    if write(1, "\x1B[31mred\x1b[0m\n" as *u8, 13) != 13 { return 3; }
+    if write(1, "\00\01\02\03\04\05\06\07" as *u8, 16) != 16 { return 4; }
+    if write(1, "\x000\x001\x002\x003\x004\x005\x006\x007" as *u8, 16) != 16 { return 5; }
+    if write(1, "\u{0}0\u{0}1\u{0}2\u{0}3\u{0}4\u{0}5\u{0}6\u{0}7" as *u8, 16) != 16 { return 6; }
+    if write(1, "\x41A\x41F\x411\x7f\x00Z" as *u8, 9) != 9 { return 7; }
+    if write(1, "\u{41}\u{00e9}\u{4e2d}\u{1F600}\u{10ffff}" as *u8, 14) != 14 { return 8; }
+    if write(1, "\0é中😀\0" as *u8, 11) != 11 { return 9; }
+    return 0;
+}

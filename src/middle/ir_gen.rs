@@ -478,7 +478,7 @@ impl IRGenerator {
         }
         // Constants carry raw 64-bit bits in IR. Apply the semantic signedness
         // before consumers select division, comparisons, shifts or conversion.
-        if matches!(&checked_type, Some(ResolvedType::Primitive(primitive)) if primitive.is_integer()) {
+        if matches!(&checked_type, Some(ResolvedType::Primitive(primitive)) if primitive.is_integer() || *primitive == PrimitiveType::Char) {
             return Ok(self.coerce_value(value, &Self::resolved_type_to_ir(checked_type.as_ref().unwrap())?));
         }
         Ok(value)

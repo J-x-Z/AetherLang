@@ -1,0 +1,10 @@
+def main():
+    print("common:\n\r\t\\\"\'")
+    print("\x1b")
+    print("\x1B[31mred\x1b[0m")
+    print("\x41A\x41F\x411")
+    print("\u{41}\u{e9}\u{4e2d}\u{1F600}\u{10ffff}")
+    print("raw:é中😀")
+    # print uses C-string termination; the digit after NUL must not become BEL.
+    print("nul:\07tail")
+    return 0

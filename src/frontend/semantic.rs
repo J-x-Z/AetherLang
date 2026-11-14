@@ -1754,6 +1754,11 @@ impl SemanticAnalyzer {
                 let is_valid_cast = match (&source_ty, &target_ty) {
                     // Same type
                     (s, t) if s == t => true,
+
+                    // A character's scalar value may be explicitly converted
+                    // to an integer. The reverse direction requires validation.
+                    (ResolvedType::Primitive(PrimitiveType::Char), ResolvedType::Primitive(p))
+                        if p.is_integer() => true,
                     
                     // Int to Int
                     (ResolvedType::Primitive(p1), ResolvedType::Primitive(p2)) 
@@ -2515,6 +2520,19 @@ mod tests {
         let program = parser.parse_program()?;
         let mut analyzer = SemanticAnalyzer::new();
         analyzer.analyze(&program)
+    }
+
+    #[test]
+    fn character_scalar_casts_are_explicit_and_one_way() {
+        assert!(analyze(r#"const CODE: u32 = '\u{10ffff}' as u32;
+            const LOW: i8 = '\u{10ffff}' as i8;
+            fn code(c: char) -> u32 { c as u32 }
+            fn main() -> i32 { code('\x1b') as i32 }"#).is_ok());
+        for source in ["fn main() { let c: char = 65 as char; }",
+            "const BAD: char = 55296 as char; fn main() {}",
+            "fn main() { let n: u32 = 'A'; }"] {
+            assert!(analyze(source).is_err(), "{source}");
+        }
     }
 
     #[test]

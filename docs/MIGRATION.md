@@ -2,7 +2,26 @@
 
 > **Purpose**: Guide for migrating existing C/Rust codebases to AetherLang
 
+## Literal escape correction (2026-11-15)
+
+Unknown escapes now fail instead of silently discarding the backslash. Write
+`"\\q"` for the literal two bytes backslash + q; similarly double backslashes
+in Windows paths and regular expressions. The same rules apply to Core and
+Script strings and to primary-compiler character literals.
+
+`"\x1b"` now emits one ESC byte. Use `\xHH` for ASCII (00–7F), or
+`\u{...}` for a Unicode scalar encoded as UTF-8. The standalone Core compiler
+previously accepted `\x80..\xFF` as raw bytes; replace those with numeric `u8`
+storage when binary bytes are intended, or Unicode escapes when text is intended.
+The C backend now preserves NUL before digits: `"\07"` means bytes `00 37`,
+matching LLVM and Core. Programs that accidentally relied on the previous
+C octal-escape merging must be corrected rather than preserving that behavior.
+
+See [literal semantics](LANGUAGE.md) section 1.4 and the
+byte-level regression runner `tests/literal_escapes.py`.
+
 ---
+
 
 ## 1. C to AetherLang
 

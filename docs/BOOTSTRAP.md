@@ -31,6 +31,18 @@ Integer operations wrap by width except division/remainder by zero and signed
 MIN/-1, which trap. Operand and argument evaluation is left-to-right, Boolean
 operators short-circuit, and float-to-integer casts saturate (NaN becomes zero).
 
+String escapes use the same UTF-8 rules as the primary compiler: `\xHH`
+consumes exactly two hexadecimal digits and accepts only ASCII `00..7f`;
+`\u{H...}` accepts one to six hexadecimal digits naming a Unicode scalar
+through `10ffff`, excluding surrogates `d800..dfff`, and emits its UTF-8 bytes.
+Raw Unicode text and the existing `\n`, `\r`, `\t`, `\0`, `\\`, `\"`, and `\'`
+escapes remain supported. Embedded NUL is preserved in the token length.
+Unknown or malformed escapes are errors. Migrate former `\x80..\xff` string
+escapes to a Unicode scalar such as `\u{e9}` (UTF-8 `c3 a9`), or write numeric
+`u8` values into a byte buffer when the intended data is arbitrary binary.
+Core still has no character-literal syntax. The semantic corpus includes
+native byte checks for UTF-8 boundaries, NUL, ASCII escapes, and raw Unicode.
+
 The bootstrap compiler rejects imports, generics, enums, methods, arrays,
 references, attributes and other syntax outside this subset. Its own modules
 use a deterministic concatenation manifest instead of an import resolver.

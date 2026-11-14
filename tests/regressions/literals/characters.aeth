@@ -1,0 +1,14 @@
+extern "C" { fn printf(format: *u8, ...) -> i32; }
+const UNICODE_CODE: u32 = '\u{1f600}' as u32;
+const NARROW_CODE: i8 = '\u{10ffff}' as i8;
+fn code(character: char) -> u32 { character as u32 }
+fn main() -> i32 {
+    printf("%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n\0" as *u8,
+        '\n' as u32, '\r' as u32, '\t' as u32, '\\' as u32,
+        '\"' as u32, '\'' as u32, '\0' as u32, '\x1b' as u32,
+        '\x41' as u32, '\x7f' as u32, '\u{e9}' as u32, '\u{4e2d}' as u32,
+        '\u{1f600}' as u32, '\u{10ffff}' as u32, 'é' as u32, '😀' as u32);
+    printf("%u,%u,%u,%d,%d\n\0" as *u8, UNICODE_CODE, code('\u{1f600}'),
+        ('\u{10ffff}' as u8) as u32, ('\u{10ffff}' as i8) as i32, NARROW_CODE as i32);
+    return 0;
+}

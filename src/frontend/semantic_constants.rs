@@ -193,6 +193,12 @@ impl SemanticAnalyzer {
     fn cast_constant(&self, value: TypedConstant, target: &ResolvedType, span: Span) -> Result<TypedConstant> {
         if value.ty == *target { return Ok(value); }
         match (&value.value, target) {
+            (ScalarConstant::Char(character), ResolvedType::Primitive(p)) if p.is_integer() => {
+                self.cast_constant(TypedConstant {
+                    ty: ResolvedType::Primitive(PrimitiveType::U32),
+                    value: ScalarConstant::Int(*character as i64),
+                }, target, span)
+            }
             (ScalarConstant::Int(number), ResolvedType::Pointer(_)) => Ok(TypedConstant { ty: target.clone(), value: ScalarConstant::Int(*number) }),
             (ScalarConstant::Int(_), ResolvedType::Primitive(p)) if p.is_integer() => {
                 let number = Self::integer_value(&value).unwrap();
