@@ -2,6 +2,8 @@
 """Real JXZ command tests. All projects and artifacts stay under --work-dir."""
 import argparse
 import os
+import resource
+import signal
 from pathlib import Path
 import subprocess
 import tempfile
@@ -143,6 +145,75 @@ fn main(argc: i32, argv: **u8) -> i32 {
         self.run_jxz('test', expected=1)
         self.assertFalse((self.root / 'STALE_RAN').exists())
         self.assertFalse(stale.exists())
+
+    def test_all_dependency_manifest_forms_are_rejected(self):
+        self.source()
+        declarations = [
+            '[dependencies]\nmissing = "1.0"\n',
+            '[dependencies.missing]\npath = "/does/not/exist"\n',
+            '["dependencies".missing]\npath = "/does/not/exist"\n',
+            "['dependencies'.missing]\npath = '/does/not/exist'\n",
+            '[target.unix.dependencies]\nmissing = "1.0"\n',
+            '[[dependencies]]\nname = "missing"\n',
+        ]
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                (self.root / 'Jxz.toml').write_text('[package]\nname = "sample"\n' + declaration)
+                self.run_jxz('build', expected=1)
+        for declaration in ('dependencies = { missing = "1.0" }', 'dependencies.missing = "1.0"'):
+            (self.root / 'Jxz.toml').write_text(declaration + '\n[package]\nname = "sample"\n')
+            self.run_jxz('build', expected=1)
+        self.assertFalse((self.root / 'target').exists())
+
+    def test_clean_tracks_every_successful_output_and_legacy_records(self):
+        self.source()
+        for name in ('first', 'second', 'second'):
+            self.manifest(name=name)
+            self.run_jxz('build')
+        (self.root / 'target/keep-me').write_text('user data')
+        (self.root / 'target/legacy-program').write_text('old JXZ output')
+        (self.root / 'target/.jxz-output-name').write_text('legacy-program')
+        self.assertEqual((self.root / 'target/.jxz-outputs').read_text(), 'first\nsecond\n')
+        self.run_jxz('clean')
+        self.assertEqual({p.name for p in (self.root / 'target').iterdir()}, {'keep-me'})
+        self.run_jxz('clean')
+
+    def test_output_record_write_failure_preserves_previous_collection(self):
+        self.source()
+        self.manifest(name='first')
+        self.run_jxz('build')
+        record = self.root / 'target/.jxz-outputs'
+        before = record.read_bytes()
+        self.manifest(name='second')
+        # Stub only the compiler subprocess so the file limit targets the
+        # ownership transaction, not the already-covered native compiler.
+        compiler = self.root / 'compiler-success'
+        compiler.write_text('#!/bin/sh\nexit 0\n')
+        compiler.chmod(0o755)
+        def fail_writes():
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1, 1))
+        result = subprocess.run([JXZ, 'build'], cwd=self.root, capture_output=True,
+                                text=True, timeout=20, preexec_fn=fail_writes,
+                                env={**ENV, 'AETHC': str(compiler)})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(record.read_bytes(), before)
+        self.assertFalse((self.root / 'target/.jxz-outputs.tmp').exists())
+        self.run_jxz('clean')
+        self.assertFalse((self.root / 'target/first').exists())
+
+    def test_clean_rejects_incomplete_or_corrupt_ownership_records(self):
+        self.manifest()
+        (self.root / 'target').mkdir()
+        keep = self.root / 'target/keep-me'
+        keep.write_text('user data')
+        for marker, content in [('.jxz-outputs', b'keep-me'), ('.jxz-output-name', b'keep-me\x00junk')]:
+            with self.subTest(marker=marker):
+                record = self.root / 'target' / marker
+                record.write_bytes(content)
+                self.run_jxz('clean', expected=1)
+                self.assertEqual(keep.read_text(), 'user data')
+                record.unlink()
 
     def test_clean_does_not_delete_unowned_output(self):
         self.manifest(name='main.aeth', target='src')

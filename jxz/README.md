@@ -37,13 +37,15 @@ main = "src/application.aeth"
 The manifest reader supports quoted basic/literal strings, whitespace, comments,
 and the fields above. It is a deliberately limited project schema, not a full
 TOML implementation. Known duplicate keys, invalid paths, malformed quoted
-values and nonempty dependency tables fail. Package names must be a single
+values, unknown tables/keys and dependency declarations fail. The only accepted
+tables are `[package]`, `[build]`, and an empty `[dependencies]`; dotted, quoted,
+inline, target-specific and array dependency tables are explicitly unsupported. Package names must be a single
 filename (at most 255 bytes) and may not start with the reserved `.jxz-` prefix.
 
 Tests are `tests/**/test_*.aeth` programs; zero means pass, compile/link/runtime
 failure means fail. Paths are discovered as NUL-delimited records, so spaces and
 newlines are preserved. Test binaries are rebuilt before execution. `clean`
-removes the binary recorded by a successful JXZ build and reserved intermediates;
+removes every output recorded by successful JXZ builds and reserved intermediates;
 it never recursively deletes the target directory or removes source `.c` files.
 
 This implementation currently requires a 64-bit POSIX host with `find` and the
@@ -53,5 +55,9 @@ error; the older experimental source files remain for later development.
 
 Migration: `build` now defaults to debug (`-O0`); pass `--release` for `-O2`.
 `run` forwards arguments, `test` reports failures, and `clean` preserves unrelated
-files. A successful build creates `.jxz-output-name` in the target directory so
-subsequent cleanup can distinguish its output from preexisting files.
+files. A successful build atomically updates the deduplicated `.jxz-outputs` collection
+in the target directory, so cleanup retains ownership across package renames.
+A failed metadata write preserves the previous collection.
+Cleanup also reads the previous `.jxz-output-name` format, rejects corrupt or
+incomplete records, and preserves unrelated files. Path and process operations
+are provided by `stdlib/path.aeth` and `stdlib/process.aeth`.

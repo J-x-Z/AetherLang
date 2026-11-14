@@ -148,7 +148,9 @@ pub fn config_load() -> Config {
             if strcmp(start + 1, "package\0" as *u8) == 0 { section = 1; }
             if strcmp(start + 1, "build\0" as *u8) == 0 { section = 2; }
             if strcmp(start + 1, "dependencies\0" as *u8) == 0 { section = 3; }
+            if section == 0 { puts("jxz: unsupported manifest table (dependency tables are not implemented)\0" as *u8); return cfg; }
         } else if start[0] != 0 && start[0] != 35 {
+            if section == 0 { puts("jxz: top-level manifest keys are not supported\0" as *u8); return cfg; }
             if section == 3 { puts("jxz: dependency resolution is not implemented\0" as *u8); return cfg; }
             let mut equal: *u8 = start;
             while equal[0] != 0 && equal[0] != 61 { equal = equal + 1; }
@@ -170,6 +172,10 @@ pub fn config_load() -> Config {
                 if strcmp(start, "src\0" as *u8) == 0 { field = 4; }
                 if strcmp(start, "target\0" as *u8) == 0 { field = 8; }
                 if strcmp(start, "main\0" as *u8) == 0 { field = 16; }
+            }
+            if field == 0 {
+                let metadata: bool = section == 1 && (strcmp(start, "edition\0" as *u8) == 0 || strcmp(start, "description\0" as *u8) == 0 || strcmp(start, "authors\0" as *u8) == 0 || strcmp(start, "license\0" as *u8) == 0 || strcmp(start, "repository\0" as *u8) == 0);
+                if !metadata { puts("jxz: unsupported manifest key\0" as *u8); return cfg; }
             }
             if field != 0 {
                 if (seen & field) != 0 { puts("jxz: duplicate manifest key\0" as *u8); return cfg; }

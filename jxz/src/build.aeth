@@ -1,6 +1,7 @@
 // The compiler owns backend selection and linking; JXZ owns project policy.
 use config::{Config, config_load, config_free, package_name_valid};
-use process::{process_run, environment_tool, path_join, make_directories};
+use process::{process_run, environment_tool};
+use path::{path_join, make_directories};
 
 extern "C" {
     fn malloc(size: u64) -> *void;
@@ -14,6 +15,9 @@ extern "C" {
     fn fclose(file: *void) -> i32;
     fn fputs(s: *u8, file: *void) -> i32;
     fn fgetc(file: *void) -> i32;
+    fn fputc(value: i32, file: *void) -> i32;
+    fn strcmp(a: *u8, b: *u8) -> i32;
+    fn rename(old_path: *u8, new_path: *u8) -> i32;
     fn ferror(file: *void) -> i32;
     fn strlen(s: *u8) -> u64;
 }
@@ -92,39 +96,92 @@ pub fn run_project(argc: i32, argv: **u8) -> i32 {
     return status;
 }
 
-fn record_output(directory: *u8, name: *u8) -> bool {
-    let path: *u8 = path_join(directory, ".jxz-output-name\0" as *u8);
-    if path == (0 as *u8) { return false; }
-    let file: *void = fopen(path, "wb\0" as *u8);
-    free(path as *void);
-    if file == (0 as *void) { return false; }
-    let written: i32 = fputs(name, file);
-    let closed: i32 = fclose(file);
-    return written >= 0 && closed == 0;
+fn copy_owned_records(input: *void, output: *void, current: *u8, found: *bool) -> bool {
+    let mut name: [u8; 257] = [0; 257];
+    let mut length: u64 = 0;
+    let mut byte: i32 = fgetc(input);
+    while byte >= 0 {
+        if byte == 10 {
+            name[length] = 0;
+            if !package_name_valid(&name[0] as *u8) { return false; }
+            if strcmp(&name[0] as *u8, current) == 0 { *found = true; }
+            length = 0;
+        } else {
+            if length >= 255 || byte == 0 { return false; }
+            name[length] = byte as u8;
+            length = length + 1;
+        }
+        if fputc(byte, output) < 0 { return false; }
+        byte = fgetc(input);
+    }
+    return length == 0 && ferror(input) == 0;
 }
 
-fn clean_owned_output(directory: *u8) -> bool {
-    let record: *u8 = path_join(directory, ".jxz-output-name\0" as *u8);
+fn record_output(directory: *u8, name: *u8) -> bool {
+    let path: *u8 = path_join(directory, ".jxz-outputs\0" as *u8);
+    let temporary: *u8 = path_join(directory, ".jxz-outputs.tmp\0" as *u8);
+    if path == (0 as *u8) || temporary == (0 as *u8) {
+        free(path as *void); free(temporary as *void); return false;
+    }
+    // Never append after a partial write: validate and atomically replace the
+    // complete collection. Exclusive creation also prevents concurrent writers.
+    let output: *void = fopen(temporary, "wx\0" as *u8);
+    if output == (0 as *void) {
+        perror(temporary); free(path as *void); free(temporary as *void); return false;
+    }
+    let mut ok: bool = true;
+    let mut found: bool = false;
+    if access(path, 0) == 0 {
+        let input: *void = fopen(path, "rb\0" as *u8);
+        if input == (0 as *void) { ok = false; }
+        else {
+            ok = copy_owned_records(input, output, name, &found as *bool);
+            if fclose(input) != 0 { ok = false; }
+        }
+    }
+    if ok && !found {
+        if fputs(name, output) < 0 { ok = false; }
+        if fputc(10, output) < 0 { ok = false; }
+    }
+    if fclose(output) != 0 { ok = false; }
+    if ok { if rename(temporary, path) != 0 { ok = false; } }
+    if !ok { remove(temporary); puts("jxz: could not update build output records\0" as *u8); }
+    free(path as *void); free(temporary as *void);
+    return ok;
+}
+
+fn clean_owned_record(directory: *u8, filename: *u8, legacy: bool) -> bool {
+    let record: *u8 = path_join(directory, filename);
     if record == (0 as *u8) { return false; }
     if access(record, 0) != 0 { free(record as *void); return true; }
     let file: *void = fopen(record, "rb\0" as *u8);
     if file == (0 as *void) { free(record as *void); return false; }
-    // Package output is a single filename; POSIX NAME_MAX is at most 255 here.
     let mut name: [u8; 257] = [0; 257];
     let mut count: u64 = 0;
+    let mut ok: bool = true;
     let mut byte: i32 = fgetc(file);
-    while byte >= 0 && count < 256 {
-        name[count] = byte as u8;
-        count = count + 1;
+    while byte >= 0 {
+        if byte == 10 {
+            name[count] = 0;
+            if !package_name_valid(&name[0] as *u8) { ok = false; break; }
+            if !clean_file(directory, &name[0] as *u8) { ok = false; }
+            count = 0;
+        } else {
+            if count >= 255 || byte == 0 { ok = false; break; }
+            name[count] = byte as u8;
+            count = count + 1;
+        }
         byte = fgetc(file);
     }
-    let failed: i32 = ferror(file);
-    let closed: i32 = fclose(file);
-    let mut ok: bool = false;
-    if byte < 0 && failed == 0 && closed == 0 && count < 256 {
-        if package_name_valid(&name[0] as *u8) {
-            ok = clean_file(directory, &name[0] as *u8);
-        }
+    let read_failed: bool = ferror(file) != 0;
+    if read_failed { ok = false; }
+    if fclose(file) != 0 { ok = false; }
+    if count != 0 {
+        // Migrate the previous single-output record; new records require newline.
+        name[count] = 0;
+        if legacy && byte < 0 && !read_failed && package_name_valid(&name[0] as *u8) {
+            if !clean_file(directory, &name[0] as *u8) { ok = false; }
+        } else { ok = false; }
     }
     if ok { if remove(record) != 0 { ok = false; } }
     free(record as *void);
@@ -147,7 +204,9 @@ pub fn clean_project() -> i32 {
     let mut status: i32 = 1;
     if cfg.valid {
         status = 0;
-        if !clean_owned_output(cfg.target_dir) { status = 1; }
+        if !clean_owned_record(cfg.target_dir, ".jxz-outputs\0" as *u8, false) { status = 1; }
+        if !clean_owned_record(cfg.target_dir, ".jxz-output-name\0" as *u8, true) { status = 1; }
+        if !clean_file(cfg.target_dir, ".jxz-outputs.tmp\0" as *u8) { status = 1; }
         if !clean_file(cfg.target_dir, ".jxz-test\0" as *u8) { status = 1; }
         if !clean_file(cfg.target_dir, ".jxz-test-list\0" as *u8) { status = 1; }
         // Only remove an empty directory: unrelated files and source C survive.

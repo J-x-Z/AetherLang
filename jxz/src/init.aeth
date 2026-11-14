@@ -1,6 +1,6 @@
 // Initialize only absent files; never overwrite an existing source or manifest.
 use config::{package_name_valid};
-use process::{make_directories};
+use path::{make_directories};
 extern "C" {
     fn fopen(path: *u8, mode: *u8) -> *void;
     fn fclose(file: *void) -> i32;

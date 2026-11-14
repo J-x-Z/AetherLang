@@ -1,7 +1,8 @@
 // Discover NUL-delimited paths with the host's find utility. Compilation,
 // execution, status aggregation and resource ownership are AetherLang code.
 use config::{Config, config_load, config_free};
-use process::{process_run, path_join, make_directories, directory_exists};
+use process::{process_run};
+use path::{path_join, make_directories, directory_exists};
 use build::{compile_source};
 extern "C" {
     fn fopen(path: *u8, mode: *u8) -> *void;
