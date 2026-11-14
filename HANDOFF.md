@@ -1,6 +1,6 @@
 # AetherLang 工程交接
 
-2026-11-14升级快照已交付；2026-11-15追加审计发现新的未修问题，当前不能视为稳定发布。仓库 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`，只做本地提交，未推送。原始起点 `aceff1522790df3edfe5c711db5884350ab1b44a`；最终功能源码 `0709b338b2582906f02f12a2558ab16b783ad086`；主编译器源码 `a017d18`。当前交付提交用 `git rev-parse HEAD` 或外置 `release/manifest.json` 查询，后续文档提交不改变构建源码。
+2026-11-14升级快照已交付；2026-11-15追加审计发现新的未修问题，当前不能视为稳定发布。仓库 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`，只做本地提交，未推送。原始起点 `aceff1522790df3edfe5c711db5884350ab1b44a`；最终功能源码 `0709b338b2582906f02f12a2558ab16b783ad086`；主编译器源码 `a017d18`。2026-11-14交付由原外置release/manifest.json标识；最新开发版源码为`cd2569b`，新版本包见末尾，当前Git HEAD可用`git rev-parse HEAD`查询。
 
 所有资产在 `/Volumes/WINDOWS/work/aetherlang-upgrade-work`（下称 WORK）。已有源码与历史证据保留；没有清理其他项目或修改全局Rust配置。远端NVIDIA验收任务目录 `/tmp/aetherlang-cudaq-20261114` 已取证并删除，未关闭设备或修改全局SDK。
 
@@ -19,7 +19,7 @@ sh scripts/build.sh llvm
 sh scripts/test.sh llvm
 ```
 
-Rust/Cargo1.100.0、LLVM21.1.8、AppleClang21；`c`选择C-only。一次只做一个Cargo构建。本机CARGO_HOME为外置离线缓存，其他机器可使用正常缓存。最后一次Cargo是C-only，因此当前target/debug与target/release中的aethc是C-only；冻结的WORK/release/aethc为LLVM+C，aethc-c为C-only。
+Rust/Cargo1.100.0、LLVM21.1.8、AppleClang21；`c`选择C-only。一次只做一个Cargo构建。本机CARGO_HOME为外置离线缓存，其他机器可使用正常缓存。最后一次Cargo为LLVM+C，当前target/debug与target/release均支持LLVM/C。原冻结WORK/release保持不变；最新版本在WORK/releases/literal-escapes-20261115，带独立manifest与stdlib快照。
 
 自举：`python3 tests/bootstrap_core.py --compiler "$WORK/release/aethc-c" --work-dir "$WORK/bootstrap-repeat" --backend c`。完整链会真实执行自编译、工作负载与sanitizer；不是统计可编译模块。
 
@@ -73,3 +73,15 @@ Shell追加的N01已由本线复现：`Node { children: Vec<Node> }` 的data元�
 N02已独立复现：本机macOS27.2、SDK27.0，冻结aethc LLVM native对象LC_BUILD_VERSION minos28.0，最终binary为27.0；显式aarch64-apple-macosx27.0对象与binary均为27.0。直接Clang链接返回0但警告object更新；aethc native_compile成功路径丢弃stderr。源码native codegen读取LLVMGetDefaultTargetTriple，native link让C驱动自行选目标，两者没有共享effective target。证据 `WORK/language-blockers/darwin-native-target/results.json`；本次只编译/链接/查对象元数据，没有运行程序、没有修复。T07/T18已补统一目标与deployment/SDK政策、Mach-O回归及链接诊断验收。
 
 Shell报告当前冻结LLVM-O2主执行链已运行；这属于Shell线程报告，本线未独立重跑其产品。Shell将显式部署目标作为临时adapter策略，继续保持pin。语言侧稳定后需提供Linux x86_64可运行aethc/JXZ宿主包、匹配stdlib和manifest/SHA256，并在真实Linux验收后供Shell联验；已列T18/T28。Linux对象或已有GPU应用运行不能替代冻结宿主工具链交付。本次没有下载工具链、创建Linux发布包或改动Shell。
+
+## 2026-11-15 N03字面量链路已修复
+
+源码提交 `cd2569b698eea33710a55c2a0701923e4007c049`：Core/Script共享Rust转义解码规则，自举Core同步；未知/畸形escape拒绝，`\xHH`为ASCII00..7F，`\u{1..6 hex}`为Unicode scalar且字符串UTF-8编码。修复EOF扫描越界、Script词法错误列位置、C输出NUL后吞0..7数字；字符可显式转整数，常量/运行窄化一致，逆向未校验转换仍拒绝。规范和迁移见docs/LANGUAGE.md 1.4及docs/MIGRATION.md；Core旧高位hex原始字节需迁移为numeric u8或Unicode。
+
+验证：134单元、14driver、3tooling；C/LLVM O0/O2/O3与Core共220条字面量检查；最终新seed完整stage0→1→2→3→4、103检查、98语义用例加原生字节执行分别在normal/sanitizer模式通过；生成C三代SHA一致为 `eaefb458043767b5d3559e13feb8a160bedb9f4f91d5ce990e31789ba776b813`。22组真实负载、JXZ两后端各19项通过。Core没有新增char语法，仍是明确子集。本次没有重跑全工程所有套件/GPU，也没有Shell GUI联验。
+
+主证据 `WORK/literal-escapes/verification-final.json`、matrix-final/results.json、bootstrap-final/results.json。旧版错误接受unknown escape及C字节错误在baseline/results.json。首次运行矩阵发现char as u32被拒绝后进行了实际语义修复；初次214条中6个构建失败与一次Rust类型修正前日志均保留，不冒充首轮全通过。
+
+新独立冻结包 `WORK/releases/literal-escapes-20261115/`：aethc（LLVM+C）、aethc-core、jxz、jxz-c、原版本匹配stdlib与manifest。主编译器SHA256 `8e67c244d52a6f04536504f4a8df7888d9ed02570c25329061c3479c630c008b`。使用其stdlib时显式-I/AETHER_PATH；可搬移查找I01仍未修。原release及JXZ独立包未覆盖；Shell pin未改。当前仅Mac arm64宿主包，LLVM21动态库依赖记录在manifest；Linux宿主包任务仍在T18。
+
+主线T01/T02/T16/T18增加已完成子项，没有将整项勾完；N01递归泛型与N02deployment偏差、29组基线问题仍待处理。下一项仍是B2/F05/B3/N01的已定型事实和类型身份传递，不重启全面审计。
