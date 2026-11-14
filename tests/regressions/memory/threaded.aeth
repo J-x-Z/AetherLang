@@ -1,0 +1,39 @@
+use atomic::{atomic_add_u64_relaxed, atomic_load_u64, atomic_load_u32_acquire, atomic_store_u32_release, Spinlock, spinlock_acquire, spinlock_release};
+extern "C" { fn run_memory_threads() -> i32; }
+static mut counter: u64 = 0;
+static mut ready: u32 = 0;
+static mut published: u64 = 0;
+static mut received: u64 = 0;
+static mut lock: Spinlock = Spinlock { locked: 0 };
+static mut protected_counter: u64 = 0;
+
+@no_mangle
+pub fn memory_add_worker() {
+    let mut index: u64 = 0;
+    while index < 100000 {
+        atomic_add_u64_relaxed(&counter as *u64, 1);
+        if index < 1000 {
+            spinlock_acquire(&lock as *Spinlock);
+            protected_counter = protected_counter + 1;
+            spinlock_release(&lock as *Spinlock);
+        }
+        index = index + 1;
+    }
+}
+@no_mangle
+pub fn memory_publish_worker() {
+    published = 9876543210123;
+    atomic_store_u32_release(&ready as *u32, 1);
+}
+@no_mangle
+pub fn memory_consume_worker() {
+    while atomic_load_u32_acquire(&ready as *u32) == 0 {}
+    received = published;
+}
+fn main() -> i32 {
+    if run_memory_threads() != 0 { return 1; }
+    if atomic_load_u64(&counter as *u64) != 400000 { return 2; }
+    if protected_counter != 4000 { return 3; }
+    if received != 9876543210123 { return 4; }
+    return 0;
+}

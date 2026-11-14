@@ -1,95 +1,120 @@
-// AetherLang Atomic Operations Library
-// Platform-independent atomic primitives for concurrent programming
+// Typed atomic operations. Default operations are sequentially consistent.
+// Explicit intrinsics require compile-time orders; named wrappers below retain
+// that guarantee. All pointers must refer to aligned, live storage of the width.
+const ORDER_RELAXED: i32 = 0;
+const ORDER_ACQUIRE: i32 = 1;
+const ORDER_RELEASE: i32 = 2;
+const ORDER_ACQ_REL: i32 = 3;
+const ORDER_SEQ_CST: i32 = 4;
 
-// ==================== Atomic Load/Store ====================
+pub fn atomic_load_u8(pointer: *u8) -> u8 { __atomic_load_u8(pointer) }
+pub fn atomic_load_u8_relaxed(pointer: *u8) -> u8 { __atomic_load_u8_explicit(pointer, 0) }
+pub fn atomic_load_u8_acquire(pointer: *u8) -> u8 { __atomic_load_u8_explicit(pointer, 1) }
+pub fn atomic_store_u8(pointer: *u8, value: u8) { __atomic_store_u8(pointer, value) }
+pub fn atomic_store_u8_relaxed(pointer: *u8, value: u8) { __atomic_store_u8_explicit(pointer, value, 0) }
+pub fn atomic_store_u8_release(pointer: *u8, value: u8) { __atomic_store_u8_explicit(pointer, value, 2) }
+pub fn atomic_add_u8(pointer: *u8, value: u8) -> u8 { __atomic_fetch_add_u8(pointer, value) }
+pub fn atomic_add_u8_relaxed(pointer: *u8, value: u8) -> u8 { __atomic_fetch_add_u8_explicit(pointer, value, 0) }
+pub fn atomic_add_u8_acquire(pointer: *u8, value: u8) -> u8 { __atomic_fetch_add_u8_explicit(pointer, value, 1) }
+pub fn atomic_add_u8_release(pointer: *u8, value: u8) -> u8 { __atomic_fetch_add_u8_explicit(pointer, value, 2) }
+pub fn atomic_add_u8_acq_rel(pointer: *u8, value: u8) -> u8 { __atomic_fetch_add_u8_explicit(pointer, value, 3) }
+pub fn atomic_sub_u8(pointer: *u8, value: u8) -> u8 { __atomic_fetch_sub_u8(pointer, value) }
+pub fn atomic_sub_u8_relaxed(pointer: *u8, value: u8) -> u8 { __atomic_fetch_sub_u8_explicit(pointer, value, 0) }
+pub fn atomic_sub_u8_acquire(pointer: *u8, value: u8) -> u8 { __atomic_fetch_sub_u8_explicit(pointer, value, 1) }
+pub fn atomic_sub_u8_release(pointer: *u8, value: u8) -> u8 { __atomic_fetch_sub_u8_explicit(pointer, value, 2) }
+pub fn atomic_sub_u8_acq_rel(pointer: *u8, value: u8) -> u8 { __atomic_fetch_sub_u8_explicit(pointer, value, 3) }
+pub fn atomic_cas_u8(pointer: *u8, expected: u8, desired: u8) -> bool { __atomic_compare_exchange_u8(pointer, expected, desired) }
+pub fn atomic_cas_u8_relaxed(pointer: *u8, expected: u8, desired: u8) -> bool { __atomic_compare_exchange_u8_explicit(pointer, expected, desired, 0, 0) }
+pub fn atomic_cas_u8_acquire(pointer: *u8, expected: u8, desired: u8) -> bool { __atomic_compare_exchange_u8_explicit(pointer, expected, desired, 1, 0) }
+pub fn atomic_cas_u8_release(pointer: *u8, expected: u8, desired: u8) -> bool { __atomic_compare_exchange_u8_explicit(pointer, expected, desired, 2, 0) }
+pub fn atomic_cas_u8_acq_rel(pointer: *u8, expected: u8, desired: u8) -> bool { __atomic_compare_exchange_u8_explicit(pointer, expected, desired, 3, 1) }
+pub fn atomic_inc_u8(pointer: *u8) -> u8 { atomic_add_u8(pointer, 1) }
+pub fn atomic_dec_u8(pointer: *u8) -> u8 { atomic_sub_u8(pointer, 1) }
 
-// Atomic load (acquire ordering)
-pub fn atomic_load_u32(ptr: *u32) -> u32 {
-    return __atomic_load_u32(ptr)
-}
+pub fn atomic_load_u16(pointer: *u16) -> u16 { __atomic_load_u16(pointer) }
+pub fn atomic_load_u16_relaxed(pointer: *u16) -> u16 { __atomic_load_u16_explicit(pointer, 0) }
+pub fn atomic_load_u16_acquire(pointer: *u16) -> u16 { __atomic_load_u16_explicit(pointer, 1) }
+pub fn atomic_store_u16(pointer: *u16, value: u16) { __atomic_store_u16(pointer, value) }
+pub fn atomic_store_u16_relaxed(pointer: *u16, value: u16) { __atomic_store_u16_explicit(pointer, value, 0) }
+pub fn atomic_store_u16_release(pointer: *u16, value: u16) { __atomic_store_u16_explicit(pointer, value, 2) }
+pub fn atomic_add_u16(pointer: *u16, value: u16) -> u16 { __atomic_fetch_add_u16(pointer, value) }
+pub fn atomic_add_u16_relaxed(pointer: *u16, value: u16) -> u16 { __atomic_fetch_add_u16_explicit(pointer, value, 0) }
+pub fn atomic_add_u16_acquire(pointer: *u16, value: u16) -> u16 { __atomic_fetch_add_u16_explicit(pointer, value, 1) }
+pub fn atomic_add_u16_release(pointer: *u16, value: u16) -> u16 { __atomic_fetch_add_u16_explicit(pointer, value, 2) }
+pub fn atomic_add_u16_acq_rel(pointer: *u16, value: u16) -> u16 { __atomic_fetch_add_u16_explicit(pointer, value, 3) }
+pub fn atomic_sub_u16(pointer: *u16, value: u16) -> u16 { __atomic_fetch_sub_u16(pointer, value) }
+pub fn atomic_sub_u16_relaxed(pointer: *u16, value: u16) -> u16 { __atomic_fetch_sub_u16_explicit(pointer, value, 0) }
+pub fn atomic_sub_u16_acquire(pointer: *u16, value: u16) -> u16 { __atomic_fetch_sub_u16_explicit(pointer, value, 1) }
+pub fn atomic_sub_u16_release(pointer: *u16, value: u16) -> u16 { __atomic_fetch_sub_u16_explicit(pointer, value, 2) }
+pub fn atomic_sub_u16_acq_rel(pointer: *u16, value: u16) -> u16 { __atomic_fetch_sub_u16_explicit(pointer, value, 3) }
+pub fn atomic_cas_u16(pointer: *u16, expected: u16, desired: u16) -> bool { __atomic_compare_exchange_u16(pointer, expected, desired) }
+pub fn atomic_cas_u16_relaxed(pointer: *u16, expected: u16, desired: u16) -> bool { __atomic_compare_exchange_u16_explicit(pointer, expected, desired, 0, 0) }
+pub fn atomic_cas_u16_acquire(pointer: *u16, expected: u16, desired: u16) -> bool { __atomic_compare_exchange_u16_explicit(pointer, expected, desired, 1, 0) }
+pub fn atomic_cas_u16_release(pointer: *u16, expected: u16, desired: u16) -> bool { __atomic_compare_exchange_u16_explicit(pointer, expected, desired, 2, 0) }
+pub fn atomic_cas_u16_acq_rel(pointer: *u16, expected: u16, desired: u16) -> bool { __atomic_compare_exchange_u16_explicit(pointer, expected, desired, 3, 1) }
+pub fn atomic_inc_u16(pointer: *u16) -> u16 { atomic_add_u16(pointer, 1) }
+pub fn atomic_dec_u16(pointer: *u16) -> u16 { atomic_sub_u16(pointer, 1) }
 
-pub fn atomic_load_u64(ptr: *u64) -> u64 {
-    return __atomic_load_u64(ptr)
-}
+pub fn atomic_load_u32(pointer: *u32) -> u32 { __atomic_load_u32(pointer) }
+pub fn atomic_load_u32_relaxed(pointer: *u32) -> u32 { __atomic_load_u32_explicit(pointer, 0) }
+pub fn atomic_load_u32_acquire(pointer: *u32) -> u32 { __atomic_load_u32_explicit(pointer, 1) }
+pub fn atomic_store_u32(pointer: *u32, value: u32) { __atomic_store_u32(pointer, value) }
+pub fn atomic_store_u32_relaxed(pointer: *u32, value: u32) { __atomic_store_u32_explicit(pointer, value, 0) }
+pub fn atomic_store_u32_release(pointer: *u32, value: u32) { __atomic_store_u32_explicit(pointer, value, 2) }
+pub fn atomic_add_u32(pointer: *u32, value: u32) -> u32 { __atomic_fetch_add_u32(pointer, value) }
+pub fn atomic_add_u32_relaxed(pointer: *u32, value: u32) -> u32 { __atomic_fetch_add_u32_explicit(pointer, value, 0) }
+pub fn atomic_add_u32_acquire(pointer: *u32, value: u32) -> u32 { __atomic_fetch_add_u32_explicit(pointer, value, 1) }
+pub fn atomic_add_u32_release(pointer: *u32, value: u32) -> u32 { __atomic_fetch_add_u32_explicit(pointer, value, 2) }
+pub fn atomic_add_u32_acq_rel(pointer: *u32, value: u32) -> u32 { __atomic_fetch_add_u32_explicit(pointer, value, 3) }
+pub fn atomic_sub_u32(pointer: *u32, value: u32) -> u32 { __atomic_fetch_sub_u32(pointer, value) }
+pub fn atomic_sub_u32_relaxed(pointer: *u32, value: u32) -> u32 { __atomic_fetch_sub_u32_explicit(pointer, value, 0) }
+pub fn atomic_sub_u32_acquire(pointer: *u32, value: u32) -> u32 { __atomic_fetch_sub_u32_explicit(pointer, value, 1) }
+pub fn atomic_sub_u32_release(pointer: *u32, value: u32) -> u32 { __atomic_fetch_sub_u32_explicit(pointer, value, 2) }
+pub fn atomic_sub_u32_acq_rel(pointer: *u32, value: u32) -> u32 { __atomic_fetch_sub_u32_explicit(pointer, value, 3) }
+pub fn atomic_cas_u32(pointer: *u32, expected: u32, desired: u32) -> bool { __atomic_compare_exchange_u32(pointer, expected, desired) }
+pub fn atomic_cas_u32_relaxed(pointer: *u32, expected: u32, desired: u32) -> bool { __atomic_compare_exchange_u32_explicit(pointer, expected, desired, 0, 0) }
+pub fn atomic_cas_u32_acquire(pointer: *u32, expected: u32, desired: u32) -> bool { __atomic_compare_exchange_u32_explicit(pointer, expected, desired, 1, 0) }
+pub fn atomic_cas_u32_release(pointer: *u32, expected: u32, desired: u32) -> bool { __atomic_compare_exchange_u32_explicit(pointer, expected, desired, 2, 0) }
+pub fn atomic_cas_u32_acq_rel(pointer: *u32, expected: u32, desired: u32) -> bool { __atomic_compare_exchange_u32_explicit(pointer, expected, desired, 3, 1) }
+pub fn atomic_inc_u32(pointer: *u32) -> u32 { atomic_add_u32(pointer, 1) }
+pub fn atomic_dec_u32(pointer: *u32) -> u32 { atomic_sub_u32(pointer, 1) }
 
-// Atomic store (release ordering)
-pub fn atomic_store_u32(ptr: *u32, val: u32) {
-    __atomic_store_u32(ptr, val)
-}
+pub fn atomic_load_u64(pointer: *u64) -> u64 { __atomic_load_u64(pointer) }
+pub fn atomic_load_u64_relaxed(pointer: *u64) -> u64 { __atomic_load_u64_explicit(pointer, 0) }
+pub fn atomic_load_u64_acquire(pointer: *u64) -> u64 { __atomic_load_u64_explicit(pointer, 1) }
+pub fn atomic_store_u64(pointer: *u64, value: u64) { __atomic_store_u64(pointer, value) }
+pub fn atomic_store_u64_relaxed(pointer: *u64, value: u64) { __atomic_store_u64_explicit(pointer, value, 0) }
+pub fn atomic_store_u64_release(pointer: *u64, value: u64) { __atomic_store_u64_explicit(pointer, value, 2) }
+pub fn atomic_add_u64(pointer: *u64, value: u64) -> u64 { __atomic_fetch_add_u64(pointer, value) }
+pub fn atomic_add_u64_relaxed(pointer: *u64, value: u64) -> u64 { __atomic_fetch_add_u64_explicit(pointer, value, 0) }
+pub fn atomic_add_u64_acquire(pointer: *u64, value: u64) -> u64 { __atomic_fetch_add_u64_explicit(pointer, value, 1) }
+pub fn atomic_add_u64_release(pointer: *u64, value: u64) -> u64 { __atomic_fetch_add_u64_explicit(pointer, value, 2) }
+pub fn atomic_add_u64_acq_rel(pointer: *u64, value: u64) -> u64 { __atomic_fetch_add_u64_explicit(pointer, value, 3) }
+pub fn atomic_sub_u64(pointer: *u64, value: u64) -> u64 { __atomic_fetch_sub_u64(pointer, value) }
+pub fn atomic_sub_u64_relaxed(pointer: *u64, value: u64) -> u64 { __atomic_fetch_sub_u64_explicit(pointer, value, 0) }
+pub fn atomic_sub_u64_acquire(pointer: *u64, value: u64) -> u64 { __atomic_fetch_sub_u64_explicit(pointer, value, 1) }
+pub fn atomic_sub_u64_release(pointer: *u64, value: u64) -> u64 { __atomic_fetch_sub_u64_explicit(pointer, value, 2) }
+pub fn atomic_sub_u64_acq_rel(pointer: *u64, value: u64) -> u64 { __atomic_fetch_sub_u64_explicit(pointer, value, 3) }
+pub fn atomic_cas_u64(pointer: *u64, expected: u64, desired: u64) -> bool { __atomic_compare_exchange_u64(pointer, expected, desired) }
+pub fn atomic_cas_u64_relaxed(pointer: *u64, expected: u64, desired: u64) -> bool { __atomic_compare_exchange_u64_explicit(pointer, expected, desired, 0, 0) }
+pub fn atomic_cas_u64_acquire(pointer: *u64, expected: u64, desired: u64) -> bool { __atomic_compare_exchange_u64_explicit(pointer, expected, desired, 1, 0) }
+pub fn atomic_cas_u64_release(pointer: *u64, expected: u64, desired: u64) -> bool { __atomic_compare_exchange_u64_explicit(pointer, expected, desired, 2, 0) }
+pub fn atomic_cas_u64_acq_rel(pointer: *u64, expected: u64, desired: u64) -> bool { __atomic_compare_exchange_u64_explicit(pointer, expected, desired, 3, 1) }
+pub fn atomic_inc_u64(pointer: *u64) -> u64 { atomic_add_u64(pointer, 1) }
+pub fn atomic_dec_u64(pointer: *u64) -> u64 { atomic_sub_u64(pointer, 1) }
 
-pub fn atomic_store_u64(ptr: *u64, val: u64) {
-    __atomic_store_u64(ptr, val)
-}
+pub fn memory_fence() { __atomic_thread_fence() }
+pub fn memory_fence_acquire() { __atomic_thread_fence_explicit(1) }
+pub fn memory_fence_release() { __atomic_thread_fence_explicit(2) }
+pub fn memory_fence_acq_rel() { __atomic_thread_fence_explicit(3) }
+// Compatibility name: this now emits a full seq_cst fence (stronger than the
+// old compiler-only intent), with identical behavior on both backends.
+pub fn compiler_barrier() { __atomic_thread_fence() }
 
-// ==================== Atomic Arithmetic ====================
-
-// Atomic add, returns old value
-pub fn atomic_add_u32(ptr: *u32, val: u32) -> u32 {
-    return __atomic_fetch_add_u32(ptr, val)
-}
-
-pub fn atomic_add_u64(ptr: *u64, val: u64) -> u64 {
-    return __atomic_fetch_add_u64(ptr, val)
-}
-
-// Atomic sub, returns old value
-pub fn atomic_sub_u32(ptr: *u32, val: u32) -> u32 {
-    return __atomic_fetch_sub_u32(ptr, val)
-}
-
-// Atomic increment
-pub fn atomic_inc_u32(ptr: *u32) -> u32 {
-    return atomic_add_u32(ptr, 1)
-}
-
-// Atomic decrement
-pub fn atomic_dec_u32(ptr: *u32) -> u32 {
-    return atomic_sub_u32(ptr, 1)
-}
-
-// ==================== Atomic Compare-and-Swap ====================
-
-// CAS: compare and swap, returns true if successful
-pub fn atomic_cas_u32(ptr: *u32, expected: u32, desired: u32) -> bool {
-    return __atomic_compare_exchange_u32(ptr, expected, desired)
-}
-
-pub fn atomic_cas_u64(ptr: *u64, expected: u64, desired: u64) -> bool {
-    return __atomic_compare_exchange_u64(ptr, expected, desired)
-}
-
-// ==================== Memory Barriers ====================
-
-// Full memory fence
-pub fn memory_fence() {
-    __atomic_thread_fence()
-}
-
-// Compiler barrier (prevent reordering)
-pub fn compiler_barrier() {
-    asm!("" ::: "memory")
-}
-
-// ==================== Spinlock ====================
-
-pub struct Spinlock {
-    locked: u32,
-}
-
-pub fn spinlock_init(lock: *Spinlock) {
-    atomic_store_u32(&lock.locked, 0)
-}
-
+pub struct Spinlock { locked: u32 }
+pub fn spinlock_init(lock: *Spinlock) { atomic_store_u32_relaxed(&(*lock).locked as *u32, 0); }
 pub fn spinlock_acquire(lock: *Spinlock) {
-    while !atomic_cas_u32(&lock.locked, 0, 1) {
-        // Spin
-    }
+    while !atomic_cas_u32_acquire(&(*lock).locked as *u32, 0, 1) {}
 }
-
-pub fn spinlock_release(lock: *Spinlock) {
-    atomic_store_u32(&lock.locked, 0)
-}
-
-pub fn spinlock_try_acquire(lock: *Spinlock) -> bool {
-    return atomic_cas_u32(&lock.locked, 0, 1)
-}
+pub fn spinlock_release(lock: *Spinlock) { atomic_store_u32_release(&(*lock).locked as *u32, 0); }
+pub fn spinlock_try_acquire(lock: *Spinlock) -> bool { atomic_cas_u32_acquire(&(*lock).locked as *u32, 0, 1) }

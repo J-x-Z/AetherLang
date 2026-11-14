@@ -1,0 +1,1 @@
+fn main() { let mut value: u32 = 0; __atomic_load_u32_explicit(&value as *u32, 2); }

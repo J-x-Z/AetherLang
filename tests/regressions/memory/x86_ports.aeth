@@ -1,0 +1,8 @@
+#![no_main]
+use x86io::{port_in_u8, port_out_u8, port_in_u16, port_out_u16, port_in_u32, port_out_u32};
+@no_mangle
+pub fn device_ping(port: u16) -> u8 {
+    let value: u8 = port_in_u8(port);
+    port_out_u8(port, value);
+    value
+}

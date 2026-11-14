@@ -1,0 +1,30 @@
+// x86-only privileged port I/O. Import explicitly for x86 kernel/driver code;
+// ordinary userspace without I/O permissions must not execute these functions.
+// Kept separate so portable mmio consumers never compile x86 instructions.
+
+pub fn port_in_u8(port: u16) -> u8 {
+    let mut value: u8 = 0;
+    unsafe { asm!("inb %dx, %al", out("a") value, in("d") port); }
+    value
+}
+pub fn port_out_u8(port: u16, value: u8) {
+    unsafe { asm!("outb %al, %dx", in("a") value, in("d") port); }
+}
+
+pub fn port_in_u16(port: u16) -> u16 {
+    let mut value: u16 = 0;
+    unsafe { asm!("inw %dx, %ax", out("a") value, in("d") port); }
+    value
+}
+pub fn port_out_u16(port: u16, value: u16) {
+    unsafe { asm!("outw %ax, %dx", in("a") value, in("d") port); }
+}
+
+pub fn port_in_u32(port: u16) -> u32 {
+    let mut value: u32 = 0;
+    unsafe { asm!("inl %dx, %eax", out("a") value, in("d") port); }
+    value
+}
+pub fn port_out_u32(port: u16, value: u32) {
+    unsafe { asm!("outl %eax, %dx", in("a") value, in("d") port); }
+}

@@ -1,0 +1,43 @@
+use atomic::{atomic_load_u8, atomic_store_u8, atomic_add_u8, atomic_sub_u8, atomic_cas_u8, atomic_load_u16, atomic_store_u16, atomic_add_u16, atomic_sub_u16, atomic_cas_u16, atomic_load_u32, atomic_store_u32, atomic_add_u32, atomic_sub_u32, atomic_cas_u32, atomic_load_u64, atomic_store_u64, atomic_add_u64, atomic_sub_u64, atomic_cas_u64, memory_fence, memory_fence_acquire, memory_fence_release, memory_fence_acq_rel, compiler_barrier, Spinlock, spinlock_init, spinlock_try_acquire, spinlock_release, ORDER_ACQUIRE, ORDER_RELEASE, ORDER_RELAXED, ORDER_ACQ_REL};
+use mmio::{mmio_read_u8, mmio_write_u8, mmio_read_u16, mmio_write_u16, mmio_read_u32, mmio_write_u32, mmio_read_u64, mmio_write_u64, memory_barrier, read_barrier, write_barrier};
+
+fn identity<T>(value: T) -> T { value }
+
+fn main() -> i32 {
+    let mut byte: u8 = 0;
+    let mut word: u16 = 0;
+    let mut dword: u32 = 0;
+    let mut wide: u64 = 0;
+    atomic_store_u8(&byte as *u8, 250);
+    if atomic_add_u8(&byte as *u8, 10) != 250 || atomic_load_u8(&byte as *u8) != 4 { return 1; }
+    if atomic_sub_u8(&byte as *u8, 5) != 4 || atomic_load_u8(&byte as *u8) != 255 { return 2; }
+    if !atomic_cas_u8(&byte as *u8, 255, 7) || atomic_cas_u8(&byte as *u8, 255, 9) { return 3; }
+    atomic_store_u16(&word as *u16, 65530);
+    if atomic_add_u16(&word as *u16, 10) != 65530 || atomic_load_u16(&word as *u16) != 4 { return 4; }
+    if atomic_sub_u16(&word as *u16, 5) != 4 || !atomic_cas_u16(&word as *u16, 65535, 7) { return 5; }
+    atomic_store_u32(&dword as *u32, 4000000000);
+    if atomic_add_u32(&dword as *u32, 7) != 4000000000 || atomic_sub_u32(&dword as *u32, 7) != 4000000007 { return 6; }
+    if !atomic_cas_u32(&dword as *u32, 4000000000, 19) || atomic_load_u32(&dword as *u32) != 19 { return 7; }
+    atomic_store_u64(&wide as *u64, 1234567890123);
+    if atomic_add_u64(&wide as *u64, 7) != 1234567890123 || atomic_sub_u64(&wide as *u64, 7) != 1234567890130 { return 8; }
+    if !atomic_cas_u64(&wide as *u64, 1234567890123, 29) || atomic_load_u64(&wide as *u64) != 29 { return 9; }
+    __atomic_store_u64_explicit(&wide as *u64, 100, ORDER_RELEASE);
+    if __atomic_load_u64_explicit(&wide as *u64, ORDER_ACQUIRE) != 100 { return 10; }
+    if !__atomic_compare_exchange_u64_explicit(&wide as *u64, 100, 107, ORDER_ACQ_REL, ORDER_ACQUIRE) { return 11; }
+    if __atomic_compare_exchange_u64_explicit(&wide as *u64, 100, 99, ORDER_RELAXED, ORDER_RELAXED) { return 12; }
+    if __atomic_fetch_add_u64_explicit(&wide as *u64, 1, ORDER_RELAXED) != 107 { return 13; }
+    mmio_write_u8(&byte as *u8, 73); mmio_write_u16(&word as *u16, 12345);
+    mmio_write_u32(&dword as *u32, 3141592653); mmio_write_u64(&wide as *u64, 1234567890123456);
+    if mmio_read_u8(&byte as *u8) != 73 || mmio_read_u16(&word as *u16) != 12345 { return 14; }
+    if mmio_read_u32(&dword as *u32) != 3141592653 || mmio_read_u64(&wide as *u64) != 1234567890123456 { return 15; }
+    let mut lock: Spinlock = Spinlock { locked: 0 };
+    spinlock_init(&lock as *Spinlock);
+    if !spinlock_try_acquire(&lock as *Spinlock) || spinlock_try_acquire(&lock as *Spinlock) { return 16; }
+    spinlock_release(&lock as *Spinlock);
+    if !spinlock_try_acquire(&lock as *Spinlock) { return 17; }
+    spinlock_release(&lock as *Spinlock);
+    memory_fence(); memory_fence_acquire(); memory_fence_release(); memory_fence_acq_rel();
+    compiler_barrier(); memory_barrier(); read_barrier(); write_barrier();
+    if identity(__atomic_load_u64(&wide as *u64)) != 1234567890123456 { return 18; }
+    return 0;
+}

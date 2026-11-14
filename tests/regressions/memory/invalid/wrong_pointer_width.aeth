@@ -1,0 +1,1 @@
+fn main() { let mut value: u8 = 0; __atomic_load_u64(&value as *u8); }

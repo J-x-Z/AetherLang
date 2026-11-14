@@ -1,0 +1,1 @@
+fn main() { __atomic_thread_fence_explicit(0); }

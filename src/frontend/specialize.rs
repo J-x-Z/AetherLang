@@ -100,6 +100,20 @@ impl Specializer {
                 }
             }
         }
+        // Low-level operations use the same canonical signature inventory as
+        // checking/lowering, so generic inference can consume their results.
+        for name in crate::intrinsics::memory_names() {
+            if let Some(spec) = crate::intrinsics::memory(&name) {
+                let params = spec
+                    .params()
+                    .iter()
+                    .map(intrinsic_type)
+                    .collect::<Option<Vec<_>>>();
+                if let (Some(params), Some(ret)) = (params, intrinsic_type(&spec.result())) {
+                    this.signatures.insert(name, Signature { params, ret });
+                }
+            }
+        }
         Ok(this)
     }
 
@@ -1349,6 +1363,18 @@ impl Specializer {
     }
 }
 
+fn intrinsic_type(ty: &crate::types::ResolvedType) -> Option<Type> {
+    use crate::types::{PrimitiveType as P, ResolvedType as R};
+    let span = Span::dummy();
+    Some(match ty {
+        R::Primitive(P::Unit) => Type::Unit(span),
+        R::Primitive(P::Never) => Type::Never(span),
+        R::Primitive(primitive) => named(&format!("{primitive:?}").to_lowercase(), span),
+        R::Pointer(inner) => Type::Pointer(Box::new(intrinsic_type(inner)?), span),
+        _ => return None,
+    })
+}
+
 fn weak_numeric(expression: &Expr) -> bool {
     match expression {
         Expr::Literal(Literal::Int(..) | Literal::Float(..)) => true,
@@ -1359,7 +1385,7 @@ fn weak_numeric(expression: &Expr) -> bool {
     }
 }
 fn problem(message: &str, span: Span) -> Error {
-    Error::Expected(message.to_string(), span)
+    Error::semantic_expected("E2100", message, span)
 }
 fn named(name: &str, span: Span) -> Type {
     Type::Named(name.to_string(), span)
@@ -1714,5 +1740,10 @@ mod tests {
         assert!(
             matches!(&function(&p,"fallback__spec_").ret_type,Some(Type::Named(n,_)) if n=="i64")
         );
+    }
+    #[test]
+    fn memory_intrinsic_signatures_inform_generic_calls() {
+        let p=compile("fn id<T>(value:T)->T{value} fn main()->i32{let mut value:u64=1; if id(__atomic_load_u64(&value as *u64)) != 1 {return 1;} 0}").unwrap();
+        assert!(matches!(&function(&p,"id__spec_").ret_type, Some(Type::Named(n,_)) if n=="u64"));
     }
 }
