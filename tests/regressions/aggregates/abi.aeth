@@ -1,0 +1,43 @@
+@repr(C) struct Pair { a: i64, b: i64 }
+@repr(C) struct Tiny { a: u8, b: u8, c: u8 }
+@repr(packed) struct Odd { tag: u8, value: i64 }
+@repr(C) struct Floats { values: [f32; 3] }
+@repr(C) struct Doubles { values: [[f64; 2]; 2] }
+@repr(C) struct Large { values: [i64; 3] }
+extern "C" {
+    fn c_pair(value: Pair) -> Pair;
+    fn c_tiny(value: Tiny) -> Tiny;
+    fn c_odd(value: Odd) -> Odd;
+    fn c_floats(value: Floats) -> Floats;
+    fn c_doubles(value: Doubles) -> Doubles;
+    fn c_large(value: Large) -> Large;
+    fn c_spill(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, value: Pair) -> Pair;
+    fn abi_check() -> i32;
+}
+fn aeth_pair(value: Pair) -> Pair { return Pair { a: value.a + 1, b: value.b + 2 }; }
+fn aeth_tiny(value: Tiny) -> Tiny { return Tiny { a: value.a + (1 as u8), b: value.b + (2 as u8), c: value.c + (3 as u8) }; }
+fn aeth_odd(value: Odd) -> Odd { return Odd { tag: value.tag + (1 as u8), value: value.value + 10 }; }
+fn aeth_floats(value: Floats) -> Floats { return Floats { values: [value.values[0] + (1.0 as f32), value.values[1] + (2.0 as f32), value.values[2] + (3.0 as f32)] }; }
+fn aeth_doubles(value: Doubles) -> Doubles { return Doubles { values: [[value.values[0][0] + 1.0, value.values[0][1] + 2.0], [value.values[1][0] + 3.0, value.values[1][1] + 4.0]] }; }
+fn aeth_large(value: Large) -> Large { return Large { values: [value.values[0] + 1, value.values[1] + 2, value.values[2] + 3] }; }
+fn aeth_spill(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, value: Pair) -> Pair { return Pair { a: value.a + a + b + c + d + e + f + g, b: value.b + 2 }; }
+fn main() -> i32 {
+    unsafe {
+        let pair: Pair = c_pair(Pair { a: 10, b: 20 });
+        if pair.a != 11 || pair.b != 22 { return 1; }
+        let tiny: Tiny = c_tiny(Tiny { a: 10, b: 20, c: 30 });
+        if tiny.a != (11 as u8) || tiny.b != (22 as u8) || tiny.c != (33 as u8) { return 2; }
+        let odd: Odd = c_odd(Odd { tag: 10, value: 1000 });
+        if odd.tag != (11 as u8) || odd.value != 1010 { return 3; }
+        let floats: Floats = c_floats(Floats { values: [10.0,20.0,30.0] });
+        if floats.values[0] != (11.0 as f32) || floats.values[1] != (22.0 as f32) || floats.values[2] != (33.0 as f32) { return 4; }
+        let doubles: Doubles = c_doubles(Doubles { values: [[10.0,20.0],[30.0,40.0]] });
+        if doubles.values[0][0] != 11.0 || doubles.values[0][1] != 22.0 || doubles.values[1][0] != 33.0 || doubles.values[1][1] != 44.0 { return 5; }
+        let input: Large = Large { values: [10,20,30] };
+        let output: Large = c_large(input);
+        if input.values[0] != 10 || output.values[0] != 11 || output.values[1] != 22 || output.values[2] != 33 { return 6; }
+        let spill: Pair = c_spill(1,2,3,4,5,6,7,Pair { a:10, b:20 });
+        if spill.a != 38 || spill.b != 22 { return 7; }
+        return abi_check();
+    }
+}

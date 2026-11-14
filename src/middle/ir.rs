@@ -99,8 +99,6 @@ pub struct IRFunction {
     pub name: String,
     pub params: Vec<(String, IRType)>,
     pub ret_type: IRType,
-    /// Original struct return type for sret functions (None if not sret)
-    pub sret_type: Option<IRType>,
     pub blocks: Vec<BasicBlock>,
     pub entry_block: BlockId,
     /// Canonical types assigned by lowering, shared by every backend.
@@ -134,7 +132,6 @@ impl IRFunction {
             name: name.to_string(),
             params,
             ret_type,
-            sret_type: None,
             blocks: Vec::new(),
             entry_block: BlockId(0),
             register_types: std::collections::HashMap::new(),
@@ -226,6 +223,9 @@ pub enum Instruction {
     /// dest = gep ptr, index (with explicit element type for LLVM opaque pointers)
     GetElementPtr { dest: Register, ptr: Value, index: Value, elem_ty: IRType },
     
+    /// Address an element within a fixed array value (two-index GEP).
+    ArrayElementPtr { dest: Register, ptr: Value, index: Value, array_ty: IRType },
+
     /// Address a struct field; distinct from indexing an array of structs.
     GetFieldPtr { dest: Register, ptr: Value, field: usize, struct_ty: IRType },
 

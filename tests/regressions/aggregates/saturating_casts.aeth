@@ -1,0 +1,21 @@
+fn check(x: f64, expected: i64) -> bool { return (x as i64) == expected; }
+fn main() -> i32 {
+    let zero: f64 = 0.0;
+    let nan: f64 = zero / zero;
+    let inf: f64 = 1.0 / zero;
+    let ninf: f64 = -1.0 / zero;
+    if (nan as i64) != 0 || (nan as u64) != (0 as u64) || (nan as i8) != (0 as i8) { return 1; }
+    if !check(inf, 9223372036854775807) || !check(ninf, -9223372036854775807 - 1) { return 2; }
+    if (1.0e20 as i32) != 2147483647 || (-1.0e20 as i32) != (-2147483647 - 1) { return 3; }
+    if (128.0 as i8) != (127 as i8) || (-129.0 as i8) != (-128 as i8) { return 4; }
+    if (256.0 as u8) != (255 as u8) || (-1.0 as u8) != (0 as u8) { return 5; }
+    if (65536.0 as u16) != (65535 as u16) || (32768.0 as i16) != (32767 as i16) { return 6; }
+    if (4294967296.0 as u32) != (-1 as u32) || (18446744073709551616.0 as u64) != (-1 as u64) { return 7; }
+    if (42.9 as i32) != 42 || (-42.9 as i32) != -42 || (-0.5 as u32) != (0 as u32) { return 8; }
+    let f: f32 = 1.0e20 as f32;
+    let fnan: f32 = nan as f32;
+    if (f as i32) != 2147483647 || (fnan as i64) != 0 { return 9; }
+    if (9223372036854775808.0 as i64) != 9223372036854775807 { return 10; }
+    if (9223372036854774784.0 as i64) != 9223372036854774784 { return 11; }
+    return 0;
+}

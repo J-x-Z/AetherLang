@@ -1,0 +1,20 @@
+@repr(packed) struct Packed { lead: u8, value: i64 }
+@repr(packed) struct Nested { lead: u8, packed: Packed, values: [i32; 2] }
+fn copy(value: Packed) -> Packed { return value; }
+fn main() -> i32 {
+    let mut values: [Nested; 2] = [
+        Nested { lead: 0, packed: Packed { lead: 1, value: 42 }, values: [3,4] },
+        Nested { lead: 0, packed: Packed { lead: 2, value: 84 }, values: [5,6] }
+    ];
+    values[1].packed.value = 126;
+    values[1].values[1] = 12;
+    let copied: Packed = copy(values[1].packed);
+    if values[0].packed.value != 42 || copied.value != 126 || copied.lead != (2 as u8) || values[1].values[1] != 12 { return 1; }
+    unsafe {
+        let base: i64 = ((&mut values[0] as *Nested) as i64);
+        let field: i64 = ((&mut values[0].packed.value as *i64) as i64);
+        let next: i64 = ((&mut values[1] as *Nested) as i64);
+        if field - base != 2 || next - base != 18 { return 2; }
+    }
+    return 0;
+}

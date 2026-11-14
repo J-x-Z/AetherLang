@@ -119,6 +119,48 @@ impl CCodeGen {
         result
     }
 
+    fn array_name(ty: &IRType) -> String {
+        fn key(ty: &IRType) -> String {
+            match ty {
+                IRType::Array(elem, len) => format!("a{}_{}", len, key(elem)),
+                IRType::Ptr(elem) => format!("p_{}", key(elem)),
+                IRType::Struct(name) => format!("s{}_{}", name.len(), name),
+                other => format!("{:?}", other).to_lowercase(),
+            }
+        }
+        format!("__aeth_array_{}", key(ty))
+    }
+
+    fn emit_layout(&mut self, ty: &IRType, module: &IRModule, emitted: &mut HashSet<String>) -> Result<()> {
+        match ty {
+            IRType::Ptr(inner) => { // Pointer targets need a tag, but no complete layout.
+                if matches!(inner.as_ref(), IRType::Array(_, _)) {
+                    self.writeln(&format!("struct {};", Self::array_name(inner)));
+                }
+            }
+            IRType::Array(elem, size) => {
+                let name = Self::array_name(ty);
+                if emitted.contains(&name) { return Ok(()); }
+                self.emit_layout(elem, module, emitted)?;
+                self.writeln(&format!("struct {} {{ {} data[{}]; }};", name, self.ir_type_to_c(elem), size));
+                emitted.insert(name);
+            }
+            IRType::Struct(name) => {
+                if emitted.contains(name) { return Ok(()); }
+                let definition = module.structs.iter().find(|d| d.name == *name)
+                    .ok_or_else(|| Error::CodeGen(format!("missing struct layout for {}", name)))?;
+                for (_, field) in &definition.fields { self.emit_layout(field, module, emitted)?; }
+                let attr = if definition.repr == StructRepr::Packed { " __attribute__((packed))" } else { "" };
+                self.writeln(&format!("struct{} {} {{", attr, name));
+                for (name, field) in &definition.fields { self.writeln(&format!("    {} {};", self.ir_type_to_c(field), name)); }
+                self.writeln("};");
+                emitted.insert(name.clone());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Convert IR type to C type
     fn ir_type_to_c(&self, ty: &IRType) -> String {
         match ty {
@@ -134,11 +176,8 @@ impl CCodeGen {
             IRType::U64 => "uint64_t".to_string(),
             IRType::F32 => "float".to_string(),
             IRType::F64 => "double".to_string(),
-            IRType::Ptr(inner) => match inner.as_ref() {
-                IRType::Array(elem, _) => format!("{}*", self.ir_type_to_c(elem)),
-                _ => format!("{}*", self.ir_type_to_c(inner)),
-            },
-            IRType::Array(elem, size) => format!("{}[{}]", self.ir_type_to_c(elem), size),
+            IRType::Ptr(inner) => format!("{}*", self.ir_type_to_c(inner)),
+            IRType::Array(_, _) => format!("struct {}", Self::array_name(ty)),
             IRType::Struct(name) => format!("struct {}", name),
             IRType::Function { params, ret } => {
                 let params_str: Vec<_> = params.iter().map(|p| self.ir_type_to_c(p)).collect();
@@ -262,6 +301,9 @@ impl CCodeGen {
                  if let Some(IRType::Ptr(inner)) = self.get_value_type(ptr) {
                     self.reg_types.insert(*dest, *inner);
                 }
+            }
+            Instruction::ArrayElementPtr { dest, array_ty, .. } => {
+                if let IRType::Array(elem, _) = array_ty { self.reg_types.insert(*dest, IRType::Ptr(elem.clone())); }
             }
             Instruction::GetElementPtr { dest, elem_ty, .. } => {
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(elem_ty.clone())));
@@ -388,6 +430,7 @@ impl CCodeGen {
                     Instruction::Alloca { dest, .. } |
                     Instruction::Load { dest, .. } |
                     Instruction::GetElementPtr { dest, .. } |
+                    Instruction::ArrayElementPtr { dest, .. } |
                     Instruction::GetFieldPtr { dest, .. } |
                     Instruction::Phi { dest, .. } |
                     Instruction::Cast { dest, .. } => {
@@ -624,76 +667,41 @@ impl CCodeGen {
             Instruction::Alloca { dest, ty } => {
                 let var = self.get_var(*dest);
                 let c_type = self.ir_type_to_c(ty);
-                // Fixed arrays decay to their first element; scalar storage keeps its address.
-                if let IRType::Array(elem, size) = ty {
-                    let elem = self.ir_type_to_c(elem);
-                    self.writeln(&format!("{} _alloca_{}[{}];", elem, var, size));
-                    self.writeln(&format!("{} = _alloca_{};", var, var));
-                } else {
-                    self.writeln(&format!("{} _alloca_{};", c_type, var));
-                    self.writeln(&format!("{} = &_alloca_{};", var, var));
-                }
-                
+                self.writeln(&format!("{} _alloca_{};", c_type, var));
+                self.writeln(&format!("{} = &_alloca_{};", var, var));
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty.clone())));
             }
             
             Instruction::Load { dest, ptr, ty } => {
                 let var = self.get_var(*dest);
-                let p = self.value_to_c(ptr);
-
-                // Check if loading from volatile pointer
-                let is_volatile = matches!(ty, IRType::Ptr(inner) if matches!(**inner, IRType::Struct(ref name) if name.contains("volatile")))
-                    || self.is_volatile_type(ty);
-
-                if is_volatile {
-                    self.writeln(&format!("{} = *(volatile typeof({})*){}; /* volatile load */", var, p, p));
-                } else {
-                    self.writeln(&format!("{} = *{};", var, p));
-                }
-
-                if let Some(IRType::Ptr(inner)) = self.get_value_type(ptr) {
-                    self.reg_types.insert(*dest, *inner);
-                }
+                let pointer = self.value_to_c(ptr);
+                // memcpy preserves unaligned packed fields and strict aliasing.
+                self.writeln(&format!("memcpy((void*)&{}, (const void*){}, sizeof({}));", var, pointer, var));
+                self.reg_types.insert(*dest, ty.clone());
             }
-
             Instruction::Store { ptr, value } => {
-                let p = self.value_to_c(ptr);
-                let val = self.value_to_c(value);
-
-                // Check if storing to volatile pointer
-                let ptr_ty = self.get_value_type(ptr);
-                let val_ty = self.get_value_type(value);
-
-                let is_volatile = ptr_ty.as_ref().map(|t| self.is_volatile_type(t)).unwrap_or(false);
-
-                if let (Some(IRType::Ptr(ptr_inner)), Some(IRType::Ptr(val_inner))) = (&ptr_ty, &val_ty) {
-                    // Both are pointers - check if storing struct* to struct field
-                    if let IRType::Struct(_) = &**ptr_inner {
-                        if let IRType::Struct(_) = &**val_inner {
-                            // Dereference the value: *ptr = *val
-                            if is_volatile {
-                                self.writeln(&format!("*(volatile typeof(*{})*)({}) = *{}; /* volatile store */", p, p, val));
-                            } else {
-                                self.writeln(&format!("*{} = *{};", p, val));
-                            }
-                            return Ok(());
-                        }
-                    }
-                }
-
-                if is_volatile {
-                    self.writeln(&format!("*(volatile typeof(*{})*)({}) = {}; /* volatile store */", p, p, val));
-                } else {
-                    self.writeln(&format!("*{} = {};", p, val));
-                }
+                let pointer = self.value_to_c(ptr);
+                let value_str = self.value_to_c(value);
+                let ty = match self.get_value_type(ptr) {
+                    Some(IRType::Ptr(inner)) => *inner,
+                    _ => return Err(Error::CodeGen("store requires pointer type".into())),
+                };
+                self.writeln(&format!("{{ {} _store = {}; memcpy((void*){}, (const void*)&_store, sizeof(_store)); }}", self.ir_type_to_c(&ty), value_str, pointer));
             }
-            
+            Instruction::ArrayElementPtr { dest, ptr, index, array_ty } => {
+                let var = self.get_var(*dest);
+                let p = self.value_to_c(ptr);
+                let idx = self.value_to_c(index);
+                let element = match array_ty { IRType::Array(element, _) => element.as_ref(), _ => return Err(Error::CodeGen("array address requires fixed array".into())) };
+                self.writeln(&format!("{} = (void*)((unsigned char*){} + ({}) * sizeof({}));", var, p, idx, self.ir_type_to_c(element)));
+                if let IRType::Array(elem, _) = array_ty { self.reg_types.insert(*dest, IRType::Ptr(elem.clone())); }
+            }
             Instruction::GetElementPtr { dest, ptr, index, elem_ty } => {
                 let var = self.get_var(*dest);
                 let p = self.value_to_c(ptr);
                 let idx = self.value_to_c(index);
                 let ty = self.ir_type_to_c(elem_ty);
-                self.writeln(&format!("{} = &(({}*){})[{}];", var, ty, p, idx));
+                self.writeln(&format!("{} = (void*)((unsigned char*){} + ({}) * sizeof({}));", var, p, idx, ty));
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(elem_ty.clone())));
             }
             Instruction::GetFieldPtr { dest, ptr, field, struct_ty } => {
@@ -703,7 +711,7 @@ impl CCodeGen {
                 }.ok_or_else(|| Error::CodeGen("invalid struct field address".into()))?;
                 let var = self.get_var(*dest);
                 let p = self.value_to_c(ptr);
-                self.writeln(&format!("{} = &{}->{};", var, p, name));
+                self.writeln(&format!("{} = (void*)((unsigned char*){} + offsetof({}, {}));", var, p, self.ir_type_to_c(struct_ty), name));
                 self.reg_types.insert(*dest, IRType::Ptr(Box::new(ty)));
             }
 
@@ -711,7 +719,17 @@ impl CCodeGen {
                 let var = self.get_var(*dest);
                 let val = self.value_to_c(value);
                 let type_name = self.ir_type_to_c(ty);
-                self.writeln(&format!("{} = ({}){};", var, type_name, val));
+                if matches!(self.get_value_type(value), Some(IRType::F32 | IRType::F64)) && ty.integer_bits().is_some() && *ty != IRType::Bool {
+                    let bits = ty.integer_bits().unwrap();
+                    let signed = ty.is_signed_integer();
+                    let boundary = 2_f64.powi(if signed { bits as i32 - 1 } else { bits as i32 });
+                    let max = if signed { format!("INT{}_MAX", bits) } else { format!("UINT{}_MAX", bits) };
+                    let min = if signed { format!("INT{}_MIN", bits) } else { "0".into() };
+                    let lower = if signed { -boundary } else { 0.0 };
+                    self.writeln(&format!("{} = isnan({}) ? 0 : (({}) >= {:.1} ? {} : (({}) <= {:.1} ? {} : ({})({})));", var, val, val, boundary, max, val, lower, min, type_name, val));
+                } else {
+                    self.writeln(&format!("{} = ({}){};", var, type_name, val));
+                }
                 self.reg_types.insert(*dest, ty.clone());
             }
 
@@ -898,6 +916,7 @@ impl CCodeGen {
         // Header
         self.writeln("/* Generated by AetherLang C Backend */");
         self.writeln("#include <stdint.h>");
+        self.writeln("#include <stddef.h>");
         self.writeln("#include <stdbool.h>");
         self.writeln("#include <stdio.h>");
         self.writeln("#include <stdlib.h>");
@@ -940,23 +959,20 @@ impl CCodeGen {
         // Struct definitions
         self.writeln("/* Struct Definitions */");
         for definition in &module.structs { self.writeln(&format!("struct {};", definition.name)); }
-        for struct_def in &module.structs {
-            // Add GCC attributes based on repr
-            let attr = match struct_def.repr {
-                StructRepr::C => "",  // C layout is default for GCC structs
-                StructRepr::Packed => " __attribute__((packed))",
-                StructRepr::Transparent => "",  // Transparent is a Rust concept, no direct C equivalent
-                StructRepr::Default => "",  // No special attribute
-            };
-            self.writeln(&format!("struct {}{} {{", struct_def.name, attr));
-            for (field_name, field_type) in &struct_def.fields {
-                let c_type = self.ir_type_to_c(field_type);
-                self.writeln(&format!("    {} {};", c_type, field_name));
+        let mut emitted = HashSet::new();
+        for definition in &module.structs { self.emit_layout(&IRType::Struct(definition.name.clone()), module, &mut emitted)?; }
+        for function in &module.functions {
+            for (_, ty) in &function.params { self.emit_layout(ty, module, &mut emitted)?; }
+            self.emit_layout(&function.ret_type, module, &mut emitted)?;
+            for ty in function.register_types.values() {
+                let ty = match ty { IRType::Ptr(inner) => inner.as_ref(), other => other };
+                self.emit_layout(ty, module, &mut emitted)?;
             }
-            self.writeln("};\n");
-            self.writeln("");
         }
-        
+        for function in &module.externs {
+            for (_, ty) in &function.params { self.emit_layout(ty, module, &mut emitted)?; }
+            self.emit_layout(&function.ret_type, module, &mut emitted)?;
+        }
         // Enum definitions (tagged unions)
         self.writeln("/* Enum Definitions (Tagged Unions) */");
         for enum_def in &module.enums {

@@ -1,0 +1,38 @@
+@repr(C) struct Blob { data: [u8; 16], tail: i64 }
+struct Pair { x: i32, y: i32 }
+struct Grid { cells: [[Pair; 2]; 2], tail: i64 }
+fn make() -> [i64; 3] { let values: [i64; 3] = [10,20,30]; return values; }
+fn noise() -> i64 { let values: [i64; 3] = [90,91,92]; return values[2]; }
+fn change(mut_input: [i64; 3]) -> [i64; 3] { let mut copy: [i64; 3] = mut_input; copy[1] = 77; return copy; }
+fn narrow_tail() -> [[i16; 2]; 2] { [[1,2],[3,4]] }
+fn main() -> i32 {
+    let mut a: [i64; 3] = make();
+    let stack_noise: i64 = noise();
+    if a[0] != 10 || a[1] != 20 || a[2] != 30 || stack_noise != 92 { return 1; }
+    let mut b: [i64; 3] = a;
+    b[0] = 99;
+    if a[0] != 10 || b[0] != 99 { return 2; }
+    let c: [i64; 3] = change(a);
+    if a[1] != 20 || c[1] != 77 { return 3; }
+    a = b;
+    b[2] = 55;
+    if a[2] != 30 || b[2] != 55 { return 4; }
+    let mut nested: [[i32; 2]; 2] = [[1,2],[3,4]];
+    let mut nested_copy: [[i32; 2]; 2] = nested;
+    nested_copy[0][1] = 8;
+    if nested[0][1] != 2 || nested[1][0] != 3 || nested[1][1] != 4 || nested_copy[0][1] != 8 { return 5; }
+    let narrow: [[i16; 2]; 2] = narrow_tail();
+    if narrow[0][1] != (2 as i16) || narrow[1][1] != (4 as i16) { return 6; }
+    let mut blob: Blob = Blob { data: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15], tail: 123 };
+    unsafe {
+        let offset: i64 = ((&mut blob.tail as *i64) as i64) - ((&mut blob as *Blob) as i64);
+        if offset != 16 { return 7; }
+    }
+    if blob.data[1] != (1 as u8) || blob.data[15] != (15 as u8) || blob.tail != 123 { return 8; }
+    let pair: Pair = Pair { x: 1, y: 2 };
+    let mut grid: Grid = Grid { cells: [[pair,pair],[pair,pair]], tail: 9 };
+    let mut copy: Grid = grid;
+    copy.cells[1][0].x = 42;
+    if grid.cells[1][0].x != 1 || copy.cells[1][0].x != 42 || copy.tail != 9 { return 9; }
+    return 0;
+}

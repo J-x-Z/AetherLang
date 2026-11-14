@@ -35,15 +35,12 @@ pub struct IRGenerator {
     locals: HashMap<String, (Value, IRType)>,
     /// Addressable storage for lexical locals.
     local_addresses: HashMap<String, Value>,
-    local_aggregates: std::collections::HashSet<String>,
     /// Register type mapping (for temporaries)
     reg_types: HashMap<Register, IRType>,
     /// Struct definitions (name -> fields)
     struct_defs: HashMap<String, Vec<(String, IRType)>>,
-    /// Current function's sret pointer (for struct returns)
-    sret_ptr: Option<Value>,
-    /// Pre-scanned function signatures for forward reference (name -> (ret_type, sret_type))
-    function_signatures: HashMap<String, (IRType, Option<IRType>)>,
+    /// Pre-scanned semantic return types, independent of target calling convention.
+    function_signatures: HashMap<String, IRType>,
     function_parameters: HashMap<String, Vec<IRType>>,
 }
 
@@ -60,10 +57,8 @@ impl IRGenerator {
             loop_targets: Vec::new(),
             locals: HashMap::new(),
             local_addresses: HashMap::new(),
-            local_aggregates: std::collections::HashSet::new(),
             reg_types: HashMap::new(),
             struct_defs: HashMap::new(),
-            sret_ptr: None,
             function_signatures: HashMap::new(),
             function_parameters: HashMap::new(),
         }
@@ -204,15 +199,8 @@ impl IRGenerator {
                     IRType::Void
                 };
                 
-                // Check if this is an sret function (direct struct or pointer-to-struct return)
-                let sret_type = match &ret_type {
-                    IRType::Struct(_) => Some(IRType::Ptr(Box::new(ret_type.clone()))),  // Convert to pointer
-
-                    _ => None,
-                };
-                
                 self.function_parameters.insert(func_name.clone(), func.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect());
-                self.function_signatures.insert(func_name, (ret_type, sret_type));
+                self.function_signatures.insert(func_name, ret_type);
             }
             Item::Impl(impl_block) => {
                 let type_name = &impl_block.target.name;
@@ -224,14 +212,8 @@ impl IRGenerator {
                         IRType::Void
                     };
                     
-                    // Check if this is an sret function (direct struct or pointer-to-struct return)
-                    let sret_type = match &ret_type {
-                        IRType::Struct(_) => Some(IRType::Ptr(Box::new(ret_type.clone()))),
-                        _ => None,
-                    };
-                    
                     self.function_parameters.insert(func_name.clone(), method.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect());
-                    self.function_signatures.insert(func_name, (ret_type, sret_type));
+                    self.function_signatures.insert(func_name, ret_type);
                 }
             }
             Item::Module(m) => {
@@ -361,251 +343,52 @@ impl IRGenerator {
         self.generate_function_with_name(func, &prefixed_name)
     }
 
-    /// Generate IR for a function with a specific name
+    fn generate_function(&mut self, func: &ast::Function) -> Result<()> {
+        self.generate_function_with_name(func, &func.name.name)
+    }
+
+    /// Function IR retains language values. ABI coercion belongs to the backend.
     fn generate_function_with_name(&mut self, func: &ast::Function, name: &str) -> Result<()> {
         if !func.type_params.is_empty() { return Err(crate::utils::Error::CodeGen("generic specialization is not implemented".into())); }
         self.next_register = 0;
         self.locals.clear();
         self.local_addresses.clear();
-        self.local_aggregates.clear();
         self.reg_types.clear();
-        self.sret_ptr = None;
         self.loop_targets.clear();
-
-        // Convert parameters
-        let mut params: Vec<(String, IRType)> = func.params.iter()
-            .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
-            .collect();
-            
-        let ret_type = if let Some(ref ty) = func.ret_type {
-            self.ast_type_to_ir(ty)
-        } else {
-            IRType::Void
-        };
-        
-        // Check if this function returns a struct (sret calling convention)
-        // Both direct struct returns and pointer-to-struct returns use sret
-        let uses_sret = match &ret_type {
-            IRType::Struct(_) => true,  // Direct struct return
-            _ => false,
-        };
-        // Debug: panic on specific function to confirm sret detection
-        if name == "config_default" {
-        }
-        
-        // For sret functions, convert return type to pointer and add as first param
-        let sret_ret_type = if uses_sret && !matches!(&ret_type, IRType::Ptr(_)) {
-            // Direct struct -> convert to pointer
-            IRType::Ptr(Box::new(ret_type.clone()))
-        } else {
-            ret_type.clone()
-        };
-        
-        // For sret functions, add implicit sret parameter at position 0
-        // and change return type to void
-        let actual_ret_type = if uses_sret {
-            // Insert sret pointer as first parameter
-            params.insert(0, ("__sret".to_string(), sret_ret_type.clone()));
-            IRType::Void
-        } else {
-            ret_type.clone()
-        };
-
-        let mut ir_func = IRFunction::new(name, params.clone(), actual_ret_type);
-        // Mark as sret function if it returns a struct
-        if uses_sret {
-            ir_func.sret_type = Some(sret_ret_type.clone());
-        }
-        let entry_block = ir_func.add_block("entry");
-        self.current_block = entry_block;
-
-        // Register parameters
-        for (i, (param_name, ty)) in params.iter().enumerate() {
-            let reg = self.alloc_register();
-            
-            // Assign param to register (pseudo-instruction for valid SSA start)
-            if let Some(block) = ir_func.get_block_mut(entry_block) {
-                block.push(Instruction::Assign {
-                    dest: reg,
-                    value: Value::Parameter(i),
-                });
-            }
-            
-            self.locals.insert(param_name.clone(), (Value::Register(reg), ty.clone()));
-            self.reg_types.insert(reg, ty.clone());
-            
-            // If this is the sret parameter, save its value
-            if uses_sret && param_name == "__sret" {
-                self.sret_ptr = Some(Value::Register(reg));
-            }
-        }
-
-        self.current_fn = Some(ir_func);
-        for (name, (value, ty)) in self.locals.clone() {
-            let address = self.allocate_local(&ty, Some(value));
-            if matches!(ty, IRType::Struct(_)) { self.local_aggregates.insert(name.clone()); }
-            self.local_addresses.insert(name, address);
-        }
-
-        // Generate function body
-        let last_value = self.generate_block(&func.body)?;
-
-        let last_value = self.prepare_implicit_return(last_value)?;
-        // Add implicit return if needed (same as generate_function)
-        if let Some(ref mut ir_func) = self.current_fn {
-            let ret_type = ir_func.ret_type.clone();
-            if let Some(block) = ir_func.get_block_mut(self.current_block) {
-                if block.terminator.is_none() {
-                    // Void functions always return void, regardless of last_value
-                    if ret_type == IRType::Void {
-                        block.set_terminator(Terminator::Return { value: None });
-                    } else if let Some(val) = last_value {
-                        // Use last expression value as implicit return
-                        block.set_terminator(Terminator::Return { value: Some(val) });
-                    } else {
-                        // For non-void functions without value, add unreachable
-                        block.set_terminator(Terminator::Unreachable);
-                    }
-                }
-            }
-        }
-
-        // Finalize function
-        let mut ir_func = self.current_fn.take().unwrap();
-        ir_func.register_types = self.reg_types.clone();
-        self.module.functions.push(ir_func);
-        Ok(())
-    }
-
-    /// Generate IR for a function
-    fn generate_function(&mut self, func: &ast::Function) -> Result<()> {
-        if !func.type_params.is_empty() { return Err(crate::utils::Error::CodeGen("generic specialization is not implemented".into())); }
-        self.next_register = 0;
-        self.locals.clear();
-        self.local_addresses.clear();
-        self.local_aggregates.clear();
-        self.reg_types.clear();
-        self.sret_ptr = None;
-        self.loop_targets.clear();
-
-        // Convert parameters
-        let mut params: Vec<(String, IRType)> = func.params.iter()
-            .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
-            .collect();
-            
-        let ret_type = if let Some(ref ty) = func.ret_type {
-            self.ast_type_to_ir(ty)
-        } else {
-            IRType::Void
-        };
-
-        // Check if this function returns a struct (sret calling convention)
-        let uses_sret = match &ret_type {
-            IRType::Struct(_) => true,
-            _ => false,
-        };
-        
-        // For sret functions, convert return type to pointer if needed
-        let sret_ret_type = if uses_sret && !matches!(&ret_type, IRType::Ptr(_)) {
-            IRType::Ptr(Box::new(ret_type.clone()))
-        } else {
-            ret_type.clone()
-        };
-        
-        // For sret functions, add implicit sret parameter and change return type
-        let actual_ret_type = if uses_sret {
-            params.insert(0, ("__sret".to_string(), sret_ret_type.clone()));
-            IRType::Void
-        } else {
-            ret_type.clone()
-        };
-
-        // The resolver owns names. Re-mangling here breaks imported calls.
-        let func_name = func.name.name.clone();
-
-        let mut ir_func = IRFunction::new(&func_name, params.clone(), actual_ret_type);
-
-        
-        // Mark as sret function
-        if uses_sret {
-            ir_func.sret_type = Some(sret_ret_type.clone());
-        }
-        
-        // Check for function annotations (@simd, @naked, @interrupt, @volatile, @gpu)
+        let params: Vec<_> = func.params.iter().map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty))).collect();
+        let ret_type = func.ret_type.as_ref().map(|ty| self.ast_type_to_ir(ty)).unwrap_or(IRType::Void);
+        let mut ir_func = IRFunction::new(name, params.clone(), ret_type);
         for annotation in &func.annotations {
             match annotation.name.name.as_str() {
                 "simd" => ir_func.simd = true,
                 "naked" => ir_func.naked = true,
                 "interrupt" => ir_func.interrupt = true,
                 "volatile" => ir_func.volatile = true,
-                "gpu" => {
-                    // Mark function as GPU kernel (for future CUDA/Metal codegen)
-                    // Currently just adds a comment in C output
-                }
                 _ => {}
             }
         }
-        
-        let entry_block = ir_func.add_block("entry");
-        self.current_block = entry_block;
-
-        // Register parameters
-        for (i, (name, ty)) in params.iter().enumerate() {
-            let reg = self.alloc_register();
-            
-            // Assign param to register (pseudo-instruction for valid SSA start)
-            if let Some(block) = ir_func.get_block_mut(entry_block) {
-                block.push(Instruction::Assign {
-                    dest: reg,
-                    value: Value::Parameter(i),
-                });
-            }
-            
-            // Track sret pointer if this is the __sret parameter
-            if name == "__sret" {
-                self.sret_ptr = Some(Value::Register(reg));
-            }
-            
-            self.locals.insert(name.clone(), (Value::Register(reg), ty.clone()));
-            self.reg_types.insert(reg, ty.clone());
-        }
-
+        self.current_block = ir_func.add_block("entry");
         self.current_fn = Some(ir_func);
-        for (name, (value, ty)) in self.locals.clone() {
-            let address = self.allocate_local(&ty, Some(value));
-            if matches!(ty, IRType::Struct(_)) { self.local_aggregates.insert(name.clone()); }
+        for (index, (name, ty)) in params.into_iter().enumerate() {
+            let reg = self.alloc_register();
+            self.emit_current_with_type(Instruction::Assign { dest: reg, value: Value::Parameter(index) }, ty.clone());
+            let address = self.allocate_local(&ty, Some(Value::Register(reg)));
+            self.locals.insert(name.clone(), (address.clone(), ty));
             self.local_addresses.insert(name, address);
         }
-
-        // Generate body
         let last_value = self.generate_block(&func.body)?;
-
         let last_value = self.prepare_implicit_return(last_value)?;
-        // Add implicit return if needed
-        if let Some(ref mut ir_func) = self.current_fn {
-            let ret_type = ir_func.ret_type.clone();
-            if let Some(block) = ir_func.get_block_mut(self.current_block) {
-                if block.terminator.is_none() {
-                    // Only add return void for void functions
-                    if ret_type == IRType::Void {
-                        block.set_terminator(Terminator::Return { value: None });
-                    } else if let Some(val) = last_value {
-                        // Use last expression value as implicit return
-                        block.set_terminator(Terminator::Return { value: Some(val) });
-                    } else {
-                        // For non-void functions without value, add unreachable
-                        block.set_terminator(Terminator::Unreachable);
-                    }
-                }
-            }
+        if self.get_current_terminator().is_none() {
+            let ty = self.current_fn.as_ref().unwrap().ret_type.clone();
+            self.set_terminator_current(if ty == IRType::Void {
+                Terminator::Return { value: None }
+            } else if let Some(value) = last_value {
+                Terminator::Return { value: Some(value) }
+            } else { Terminator::Unreachable });
         }
-
-        // Finalize function
-        if let Some(mut ir_func) = self.current_fn.take() {
-            ir_func.register_types = self.reg_types.clone();
-            self.module.functions.push(ir_func);
-        }
-
+        let mut function = self.current_fn.take().unwrap();
+        function.register_types = self.reg_types.clone();
+        self.module.functions.push(function);
         Ok(())
     }
 
@@ -614,14 +397,12 @@ impl IRGenerator {
         let mut last_value = None;
         let saved_locals = self.locals.clone();
         let saved_addresses = self.local_addresses.clone();
-        let saved_aggregates = self.local_aggregates.clone();
         for stmt in &block.stmts {
             if self.get_current_terminator().is_some() { break; }
             last_value = self.generate_stmt(stmt)?;
         }
         self.locals = saved_locals;
         self.local_addresses = saved_addresses;
-        self.local_aggregates = saved_aggregates;
         Ok(last_value)
     }
 
@@ -629,30 +410,9 @@ impl IRGenerator {
     fn generate_stmt(&mut self, stmt: &ast::Stmt) -> Result<Option<Value>> {
         match stmt {
             Stmt::Let { name, value, ty: type_annotation, .. } => {
-                let mut val = match value.as_ref() {
-                    Some(Expr::Array { elements, .. }) => {
-                        let element_type = type_annotation.as_ref().and_then(|ty| self.array_element_type(ty));
-                        Some(self.generate_array(elements, element_type)?)
-                    }
-                    _ => value.as_ref().map(|expr| self.generate_expr(expr)).transpose()?,
-                };
-                self.local_aggregates.remove(&name.name);
-                let mut var_type = val.as_ref().and_then(|v| self.get_value_type(v)).unwrap_or(IRType::I64);
-                if let Some(ty) = type_annotation {
-                    let declared = self.ast_type_to_ir(ty);
-                    if let IRType::Struct(_) = &declared {
-                        self.local_aggregates.insert(name.name.clone());
-                        if let Some(source) = val {
-                            let copy = self.load_address(source, declared.clone());
-                            let address = self.allocate_local(&declared, Some(copy));
-                            val = Some(address);
-                            var_type = IRType::Ptr(Box::new(declared));
-                        }
-                    } else if !matches!(declared, IRType::Array(_, _)) {
-                        if let Some(v) = val { val = Some(self.coerce_value(v, &declared)); }
-                        var_type = declared;
-                    }
-                }
+                let declared = type_annotation.as_ref().map(|ty| self.ast_type_to_ir(ty));
+                let val = value.as_ref().map(|expr| self.generate_expr_expected(expr, declared.as_ref())).transpose()?;
+                let var_type = declared.or_else(|| val.as_ref().and_then(|v| self.get_value_type(v))).unwrap_or(IRType::I64);
                 let address = self.allocate_local(&var_type, val);
                 self.locals.insert(name.name.clone(), (address.clone(), var_type));
                 self.local_addresses.insert(name.name.clone(), address);
@@ -670,33 +430,8 @@ impl IRGenerator {
             }
 
             Stmt::Return { value, .. } => {
-                // Check if this is an sret function (void return type but sret_type is Some)
-                let is_sret = if let Some(func) = &self.current_fn {
-                    func.ret_type == IRType::Void && func.sret_type.is_some()
-                } else {
-                    false
-                };
-                
-                if is_sret {
-                    let expr = value.as_ref().ok_or_else(|| crate::utils::Error::CodeGen("struct return requires a value".into()))?;
-                    let value = self.generate_expr(expr)?;
-                    self.copy_to_return_slot(value)?;
-                    self.set_terminator_current(Terminator::Return { value: None });
-                    return Ok(None);
-                }
-
-                let ret_val = if let Some(expr) = value {
-                    let mut val = self.generate_expr(expr)?;
-                    
-                    if let Some(func) = &self.current_fn {
-                        let expected_ty = func.ret_type.clone();
-                        val = self.coerce_value(val, &expected_ty);
-                    }
-                    Some(val)
-                } else {
-                    None
-                };
-                
+                let expected = self.current_fn.as_ref().unwrap().ret_type.clone();
+                let ret_val = value.as_ref().map(|expr| self.generate_expr_expected(expr, Some(&expected))).transpose()?;
                 self.set_terminator_current(Terminator::Return { value: ret_val });
                 Ok(None)
             }
@@ -728,7 +463,6 @@ impl IRGenerator {
             Expr::Ident(ident) => {
                 if let Some((val, ty)) = self.locals.get(&ident.name).cloned() {
                     if let Some(address) = self.local_addresses.get(&ident.name).cloned() {
-                        if matches!(ty, IRType::Struct(_)) { return Ok(address); }
                         return Ok(self.load_address(address, ty));
                     }
                     Ok(val)
@@ -882,7 +616,7 @@ impl IRGenerator {
                     .unwrap_or_default();
                 let variadic = external.as_ref().map(|e| e.variadic).unwrap_or(false);
                 for (i, arg) in args.iter().enumerate() {
-                    let mut val = self.generate_expr(arg)?;
+                    let mut val = self.generate_expr_expected(arg, param_types.get(i))?;
                     if let Some(expected) = param_types.get(i) {
                         val = self.coerce_value(val, expected);
                     } else if variadic {
@@ -901,49 +635,22 @@ impl IRGenerator {
                     arg_vals.push(val);
                 }
 
-                // Get return type and sret type from pre-scanned signatures first
-                let (ret_type, sret_type) = self.function_signatures.get(&func_name)
+                // Resolve the semantic return type.
+                let ret_type = self.function_signatures.get(&func_name)
                     .cloned()
                     .or_else(|| {
                         self.module.functions.iter()
                             .find(|f| f.name == func_name)
-                            .map(|f| (f.ret_type.clone(), f.sret_type.clone()))
+                            .map(|f| f.ret_type.clone())
                     })
                     .unwrap_or_else(|| {
                         self.module.externs.iter()
                             .find(|e| e.name == func_name)
-                            .map(|e| (e.ret_type.clone(), None))
-                            .unwrap_or((IRType::I64, None))
+                            .map(|e| e.ret_type.clone())
+                            .unwrap_or(IRType::I64)
                     });
                 
-                // Check if this is an sret function
-                if let Some(sret_ty) = sret_type {
-                    // sret convention: caller allocates, passes pointer as first arg
-                    let sret_ptr = self.alloc_register();
-                    if let IRType::Ptr(inner) = &sret_ty {
-                        if let IRType::Struct(struct_name) = inner.as_ref() {
-                            let struct_ty = IRType::Struct(struct_name.clone());
-                            self.emit_current_with_type(
-                                Instruction::Alloca { dest: sret_ptr, ty: struct_ty },
-                                sret_ty.clone()
-                            );
-                        }
-                    }
-                    
-                    // Insert sret pointer as first argument
-                    let mut sret_args = vec![Value::Register(sret_ptr)];
-                    sret_args.extend(arg_vals);
-                    
-                    // Call function (returns void, writes to sret pointer)
-                    self.emit_current_with_type(Instruction::Call {
-                        dest: None,
-                        func: func_name,
-                        args: sret_args,
-                    }, IRType::Void);
-                    
-                    // Return the caller-allocated pointer
-                    Ok(Value::Register(sret_ptr))
-                } else if ret_type == IRType::Void {
+                if ret_type == IRType::Void {
                     // Regular void function
                     self.emit_current_with_type(Instruction::Call {
                         dest: None,
@@ -1034,16 +741,13 @@ impl IRGenerator {
 
             Expr::Field { .. } | Expr::Index { .. } | Expr::Deref { .. } => {
                 let (address, ty) = self.generate_place(expr)?;
-                if matches!(ty, IRType::Struct(_)) { Ok(address) }
-                else { Ok(self.load_address(address, ty)) }
+                Ok(self.load_address(address, ty))
             }
 
             Expr::StructLit { name, fields, .. } => {
                 let struct_type = IRType::Struct(name.name.clone());
                 
-                // Every literal has its own storage. A return copies the selected
-                // value to the caller's result slot, so unrelated literals cannot
-                // overwrite it and pointers to structs keep their ordinary ABI.
+                // Construct in private storage, then produce a true aggregate value.
                 let ptr_val = self.allocate_local(&struct_type, None);
 
                 let struct_fields = self.struct_defs.get(&name.name).cloned().ok_or_else(|| crate::utils::Error::UndefinedType {
@@ -1059,8 +763,7 @@ impl IRGenerator {
                               field: field_name.name.clone(),
                           })?;
                           
-                     let field_val = self.generate_expr(field_expr)?;
-                     let field_val = self.coerce_value(field_val, &field_ty);
+                     let field_val = self.generate_expr_expected(field_expr, Some(field_ty))?;
                      let field_ptr = self.alloc_register();
                      
                      self.emit_current_with_type(Instruction::GetFieldPtr {
@@ -1076,7 +779,7 @@ impl IRGenerator {
                      });
                 }
                 
-                Ok(ptr_val)
+                Ok(self.load_address(ptr_val, struct_type))
             }
             
             Expr::Loop { body, .. } => {
@@ -1181,7 +884,6 @@ impl IRGenerator {
                     let guard = if arm.guard.is_some() { self.add_block("match_guard") } else { body };
                     let saved_locals = self.locals.clone();
                     let saved_addresses = self.local_addresses.clone();
-                    let saved_aggregates = self.local_aggregates.clone();
                     match &arm.pattern {
                         ast::Pattern::Literal(literal) => {
                             let literal = self.generate_literal(literal);
@@ -1218,7 +920,6 @@ impl IRGenerator {
                     }
                     self.locals = saved_locals;
                     self.local_addresses = saved_addresses;
-                    self.local_aggregates = saved_aggregates;
                     self.current_block = next;
                 }
                 self.current_block = miss;
@@ -1262,8 +963,8 @@ impl IRGenerator {
                  } else {
                      // General method call: receiver.method(args...) 
                      // -> Struct_method(&receiver, args...)
-                     let receiver_val = self.generate_expr(receiver)?;
-                     let receiver_ty = self.get_value_type(&receiver_val);
+                     let (receiver_address, receiver_type) = self.address_or_temporary(receiver)?;
+                     let receiver_ty = Some(receiver_type.clone());
                      
                      // Determine struct name from receiver type
                      let struct_name = match &receiver_ty {
@@ -1284,46 +985,27 @@ impl IRGenerator {
                          let func_name = format!("{}_{}", struct_name, method.name);
                          
                          // Generate arg values
-                         let mut arg_vals = vec![receiver_val]; // self as first arg
-                         for arg in args {
-                             arg_vals.push(self.generate_expr(arg)?);
+                         let parameters = self.function_parameters.get(&func_name).cloned().unwrap_or_default();
+                         let receiver_val = if parameters.first() == Some(&IRType::Ptr(Box::new(receiver_type.clone()))) {
+                             receiver_address
+                         } else { self.load_address(receiver_address, receiver_type) };
+                         let mut arg_vals = vec![receiver_val];
+                         for (index, arg) in args.iter().enumerate() {
+                             arg_vals.push(self.generate_expr_expected(arg, parameters.get(index + 1))?);
                          }
                          
-                         // Look up function return type and sret info from pre-scanned signatures
-                         let (ret_type, sret_type) = self.function_signatures.get(&func_name)
+                         // Resolve the semantic return type.
+                         let ret_type = self.function_signatures.get(&func_name)
                              .cloned()
                              .or_else(|| {
                                  // Fallback to module.functions if not in signatures
                                  self.module.functions.iter()
                                      .find(|f| f.name == func_name)
-                                     .map(|f| (f.ret_type.clone(), f.sret_type.clone()))
+                                     .map(|f| f.ret_type.clone())
                              })
-                             .unwrap_or((IRType::Void, None));
+                             .unwrap_or(IRType::Void);
                          
-                         // Check if this is an sret function
-                         if let Some(sret_ty) = sret_type {
-                             let sret_ptr = self.alloc_register();
-                             if let IRType::Ptr(inner) = &sret_ty {
-                                 if let IRType::Struct(s_name) = inner.as_ref() {
-                                     let struct_ty = IRType::Struct(s_name.clone());
-                                     self.emit_current_with_type(
-                                         Instruction::Alloca { dest: sret_ptr, ty: struct_ty },
-                                         sret_ty.clone()
-                                     );
-                                 }
-                             }
-                             
-                             let mut sret_args = vec![Value::Register(sret_ptr)];
-                             sret_args.extend(arg_vals);
-                             
-                             self.emit_current_with_type(Instruction::Call {
-                                 dest: None,
-                                 func: func_name,
-                                 args: sret_args,
-                             }, IRType::Void);
-                             
-                             Ok(Value::Register(sret_ptr))
-                         } else if ret_type == IRType::Void {
+                         if ret_type == IRType::Void {
                              // Void return
                              self.emit_current_with_type(Instruction::Call {
                                  dest: None,
@@ -1421,45 +1103,36 @@ impl IRGenerator {
             || matches!(expr, Expr::Unary { op: ast::UnOp::Neg, expr, .. } if Self::numeric_literal(expr))
     }
 
+    fn generate_expr_expected(&mut self, expr: &Expr, expected: Option<&IRType>) -> Result<Value> {
+        if let (Expr::Array { elements, .. }, Some(IRType::Array(element, size))) = (expr, expected) {
+            if elements.len() != *size { return Err(crate::utils::Error::CodeGen("array length mismatch".into())); }
+            return self.generate_array(elements, Some((**element).clone()));
+        }
+        let value = self.generate_expr(expr)?;
+        Ok(match expected { Some(ty) => self.coerce_value(value, ty), None => value })
+    }
+
     fn generate_array(&mut self, elements: &[Expr], expected: Option<IRType>) -> Result<Value> {
         let mut values = Vec::new();
-        for element in elements { values.push(self.generate_expr(element)?); }
+        for element in elements { values.push(self.generate_expr_expected(element, expected.as_ref())?); }
         let ty = expected.or_else(|| values.first().and_then(|v| self.get_value_type(v)))
             .ok_or_else(|| crate::utils::Error::CodeGen("empty array requires an element type".into()))?;
-        let storage = self.allocate_local(&IRType::Array(Box::new(ty.clone()), values.len()), None);
+        let array_ty = IRType::Array(Box::new(ty.clone()), values.len());
+        let storage = self.allocate_local(&array_ty, None);
         for (index, value) in values.into_iter().enumerate() {
             let value = self.coerce_value(value, &ty);
             let dest = self.alloc_register();
-            self.emit_current_with_type(Instruction::GetElementPtr {
-                dest, ptr: storage.clone(), index: Value::Constant(Constant::Int(index as i64)), elem_ty: ty.clone(),
+            self.emit_current_with_type(Instruction::ArrayElementPtr {
+                dest, ptr: storage.clone(), index: Value::Constant(Constant::Int(index as i64)), array_ty: array_ty.clone(),
             }, IRType::Ptr(Box::new(ty.clone())));
             self.emit_current(Instruction::Store { ptr: Value::Register(dest), value });
         }
-        // Array expressions decay to an element pointer in the current IR.
-        let dest = self.alloc_register();
-        let pointer_type = IRType::Ptr(Box::new(ty));
-        self.emit_current_with_type(Instruction::Cast { dest, value: storage, ty: pointer_type.clone() }, pointer_type);
-        Ok(Value::Register(dest))
-    }
-
-    fn copy_to_return_slot(&mut self, value: Value) -> Result<()> {
-        let (target, ty) = match (&self.sret_ptr, self.current_fn.as_ref().and_then(|f| f.sret_type.clone())) {
-            (Some(target), Some(IRType::Ptr(ty))) => (target.clone(), *ty),
-            _ => return Err(crate::utils::Error::CodeGen("missing struct return slot".into())),
-        };
-        let aggregate = self.load_address(value, ty);
-        self.emit_current(Instruction::Store { ptr: target, value: aggregate });
-        Ok(())
+        Ok(self.load_address(storage, array_ty))
     }
 
     fn prepare_implicit_return(&mut self, value: Option<Value>) -> Result<Option<Value>> {
         if self.get_current_terminator().is_some() { return Ok(value); }
-        let function = self.current_fn.as_ref().unwrap();
-        if function.sret_type.is_some() {
-            if let Some(value) = value { self.copy_to_return_slot(value)?; }
-            return Ok(None);
-        }
-        let ty = function.ret_type.clone();
+        let ty = self.current_fn.as_ref().unwrap().ret_type.clone();
         Ok(value.map(|value| self.coerce_value(value, &ty)))
     }
 
@@ -1485,12 +1158,6 @@ impl IRGenerator {
                 let address = self.local_addresses.get(&name.name).cloned()
                     .ok_or_else(|| crate::utils::Error::CodeGen(format!("'{}' has no addressable storage", name.name)))?;
                 let ty = self.locals.get(&name.name).unwrap().1.clone();
-                if self.local_aggregates.contains(&name.name) {
-                    if let IRType::Ptr(inner) = &ty {
-                        let ptr = self.load_address(address, ty.clone());
-                        return Ok((ptr, (**inner).clone()));
-                    }
-                }
                 Ok((address, ty))
             }
             Expr::Deref { expr, .. } => {
@@ -1501,44 +1168,33 @@ impl IRGenerator {
                 }
             }
             Expr::Index { expr, index, .. } => {
-                let ptr = self.generate_expr(expr)?;
+                let (base, base_ty) = self.address_or_temporary(expr)?;
                 let index = self.generate_expr(index)?;
-                let ty = match self.get_value_type(&ptr) {
-                    Some(IRType::Ptr(ty)) => match *ty {
-                        IRType::Array(element, _) => *element,
-                        ty => ty,
-                    },
+                let dest = self.alloc_register();
+                let (instruction, ty) = match base_ty {
+                    IRType::Array(element, size) => {
+                        let ty = *element;
+                        (Instruction::ArrayElementPtr { dest, ptr: base, index, array_ty: IRType::Array(Box::new(ty.clone()), size) }, ty)
+                    }
+                    IRType::Ptr(element) => {
+                        let ptr = self.load_address(base, IRType::Ptr(element.clone()));
+                        let ty = *element;
+                        (Instruction::GetElementPtr { dest, ptr, index, elem_ty: ty.clone() }, ty)
+                    }
                     _ => return Err(crate::utils::Error::CodeGen("index requires an array or pointer".into())),
                 };
-                let dest = self.alloc_register();
-                self.emit_current_with_type(Instruction::GetElementPtr {
-                    dest, ptr, index, elem_ty: ty.clone(),
-                }, IRType::Ptr(Box::new(ty.clone())));
+                self.emit_current_with_type(instruction, IRType::Ptr(Box::new(ty.clone())));
                 Ok((Value::Register(dest), ty))
             }
             Expr::Field { expr: base, field, .. } => {
-                let (mut ptr, mut ptr_ty) = if let Expr::Deref { expr, .. } = base.as_ref() {
-                    let ptr = self.generate_expr(expr)?;
-                    let ty = self.get_value_type(&ptr);
-                    (ptr, ty)
-                } else {
-                    let ptr = self.generate_expr(base)?;
-                    let ty = self.get_value_type(&ptr);
-                    (ptr, ty)
-                };
-                if let Some(IRType::Ptr(inner)) = &ptr_ty {
-                    if matches!(inner.as_ref(), IRType::Ptr(_)) {
-                        let ty = (**inner).clone();
-                        ptr = self.load_address(ptr, ty.clone());
-                        ptr_ty = Some(ty);
-                    }
+                let (mut ptr, mut ty) = self.address_or_temporary(base)?;
+                while let IRType::Ptr(inner) = ty {
+                    ptr = self.load_address(ptr, IRType::Ptr(inner.clone()));
+                    ty = *inner;
                 }
-                let name = match ptr_ty {
-                    Some(IRType::Ptr(inner)) => match *inner {
-                        IRType::Struct(name) => name,
-                        _ => return Err(crate::utils::Error::CodeGen("field access requires a struct".into())),
-                    },
-                    _ => return Err(crate::utils::Error::CodeGen("field access requires addressable struct storage".into())),
+                let name = match ty {
+                    IRType::Struct(name) => name,
+                    _ => return Err(crate::utils::Error::CodeGen("field access requires a struct".into())),
                 };
                 let (index, ty) = self.struct_defs.get(&name)
                     .and_then(|fields| fields.iter().enumerate().find(|(_, (n, _))| *n == field.name))
@@ -1554,12 +1210,36 @@ impl IRGenerator {
         }
     }
 
+    /// Addressable expressions retain their storage; temporaries get a private value copy.
+    fn address_or_temporary(&mut self, expr: &Expr) -> Result<(Value, IRType)> {
+        if matches!(expr, Expr::Ident(_) | Expr::Deref { .. } | Expr::Index { .. } | Expr::Field { .. }) {
+            return self.generate_place(expr);
+        }
+        let value = self.generate_expr(expr)?;
+        let ty = self.get_value_type(&value).ok_or_else(|| crate::utils::Error::CodeGen("unknown temporary type".into()))?;
+        Ok((self.allocate_local(&ty, Some(value)), ty))
+    }
+
     /// Preserve the declared scalar width through IR, rather than letting the
     /// backends independently infer a local's type from an untyped literal.
     fn coerce_value(&mut self, value: Value, ty: &IRType) -> Value {
         if let Some(actual) = self.get_value_type(&value) {
-            if let (IRType::Ptr(inner), IRType::Struct(_)) = (&actual, ty) {
-                if inner.as_ref() == ty { return self.load_address(value, ty.clone()); }
+
+            if let (IRType::Array(from, n), IRType::Array(to, m)) = (&actual, ty) {
+                if n == m && from != to {
+                    let source = self.allocate_local(&actual, Some(value));
+                    let target = self.allocate_local(ty, None);
+                    for i in 0..*n {
+                        let src = self.alloc_register();
+                        self.emit_current_with_type(Instruction::ArrayElementPtr { dest: src, ptr: source.clone(), index: Value::Constant(Constant::Int(i as i64)), array_ty: actual.clone() }, IRType::Ptr(from.clone()));
+                        let element = self.load_address(Value::Register(src), (**from).clone());
+                        let element = self.coerce_value(element, to);
+                        let dst = self.alloc_register();
+                        self.emit_current_with_type(Instruction::ArrayElementPtr { dest: dst, ptr: target.clone(), index: Value::Constant(Constant::Int(i as i64)), array_ty: ty.clone() }, IRType::Ptr(to.clone()));
+                        self.emit_current(Instruction::Store { ptr: Value::Register(dst), value: element });
+                    }
+                    return self.load_address(target, ty.clone());
+                }
             }
             if actual != *ty && ((Self::is_integer_type(&actual) && Self::is_integer_type(ty))
                 || matches!((&actual, ty), (IRType::F32 | IRType::F64, IRType::F32 | IRType::F64))) {
@@ -1632,6 +1312,7 @@ impl IRGenerator {
                Instruction::Alloca { dest, .. } | 
                Instruction::Load { dest, .. } | 
                Instruction::GetElementPtr { dest, .. } |
+               Instruction::ArrayElementPtr { dest, .. } |
                Instruction::GetFieldPtr { dest, .. } |
                Instruction::Cast { dest, .. } |
                Instruction::Phi { dest, .. } = &inst {
@@ -1768,7 +1449,7 @@ impl IRGenerator {
                 P::F32 => IRType::F32, P::F64 => IRType::F64, P::Bool => IRType::Bool, P::Unit | P::Never => IRType::Void,
             },
             ResolvedType::Pointer(inner) | ResolvedType::Reference { inner, .. } => IRType::Ptr(Box::new(Self::resolved_type_to_ir(inner)?)),
-            ResolvedType::Array { elem, .. } => IRType::Ptr(Box::new(Self::resolved_type_to_ir(elem)?)),
+            ResolvedType::Array { elem, size } => IRType::Array(Box::new(Self::resolved_type_to_ir(elem)?), *size),
             ResolvedType::Struct { name, .. } | ResolvedType::Enum { name } => IRType::Struct(name.clone()),
             ResolvedType::String => IRType::Ptr(Box::new(IRType::U8)),
             ResolvedType::Vector(inner, lanes) => IRType::Vector(Box::new(Self::resolved_type_to_ir(inner)?), *lanes),
@@ -1849,10 +1530,7 @@ impl IRGenerator {
                 IRType::Struct(mangled)
             }
             AstType::Pointer(inner, _) => IRType::Ptr(Box::new(self.ast_type_to_ir(inner))),
-            AstType::Array { elem, size: _, .. } => {
-                 // Array logic hack
-                 IRType::Ptr(Box::new(self.ast_type_to_ir(elem))) 
-            }
+            AstType::Array { elem, size, .. } => IRType::Array(Box::new(self.ast_type_to_ir(elem)), *size),
             AstType::Ref { inner, .. } => IRType::Ptr(Box::new(self.ast_type_to_ir(inner))),
             AstType::Tuple(elements, _) => {
                 if elements.is_empty() {

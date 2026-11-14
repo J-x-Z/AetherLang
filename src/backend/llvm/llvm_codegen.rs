@@ -17,6 +17,16 @@ use crate::backend::codegen::CodeGen;
 use crate::middle::ir::*;
 use crate::utils::{Error, Result};
 
+/// Source values and machine ABI values deliberately have separate types.
+#[derive(Clone)]
+enum AbiValue { Direct(LLVMTypeRef), Coerce(LLVMTypeRef), Indirect, Ignore }
+#[derive(Clone)]
+struct FunctionAbi {
+    params: Vec<(IRType, AbiValue)>,
+    result: (IRType, AbiValue),
+    variadic: bool,
+}
+
 /// LLVM-based code generator
 pub struct LLVMCodeGen {
     target_triple: String,
@@ -24,6 +34,11 @@ pub struct LLVMCodeGen {
     context: LLVMContextRef,
     module: LLVMModuleRef,
     builder: LLVMBuilderRef,
+    target_machine: LLVMTargetMachineRef,
+    target_data: LLVMTargetDataRef,
+    abi: HashMap<String, FunctionAbi>,
+    current_abi: Option<FunctionAbi>,
+    return_slot: Option<LLVMValueRef>,
     
     // Mapping from IR values to LLVM values
     value_map: HashMap<Register, LLVMValueRef>,
@@ -52,6 +67,11 @@ impl LLVMCodeGen {
                 context,
                 module,
                 builder,
+                target_machine: ptr::null_mut(),
+                target_data: ptr::null_mut(),
+                abi: HashMap::new(),
+                current_abi: None,
+                return_slot: None,
                 value_map: HashMap::new(),
                 block_map: HashMap::new(),
                 current_function: None,
@@ -193,25 +213,12 @@ impl LLVMCodeGen {
     /// Generate LLVM IR for a function
     fn generate_function(&mut self, func: &IRFunction) -> Result<()> {
         unsafe {
-            // Create function type
-            let ret_type = self.ir_type_to_llvm(&func.ret_type);
-            let mut param_types: Vec<_> = func.params.iter()
-                .map(|(_, ty)| self.ir_type_to_llvm(ty))
-                .collect();
-            
-            let func_type = LLVMFunctionType(
-                ret_type,
-                param_types.as_mut_ptr(),
-                param_types.len() as u32,
-                0 // not variadic
-            );
-            
-            // Create function
+            let abi = self.abi.get(&func.name).cloned().ok_or_else(|| Error::CodeGen("function ABI missing".into()))?;
             let name = CString::new(func.name.as_str()).unwrap();
-            let mut llvm_func = LLVMGetNamedFunction(self.module, name.as_ptr());
-            if llvm_func.is_null() { llvm_func = LLVMAddFunction(self.module, name.as_ptr(), func_type); }
+            let llvm_func = LLVMGetNamedFunction(self.module, name.as_ptr());
             self.current_function = Some(llvm_func);
-            
+            self.current_abi = Some(abi.clone());
+            self.return_slot = None;
             // Clear mappings for new function
             self.value_map.clear();
             self.block_map.clear();
@@ -230,39 +237,23 @@ impl LLVMCodeGen {
                 self.block_map.insert(i, llvm_block);
             }
             
-            // Map parameters
-            for (i, (name, _)) in func.params.iter().enumerate() {
-                let param = LLVMGetParam(llvm_func, i as u32);
-                let param_name = CString::new(name.as_str()).unwrap();
-                LLVMSetValueName2(param, param_name.as_ptr(), name.len());
-                // Store parameter in a special register
-                self.parameter_values.push(param);
+            LLVMPositionBuilderAtEnd(self.builder, self.block_map[&func.entry_block.0]);
+            let mut index = 0;
+            if matches!(abi.result.1, AbiValue::Indirect) {
+                self.return_slot = Some(LLVMGetParam(llvm_func, 0));
+                index += 1;
             }
-            
-            // Add sret attribute for functions returning structs via pointer
-            // The first parameter named "__sret" gets the sret attribute
-            if func.sret_type.is_some() && !func.params.is_empty() {
-                if let Some((name, _)) = func.params.first() {
-                    if name == "__sret" {
-                        // Parameter index 0 is for return value, 1 is first param
-                        let sret_attr_kind = llvm_sys::core::LLVMGetEnumAttributeKindForName(
-                            b"sret\0".as_ptr() as *const _,
-                            4
-                        );
-                        if sret_attr_kind != 0 {
-                            let returned_type = match &func.sret_type {
-                                Some(IRType::Ptr(inner)) => self.ir_type_to_llvm(inner),
-                                _ => return Err(Error::CodeGen("invalid sret type".into())),
-                            };
-                            let sret_attr = llvm_sys::core::LLVMCreateTypeAttribute(
-                                self.context, sret_attr_kind, returned_type,
-                            );
-                            llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, 1, sret_attr);
-                        }
+            for (semantic, lowering) in &abi.params {
+                let value = match lowering {
+                    AbiValue::Ignore => LLVMConstNull(self.ir_type_to_llvm(semantic)),
+                    _ => {
+                        let machine = LLVMGetParam(llvm_func, index);
+                        index += 1;
+                        self.decode_abi(machine, semantic, lowering)
                     }
-                }
+                };
+                self.parameter_values.push(value);
             }
-
             // Add naked attribute if function is marked naked
             if func.naked {
                 let naked_attr_kind = llvm_sys::core::LLVMGetEnumAttributeKindForName(
@@ -556,92 +547,37 @@ impl LLVMCodeGen {
                 }
                 
                 Instruction::Call { dest, func, args } => {
-                    let func_name = CString::new(func.as_str()).unwrap();
-                    let callee = LLVMGetNamedFunction(self.module, func_name.as_ptr());
-                    
-                    if callee.is_null() {
-                        return Err(Error::CodeGen(format!("Unknown function: {}", func)));
-                    }
-                    
-                    let mut llvm_args: Vec<_> = args.iter()
-                        .map(|a| self.get_value(a))
-                        .collect::<Result<Vec<_>>>()?;
-                    
-                    // Cast arguments to match expected parameter types
-                    let func_ty = LLVMGlobalGetValueType(callee);
-                    let param_count = LLVMCountParamTypes(func_ty);
-                    if param_count > 0 {
-                        let mut param_types = vec![std::ptr::null_mut(); param_count as usize];
-                        LLVMGetParamTypes(func_ty, param_types.as_mut_ptr());
-                        
-                        for (i, (arg, &expected_ty)) in llvm_args.iter_mut().zip(param_types.iter()).enumerate() {
-                            if i >= param_count as usize { break; }
-                            let actual_ty = LLVMTypeOf(*arg);
-                            if actual_ty != expected_ty && !expected_ty.is_null() {
-                                let name = CString::new("").unwrap();
-                                let expected_kind = LLVMGetTypeKind(expected_ty);
-                                let actual_kind = LLVMGetTypeKind(actual_ty);
-                                
-                                *arg = if expected_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind 
-                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
-                                    LLVMBuildIntToPtr(self.builder, *arg, expected_ty, name.as_ptr())
-                                } else if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
-                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind {
-                                    LLVMBuildPtrToInt(self.builder, *arg, expected_ty, name.as_ptr())
-                                } else if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
-                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
-                                    let expected_bits = LLVMGetIntTypeWidth(expected_ty);
-                                    let actual_bits = LLVMGetIntTypeWidth(actual_ty);
-                                    if expected_bits > actual_bits {
-                                        LLVMBuildZExt(self.builder, *arg, expected_ty, name.as_ptr())
-                                    } else if expected_bits < actual_bits {
-                                        LLVMBuildTrunc(self.builder, *arg, expected_ty, name.as_ptr())
-                                    } else {
-                                        *arg
-                                    }
-                                } else {
-                                    *arg // Keep as-is if can't convert
-                                };
+                    let name = CString::new(func.as_str()).unwrap();
+                    let callee = LLVMGetNamedFunction(self.module, name.as_ptr());
+                    if callee.is_null() { return Err(Error::CodeGen(format!("Unknown function: {}", func))); }
+                    let abi = self.abi.get(func).cloned().ok_or_else(|| Error::CodeGen(format!("missing ABI for {}", func)))?;
+                    let mut llvm_args = Vec::new();
+                    let result_slot = if matches!(abi.result.1, AbiValue::Indirect) {
+                        let slot = self.entry_alloca(self.ir_type_to_llvm(&abi.result.0));
+                        llvm_args.push(slot);
+                        Some(slot)
+                    } else { None };
+                    for (index, argument) in args.iter().enumerate() {
+                        let value = self.get_value(argument)?;
+                        if let Some((semantic, lowering)) = abi.params.get(index) {
+                            if let Some(value) = self.encode_abi(value, semantic, lowering) { llvm_args.push(value); }
+                        } else {
+                            if matches!(self.value_type(argument), Some(IRType::Array(_, _) | IRType::Struct(_))) {
+                                return Err(Error::CodeGen("aggregate arguments in C variadic positions are not implemented".into()));
                             }
+                            llvm_args.push(value);
                         }
                     }
-                    
-                    let name = if dest.is_some() { 
-                        CString::new("call").unwrap() 
-                    } else { 
-                        CString::new("").unwrap() 
-                    };
-                    // Use LLVMGlobalGetValueType for opaque pointers (LLVM 18+)
-                    let func_ty = LLVMGlobalGetValueType(callee);
-                    
-                    // Check if function returns void
-                    let ret_ty = LLVMGetReturnType(func_ty);
-                    let is_void = LLVMGetTypeKind(ret_ty) == llvm_sys::LLVMTypeKind::LLVMVoidTypeKind;
-                    
-                    // Use empty name for void functions to avoid LLVM verification error
-                    let call_name = if is_void {
-                        CString::new("").unwrap()
-                    } else {
-                        name
-                    };
-                    
-                    let result = LLVMBuildCall2(
-                        self.builder,
-                        func_ty,
-                        callee,
-                        llvm_args.as_mut_ptr(),
-                        llvm_args.len() as u32,
-                        call_name.as_ptr()
-                    );
-                    
-                    if let Some(d) = dest {
-                        // Only store result if function doesn't return void
-                        if !is_void {
-                            self.value_map.insert(*d, result);
-                        }
+                    let function_type = LLVMGlobalGetValueType(callee);
+                    let call = LLVMBuildCall2(self.builder, function_type, callee, llvm_args.as_mut_ptr(), llvm_args.len() as u32, c"".as_ptr());
+                    self.add_abi_attributes(call, &abi, true);
+                    if let Some(dest) = dest {
+                        let value = if let Some(slot) = result_slot { self.unaligned_load(self.ir_type_to_llvm(&abi.result.0), slot) }
+                            else { self.decode_abi(call, &abi.result.0, &abi.result.1) };
+                        self.value_map.insert(*dest, value);
                     }
                 }
-                
+
                 Instruction::Alloca { .. } => { /* reserved once in the entry block */ }
 
                 Instruction::Load { dest, ptr, ty } => {
@@ -650,6 +586,7 @@ impl LLVMCodeGen {
                     // Use the actual element type from IR
                     let elem_ty = self.ir_type_to_llvm(ty);
                     let result = LLVMBuildLoad2(self.builder, elem_ty, ptr_val, name.as_ptr());
+                    LLVMSetAlignment(result, 1);
                     self.value_map.insert(*dest, result);
                 }
 
@@ -665,9 +602,15 @@ impl LLVMCodeGen {
                         ptr_val = LLVMBuildIntToPtr(self.builder, ptr_val, ptr_type, name.as_ptr());
                     }
                     let store_inst = LLVMBuildStore(self.builder, store_val, ptr_val);
-                    let _ = store_inst; // Suppress unused warning
+                    LLVMSetAlignment(store_inst, 1);
                 }
                 
+                Instruction::ArrayElementPtr { dest, ptr, index, array_ty } => {
+                    let ptr = self.get_value(ptr)?;
+                    let mut indices = [LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0), self.get_value(index)?];
+                    let result = LLVMBuildGEP2(self.builder, self.ir_type_to_llvm(array_ty), ptr, indices.as_mut_ptr(), 2, c"".as_ptr());
+                    self.value_map.insert(*dest, result);
+                }
                 Instruction::GetElementPtr { dest, ptr, index, elem_ty } => {
                     let ptr_val = self.get_value(ptr)?;
                     let mut indices = [self.get_value(index)?];
@@ -803,55 +746,19 @@ impl LLVMCodeGen {
         unsafe {
             match term {
                 Terminator::Return { value } => {
-                    if let Some(val) = value {
-                        let ret_val = self.get_value(val)?;
-                        // Get expected return type from current function
-                        if let Some(func) = self.current_function {
-                            let func_ty = LLVMGlobalGetValueType(func);
-                            let expected_ret_ty = LLVMGetReturnType(func_ty);
-                            let actual_ty = LLVMTypeOf(ret_val);
-                            
-                            // If types don't match, try to cast
-                            let final_val = if actual_ty != expected_ret_ty {
-                                let name = CString::new("").unwrap();
-                                // Use inttoptr/ptrtoint for integer/pointer conversions
-                                let expected_kind = LLVMGetTypeKind(expected_ret_ty);
-                                let actual_kind = LLVMGetTypeKind(actual_ty);
-                                
-                                if expected_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind 
-                                   && actual_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
-                                    LLVMBuildIntToPtr(self.builder, ret_val, expected_ret_ty, name.as_ptr())
-                                } else if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
-                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind {
-                                    LLVMBuildPtrToInt(self.builder, ret_val, expected_ret_ty, name.as_ptr())
-                                } else if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind 
-                                          && actual_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
-                                    // Integer size conversion
-                                    let expected_bits = LLVMGetIntTypeWidth(expected_ret_ty);
-                                    let actual_bits = LLVMGetIntTypeWidth(actual_ty);
-                                    if expected_bits > actual_bits {
-                                        LLVMBuildZExt(self.builder, ret_val, expected_ret_ty, name.as_ptr())
-                                    } else if expected_bits < actual_bits {
-                                        LLVMBuildTrunc(self.builder, ret_val, expected_ret_ty, name.as_ptr())
-                                    } else {
-                                        ret_val
-                                    }
-                                } else {
-                                    // Fallback: bitcast
-                                    LLVMBuildBitCast(self.builder, ret_val, expected_ret_ty, name.as_ptr())
-                                }
-                            } else {
-                                ret_val
-                            };
-                            LLVMBuildRet(self.builder, final_val);
-                        } else {
-                            LLVMBuildRet(self.builder, ret_val);
-                        }
-                    } else {
-                        LLVMBuildRetVoid(self.builder);
-                    }
+                    let abi = self.current_abi.clone().unwrap();
+                    if let Some(value) = value {
+                        let value = self.get_value(value)?;
+                        if let Some(slot) = self.return_slot {
+                            let store = LLVMBuildStore(self.builder, value, slot);
+                            LLVMSetAlignment(store, 1);
+                            LLVMBuildRetVoid(self.builder);
+                        } else if let Some(value) = self.encode_abi(value, &abi.result.0, &abi.result.1) {
+                            LLVMBuildRet(self.builder, value);
+                        } else { LLVMBuildRetVoid(self.builder); }
+                    } else { LLVMBuildRetVoid(self.builder); }
                 }
-                
+
                 Terminator::Jump { target } => {
                     let target_block = self.block_map[&target.0];
                     LLVMBuildBr(self.builder, target_block);
@@ -952,8 +859,13 @@ impl LLVMCodeGen {
                 else { LLVMBuildSIToFP(self.builder, val, dest_ty, name) }
             }
             (LLVMFloatTypeKind | LLVMDoubleTypeKind, LLVMIntegerTypeKind) => {
-                if Self::is_unsigned(ty) { LLVMBuildFPToUI(self.builder, val, dest_ty, name) }
-                else { LLVMBuildFPToSI(self.builder, val, dest_ty, name) }
+                let signed = if Self::is_unsigned(ty) { "u" } else { "s" };
+                let source_bits = if src_kind == LLVMFloatTypeKind { 32 } else { 64 };
+                let intrinsic = CString::new(format!("llvm.fpto{}i.sat.i{}.f{}", signed, LLVMGetIntTypeWidth(dest_ty), source_bits)).unwrap();
+                let mut function = LLVMGetNamedFunction(self.module, intrinsic.as_ptr());
+                let function_type = LLVMFunctionType(dest_ty, [src_ty].as_mut_ptr(), 1, 0);
+                if function.is_null() { function = LLVMAddFunction(self.module, intrinsic.as_ptr(), function_type); }
+                LLVMBuildCall2(self.builder, function_type, function, [val].as_mut_ptr(), 1, name)
             }
             _ => return Err(Error::CodeGen(format!("unsupported scalar cast to {:?}", ty))),
         })
@@ -1055,8 +967,7 @@ impl LLVMCodeGen {
         Ok(())
     }
 
-    /// Emit object file
-    fn emit_object(&self) -> Result<Vec<u8>> {
+    fn initialize_target(&mut self) -> Result<()> {
         unsafe {
             let triple = CString::new(self.target_triple.as_str()).unwrap();
             LLVMSetTarget(self.module, triple.as_ptr());
@@ -1101,9 +1012,18 @@ impl LLVMCodeGen {
             // Get data layout
             let data_layout = LLVMCreateTargetDataLayout(target_machine);
             LLVMSetModuleDataLayout(self.module, data_layout);
-            LLVMDisposeTargetData(data_layout);
+            self.target_data = data_layout;
+            self.target_machine = target_machine;
             LLVMSetTarget(self.module, triple.as_ptr());
 
+        }
+        Ok(())
+    }
+
+    /// Emit object file
+    fn emit_object(&self) -> Result<Vec<u8>> {
+        unsafe {
+            let target_machine = self.target_machine;
             if self.opt_level > 0 {
                 use llvm_sys::transforms::pass_builder::*;
                 let pipeline = CString::new(format!("default<O{}>", self.opt_level)).unwrap();
@@ -1114,11 +1034,9 @@ impl LLVMCodeGen {
                     let message = llvm_sys::error::LLVMGetErrorMessage(error);
                     let detail = CStr::from_ptr(message).to_string_lossy().into_owned();
                     llvm_sys::error::LLVMDisposeErrorMessage(message);
-                    LLVMDisposeTargetMachine(target_machine);
                     return Err(Error::CodeGen(format!("LLVM optimization failed: {}", detail)));
                 }
                 if let Err(error) = self.verify_module() {
-                    LLVMDisposeTargetMachine(target_machine);
                     return Err(error);
                 }
             }
@@ -1135,7 +1053,6 @@ impl LLVMCodeGen {
                 &mut mem_buf
             );
             
-            LLVMDisposeTargetMachine(target_machine);
             
             if result != 0 {
                 let msg = if error_msg.is_null() {
@@ -1173,6 +1090,7 @@ impl LLVMCodeGen {
 impl CodeGen for LLVMCodeGen {
     fn generate(&mut self, module: &IRModule) -> Result<Vec<u8>> {
         Self::init_targets();
+        self.initialize_target()?;
         
         // Set module name
         unsafe {
@@ -1189,33 +1107,6 @@ impl CodeGen for LLVMCodeGen {
                 }
             }
         }
-        // Declare extern functions first
-        for ext in &module.externs {
-            unsafe {
-                let func_name = CString::new(ext.name.as_str()).unwrap();
-                
-                // Check if function already exists
-                if !LLVMGetNamedFunction(self.module, func_name.as_ptr()).is_null() {
-                    continue;
-                }
-                
-                // Build function type
-                let ret_ty = self.ir_type_to_llvm(&ext.ret_type);
-                let mut param_types: Vec<LLVMTypeRef> = ext.params.iter()
-                    .map(|(_, ty)| self.ir_type_to_llvm(ty))
-                    .collect();
-                let func_ty = LLVMFunctionType(
-                    ret_ty,
-                    param_types.as_mut_ptr(),
-                    param_types.len() as u32,
-                    ext.variadic as i32
-                );
-                
-                // Add function declaration
-                LLVMAddFunction(self.module, func_name.as_ptr(), func_ty);
-            }
-        }
-        
         // Declare struct types
         for ir_struct in &module.structs {
             unsafe {
@@ -1242,17 +1133,12 @@ impl CodeGen for LLVMCodeGen {
             }
         }
         
-        // Declare every actual function before emitting bodies: forward calls
-        // and recursion must resolve to code, never a synthesized placeholder.
-        for func in &module.functions {
-            unsafe {
-                let name = CString::new(func.name.as_str()).unwrap();
-                if LLVMGetNamedFunction(self.module, name.as_ptr()).is_null() {
-                    let mut params: Vec<_> = func.params.iter().map(|(_, ty)| self.ir_type_to_llvm(ty)).collect();
-                    let ty = LLVMFunctionType(self.ir_type_to_llvm(&func.ret_type), params.as_mut_ptr(), params.len() as u32, 0);
-                    LLVMAddFunction(self.module, name.as_ptr(), ty);
-                }
-            }
+        // Layouts are complete before target ABI classification.
+        for function in &module.externs {
+            self.declare_abi(&function.name, &function.params, &function.ret_type, function.variadic)?;
+        }
+        for function in &module.functions {
+            self.declare_abi(&function.name, &function.params, &function.ret_type, false)?;
         }
         // Generate code for each function
         for func in &module.functions {
@@ -1275,9 +1161,13 @@ impl CodeGen for LLVMCodeGen {
     }
 }
 
+include!("llvm_abi.rs");
+
 impl Drop for LLVMCodeGen {
     fn drop(&mut self) {
         unsafe {
+            if !self.target_data.is_null() { LLVMDisposeTargetData(self.target_data); }
+            if !self.target_machine.is_null() { LLVMDisposeTargetMachine(self.target_machine); }
             LLVMDisposeBuilder(self.builder);
             LLVMDisposeModule(self.module);
             LLVMContextDispose(self.context);
