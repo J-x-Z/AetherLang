@@ -1,213 +1,123 @@
 # AetherLang
 
-> **AI-Native Systems Programming Language** - Designed to reduce AI hallucinations and enable AI self-iteration
+AetherLang is an independent language project with two source forms: `.ath`
+prioritizes human readability; `.aeth` uses explicit types and exposes pointers,
+layout and foreign interfaces. Both compile through the same checked pipeline.
+The maintained compiler is written in Rust. LLVM is the primary native backend;
+a C backend provides a portable fallback and an independent semantic comparison.
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-![Tests](https://img.shields.io/badge/tests-passing-green)
-![Self-Hosting](https://img.shields.io/badge/self--hosting-100%25-brightgreen)
+## Build and run
 
-##  Vision
+Use Rust 1.100.0, a native C compiler/linker, and LLVM 21 for the primary backend.
+Set `LLVM_SYS_211_PREFIX` if LLVM 21 is not discoverable. The build script detects
+Homebrew LLVM 21. LLVM builds prefer the shared library, which must remain
+available when running `aethc`.
 
-AetherLang is an **AI-Native Programming Language** built from the ground up to:
+```sh
+scripts/build.sh llvm
+"${CARGO_TARGET_DIR:-target}/release/aethc" build examples/upgrade/compute.aeth -O2 -o ./compute
+./compute
 
-1. **Reduce AI Hallucinations** - Explicit interfaces, constrained syntax, semantic annotations
-2. **Enable AI Self-Iteration** - AI-readable IR, structured feedback, sandboxed optimization
-3. **Maintain Rigor & Safety** - Contract programming, effect system, ownership semantics
-
-##  Self-Hosting Progress
-
- **Self-hosting complete!** AetherLang compiler is written in AetherLang.
-
-| Component | Status | Functions | Notes |
-|-----------|--------|-----------|-------|
-| **Lexer** | ✅ 100% | 23 | Tokenization with 80+ token types |
-| **Parser** | ✅ 100% | 76 | Full AST generation |
-| **Semantic Analyzer** | ✅ 100% | 68 | Type checking, ownership analysis |
-| **IR Generator** | ✅ 100% | 52 | Three-address code generation |
-| **Codegen** | ✅ 100% | 40 | Native object file output |
-| **Total** | ✅ | **259** | All modules compile to native code |
-
-## ✨ AI-Native Features (P5 Complete)
-
-AetherLang enforces **"Radical Explicitness"** to reduce AI hallucinations:
-
-### 1. Mandatory Type Annotations
-```aether
-// ❌ Forbidden - type inference
-let x = 10;
-
-// ✅ Required - explicit types
-let x: i32 = 10;
-let name: *u8 = "hello\0" as *u8;
+# C-only fallback, without an LLVM dependency:
+scripts/build.sh c
+"${CARGO_TARGET_DIR:-target}/release/aethc" build examples/upgrade/compute.aeth --backend c -O2 -o ./compute
 ```
 
-### 2. Effect System (Hard Errors)
+`CARGO_TARGET_DIR` and `TMPDIR` can point to an external work volume. The scripts
+reuse installed toolchains and caches and default to three Cargo build jobs.
+The Cargo lockfile and Rust version are committed.
+
 ```aether
-// ❌ Compile error - calling effect[io] without declaring it
-fn bad_caller() {
-    puts("hello\0" as *u8);
-}
-
-// ✅ Correct - effect declared
-fn good_caller() effect[io] {
-    puts("hello\0" as *u8);
-}
-```
-
-| Effect | Description |
-|--------|-------------|
-| `io` | Input/Output |
-| `alloc` | Memory allocation |
-| `read` | Read global state |
-| `write` | Write global state |
-| `panic` | May panic |
-
-### 3. No `unwrap()` on Option/Result
-```aether
-// ❌ Does not exist - unwrap() is not defined
-let value: i32 = maybe_value.unwrap();
-
-// ✅ Use match or unwrap_or
-let value: i32 = maybe_value.unwrap_or(0);
-```
-
-### 4. Explicit Allocators
-```aether
-use alloc::{Allocator, GlobalAllocator, ArenaAllocator}
-
-// Vec requires allocator parameter
-let v: Vec<i32, GlobalAllocator> = Vec::new_in(GlobalAllocator::new());
-
-// Use Arena for batch deallocation
-let arena: ArenaAllocator = ArenaAllocator::new(1024);
-let v: Vec<i32, ArenaAllocator> = Vec::new_in(arena);
-```
-
-## ✨ Dual-Layer Architecture
-
-AetherLang introduces a novel **Dual-Layer Architecture** to balance high-level productivity with system-level control.
-
-### Layer 1: Aether Script (`.ath`)
-The high-level logic layer. Used for rapid development, scripting, and business logic.
-```python
-# hello.ath - Python-like syntax
-def main():
-    print("Hello from Script!")
-    return 0
-```
-- **Indentation-based syntax** for readability
-- **Mutable-by-default** to align with algorithmic pseudocode
-- **Transpiles directly** to Layer 0 (Aether Core)
-
-### Layer 0: Aether Core (`.aeth`)
-The low-level system layer. Used for kernel, drivers, and performance-critical paths.
-```aether
-// hello.aeth - Rust-like syntax
-extern "C" { fn puts(s: *u8) -> i32; }
-
+// example.aeth
+extern "C" { fn printf(format: *u8, ...) -> i32; }
 fn main() -> i32 {
-    puts("Hello, AetherLang!\0" as *u8);
+    let mut sum: i64 = 0;
+    for i in 0..100 {
+        if i == 50 { continue; }
+        sum = sum + i;
+    }
+    printf("%lld\n\0" as *u8, sum);
     return 0;
 }
 ```
-- **Explicit Ownership & Lifetimes**
-- **Effect System** (`pure`, `effect[io]`) tracking side-effects
-- **Contract Programming** (`requires`/`ensures`) for formal verification
 
-## 🏗️ Technical Stack
+```python
+# example.ath
+def sum_to(n: int) -> int:
+    total = 0
+    for i in range(n):
+        total = total + i
+    return total
 
-```
-src/
-├── frontend/     # Lexer, Parser, Semantic Analysis, Module System
-├── script/       # Aether Script Transpiler (Layer 1 → Layer 0)
-├── middle/       # IR Generation and Optimization
-├── backend/      # C / LLVM Code Generation
-│   ├── c/            # C backend (portable)
-│   └── llvm/         # LLVM backend (optimized)
-├── ai_ir/        # AI-Readable IR Layer
-└── types/        # Type System & Resolution
+def main():
+    print(sum_to(100))
+    return 0
 ```
 
-## 🚀 Quick Start
+Imports resolve relative to the importing source file, followed by `-I` module
+paths, `AETHER_PATH`, and the bundled standard-library source directory. Imported
+bodies are compiled once; public imports, aliases and private helpers use one
+resolution stage for checking and both backends. Native language definitions
+have private linker names; `main` and explicit `#[no_mangle]` functions retain
+their ABI names.
 
-```bash
-# Build the compiler
-cargo build --release --features llvm
-
-# Compile and run a program
-cargo run --features llvm -- build examples/hello.aeth
-./hello
-
-# Or use C backend (no LLVM required)
-cargo build --release --no-default-features
-./target/release/aethc --emit-c examples/hello.aeth
-cc -o hello examples/hello.c && ./hello
-
-# Run all tests
-cargo test
+```sh
+aethc check example.ath
+aethc build example.ath -O2 -o example
+aethc build example.aeth --backend llvm --emit-obj -o example.o
+aethc example.aeth --emit-c -o example.c
+aethc example.aeth --emit-ir -o example.ir
 ```
 
-## 📊 Development Status
+`check` performs parsing, module resolution and semantic checks. Building also
+validates the supported lowering and target code generation. `--emit-obj` is the
+explicit object-only mode; `build` links an executable. `--cc` or `CC` selects one
+compiler/linker executable. Compiler subprocess failures retain their actual
+diagnostics and exit status.
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| **P0: Self-Hosting** | ✅ | 5/5 modules, 259 functions compiled |
-| **P1: Core Language** | ✅ | Floats, generics, closures, traits, lifetimes, modules |
-| **P2: Platforms** | ✅ | Linux, macOS, Windows CI passing |
-| **P3: SIMD/Matrix** | ✅ | Vector types `f32x4`, BLAS FFI, Matrix4x4 |
-| **P4: Kernel Dev** | ✅ | Inline ASM, naked functions, atomic, MMIO |
-| **P5: AI-Native** | ✅ | Mandatory types, effect system, no unwrap, explicit allocators |
-| **P6: Engineering** | ✅ | CI/CD, .ath transpiler, jxz config, C backend fixes |
+## Verified workloads and tests
 
-## 📦 JXZ Package Manager
-
-AetherLang includes **JXZ** - a cross-platform package manager written in AetherLang:
-
-```bash
-# Project management
-jxz init          # Create new project with Jxz.toml
-jxz build         # Build project (reads config from Jxz.toml)
-jxz run           # Build and run
-jxz test          # Run tests
-jxz clean         # Remove build artifacts
-
-# Dependency management
-jxz add <pkg>     # Add dependency to Jxz.toml
-jxz remove <pkg>  # Remove dependency
-jxz install       # Install from Jxz.lock
+```sh
+scripts/test.sh llvm  # semantic/CLI regressions, both backends, real workloads
+scripts/test.sh c     # equivalent supported C-only checks
 ```
 
-**161 functions** written entirely in AetherLang (self-hosting!)
+The native suite compares LLVM and C at O0/O2/O3 using semantic assertions,
+including short circuiting, loop exits, typed pointer indexing, aliases,
+structure copies/returns, scalar numeric behavior, foreign calls and strings.
+The real workloads include:
 
-##  Documentation
+- `examples/upgrade/compute.aeth`: heap sort, binary search, deterministic PRNG,
+  integer reduction and floating-point computation over allocated storage.
+- `examples/upgrade/accumulator.aeth`: a persistent input service with bounded
+  integer parsing, command errors, state, journal writes and explicit cleanup.
+- `tests/regressions/script/`: `.ath` arithmetic, loops, functions, branching,
+  printing and rejection of invalid or uninitialized programs.
+- JXZ: real project initialization, configuration, building, running with argv,
+  test aggregation and cleanup. See [JXZ usage and limits](jxz/README.md).
 
-### Language Reference
-- [Language Guide](docs/LANGUAGE.md) - Complete language reference with P5 rules
-- [Grammar Spec](docs/grammar.ebnf) - Formal EBNF grammar
+## Current boundaries
 
-### Design Documents
-- [AI-IR Design](docs/design/ai_ir_design.md) - AI-Native Interface
-- [Dual-Layer Architecture](docs/design/DUAL_LAYER_ARCHITECTURE.md) - .ath/.aeth layers
-- [Aether Script Spec](docs/AETHER_SCRIPT_SPEC.md) - Layer 1 syntax
-- [Context Pattern](docs/context-pattern.md) - Explicit context passing
+The native acceptance platform is macOS on Apple Silicon. CI definitions also
+cover Linux and Windows compiler builds; those jobs are not evidence of a run
+until they actually execute. JXZ and the persistent service currently target
+64-bit POSIX hosts.
 
-### Tutorials
-- [Quick Start Guide](docs/GUIDE.md) - Getting started
+Raw pointers and C FFI provide direct control and require manual lifetime/ABI
+care. This release does not claim complete ownership enforcement, automatic
+resource destruction, or a complete generic/trait/closure ecosystem. Unsupported
+lowering must report an error instead of generating placeholder behavior. Much
+of the older standard library remains experimental; the new workload and JXZ
+interfaces are the exercised subset.
 
-##  For AI Models
+`src_aether/` contains an experimental compiler implementation. Its full entry
+point does not currently build a working compiler, and its pipeline still
+contains placeholder generation. AetherLang is **not currently self-hosting**.
+Old standalone binaries and generated C files are historical artifacts, not
+build inputs or acceptance evidence.
 
-AetherLang is designed to be **AI-friendly**:
+See [upgrade results and migration notes](docs/UPGRADE.md) and
+[the current engineering handoff](HANDOFF.md). Older design documents describe
+intent; they are not a claim that every described feature works.
 
-1. **Constrained Syntax** - Fewer ways to express the same thing
-2. **Explicit Semantics** - Ownership, effects, contracts all visible
-3. **Structured Errors** - Machine-readable output with fix suggestions
-4. **AI-IR Layer** - Semantic graph + intent annotations for AI understanding
-5. **No Hidden Magic** - Every operation is explicit and traceable
-
-## 🤝 Contributing
-
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## License
-
-Apache License 2.0 - see [LICENSE](LICENSE)
+Licensed under Apache-2.0; see [LICENSE](LICENSE).
