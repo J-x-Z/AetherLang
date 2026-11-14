@@ -1,0 +1,37 @@
+use result::{Result, result_is_ok, result_or, result_ok, result_err};
+use option::{Option, option_or};
+
+fn checked(value: i64) -> Result<i64, i32> {
+    if value < 0 { return Result::Err(37); }
+    Result::Ok(value)
+}
+fn twice(value: i64) -> Result<i64, i32> {
+    let number: i64 = checked(value)?;
+    Result::Ok(number * 2)
+}
+fn byte(value: i64) -> Result<u8, i32> {
+    if value < 0 || value > 255 { return Result::Err(51); }
+    Result::Ok(value as u8)
+}
+fn widen(value: i64) -> Result<i64, i32> {
+    let number: u8 = byte(value)?;
+    Result::Ok((number as i64) + 1000)
+}
+fn guarded(value: Result<i64, i32>) -> i64 {
+    match value {
+        Result::Ok(n) if n > 10 => n + 1,
+        Result::Ok(n) => n - 1,
+        Result::Err(error) => -(error as i64),
+    }
+}
+fn main() -> i32 {
+    let success: Result<i64, i32> = twice(21);
+    let failure: Result<i64, i32> = twice(-1);
+    if !result_is_ok(success) || result_is_ok(failure) { return 1; }
+    if result_or(success, 0) != 42 || result_or(failure, 9) != 9 { return 2; }
+    if option_or(result_ok(success), 0) != 42 { return 3; }
+    if option_or(result_err(failure), 0) != 37 { return 4; }
+    if result_or(widen(200), 0) != 1200 || option_or(result_err(widen(500)), 0) != 51 { return 5; }
+    if guarded(checked(5)) != 4 || guarded(checked(20)) != 21 || guarded(failure) != -37 { return 6; }
+    return 0;
+}

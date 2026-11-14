@@ -1,0 +1,26 @@
+// A value that may be absent. Payloads are stored as real tagged values.
+// Values follow the language's explicit ownership rules; no implicit destructor.
+pub enum Option<T> {
+    Some(T),
+    None,
+}
+
+pub fn option_is_some<T>(value: Option<T>) -> bool {
+    match value {
+        Option::Some(_) => true,
+        Option::None => false,
+    }
+}
+
+pub fn option_or<T>(value: Option<T>, fallback: T) -> T {
+    match value {
+        Option::Some(item) => item,
+        Option::None => fallback,
+    }
+}
+
+pub fn option_take<T>(value: *Option<T>) -> Option<T> {
+    let previous: Option<T> = *value;
+    *value = Option::None;
+    previous
+}

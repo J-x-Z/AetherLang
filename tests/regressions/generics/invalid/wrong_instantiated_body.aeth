@@ -1,0 +1,2 @@
+fn bad<T>(value: T) -> T { 1000 as i64 }
+fn main() { let value: u8 = bad(1); }

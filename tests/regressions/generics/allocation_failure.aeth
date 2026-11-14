@@ -1,0 +1,14 @@
+use vec::{Vec, vec_new, vec_reserve, vec_push, vec_get, vec_free};
+use option::option_or;
+fn main() -> i32 {
+    let mut vector: Vec<i64> = vec_new();
+    if !vec_push(&vector as *Vec<i64>, 1234567890123) { return 1; }
+    let old: *i64 = vector.data;
+    let capacity: u64 = vector.capacity;
+    if vec_reserve(&vector as *Vec<i64>, 1024) { return 2; }
+    if vector.data != old || vector.len != 1 || vector.capacity != capacity { return 3; }
+    if option_or(vec_get(&vector as *Vec<i64>, 0), 0) != 1234567890123 { return 4; }
+    if !vec_push(&vector as *Vec<i64>, 7) { return 5; }
+    vec_free(&vector as *Vec<i64>);
+    return 0;
+}

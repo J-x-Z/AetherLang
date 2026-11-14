@@ -1,0 +1,5 @@
+enum Result<T, E> { Ok(T), Err(E) }
+fn main() {
+    let error: i64 = 1234567890123;
+    let value: Result<u8, i32> = Result::Err(error);
+}

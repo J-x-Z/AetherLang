@@ -1,0 +1,50 @@
+use vec::{Vec, vec_new, vec_reserve, vec_push, vec_get, vec_set, vec_pop, vec_free};
+use option::{Option, option_is_some};
+use result::{Result, result_is_ok};
+
+struct Empty {}
+
+fn operation(fail: bool) -> Result<(), i32> {
+    if fail { return Result::Err(67); }
+    Result::Ok(())
+}
+fn propagated(fail: bool) -> Result<(), i32> {
+    operation(fail)?;
+    Result::Ok(())
+}
+fn main() -> i32 {
+    if size_of(()) != 0 || align_of(()) != 1 { return 1; }
+    let mut values: Vec<()> = vec_new();
+    if !vec_reserve(&values as *Vec<()>, 0) { return 2; }
+    if option_is_some(vec_get(&values as *Vec<()>, 0)) { return 3; }
+    let mut index: u64 = 0;
+    while index < 1000 {
+        if !vec_push(&values as *Vec<()>, ()) { return 4; }
+        index = index + 1;
+    }
+    if values.len != 1000 || values.capacity < 1000 { return 5; }
+    if !option_is_some(vec_get(&values as *Vec<()>, 999)) { return 6; }
+    if option_is_some(vec_get(&values as *Vec<()>, 1000)) { return 7; }
+    if !vec_set(&values as *Vec<()>, 999, ()) || vec_set(&values as *Vec<()>, 1000, ()) { return 8; }
+    index = 0;
+    while index < 1000 {
+        if !option_is_some(vec_pop(&values as *Vec<()>)) { return 9; }
+        index = index + 1;
+    }
+    if values.len != 0 || option_is_some(vec_pop(&values as *Vec<()>)) { return 10; }
+    vec_free(&values as *Vec<()>); vec_free(&values as *Vec<()>);
+    if values.data != (0 as *()) || values.capacity != 0 { return 11; }
+    if !result_is_ok(propagated(false)) || result_is_ok(propagated(true)) { return 12; }
+    let failure: Result<(), i32> = propagated(true);
+    let error: i32 = match failure { Result::Ok(_) => 0, Result::Err(code) => code, };
+    if error != 67 { return 13; }
+    let mut empty: Vec<Empty> = vec_new();
+    if !vec_push(&empty as *Vec<Empty>, Empty {}) { return 14; }
+    if !option_is_some(vec_get(&empty as *Vec<Empty>, 0)) { return 15; }
+    vec_free(&empty as *Vec<Empty>);
+    let mut arrays: Vec<[u8; 0]> = vec_new();
+    if !vec_push(&arrays as *Vec<[u8; 0]>, [0; 0]) { return 16; }
+    if !option_is_some(vec_pop(&arrays as *Vec<[u8; 0]>)) { return 17; }
+    vec_free(&arrays as *Vec<[u8; 0]>);
+    return 0;
+}

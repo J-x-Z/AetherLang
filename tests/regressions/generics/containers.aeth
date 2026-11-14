@@ -1,0 +1,52 @@
+use vec::{Vec, vec_new, vec_reserve, vec_push, vec_get, vec_set, vec_pop, vec_free};
+use option::{Option, option_or, option_take, option_is_some};
+
+struct Pair<T> { first: T, second: T }
+fn first<T>(pair: Pair<T>) -> T { pair.first }
+fn identity<T>(value: T) -> T { value }
+fn choose<T>(left: T, right: T) -> T { left }
+fn recurse<T>(value: T, count: i64) -> T {
+    if count == 0 { return value; }
+    recurse(value, count - 1)
+}
+
+fn main() -> i32 {
+    let mut wide: Vec<i64> = vec_new();
+    let mut bytes: Vec<u8> = vec_new();
+    let mut i: u64 = 0;
+    while i < 257 {
+        if !vec_push(&wide as *Vec<i64>, (i as i64) * 1000000000) { return 1; }
+        if !vec_push(&bytes as *Vec<u8>, (i % 251) as u8) { return 2; }
+        i = i + 1;
+    }
+    if size_of(i64) != 8 || size_of(u8) != 1 { return 3; }
+    if wide.len != 257 || bytes.len != 257 || wide.capacity < wide.len { return 4; }
+    i = 0;
+    while i < 257 {
+        let w: i64 = option_or(vec_get(&wide as *Vec<i64>, i), -1);
+        let b: u8 = option_or(vec_get(&bytes as *Vec<u8>, i), 255);
+        if w != (i as i64) * 1000000000 || b != (i % 251) as u8 { return 5; }
+        i = i + 1;
+    }
+    if option_is_some(vec_get(&wide as *Vec<i64>, 257)) { return 6; }
+    if vec_set(&bytes as *Vec<u8>, 257, 99) { return 7; }
+    if !vec_set(&bytes as *Vec<u8>, 256, 42) { return 8; }
+    if option_or(vec_pop(&bytes as *Vec<u8>), 255) != 42 { return 9; }
+    let old_data: *i64 = wide.data;
+    let old_capacity: u64 = wide.capacity;
+    if vec_reserve(&wide as *Vec<i64>, 9223372036854775807) { return 10; }
+    if wide.data != old_data || wide.capacity != old_capacity || wide.len != 257 { return 11; }
+    if option_or(vec_get(&wide as *Vec<i64>, 256), -1) != 256000000000 { return 12; }
+    let mut optional: Option<i64> = Option::Some(93);
+    if option_or(option_take(&optional as *Option<i64>), 0) != 93 || option_is_some(optional) { return 13; }
+    let pair: Pair<u8> = Pair { first: 23, second: 99 };
+    let typed: u8 = 17;
+    if first(pair) != 23 || choose(1, typed) != 1 { return 14; }
+    let id: i64 = identity(1234567890123);
+    if recurse(id, 6) != 1234567890123 { return 15; }
+    vec_free(&wide as *Vec<i64>); vec_free(&bytes as *Vec<u8>);
+    vec_free(&wide as *Vec<i64>); vec_free(&bytes as *Vec<u8>);
+    if wide.len != 0 || wide.capacity != 0 || wide.data != (0 as *i64) { return 16; }
+    if option_is_some(vec_pop(&wide as *Vec<i64>)) { return 17; }
+    return 0;
+}

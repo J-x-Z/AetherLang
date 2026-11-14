@@ -1,0 +1,34 @@
+use result::{Result, result_or, result_err};
+use option::option_or;
+use fs::{File, file_open_write, file_is_open, file_write, file_flush, file_close};
+
+fn open_checked(path: *u8) -> Result<File, i32> {
+    let mut file: File = file_open_write(path);
+    if !file_is_open(&file as *File) { return Result::Err(20); }
+    Result::Ok(file)
+}
+fn write_checked(file: *File) -> Result<i64, i32> {
+    if file_write(file, "payload\0" as *u8, 7) != 7 { return Result::Err(21); }
+    if !file_flush(file) { return Result::Err(22); }
+    Result::Ok(7)
+}
+fn save(path: *u8) -> Result<i64, i32> {
+    let mut file: File = open_checked(path)?;
+    let outcome: Result<i64, i32> = write_checked(&file as *File);
+    let closed: bool = file_close(&file as *File);
+    let count: i64 = outcome?;
+    if !closed { return Result::Err(23); }
+    Result::Ok(count)
+}
+fn main(argc: i32, argv: **u8) -> i32 {
+    if argc != 3 { return 1; }
+    let outcome: Result<i64, i32> = save(argv[1]);
+    let mode: u8 = argv[2][0];
+    if mode == 115 { // success
+        if result_or(outcome, -1) != 7 { return 2; }
+    } else {
+        let expected: i32 = if mode == 111 { 20 } else { 22 };
+        if option_or(result_err(outcome), 0) != expected { return 3; }
+    }
+    return 0;
+}

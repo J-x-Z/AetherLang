@@ -1,0 +1,6 @@
+fn choose<T>(left: T, right: T) -> T { left }
+fn main() {
+    let byte: u8 = 1;
+    let wide: i64 = 2;
+    choose(byte, wide);
+}
