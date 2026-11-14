@@ -1,162 +1,123 @@
-// CUDA FFI Bindings for AetherLang
-// Foreign Function Interface to CUDA Runtime API for GPU computing
-//
-// Linking: -lcudart (CUDA Runtime) or -lcuda (CUDA Driver API)
-
-// ==================== CUDA Types ====================
-
-pub type CudaError = i32
-pub type CudaStream = *u8
-pub type CudaEvent = *u8
-pub type CudaDevicePtr = *u8
-
-// ==================== Error Codes ====================
-
-pub const CUDA_SUCCESS: i32 = 0
-pub const CUDA_ERROR_INVALID_VALUE: i32 = 1
-pub const CUDA_ERROR_OUT_OF_MEMORY: i32 = 2
-pub const CUDA_ERROR_NOT_INITIALIZED: i32 = 3
-
-// ==================== Memory Copy Kinds ====================
-
-pub const CUDA_MEMCPY_HOST_TO_HOST: i32 = 0
-pub const CUDA_MEMCPY_HOST_TO_DEVICE: i32 = 1
-pub const CUDA_MEMCPY_DEVICE_TO_HOST: i32 = 2
-pub const CUDA_MEMCPY_DEVICE_TO_DEVICE: i32 = 3
-
-// ==================== Device Management ====================
-
-extern "C" fn cudaGetDeviceCount(count: *i32) -> CudaError
-extern "C" fn cudaSetDevice(device: i32) -> CudaError
-extern "C" fn cudaGetDevice(device: *i32) -> CudaError
-extern "C" fn cudaDeviceSynchronize() -> CudaError
-extern "C" fn cudaDeviceReset() -> CudaError
-
-// ==================== Memory Management ====================
-
-extern "C" fn cudaMalloc(devPtr: *CudaDevicePtr, size: u64) -> CudaError
-extern "C" fn cudaFree(devPtr: CudaDevicePtr) -> CudaError
-extern "C" fn cudaMemcpy(dst: *u8, src: *u8, count: u64, kind: i32) -> CudaError
-extern "C" fn cudaMemcpyAsync(dst: *u8, src: *u8, count: u64, kind: i32, stream: CudaStream) -> CudaError
-extern "C" fn cudaMemset(devPtr: CudaDevicePtr, value: i32, count: u64) -> CudaError
-extern "C" fn cudaMallocHost(ptr: **u8, size: u64) -> CudaError
-extern "C" fn cudaFreeHost(ptr: *u8) -> CudaError
-
-// ==================== Stream Management ====================
-
-extern "C" fn cudaStreamCreate(stream: *CudaStream) -> CudaError
-extern "C" fn cudaStreamDestroy(stream: CudaStream) -> CudaError
-extern "C" fn cudaStreamSynchronize(stream: CudaStream) -> CudaError
-
-// ==================== Event Management ====================
-
-extern "C" fn cudaEventCreate(event: *CudaEvent) -> CudaError
-extern "C" fn cudaEventDestroy(event: CudaEvent) -> CudaError
-extern "C" fn cudaEventRecord(event: CudaEvent, stream: CudaStream) -> CudaError
-extern "C" fn cudaEventSynchronize(event: CudaEvent) -> CudaError
-extern "C" fn cudaEventElapsedTime(ms: *f32, start: CudaEvent, end: CudaEvent) -> CudaError
-
-// ==================== Error Handling ====================
-
-extern "C" fn cudaGetLastError() -> CudaError
-extern "C" fn cudaGetErrorString(error: CudaError) -> *u8
-
-// ==================== High-Level Wrappers ====================
-
-pub fn cuda_device_count() -> i32 {
-    let count: i32 = 0;
-    cudaGetDeviceCount(&count);
-    return count;
+// CUDA runtime/cuBLAS host ABI. Link -lcudart -lcublas on a CUDA host.
+// Raw calls remain available; these bindings do not compile GPU kernels.
+// Migration: cuda_malloc/free become cuda_buffer_new/free; stream/BLAS
+// constructors and operations now return Result instead of pointers/bools.
+// Construct Dim3 with a struct literal. Wrap raw statuses with cuda_status or
+// cublas_status when using raw memory/event calls. Do not
+// copy live owners; release explicitly. A failed release retains its owner so
+// the caller can inspect the CUDA context/error before deciding how to recover.
+// Stream destruction is asynchronous: synchronize before reusing host memory.
+// API: https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__MEMORY.html
+//      https://docs.nvidia.com/cuda/cublas/index.html (column-major, host scalars)
+use result::Result;
+pub type CudaError = i32;
+pub type CudaStream = *u8;
+pub type CudaEvent = *u8;
+pub type CudaDevicePtr = *u8;
+pub type CublasHandle = *u8;
+const CUDA_SUCCESS:i32=0;
+const CUDA_ERROR_INVALID_VALUE:i32=1;
+const CUDA_ERROR_OUT_OF_MEMORY:i32=2;
+const CUDA_ERROR_NOT_INITIALIZED:i32=3;
+const CUDA_ERROR_NO_DEVICE:i32=100;
+const CUDA_MEMCPY_HOST_TO_HOST:i32=0;
+const CUDA_MEMCPY_HOST_TO_DEVICE:i32=1;
+const CUDA_MEMCPY_DEVICE_TO_HOST:i32=2;
+const CUDA_MEMCPY_DEVICE_TO_DEVICE:i32=3;
+const CUBLAS_OP_N:i32=0;
+const CUBLAS_OP_T:i32=1;
+const CUBLAS_POINTER_MODE_HOST:i32=0;
+const GPU_CUDA:i32=1;
+const GPU_CUBLAS:i32=2;
+extern "C" {
+ fn cudaGetDeviceCount(count:*i32)->CudaError;
+ fn cudaSetDevice(device:i32)->CudaError;
+ fn cudaGetDevice(device:*i32)->CudaError;
+ fn cudaDeviceSynchronize()->CudaError;
+ fn cudaDeviceReset()->CudaError;
+ fn cudaMalloc(pointer:*CudaDevicePtr,size:u64)->CudaError;
+ fn cudaFree(pointer:CudaDevicePtr)->CudaError;
+ fn cudaMemcpy(destination:*u8,source:*u8,size:u64,kind:i32)->CudaError;
+ fn cudaMemcpyAsync(destination:*u8,source:*u8,size:u64,kind:i32,stream:CudaStream)->CudaError;
+ fn cudaMemset(pointer:CudaDevicePtr,value:i32,size:u64)->CudaError;
+ fn cudaMallocHost(pointer:**u8,size:u64)->CudaError;
+ fn cudaFreeHost(pointer:*u8)->CudaError;
+ fn cudaStreamCreate(stream:*CudaStream)->CudaError;
+ fn cudaStreamDestroy(stream:CudaStream)->CudaError;
+ fn cudaStreamSynchronize(stream:CudaStream)->CudaError;
+ fn cudaEventCreate(event:*CudaEvent)->CudaError;
+ fn cudaEventDestroy(event:CudaEvent)->CudaError;
+ fn cudaEventRecord(event:CudaEvent,stream:CudaStream)->CudaError;
+ fn cudaEventSynchronize(event:CudaEvent)->CudaError;
+ fn cudaEventElapsedTime(ms:*f32,start:CudaEvent,end:CudaEvent)->CudaError;
+ fn cudaGetLastError()->CudaError;
+ fn cudaGetErrorString(error:CudaError)->*u8;
+ fn cublasCreate_v2(handle:*CublasHandle)->i32;
+ fn cublasDestroy_v2(handle:CublasHandle)->i32;
+ fn cublasSetStream_v2(handle:CublasHandle,stream:CudaStream)->i32;
+ fn cublasSetPointerMode_v2(handle:CublasHandle,mode:i32)->i32;
+ fn cublasSgemm_v2(handle:CublasHandle,transa:i32,transb:i32,m:i32,n:i32,k:i32,
+  alpha:*f32,a:*f32,lda:i32,b:*f32,ldb:i32,beta:*f32,c:*f32,ldc:i32)->i32;
+ fn cublasDgemm_v2(handle:CublasHandle,transa:i32,transb:i32,m:i32,n:i32,k:i32,
+  alpha:*f64,a:*f64,lda:i32,b:*f64,ldb:i32,beta:*f64,c:*f64,ldc:i32)->i32;
 }
-
-pub fn cuda_set_device(device: i32) -> bool {
-    return cudaSetDevice(device) == CUDA_SUCCESS;
-}
-
-pub fn cuda_sync() -> bool {
-    return cudaDeviceSynchronize() == CUDA_SUCCESS;
-}
-
-pub fn cuda_malloc(size: u64) -> CudaDevicePtr {
-    let ptr: CudaDevicePtr = 0 as CudaDevicePtr;
-    cudaMalloc(&ptr, size);
-    return ptr;
-}
-
-pub fn cuda_free(ptr: CudaDevicePtr) -> bool {
-    return cudaFree(ptr) == CUDA_SUCCESS;
-}
-
-pub fn cuda_copy_to_device(dst: CudaDevicePtr, src: *u8, size: u64) -> bool {
-    return cudaMemcpy(dst, src, size, CUDA_MEMCPY_HOST_TO_DEVICE) == CUDA_SUCCESS;
-}
-
-pub fn cuda_copy_to_host(dst: *u8, src: CudaDevicePtr, size: u64) -> bool {
-    return cudaMemcpy(dst, src, size, CUDA_MEMCPY_DEVICE_TO_HOST) == CUDA_SUCCESS;
-}
-
-pub fn cuda_memset(ptr: CudaDevicePtr, value: i32, size: u64) -> bool {
-    return cudaMemset(ptr, value, size) == CUDA_SUCCESS;
-}
-
-pub fn cuda_stream_create() -> CudaStream {
-    let stream: CudaStream = 0 as CudaStream;
-    cudaStreamCreate(&stream);
-    return stream;
-}
-
-pub fn cuda_stream_destroy(stream: CudaStream) -> bool {
-    return cudaStreamDestroy(stream) == CUDA_SUCCESS;
-}
-
-pub fn cuda_last_error() -> *u8 {
-    return cudaGetErrorString(cudaGetLastError());
-}
-
-// ==================== Dim3 for Kernel Launch ====================
-
+pub struct GpuError { domain:i32,code:i32 }
+pub struct CudaBuffer { data:CudaDevicePtr,bytes:u64 }
+pub struct OwnedCudaStream { raw:CudaStream }
+pub struct OwnedCublasHandle { raw:CublasHandle }
 #[repr(C)]
-pub struct Dim3 {
-    pub x: u32,
-    pub y: u32,
-    pub z: u32,
+pub struct Dim3 { x:u32,y:u32,z:u32 }
+pub fn cuda_status(code:i32)->Result<(),GpuError> {
+ if code!=CUDA_SUCCESS {return Result::Err(GpuError{domain:GPU_CUDA,code:code});}
+ Result::Ok(())
 }
-
-impl Dim3 {
-    pub fn new(x: u32, y: u32, z: u32) -> Dim3 {
-        return Dim3 { x: x, y: y, z: z };
-    }
-
-    pub fn d1(x: u32) -> Dim3 {
-        return Dim3 { x: x, y: 1, z: 1 };
-    }
+pub fn cublas_status(code:i32)->Result<(),GpuError> {
+ if code!=0 {return Result::Err(GpuError{domain:GPU_CUBLAS,code:code});}
+ Result::Ok(())
 }
-
-// ==================== cuBLAS FFI ====================
-
-pub type CublasHandle = *u8
-
-extern "C" fn cublasCreate_v2(handle: *CublasHandle) -> i32
-extern "C" fn cublasDestroy_v2(handle: CublasHandle) -> i32
-
-extern "C" fn cublasSgemm_v2(
-    handle: CublasHandle,
-    transa: i32, transb: i32,
-    m: i32, n: i32, k: i32,
-    alpha: *f32, a: *f32, lda: i32,
-    b: *f32, ldb: i32,
-    beta: *f32, c: *f32, ldc: i32
-) -> i32
-
-pub const CUBLAS_OP_N: i32 = 0
-pub const CUBLAS_OP_T: i32 = 1
-
-pub fn cublas_create() -> CublasHandle {
-    let handle: CublasHandle = 0 as CublasHandle;
-    cublasCreate_v2(&handle);
-    return handle;
+pub fn cuda_device_count()->Result<i32,GpuError> {
+ let mut count:i32=0;cuda_status(cudaGetDeviceCount(&count as *i32))?;Result::Ok(count)
 }
-
-pub fn cublas_destroy(handle: CublasHandle) -> bool {
-    return cublasDestroy_v2(handle) == 0;
+pub fn cuda_set_device(device:i32)->Result<(),GpuError> {cuda_status(cudaSetDevice(device))}
+pub fn cuda_sync()->Result<(),GpuError> {cuda_status(cudaDeviceSynchronize())}
+pub fn cuda_buffer_new(bytes:u64)->Result<CudaBuffer,GpuError> {
+ if bytes==0 {return Result::Err(GpuError{domain:GPU_CUDA,code:CUDA_ERROR_INVALID_VALUE});}
+ let mut pointer:CudaDevicePtr=0 as CudaDevicePtr;
+ cuda_status(cudaMalloc(&pointer as *CudaDevicePtr,bytes))?;
+ Result::Ok(CudaBuffer{data:pointer,bytes:bytes})
+}
+pub fn cuda_buffer_free(buffer:*CudaBuffer)->Result<(),GpuError> {
+ if buffer.data==(0 as CudaDevicePtr) {return Result::Ok(());}
+ cuda_status(cudaFree(buffer.data))?;buffer.data=0 as CudaDevicePtr;buffer.bytes=0;Result::Ok(())
+}
+pub fn cuda_copy_to_device(buffer:*CudaBuffer,source:*u8,bytes:u64)->Result<(),GpuError> {
+ if bytes>buffer.bytes || (bytes>0 && (source==(0 as *u8) || buffer.data==(0 as CudaDevicePtr))) {
+  return Result::Err(GpuError{domain:GPU_CUDA,code:CUDA_ERROR_INVALID_VALUE});
+ }
+ if bytes==0 {return Result::Ok(());}
+ cuda_status(cudaMemcpy(buffer.data,source,bytes,CUDA_MEMCPY_HOST_TO_DEVICE))
+}
+pub fn cuda_copy_to_host(destination:*u8,buffer:*CudaBuffer,bytes:u64)->Result<(),GpuError> {
+ if bytes>buffer.bytes || (bytes>0 && (destination==(0 as *u8) || buffer.data==(0 as CudaDevicePtr))) {
+  return Result::Err(GpuError{domain:GPU_CUDA,code:CUDA_ERROR_INVALID_VALUE});
+ }
+ if bytes==0 {return Result::Ok(());}
+ cuda_status(cudaMemcpy(destination,buffer.data,bytes,CUDA_MEMCPY_DEVICE_TO_HOST))
+}
+pub fn cuda_stream_create()->Result<OwnedCudaStream,GpuError> {
+ let mut stream:CudaStream=0 as CudaStream;
+ cuda_status(cudaStreamCreate(&stream as *CudaStream))?;Result::Ok(OwnedCudaStream{raw:stream})
+}
+pub fn cuda_stream_destroy(stream:*OwnedCudaStream)->Result<(),GpuError> {
+ if stream.raw==(0 as CudaStream) {return Result::Ok(());}
+ cuda_status(cudaStreamDestroy(stream.raw))?;stream.raw=0 as CudaStream;Result::Ok(())
+}
+pub fn cuda_stream_sync(stream:*OwnedCudaStream)->Result<(),GpuError> {cuda_status(cudaStreamSynchronize(stream.raw))}
+pub fn cublas_create()->Result<OwnedCublasHandle,GpuError> {
+ let mut handle:CublasHandle=0 as CublasHandle;
+ cublas_status(cublasCreate_v2(&handle as *CublasHandle))?;Result::Ok(OwnedCublasHandle{raw:handle})
+}
+pub fn cublas_destroy(handle:*OwnedCublasHandle)->Result<(),GpuError> {
+ if handle.raw==(0 as CublasHandle) {return Result::Ok(());}
+ cublas_status(cublasDestroy_v2(handle.raw))?;handle.raw=0 as CublasHandle;Result::Ok(())
 }

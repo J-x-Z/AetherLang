@@ -1,0 +1,58 @@
+// Fault-shim test only: verifies CUDA ABI/error/ownership contracts, not GPU math.
+use result::Result;
+use cuda::{GpuError,CudaBuffer,OwnedCudaStream,OwnedCublasHandle,cuda_device_count,cuda_set_device,cuda_sync,cuda_buffer_new,cuda_buffer_free,cuda_copy_to_device,cuda_copy_to_host,cuda_stream_create,cuda_stream_destroy,cuda_stream_sync,cublas_create,cublas_destroy};
+extern "C" {fn mock_failure(operation:i32,code:i32);fn mock_live()->i32;fn mock_calls()->i32;}
+fn is_error(result:Result<(),GpuError>,domain:i32,code:i32)->bool {
+ match result{Result::Err(error)=>error.domain==domain && error.code==code,Result::Ok(_)=>false,}
+}
+fn main()->i32 {
+ let initial_calls:i32=mock_calls();
+ match cuda_buffer_new(0){Result::Err(error)=>{if error.domain!=1 || error.code!=1{return 34;}},Result::Ok(_)=>{return 35;},}
+ if mock_calls()!=initial_calls{return 36;}
+ mock_failure(1,2);
+ match cuda_buffer_new(32){Result::Err(error)=>{if error.domain!=1 || error.code!=2{return 1;}},Result::Ok(_)=>{return 2;},}
+ if mock_live()!=0{return 3;}
+ mock_failure(0,0);
+ let mut buffer:CudaBuffer=match cuda_buffer_new(32){Result::Ok(value)=>value,Result::Err(_)=>{return 4;},};
+ if buffer.bytes!=32 || buffer.data==(0 as *u8) || mock_live()!=1{return 5;}
+ let source:[u8;4]=[65,0,66,255];let mut destination:[u8;4]=[0;4];
+ match cuda_copy_to_device(&buffer as *CudaBuffer,&source[0] as *u8,4){Result::Ok(_)=>{},Result::Err(_)=>{return 6;},}
+ match cuda_copy_to_host(&destination[0] as *u8,&buffer as *CudaBuffer,4){Result::Ok(_)=>{},Result::Err(_)=>{return 7;},}
+ if destination[0]!=65 || destination[1]!=0 || destination[2]!=66 || destination[3]!=255{return 8;}
+ let before:i32=mock_calls();
+ if !is_error(cuda_copy_to_device(&buffer as *CudaBuffer,&source[0] as *u8,33),1,1){return 9;}
+ if !is_error(cuda_copy_to_host(0 as *u8,&buffer as *CudaBuffer,4),1,1) || mock_calls()!=before{return 10;}
+ mock_failure(7,13);
+ if !is_error(cuda_copy_to_host(&destination[0] as *u8,&buffer as *CudaBuffer,4),1,13){return 11;}
+ mock_failure(2,17);
+ let pointer:*u8=buffer.data;
+ if !is_error(cuda_buffer_free(&buffer as *CudaBuffer),1,17) || buffer.data!=pointer || buffer.bytes!=32 || mock_live()!=1{return 12;}
+ mock_failure(0,0);
+ match cuda_buffer_free(&buffer as *CudaBuffer){Result::Ok(_)=>{},Result::Err(_)=>{return 13;},}
+ let released:i32=mock_calls();
+ match cuda_buffer_free(&buffer as *CudaBuffer){Result::Ok(_)=>{},Result::Err(_)=>{return 14;},}
+ if buffer.data!=(0 as *u8) || buffer.bytes!=0 || mock_live()!=0 || mock_calls()!=released{return 15;}
+ mock_failure(3,35);
+ match cuda_stream_create(){Result::Err(error)=>{if error.domain!=1 || error.code!=35{return 16;}},Result::Ok(_)=>{return 17;},}
+ mock_failure(0,0);
+ let mut stream:OwnedCudaStream=match cuda_stream_create(){Result::Ok(value)=>value,Result::Err(_)=>{return 18;},};
+ mock_failure(11,41);if !is_error(cuda_stream_sync(&stream as *OwnedCudaStream),1,41){return 19;}
+ mock_failure(4,42);if !is_error(cuda_stream_destroy(&stream as *OwnedCudaStream),1,42) || stream.raw==(0 as *u8){return 20;}
+ mock_failure(0,0);
+ match cuda_stream_destroy(&stream as *OwnedCudaStream){Result::Ok(_)=>{},Result::Err(_)=>{return 21;},}
+ match cuda_stream_destroy(&stream as *OwnedCudaStream){Result::Ok(_)=>{},Result::Err(_)=>{return 22;},}
+ mock_failure(5,7);
+ match cublas_create(){Result::Err(error)=>{if error.domain!=2 || error.code!=7{return 23;}},Result::Ok(_)=>{return 24;},}
+ mock_failure(0,0);
+ let mut handle:OwnedCublasHandle=match cublas_create(){Result::Ok(value)=>value,Result::Err(_)=>{return 25;},};
+ mock_failure(6,11);if !is_error(cublas_destroy(&handle as *OwnedCublasHandle),2,11) || handle.raw==(0 as *u8){return 26;}
+ mock_failure(0,0);
+ match cublas_destroy(&handle as *OwnedCublasHandle){Result::Ok(_)=>{},Result::Err(_)=>{return 27;},}
+ match cublas_destroy(&handle as *OwnedCublasHandle){Result::Ok(_)=>{},Result::Err(_)=>{return 28;},}
+ mock_failure(8,100);
+ match cuda_device_count(){Result::Err(error)=>{if error.domain!=1 || error.code!=100{return 29;}},Result::Ok(_)=>{return 30;},}
+ mock_failure(9,101);if !is_error(cuda_set_device(0),1,101){return 31;}
+ mock_failure(10,102);if !is_error(cuda_sync(),1,102){return 32;}
+ if mock_live()!=0{return 33;}
+ 0
+}

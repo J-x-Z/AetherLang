@@ -1,0 +1,77 @@
+// Actual GPU work: Aether owns inputs, column-major indexing, reference GEMM,
+// comparison and all resource cleanup. cuBLAS performs the device GEMMs.
+use result::Result;
+use cuda::{GpuError,CudaBuffer,OwnedCudaStream,OwnedCublasHandle,cuda_device_count,cuda_buffer_new,cuda_buffer_free,cuda_copy_to_device,cuda_copy_to_host,cuda_stream_create,cuda_stream_destroy,cuda_stream_sync,cublas_create,cublas_destroy,cublas_status,cublasSetStream_v2,cublasSetPointerMode_v2,cublasSgemm_v2,cublasDgemm_v2,CUBLAS_OP_N,CUBLAS_POINTER_MODE_HOST};
+extern "C" {fn malloc(bytes:u64)->*void;fn free(pointer:*void);fn printf(format:*u8,...)->i32;}
+struct Resources {a:CudaBuffer,b:CudaBuffer,c:CudaBuffer,stream:OwnedCudaStream,handle:OwnedCublasHandle}
+fn initial(index:i32)->f64 {((index%7)-3) as f64/8.0}
+fn reference(a:*f64,b:*f64,row:i32,column:i32)->f64 {
+ let mut sum:f64=0.0;let mut inner:i32=0;
+ while inner<19 {sum=sum+a[row+inner*17]*b[inner+column*19];inner=inner+1;}
+ 1.25*sum+0.5*initial(row+column*17)
+}
+fn execute(resource:*Resources,a:*f64,b:*f64,c:*f64,af:*f32,bf:*f32,cf:*f32)->Result<(),GpuError> {
+ resource.a=cuda_buffer_new(323*8)?;resource.b=cuda_buffer_new(247*8)?;resource.c=cuda_buffer_new(221*8)?;
+ resource.stream=cuda_stream_create()?;resource.handle=cublas_create()?;
+ cublas_status(cublasSetStream_v2(resource.handle.raw,resource.stream.raw))?;
+ cublas_status(cublasSetPointerMode_v2(resource.handle.raw,CUBLAS_POINTER_MODE_HOST))?;
+ cuda_copy_to_device(&resource.a as *CudaBuffer,af as *u8,323*4)?;
+ cuda_copy_to_device(&resource.b as *CudaBuffer,bf as *u8,247*4)?;
+ cuda_copy_to_device(&resource.c as *CudaBuffer,cf as *u8,221*4)?;
+ let alpha:f32=1.25;let beta:f32=0.5;
+ cublas_status(cublasSgemm_v2(resource.handle.raw,CUBLAS_OP_N,CUBLAS_OP_N,17,13,19,&alpha as *f32,resource.a.data as *f32,17,resource.b.data as *f32,19,&beta as *f32,resource.c.data as *f32,17))?;
+ cuda_stream_sync(&resource.stream as *OwnedCudaStream)?;
+ cuda_copy_to_host(cf as *u8,&resource.c as *CudaBuffer,221*4)?;
+ cuda_copy_to_device(&resource.a as *CudaBuffer,a as *u8,323*8)?;
+ cuda_copy_to_device(&resource.b as *CudaBuffer,b as *u8,247*8)?;
+ cuda_copy_to_device(&resource.c as *CudaBuffer,c as *u8,221*8)?;
+ let alpha64:f64=1.25;let beta64:f64=0.5;
+ cublas_status(cublasDgemm_v2(resource.handle.raw,CUBLAS_OP_N,CUBLAS_OP_N,17,13,19,&alpha64 as *f64,resource.a.data as *f64,17,resource.b.data as *f64,19,&beta64 as *f64,resource.c.data as *f64,17))?;
+ cuda_stream_sync(&resource.stream as *OwnedCudaStream)?;
+ cuda_copy_to_host(c as *u8,&resource.c as *CudaBuffer,221*8)?;
+ let mut row:i32=0;let mut largest32:f64=0.0;let mut largest64:f64=0.0;
+ while row<17 {
+  let mut column:i32=0;
+  while column<13 {
+   let expected:f64=reference(a,b,row,column);let index:i32=row+column*17;
+   let mut error32:f64=(cf[index] as f64)-expected;if error32<0.0{error32=-error32;}
+   let mut error64:f64=c[index]-expected;if error64<0.0{error64=-error64;}
+   // These comparisons reject NaN as well as an excessive finite error.
+   if !(error32<=0.00001) || !(error64<=0.0000000001) {return Result::Err(GpuError{domain:3,code:1});}
+   if error32>largest32 {largest32=error32;}if error64>largest64 {largest64=error64;}
+   column=column+1;
+  }
+  row=row+1;
+ }
+ printf("cuda-gemm m=17 n=13 k=19 sgemm-max=%.9g dgemm-max=%.9g\n",largest32,largest64);
+ Result::Ok(())
+}
+fn preserve(first:*GpuError,result:Result<(),GpuError>) {
+ match result {Result::Ok(_)=>{},Result::Err(error)=>{if first.domain==0{*first=error;}},}
+}
+fn main()->i32 {
+ let count:i32=match cuda_device_count(){Result::Ok(value)=>value,Result::Err(error)=>{if error.code==100{printf("SKIP no CUDA device\n");return 77;}printf("CUDA discovery error %d:%d\n",error.domain,error.code);return 1;},};
+ if count==0 {printf("SKIP no CUDA device\n");return 77;}
+ let data:*f64=malloc(791*8) as *f64;let single:*f32=malloc(791*4) as *f32;
+ if data==(0 as *f64) || single==(0 as *f32) {free(data as *void);free(single as *void);return 2;}
+ let a:*f64=data;let b:*f64=data+323;let c:*f64=data+570;
+ let af:*f32=single;let bf:*f32=single+323;let cf:*f32=single+570;
+ let mut index:i32=0;
+ while index<323 {a[index]=((index%17)-(index/17)%5) as f64/8.0;af[index]=a[index] as f32;index=index+1;}
+ index=0;while index<247 {b[index]=((index/19)+(index%19)%7) as f64/16.0;bf[index]=b[index] as f32;index=index+1;}
+ index=0;while index<221 {c[index]=initial(index);cf[index]=c[index] as f32;index=index+1;}
+ let mut resource:Resources=Resources{a:CudaBuffer{data:0 as *u8,bytes:0},b:CudaBuffer{data:0 as *u8,bytes:0},c:CudaBuffer{data:0 as *u8,bytes:0},stream:OwnedCudaStream{raw:0 as *u8},handle:OwnedCublasHandle{raw:0 as *u8}};
+ let mut first:GpuError=GpuError{domain:0,code:0};
+ preserve(&first as *GpuError,execute(&resource as *Resources,a,b,c,af,bf,cf));
+ // Complete outstanding work even when an earlier API returned an error, then
+ // release every acquired resource while preserving the first failure.
+ if resource.stream.raw!=(0 as *u8) {preserve(&first as *GpuError,cuda_stream_sync(&resource.stream as *OwnedCudaStream));}
+ preserve(&first as *GpuError,cublas_destroy(&resource.handle as *OwnedCublasHandle));
+ preserve(&first as *GpuError,cuda_buffer_free(&resource.c as *CudaBuffer));
+ preserve(&first as *GpuError,cuda_buffer_free(&resource.b as *CudaBuffer));
+ preserve(&first as *GpuError,cuda_buffer_free(&resource.a as *CudaBuffer));
+ preserve(&first as *GpuError,cuda_stream_destroy(&resource.stream as *OwnedCudaStream));
+ free(single as *void);free(data as *void);
+ if first.domain!=0 {printf("GPU error %d:%d\n",first.domain,first.code);return 1;}
+ 0
+}
