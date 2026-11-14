@@ -8,8 +8,10 @@ cd "$root"
 : "${RUST_TEST_THREADS:=3}"
 : "${CARGO_TARGET_DIR:=$root/target}"
 : "${TMPDIR:=$CARGO_TARGET_DIR/tmp}"
+mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR"
+CARGO_TARGET_DIR=$(CDPATH= cd -- "$CARGO_TARGET_DIR" && pwd)
+TMPDIR=$(CDPATH= cd -- "$TMPDIR" && pwd)
 export CARGO_BUILD_JOBS RUST_TEST_THREADS CARGO_TARGET_DIR TMPDIR
-mkdir -p "$TMPDIR"
 case "${1:-llvm}" in
     llvm)
         if [ -z "${LLVM_SYS_211_PREFIX:-}" ] && [ -x /opt/homebrew/opt/llvm@21/bin/llvm-config ]; then
@@ -22,6 +24,7 @@ case "${1:-llvm}" in
         backends='c' ;;
     *) printf '%s\n' 'Usage: scripts/test.sh [llvm|c]' >&2; exit 2 ;;
 esac
+python3 "$root/scripts/test_build_paths.py"
 compiler="$CARGO_TARGET_DIR/debug/aethc"
 # $backends is an intentional list of fixed tokens selected above.
 python3 scripts/validate.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/validation" --backends $backends

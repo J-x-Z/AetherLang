@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Comparable baseline/current measurements on the same scalar workload.
 
-Use C-only release compilers for --baseline and --current. Emission is timed
-separately from clang. Identical host compiler flags then isolate generated-code
-quality from the old driver's omission of native optimization flags.
+Use matching release builds for --baseline and --current. Emission is timed
+separately from clang. --backend llvm handles the baseline object-only driver
+and the upgraded explicit --emit-obj interface.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,7 +19,10 @@ p.add_argument('--baseline', type=Path, required=True)
 p.add_argument('--current', type=Path, required=True)
 p.add_argument('--work-dir', type=Path, required=True)
 p.add_argument('--samples', type=int, default=5)
+p.add_argument('--backend', choices=['c', 'llvm'], default='c')
 a = p.parse_args()
+if a.samples < 1:
+    p.error('--samples must be positive')
 a.work_dir.mkdir(parents=True, exist_ok=True)
 a.work_dir = a.work_dir.resolve()
 source = Path(__file__).resolve().parents[1] / 'examples/upgrade/benchmark.aeth'
@@ -37,20 +41,25 @@ def timed(command, expected=None):
     return dict(seconds=elapsed, rss_bytes=int(match[1]) if match else None)
 
 report = {'source': str(source), 'host': os.uname().sysname + ' ' + os.uname().machine,
-          'samples': a.samples, 'expected_stdout': '652496\n', 'versions': {}, 'results': {}}
-for tool in ['clang', 'rustc']:
+          'backend': a.backend, 'samples': a.samples, 'expected_stdout': '652496\n', 'versions': {}, 'results': {}}
+for tool in ['clang']:
     report['versions'][tool] = subprocess.check_output([tool, '--version'], text=True).splitlines()[0]
 for name, compiler in [('baseline', a.baseline.resolve()), ('current', a.current.resolve())]:
-    cfile = a.work_dir / (name + '.c')
-    args = [compiler, '--backend', 'c', '--emit-c', '-O', '0', '-o', cfile, source]
+    cfile = a.work_dir / (name + ('.c' if a.backend == 'c' else '.o'))
+    mode = ['--emit-c'] if a.backend == 'c' else (['--emit-obj'] if name == 'current' else [])
+    args = [compiler, '--backend', a.backend, *mode, '-O', '0', '-o', cfile, source]
     timed(args) # one untimed cache warm-up, then identical measured samples
     emission = [timed(args) for _ in range(a.samples)]
-    entry = dict(compiler_bytes=compiler.stat().st_size, c_bytes=cfile.stat().st_size,
+    measured_rss = [x['rss_bytes'] for x in emission if x['rss_bytes'] is not None]
+    entry = dict(compiler=str(compiler), compiler_sha256=hashlib.sha256(compiler.read_bytes()).hexdigest(),
+                 compiler_bytes=compiler.stat().st_size, emitted_bytes=cfile.stat().st_size,
                  emission_samples=emission,
                  emission_seconds_median=statistics.median(x['seconds'] for x in emission),
-                 emission_rss_bytes_max=max((x['rss_bytes'] or 0) for x in emission), programs={})
+                 emission_rss_bytes_max=max(measured_rss) if measured_rss else None, programs={})
     for opt in [0, 2]:
         binary = a.work_dir / f'{name}-O{opt}'
+        if a.backend == 'llvm':
+            timed([compiler, '--backend', 'llvm', *mode, '-O', str(opt), '-o', cfile, source])
         built = timed(['clang', '-w', f'-O{opt}', cfile, '-o', binary])
         timed([binary], '652496\n')
         samples = [timed([binary], '652496\n') for _ in range(a.samples)]

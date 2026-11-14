@@ -8,8 +8,10 @@ cd "$root"
 : "${CARGO_BUILD_JOBS:=3}"
 : "${CARGO_TARGET_DIR:=$root/target}"
 : "${TMPDIR:=$CARGO_TARGET_DIR/tmp}"
+mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR"
+CARGO_TARGET_DIR=$(CDPATH= cd -- "$CARGO_TARGET_DIR" && pwd)
+TMPDIR=$(CDPATH= cd -- "$TMPDIR" && pwd)
 export CARGO_BUILD_JOBS CARGO_TARGET_DIR TMPDIR
-mkdir -p "$TMPDIR"
 case "${1:-llvm}" in
     c) set -- --no-default-features ;;
     llvm)
