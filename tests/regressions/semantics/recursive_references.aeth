@@ -1,0 +1,33 @@
+enum Next { More(&Node), End }
+struct Node { next: Next, value: i32 }
+
+fn last(start: &Node) -> &Node {
+    let mut current: &Node = start;
+    loop {
+        match current.next {
+            Next::More(next) => { current = next; },
+            Next::End => { return current; }
+        }
+    }
+}
+fn advance(start: &Node, count: i32) -> &Node {
+    if count == 0 { return start; }
+    match start.next {
+        Next::More(next) => advance(next, count - 1),
+        Next::End => start
+    }
+}
+fn last_value(start: &Node) -> &i32 {
+    match start.next {
+        Next::More(next) => last_value(next),
+        Next::End => &start.value,
+    }
+}
+fn main() -> i32 {
+    let end: Node = Node { next: Next::End, value: 7 };
+    let head: Node = Node { next: Next::More(&end), value: 42 };
+    let result: &Node = last(&head);
+    if result.value != 7 || advance(&head, 10).value != 7 { return 1; }
+    if *last_value(&head) != 7 { return 3; }
+    return 0;
+}

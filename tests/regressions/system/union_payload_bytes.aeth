@@ -1,0 +1,27 @@
+// Inactive bool fields/padding must never interpret another variant's bytes.
+enum Result<T,E> { Ok(T), Err(E) }
+struct Child { pid:i32, reaped:bool, status:i32 }
+struct Failure { stage:i32, code:i32 }
+union Payload { child:Child, failure:Failure }
+struct Wrapper { first:u64, payload:Payload, last:u8 }
+fn create(code:i32)->Result<Child,Failure> {return Result::Err(Failure{stage:6,code:code});}
+fn relay(value:Result<Child,Failure>)->Result<Child,Failure> {return value;}
+fn unwrap(value:Result<Child,Failure>)->i32 {match value {Result::Ok(_)=>-1,Result::Err(error)=>error.code}}
+fn union_create(code:i32)->Payload {Payload{failure:Failure{stage:2,code:code}}}
+fn union_relay(value:Payload)->Payload {return value;}
+fn nested(value:Wrapper)->Wrapper {return value;}
+fn main()->i32 {
+    let codes:[i32;6]=[0,1,2,9,305419896,-123456789];
+    let mut i:usize=0;
+    while i<6 {
+        let code:i32=codes[i];
+        if unwrap(relay(create(code)))!=code {return 1;}
+        let p:Payload=union_relay(union_create(code));
+        let wrapper:Wrapper=nested(Wrapper{first:99,payload:p,last:7});
+        unsafe {if p.failure.code!=code || wrapper.payload.failure.code!=code {return 2;}}
+        if wrapper.first!=99 || wrapper.last!=(7 as u8) {return 3;}
+        i=i+1;
+    }
+    if size_of(Payload)!=(12 as usize) || align_of(Payload)!=(4 as usize) {return 4;}
+    return 0;
+}

@@ -127,6 +127,7 @@ impl CCodeGen {
         fn key(ty: &IRType) -> String {
             match ty {
                 IRType::Array(elem, len) => format!("a{}_{}", len, key(elem)),
+                IRType::Vector(elem, lanes) => format!("vec{}_{}", lanes, key(elem)),
                 IRType::Ptr(elem) => format!("p_{}", key(elem)),
                 IRType::Volatile(elem) => format!("v_{}", key(elem)),
                 IRType::Struct(name) => format!("s{}_{}", name.len(), name),
@@ -249,33 +250,7 @@ impl CCodeGen {
                 let params_str: Vec<_> = params.iter().map(|p| self.ir_type_to_c(p)).collect();
                 format!("{}(*)({})", self.ir_type_to_c(ret), params_str.join(", "))
             }
-            // SIMD vector types - use platform-specific intrinsics
-            IRType::Vector(elem, lanes) => {
-                match (elem.as_ref(), lanes) {
-                    // ARM NEON types
-                    (IRType::F32, 4) if self.target_triple.contains("aarch64") || self.target_triple.contains("arm") => 
-                        "float32x4_t".to_string(),
-                    (IRType::F64, 2) if self.target_triple.contains("aarch64") => 
-                        "float64x2_t".to_string(),
-                    (IRType::I32, 4) if self.target_triple.contains("aarch64") || self.target_triple.contains("arm") => 
-                        "int32x4_t".to_string(),
-                    (IRType::I64, 2) if self.target_triple.contains("aarch64") => 
-                        "int64x2_t".to_string(),
-                    // x86 SSE/AVX types  
-                    (IRType::F32, 4) => "__m128".to_string(),
-                    (IRType::F32, 8) => "__m256".to_string(),
-                    (IRType::F64, 2) => "__m128d".to_string(),
-                    (IRType::F64, 4) => "__m256d".to_string(),
-                    (IRType::I32, 4) => "__m128i".to_string(),
-                    (IRType::I32, 8) => "__m256i".to_string(),
-                    (IRType::I64, 2) => "__m128i".to_string(),
-                    (IRType::I64, 4) => "__m256i".to_string(),
-                    // Fallback: use GCC vector extension
-                    _ => format!("{} __attribute__((vector_size({})))", 
-                        self.ir_type_to_c(elem), 
-                        elem.size_bytes() * lanes)
-                }
-            }
+            IRType::Vector(elem, lanes) => format!("__aeth_v_{}_{}", self.ir_type_to_c(elem),lanes),
         }
     }
 
@@ -438,14 +413,7 @@ impl CCodeGen {
             self.writeln(&format!("/* @effects: {} */", effects_str));
         }
         
-        // Generate SIMD vectorization hints for @simd annotated functions
-        if func.simd {
-            self.writeln("/* @simd: auto-vectorization enabled */");
-            self.writeln("#if defined(__GNUC__) || defined(__clang__)");
-            self.writeln("__attribute__((optimize(\"tree-vectorize\")))");
-            self.writeln("#endif");
-        }
-        
+        // @simd does not authorize ISA changes or relaxed floating semantics.
         // Generate naked function attribute (no prologue/epilogue)
         if func.naked {
             self.writeln("/* @naked: no prologue/epilogue */");
@@ -500,6 +468,7 @@ impl CCodeGen {
                     Instruction::GetFieldPtr { dest, .. } |
                     Instruction::Phi { dest, .. } |
                     Instruction::Layout { dest, .. } |
+                    Instruction::Platform { dest, .. } |
                     Instruction::Cast { dest, .. } => {
                         let var = self.get_var(*dest);
                         let c_type = self.reg_types.get(dest)
@@ -507,7 +476,7 @@ impl CCodeGen {
                             .unwrap_or("int64_t".to_string());
                         declarations.push(format!("{} {};", c_type, var));
                     }
-                    Instruction::Call { dest: Some(dest), .. } | Instruction::Memory { dest: Some(dest), .. } => {
+                    Instruction::Call { dest: Some(dest), .. } | Instruction::Memory { dest: Some(dest), .. } | Instruction::Vector { dest: Some(dest), .. } => {
                         let var = self.get_var(*dest);
                         let c_type = self.reg_types.get(dest)
                             .map(|t| self.ir_type_to_c(t))
@@ -644,6 +613,11 @@ impl CCodeGen {
                 }
             }
             
+            Instruction::Platform {dest, op} => {
+                let var = self.get_var(*dest);
+                match op { crate::intrinsics::PlatformOp::ErrnoGet => self.writeln(&format!("{var} = errno;")) }
+            }
+            Instruction::Vector {dest,kind,ty,args} => {self.generate_vector(*dest,*kind,ty,args);}
             Instruction::Memory {dest,kind,ty,args,order,failure_order} => {
                 self.generate_memory(*dest,*kind,ty,args,*order,*failure_order);
             }
@@ -661,35 +635,6 @@ impl CCodeGen {
                     "alloc" => ("malloc", false),
                     "free" => ("free", true),
                     "exit" => ("exit", true),
-                    // SIMD intrinsics - map to platform-specific calls
-                    "f32x4_splat" => ("_mm_set1_ps", false),
-                    "f32x4_add" => ("_mm_add_ps", false),
-                    "f32x4_sub" => ("_mm_sub_ps", false),
-                    "f32x4_mul" => ("_mm_mul_ps", false),
-                    "f32x4_div" => ("_mm_div_ps", false),
-                    "f64x2_splat" => ("_mm_set1_pd", false),
-                    "f64x2_add" => ("_mm_add_pd", false),
-                    "f64x2_mul" => ("_mm_mul_pd", false),
-                    "i32x4_splat" => ("_mm_set1_epi32", false),
-                    "i32x4_add" => ("_mm_add_epi32", false),
-                    "i32x4_mul" => ("_mm_mullo_epi32", false),
-                    // __simd_* prefixed versions for simd.aeth
-                    "__simd_f32x4_new" => ("_mm_set_ps", false), // Note: reversed arg order
-                    "__simd_f32x4_splat" => ("_mm_set1_ps", false),
-                    "__simd_f32x4_add" => ("_mm_add_ps", false),
-                    "__simd_f32x4_sub" => ("_mm_sub_ps", false),
-                    "__simd_f32x4_mul" => ("_mm_mul_ps", false),
-                    "__simd_f32x4_div" => ("_mm_div_ps", false),
-                    "__simd_f32x4_load" => ("_mm_loadu_ps", false),
-                    "__simd_f32x4_store" => ("_mm_storeu_ps", true), // void return
-                    "__simd_f64x2_new" => ("_mm_set_pd", false),
-                    "__simd_f64x2_splat" => ("_mm_set1_pd", false),
-                    "__simd_f64x2_add" => ("_mm_add_pd", false),
-                    "__simd_f64x2_mul" => ("_mm_mul_pd", false),
-                    "__simd_i32x4_new" => ("_mm_set_epi32", false),
-                    "__simd_i32x4_splat" => ("_mm_set1_epi32", false),
-                    "__simd_i32x4_add" => ("_mm_add_epi32", false),
-                    "__simd_i32x4_mul" => ("_mm_mullo_epi32", false),
                     _ => (func.as_str(), false),
                 };
                 
@@ -983,6 +928,7 @@ impl CCodeGen {
         // Header
         self.writeln("/* Generated by AetherLang C Backend */");
         self.writeln("#include <stdint.h>");
+        self.writeln("#include <errno.h>");
         self.writeln("#include <stddef.h>");
         self.writeln("#include <stdbool.h>");
         self.writeln("#include <stdio.h>");
@@ -990,11 +936,12 @@ impl CCodeGen {
         self.writeln("#include <string.h>");
         self.writeln("#include <math.h>");
         self.writeln("struct __aeth_unit { }; /* zero-sized language unit */");
-        // SIMD headers (platform-specific)
-        if self.target_triple.contains("aarch64") || self.target_triple.contains("arm64") || self.target_triple.contains("arm") {
-            self.writeln("#include <arm_neon.h>");
-        } else if self.target_triple.contains("x86") || self.target_triple.contains("i686") || self.target_triple.contains("x86_64") {
-            self.writeln("#include <immintrin.h>  /* SSE/AVX */");
+        // Fixed-width portable vector representation: the host compiler selects ISA.
+        for element in [IRType::F32,IRType::F64,IRType::I32,IRType::I64,IRType::U32,IRType::U64] {
+            for lanes in [2,4,8] {
+                let name=self.ir_type_to_c(&IRType::Vector(Box::new(element.clone()),lanes));
+                self.writeln(&format!("typedef {} {} __attribute__((vector_size({})));",self.ir_type_to_c(&element),name,element.size_bytes()*lanes));
+            }
         }
         // LLVM-C headers (if module uses LLVM functions)
         let uses_llvm = module.externs.iter().any(|e| e.name.starts_with("LLVM"));
@@ -1180,7 +1127,7 @@ impl CCodeGen {
         // foreign function receives a prototype, including its variadic marker.
         const HEADER_FUNCTIONS: &[&str] = &[
             "abort", "exit", "malloc", "calloc", "realloc", "free", "atoi", "atol", "atof", "strtol", "strtoul",
-            "system", "getenv", "qsort", "bsearch", "abs", "labs", "llabs", "rand", "srand",
+            "system", "getenv", "setenv", "unsetenv", "qsort", "bsearch", "abs", "labs", "llabs", "rand", "srand",
             "puts", "putchar", "getchar", "printf", "fprintf", "sprintf", "snprintf", "scanf", "sscanf", "fscanf",
             "fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "rewind", "fgets", "fputs", "fflush", "feof", "ferror", "clearerr",
             "tmpfile", "remove", "rename", "perror", "setbuf", "setvbuf", "fileno", "fgetc", "fputc", "getc", "putc", "ungetc", "freopen",
@@ -1357,3 +1304,6 @@ mod tests {
 
 #[path = "c_memory.rs"]
 mod memory;
+
+#[path = "c_simd.rs"]
+mod simd;

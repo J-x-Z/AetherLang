@@ -1,93 +1,80 @@
-// AetherLang SIMD Standard Library
-// Platform-independent SIMD vector operations
-// Uses NEON on ARM, SSE/AVX on x86
+// Portable fixed-width SIMD. Lanes are ordered from zero in constructor order.
+// Floating arithmetic follows IEEE semantics; reductions add lanes left to right.
+// Comparisons return integer masks: true=-1, false=0; all/any test nonzero lanes.
+// Loads/stores permit unaligned addresses and copy exactly one vector.
+// Callers of pointer operations must provide valid memory for every lane.
 
-// ==================== f32x4 Operations ====================
+pub fn f32x4_new(x0: f32, x1: f32, x2: f32, x3: f32) -> f32x4 { return __simd_f32x4_new(x0, x1, x2, x3); }
+pub fn f32x4_splat(value: f32) -> f32x4 { return __simd_f32x4_splat(value); }
+pub fn f32x4_add(a: f32x4, b: f32x4) -> f32x4 { return __simd_f32x4_add(a, b); }
+pub fn f32x4_sub(a: f32x4, b: f32x4) -> f32x4 { return __simd_f32x4_sub(a, b); }
+pub fn f32x4_mul(a: f32x4, b: f32x4) -> f32x4 { return __simd_f32x4_mul(a, b); }
+pub fn f32x4_div(a: f32x4, b: f32x4) -> f32x4 { return __simd_f32x4_div(a, b); }
+pub fn f32x4_sum(value: f32x4) -> f32 { return __simd_f32x4_sum(value); }
+pub fn f32x4_extract(value: f32x4, lane: usize) -> f32 { return __simd_f32x4_extract(value, lane); }
+pub fn f32x4_load(pointer: *f32) -> f32x4 { unsafe { return __simd_f32x4_load(pointer); } }
+pub fn f32x4_store(pointer: *f32, value: f32x4) -> () { unsafe { __simd_f32x4_store(pointer, value); } }
+pub fn f32x4_eq(a: f32x4, b: f32x4) -> i32x4 { return __simd_f32x4_eq(a, b); }
+pub fn f32x4_ne(a: f32x4, b: f32x4) -> i32x4 { return __simd_f32x4_ne(a, b); }
+pub fn f32x4_lt(a: f32x4, b: f32x4) -> i32x4 { return __simd_f32x4_lt(a, b); }
+pub fn f32x4_le(a: f32x4, b: f32x4) -> i32x4 { return __simd_f32x4_le(a, b); }
+pub fn f32x4_gt(a: f32x4, b: f32x4) -> i32x4 { return __simd_f32x4_gt(a, b); }
+pub fn f32x4_ge(a: f32x4, b: f32x4) -> i32x4 { return __simd_f32x4_ge(a, b); }
 
-// Construct a f32x4 from 4 floats
-pub fn f32x4_new(a: f32, b: f32, c: f32, d: f32) -> f32x4 {
-    // Compiler intrinsic - generates platform-specific code
-    return __simd_f32x4_new(a, b, c, d)
-}
+pub fn f64x2_new(x0: f64, x1: f64) -> f64x2 { return __simd_f64x2_new(x0, x1); }
+pub fn f64x2_splat(value: f64) -> f64x2 { return __simd_f64x2_splat(value); }
+pub fn f64x2_add(a: f64x2, b: f64x2) -> f64x2 { return __simd_f64x2_add(a, b); }
+pub fn f64x2_sub(a: f64x2, b: f64x2) -> f64x2 { return __simd_f64x2_sub(a, b); }
+pub fn f64x2_mul(a: f64x2, b: f64x2) -> f64x2 { return __simd_f64x2_mul(a, b); }
+pub fn f64x2_div(a: f64x2, b: f64x2) -> f64x2 { return __simd_f64x2_div(a, b); }
+pub fn f64x2_sum(value: f64x2) -> f64 { return __simd_f64x2_sum(value); }
+pub fn f64x2_extract(value: f64x2, lane: usize) -> f64 { return __simd_f64x2_extract(value, lane); }
+pub fn f64x2_load(pointer: *f64) -> f64x2 { unsafe { return __simd_f64x2_load(pointer); } }
+pub fn f64x2_store(pointer: *f64, value: f64x2) -> () { unsafe { __simd_f64x2_store(pointer, value); } }
+pub fn f64x2_eq(a: f64x2, b: f64x2) -> i64x2 { return __simd_f64x2_eq(a, b); }
+pub fn f64x2_ne(a: f64x2, b: f64x2) -> i64x2 { return __simd_f64x2_ne(a, b); }
+pub fn f64x2_lt(a: f64x2, b: f64x2) -> i64x2 { return __simd_f64x2_lt(a, b); }
+pub fn f64x2_le(a: f64x2, b: f64x2) -> i64x2 { return __simd_f64x2_le(a, b); }
+pub fn f64x2_gt(a: f64x2, b: f64x2) -> i64x2 { return __simd_f64x2_gt(a, b); }
+pub fn f64x2_ge(a: f64x2, b: f64x2) -> i64x2 { return __simd_f64x2_ge(a, b); }
 
-// Create a f32x4 with all lanes set to same value
-pub fn f32x4_splat(v: f32) -> f32x4 {
-    return __simd_f32x4_splat(v)
-}
+pub fn i32x4_new(x0: i32, x1: i32, x2: i32, x3: i32) -> i32x4 { return __simd_i32x4_new(x0, x1, x2, x3); }
+pub fn i32x4_splat(value: i32) -> i32x4 { return __simd_i32x4_splat(value); }
+pub fn i32x4_add(a: i32x4, b: i32x4) -> i32x4 { return __simd_i32x4_add(a, b); }
+pub fn i32x4_sub(a: i32x4, b: i32x4) -> i32x4 { return __simd_i32x4_sub(a, b); }
+pub fn i32x4_mul(a: i32x4, b: i32x4) -> i32x4 { return __simd_i32x4_mul(a, b); }
+pub fn i32x4_sum(value: i32x4) -> i32 { return __simd_i32x4_sum(value); }
+pub fn i32x4_extract(value: i32x4, lane: usize) -> i32 { return __simd_i32x4_extract(value, lane); }
+pub fn i32x4_load(pointer: *i32) -> i32x4 { unsafe { return __simd_i32x4_load(pointer); } }
+pub fn i32x4_store(pointer: *i32, value: i32x4) -> () { unsafe { __simd_i32x4_store(pointer, value); } }
+pub fn i32x4_eq(a: i32x4, b: i32x4) -> i32x4 { return __simd_i32x4_eq(a, b); }
+pub fn i32x4_ne(a: i32x4, b: i32x4) -> i32x4 { return __simd_i32x4_ne(a, b); }
+pub fn i32x4_lt(a: i32x4, b: i32x4) -> i32x4 { return __simd_i32x4_lt(a, b); }
+pub fn i32x4_le(a: i32x4, b: i32x4) -> i32x4 { return __simd_i32x4_le(a, b); }
+pub fn i32x4_gt(a: i32x4, b: i32x4) -> i32x4 { return __simd_i32x4_gt(a, b); }
+pub fn i32x4_ge(a: i32x4, b: i32x4) -> i32x4 { return __simd_i32x4_ge(a, b); }
+pub fn i32x4_all(value: i32x4) -> bool { return __simd_i32x4_all(value); }
+pub fn i32x4_any(value: i32x4) -> bool { return __simd_i32x4_any(value); }
 
-// Element-wise addition
-pub fn f32x4_add(a: f32x4, b: f32x4) -> f32x4 {
-    return __simd_f32x4_add(a, b)
-}
+pub fn i64x2_new(x0: i64, x1: i64) -> i64x2 { return __simd_i64x2_new(x0, x1); }
+pub fn i64x2_splat(value: i64) -> i64x2 { return __simd_i64x2_splat(value); }
+pub fn i64x2_add(a: i64x2, b: i64x2) -> i64x2 { return __simd_i64x2_add(a, b); }
+pub fn i64x2_sub(a: i64x2, b: i64x2) -> i64x2 { return __simd_i64x2_sub(a, b); }
+pub fn i64x2_mul(a: i64x2, b: i64x2) -> i64x2 { return __simd_i64x2_mul(a, b); }
+pub fn i64x2_sum(value: i64x2) -> i64 { return __simd_i64x2_sum(value); }
+pub fn i64x2_extract(value: i64x2, lane: usize) -> i64 { return __simd_i64x2_extract(value, lane); }
+pub fn i64x2_load(pointer: *i64) -> i64x2 { unsafe { return __simd_i64x2_load(pointer); } }
+pub fn i64x2_store(pointer: *i64, value: i64x2) -> () { unsafe { __simd_i64x2_store(pointer, value); } }
+pub fn i64x2_eq(a: i64x2, b: i64x2) -> i64x2 { return __simd_i64x2_eq(a, b); }
+pub fn i64x2_ne(a: i64x2, b: i64x2) -> i64x2 { return __simd_i64x2_ne(a, b); }
+pub fn i64x2_lt(a: i64x2, b: i64x2) -> i64x2 { return __simd_i64x2_lt(a, b); }
+pub fn i64x2_le(a: i64x2, b: i64x2) -> i64x2 { return __simd_i64x2_le(a, b); }
+pub fn i64x2_gt(a: i64x2, b: i64x2) -> i64x2 { return __simd_i64x2_gt(a, b); }
+pub fn i64x2_ge(a: i64x2, b: i64x2) -> i64x2 { return __simd_i64x2_ge(a, b); }
+pub fn i64x2_all(value: i64x2) -> bool { return __simd_i64x2_all(value); }
+pub fn i64x2_any(value: i64x2) -> bool { return __simd_i64x2_any(value); }
 
-// Element-wise subtraction
-pub fn f32x4_sub(a: f32x4, b: f32x4) -> f32x4 {
-    return __simd_f32x4_sub(a, b)
-}
-
-// Element-wise multiplication
-pub fn f32x4_mul(a: f32x4, b: f32x4) -> f32x4 {
-    return __simd_f32x4_mul(a, b)
-}
-
-// Element-wise division
-pub fn f32x4_div(a: f32x4, b: f32x4) -> f32x4 {
-    return __simd_f32x4_div(a, b)
-}
-
-// Dot product: sum of element-wise products
 pub fn f32x4_dot(a: f32x4, b: f32x4) -> f32 {
-    let prod = f32x4_mul(a, b)
-    return __simd_f32x4_sum(prod)
-}
-
-// Horizontal sum of all lanes
-pub fn f32x4_sum(v: f32x4) -> f32 {
-    return __simd_f32x4_sum(v)
-}
-
-// Load 4 floats from memory (must be 16-byte aligned)
-pub fn f32x4_load(ptr: *f32) -> f32x4 {
-    return __simd_f32x4_load(ptr)
-}
-
-// Store 4 floats to memory (must be 16-byte aligned)
-pub fn f32x4_store(ptr: *f32, v: f32x4) {
-    __simd_f32x4_store(ptr, v)
-}
-
-// ==================== f64x2 Operations ====================
-
-pub fn f64x2_new(a: f64, b: f64) -> f64x2 {
-    return __simd_f64x2_new(a, b)
-}
-
-pub fn f64x2_splat(v: f64) -> f64x2 {
-    return __simd_f64x2_splat(v)
-}
-
-pub fn f64x2_add(a: f64x2, b: f64x2) -> f64x2 {
-    return __simd_f64x2_add(a, b)
-}
-
-pub fn f64x2_mul(a: f64x2, b: f64x2) -> f64x2 {
-    return __simd_f64x2_mul(a, b)
-}
-
-// ==================== i32x4 Operations ====================
-
-pub fn i32x4_new(a: i32, b: i32, c: i32, d: i32) -> i32x4 {
-    return __simd_i32x4_new(a, b, c, d)
-}
-
-pub fn i32x4_splat(v: i32) -> i32x4 {
-    return __simd_i32x4_splat(v)
-}
-
-pub fn i32x4_add(a: i32x4, b: i32x4) -> i32x4 {
-    return __simd_i32x4_add(a, b)
-}
-
-pub fn i32x4_mul(a: i32x4, b: i32x4) -> i32x4 {
-    return __simd_i32x4_mul(a, b)
+    let product: f32x4 = f32x4_mul(a, b);
+    return f32x4_sum(product);
 }

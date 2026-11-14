@@ -1,15 +1,43 @@
 //! Binding-aware definite assignment, lexical loans, and reference provenance.
 //! Raw pointers remain an explicit manual-lifetime boundary; references do not.
 use super::*;
+use std::hash::{Hash, Hasher};
 
 type BindingId = usize;
 type Path = Vec<Projection>;
+/// A finite abstract region: all storage of `ty` reachable from a parameter
+/// origin through aggregate projections and references. It is never a concrete
+/// pointer; call sites expand it against their actual binding/reference graph.
+#[derive(Clone)]
+struct Region {
+    ty: ResolvedType,
+}
+impl PartialEq for Region {
+    fn eq(&self, other: &Self) -> bool {
+        SemanticAnalyzer::type_identity(&self.ty) == SemanticAnalyzer::type_identity(&other.ty)
+    }
+}
+impl Eq for Region {}
+impl Hash for Region {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        SemanticAnalyzer::type_identity(&self.ty).hash(state);
+    }
+}
+impl std::fmt::Debug for Region {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Region")
+            .field(&SemanticAnalyzer::type_identity(&self.ty))
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Projection {
     Field(String),
     Index(Option<i64>),
     Variant(usize),
     Deref,
+    Reachable(Region),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Root {
@@ -27,6 +55,7 @@ struct Place {
 struct Reference {
     at: Path,
     target: Place,
+    pointee: Region,
     mutable: bool,
     ancestors: HashSet<BindingId>,
 }
@@ -197,8 +226,7 @@ impl SemanticAnalyzer {
         // Reference return/write summaries are independent of declaration order,
         // including recursive forwarding functions. Validation uses the fixed point.
         let mut summaries = HashMap::<String, FunctionFlow>::new();
-        let mut converged = false;
-        for _ in 0..=functions.len() {
+        loop {
             let mut changed = false;
             for function in &functions {
                 if !function.type_params.is_empty() {
@@ -211,12 +239,8 @@ impl SemanticAnalyzer {
                 }
             }
             if !changed {
-                converged = true;
                 break;
             }
-        }
-        if !converged {
-            return Err(Error::ModuleError("recursive reference provenance does not converge; use an explicit raw-pointer lifetime contract".into()));
         }
         for function in functions {
             if !function.type_params.is_empty() {
@@ -399,6 +423,7 @@ impl<'a> Flow<'a> {
     fn child_type(&self, ty: &ResolvedType, projection: &Projection) -> ResolvedType {
         let qualified = matches!(ty, ResolvedType::Volatile(_));
         let result = match (ty.unqualified(), projection) {
+            (_, Projection::Reachable(region)) => region.ty.clone(),
             (ResolvedType::Enum { name }, Projection::Variant(index)) => self
                 .analyzer
                 .facts
@@ -471,11 +496,12 @@ impl<'a> Flow<'a> {
             return;
         }
         match ty.unqualified() {
-            ResolvedType::Reference { mutable, .. } => {
+            ResolvedType::Reference { mutable, inner } => {
                 let mut path = at.clone();
                 path.push(Projection::Deref);
                 result.push(Reference {
                     at: at.clone(),
+                    pointee: Region { ty: *inner.clone() },
                     target: Place {
                         root: Root::Parameter(index, path),
                         path: vec![],
@@ -533,6 +559,7 @@ impl<'a> Flow<'a> {
                     full.extend(path.clone());
                     *path = full;
                 }
+                Self::normalize_reference(&mut reference);
                 value.references.push(reference);
             }
         }
@@ -688,11 +715,107 @@ impl<'a> Flow<'a> {
         }
         result
     }
+    fn parameter_path(place: &Place) -> Option<(usize, Path)> {
+        let Root::Parameter(index, path) = &place.root else {
+            return None;
+        };
+        let mut full = path.clone();
+        full.extend(place.path.clone());
+        Some((*index, full))
+    }
+    fn region_place(place: &Place, ty: &ResolvedType) -> Place {
+        let Some((index, mut path)) = Self::parameter_path(place) else {
+            return place.clone();
+        };
+        if let Some(at) = path
+            .iter()
+            .position(|p| matches!(p, Projection::Reachable(_)))
+        {
+            path.truncate(at);
+        }
+        path.push(Projection::Reachable(Region { ty: ty.clone() }));
+        Place {
+            root: Root::Parameter(index, path),
+            path: vec![],
+        }
+    }
+    fn normalize_reference(reference: &mut Reference) {
+        if let Some((index, path)) = Self::parameter_path(&reference.target) {
+            reference.target = Place {
+                root: Root::Parameter(index, path.clone()),
+                path: vec![],
+            };
+            if path.iter().any(|p| matches!(p, Projection::Reachable(_))) {
+                reference.target = Self::region_place(&reference.target, &reference.pointee.ty);
+            }
+        }
+    }
+    fn join_reference(references: &mut Vec<Reference>, mut next: Reference) {
+        Self::normalize_reference(&mut next);
+        let mut index = 0;
+        while index < references.len() {
+            let existing = &references[index];
+            if existing.at != next.at
+                || existing.mutable != next.mutable
+                || existing.pointee != next.pointee
+            {
+                index += 1;
+                continue;
+            }
+            let mut joined = existing.target == next.target;
+            if !joined {
+                if let (Some((a, ap)), Some((b, bp))) = (
+                    Self::parameter_path(&existing.target),
+                    Self::parameter_path(&next.target),
+                ) {
+                    if a == b {
+                        let ar = ap
+                            .iter()
+                            .position(|p| matches!(p, Projection::Reachable(_)));
+                        let br = bp
+                            .iter()
+                            .position(|p| matches!(p, Projection::Reachable(_)));
+                        let abase = &ap[..ar.unwrap_or(ap.len())];
+                        let bbase = &bp[..br.unwrap_or(bp.len())];
+                        // A recursive call may append a field after traversing
+                        // the graph, so neither complete path is necessarily a
+                        // prefix (node.value versus node.next.value). Widen the
+                        // common prefix when path length grows, retaining every
+                        // reachable address of the result type. Equal-depth
+                        // distinct fields remain precise until recursion occurs.
+                        let common_length =
+                            abase.iter().zip(bbase).take_while(|(a, b)| a == b).count();
+                        let common = if ar.is_some() || br.is_some() || abase.len() != bbase.len() {
+                            Some(&abase[..common_length])
+                        } else {
+                            None
+                        };
+                        if let Some(base) = common {
+                            next.target = Self::region_place(
+                                &Place {
+                                    root: Root::Parameter(a, base.to_vec()),
+                                    path: vec![],
+                                },
+                                &next.pointee.ty,
+                            );
+                            joined = true;
+                        }
+                    }
+                }
+            }
+            if joined {
+                next.ancestors.extend(references.remove(index).ancestors);
+                index = 0;
+            } else {
+                index += 1;
+            }
+        }
+        references.push(next);
+        references.sort_by_key(|reference| format!("{:?}", reference));
+    }
     fn union_value(left: &mut Value, right: &Value) {
         for reference in &right.references {
-            if !left.references.contains(reference) {
-                left.references.push(reference.clone());
-            }
+            Self::join_reference(&mut left.references, reference.clone());
         }
         left.holders.extend(right.holders.iter().copied());
     }
@@ -707,9 +830,7 @@ impl<'a> Flow<'a> {
             let mut at = path.to_vec();
             at.extend(reference.at);
             reference.at = at;
-            if !target.references.contains(&reference) {
-                target.references.push(reference);
-            }
+            Self::join_reference(&mut target.references, reference);
         }
     }
     fn write(&mut self, address: &Address, value: Value, definite: bool, span: Span) -> Result<()> {
@@ -730,10 +851,14 @@ impl<'a> Flow<'a> {
     fn write_one(
         &mut self,
         address: &Address,
-        value: Value,
+        mut value: Value,
         definite: bool,
         span: Span,
     ) -> Result<()> {
+        value.ty = address.ty.clone();
+        for reference in &mut value.references {
+            Self::normalize_reference(reference);
+        }
         self.access(address, true, span)?;
         if self.validate {
             for reference in &value.references {
@@ -803,8 +928,8 @@ impl<'a> Flow<'a> {
                         span,
                     ));
                 }
-            } else if !self.returned.contains(reference) {
-                self.returned.push(reference.clone());
+            } else {
+                Self::join_reference(&mut self.returned, reference.clone());
             }
         }
         Ok(())
@@ -1230,6 +1355,9 @@ impl<'a> Flow<'a> {
                 if *mutable {
                     self.writable(&address, *span)?;
                 }
+                let pointee = Region {
+                    ty: address.ty.clone(),
+                };
                 let mut value = Value::empty(ResolvedType::Reference {
                     mutable: *mutable,
                     inner: Box::new(address.ty),
@@ -1238,6 +1366,7 @@ impl<'a> Flow<'a> {
                     value.references.push(Reference {
                         at: vec![],
                         target,
+                        pointee: pointee.clone(),
                         mutable: *mutable,
                         ancestors: address.permits.clone(),
                     });
@@ -1786,6 +1915,90 @@ impl<'a> Flow<'a> {
         }
         Ok(())
     }
+    fn reachable_places(
+        &mut self,
+        mut queue: Vec<Address>,
+        desired: &ResolvedType,
+        span: Span,
+    ) -> Result<Vec<Address>> {
+        let mut visited = HashSet::new();
+        let mut result = vec![];
+        while let Some(address) = queue.pop() {
+            if !visited.insert(address.place.clone()) {
+                continue;
+            }
+            if matches!(address.place.root, Root::Parameter(..)) {
+                result.push(Address {
+                    place: Self::region_place(&address.place, desired),
+                    alternatives: vec![],
+                    ty: desired.clone(),
+                    permits: address.permits,
+                });
+                continue;
+            }
+            if matches!(address.place.root, Root::Raw) {
+                result.push(Address {
+                    ty: desired.clone(),
+                    ..address
+                });
+                continue;
+            }
+            if SemanticAnalyzer::type_identity(&address.ty)
+                == SemanticAnalyzer::type_identity(desired)
+            {
+                result.push(address.clone());
+            }
+            let mut projections = vec![];
+            match address.ty.unqualified() {
+                ResolvedType::Reference { .. } => {
+                    let value = self.read(&address, false, span)?;
+                    for reference in value.references {
+                        if reference.at.is_empty() {
+                            let mut permits = address.permits.clone();
+                            permits.extend(value.holders.iter().copied());
+                            permits.extend(reference.ancestors);
+                            queue.push(Address {
+                                place: reference.target,
+                                alternatives: vec![],
+                                ty: reference.pointee.ty,
+                                permits,
+                            });
+                        }
+                    }
+                }
+                ResolvedType::Struct { .. } => {
+                    for (field, _) in self.fields(&address.ty) {
+                        projections.push(Projection::Field(field));
+                    }
+                }
+                ResolvedType::Enum { name } => {
+                    if let Some(variants) = self.analyzer.facts.enum_variants.get(name) {
+                        for index in 0..variants.len() {
+                            projections.push(Projection::Variant(index));
+                        }
+                    }
+                }
+                ResolvedType::Tuple(types) => {
+                    for index in 0..types.len() {
+                        projections.push(Projection::Index(Some(index as i64)));
+                    }
+                }
+                ResolvedType::Array { size, .. } => {
+                    for index in 0..*size {
+                        projections.push(Projection::Index(Some(index as i64)));
+                    }
+                }
+                _ => {}
+            }
+            for projection in projections {
+                let mut child = address.clone();
+                child.ty = self.child_type(&child.ty, &projection);
+                child.place.path.push(projection);
+                queue.push(child);
+            }
+        }
+        Ok(result)
+    }
     fn instantiate_place(
         &mut self,
         place: &Place,
@@ -1829,6 +2042,25 @@ impl<'a> Flow<'a> {
                         }
                     }
                 }
+            } else if let Projection::Reachable(region) = projection {
+                if addresses.is_empty() {
+                    // A by-value aggregate parameter may contain reference
+                    // fields with no common projected address. Seed its region
+                    // with all retained reference origins, never an empty set.
+                    for value in values.drain(..) {
+                        for reference in value.references {
+                            let mut permits = value.holders.clone();
+                            permits.extend(reference.ancestors);
+                            addresses.push(Address {
+                                place: reference.target,
+                                alternatives: vec![],
+                                ty: reference.pointee.ty,
+                                permits,
+                            });
+                        }
+                    }
+                }
+                addresses = self.reachable_places(addresses, &region.ty, span)?;
             } else if !addresses.is_empty() {
                 for address in &mut addresses {
                     address.ty = self.child_type(&address.ty, projection);
@@ -1856,6 +2088,7 @@ impl<'a> Flow<'a> {
                 result.references.push(Reference {
                     at: reference.at.clone(),
                     target: address.place,
+                    pointee: reference.pointee.clone(),
                     mutable: reference.mutable,
                     ancestors: address.permits,
                 });
@@ -1963,8 +2196,10 @@ impl<'a> Flow<'a> {
             )?;
             for write in summary.writes {
                 let value = self.instantiate_value(&write.value, &values, span)?;
-                for address in self.instantiate_place(&write.target, &values, span)? {
-                    self.write(&address, value.clone(), write.definite, span)?;
+                let destinations = self.instantiate_place(&write.target, &values, span)?;
+                let definite = write.definite && destinations.len() == 1;
+                for address in destinations {
+                    self.write(&address, value.clone(), definite, span)?;
                 }
             }
         } else if self.validate {
@@ -2154,6 +2389,7 @@ fn expression_names(expression: &Expr, names: &mut HashSet<String>) {
 mod tests {
     use super::*;
     use crate::frontend::{lexer::Lexer, parser::Parser};
+    use std::hash::{Hash, Hasher};
     fn check(source: &str) -> Result<()> {
         let program = Parser::new(Lexer::new(source, 0)).parse_program()?;
         SemanticAnalyzer::new().analyze(&program)

@@ -24,6 +24,8 @@ mod effects;
 mod enums;
 #[path = "semantic_memory.rs"]
 mod memory;
+#[path = "semantic_simd.rs"]
+mod simd;
 pub use constants::{ScalarConstant, SemanticFacts, TypedConstant, TypedInitializer, InitializerValue};
 
 // ==================== Symbol Table ====================
@@ -419,6 +421,11 @@ impl SemanticAnalyzer {
     /// Register built-in functions
     fn register_builtins(&mut self) {
         self.register_memory_intrinsics();
+        for name in crate::intrinsics::platform_names() {
+            let spec = crate::intrinsics::platform(name).expect("platform inventory");
+            self.define_builtin_with_effects(name, spec.params(), spec.result(),
+                EffectSet { is_pure: false, effects: vec![Effect::Read] });
+        }
         // Create effect sets for builtins
         let io_effects = EffectSet { is_pure: false, effects: vec![Effect::IO] };
         let alloc_effects = EffectSet { is_pure: false, effects: vec![Effect::Alloc] };
@@ -454,55 +461,7 @@ impl SemanticAnalyzer {
         // Debug - require effect[panic]
         self.define_builtin_with_effects("assert", vec![ResolvedType::BOOL], ResolvedType::UNIT, panic_effects.clone());
         
-        // SIMD intrinsics for f32x4
-        let f32x4 = ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 4);
-        self.define_builtin("f32x4_splat", vec![ResolvedType::Primitive(PrimitiveType::F32)], f32x4.clone());
-        self.define_builtin("f32x4_add", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
-        self.define_builtin("f32x4_sub", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
-        self.define_builtin("f32x4_mul", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
-        self.define_builtin("f32x4_div", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
-        self.define_builtin("f32x4_sum", vec![f32x4.clone()], ResolvedType::Primitive(PrimitiveType::F32));
-        
-        // __simd_* prefixed versions for simd.aeth
-        let f32_ty = ResolvedType::Primitive(PrimitiveType::F32);
-        let f64_ty = ResolvedType::Primitive(PrimitiveType::F64);
-        let i32_ty = ResolvedType::Primitive(PrimitiveType::I32);
-        let f32_ptr = ResolvedType::Pointer(Box::new(f32_ty.clone()));
-        
-        // f32x4 intrinsics
-        self.define_builtin("__simd_f32x4_new", vec![f32_ty.clone(), f32_ty.clone(), f32_ty.clone(), f32_ty.clone()], f32x4.clone());
-        self.define_builtin("__simd_f32x4_splat", vec![f32_ty.clone()], f32x4.clone());
-        self.define_builtin("__simd_f32x4_add", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
-        self.define_builtin("__simd_f32x4_sub", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
-        self.define_builtin("__simd_f32x4_mul", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
-        self.define_builtin("__simd_f32x4_div", vec![f32x4.clone(), f32x4.clone()], f32x4.clone());
-        self.define_builtin("__simd_f32x4_sum", vec![f32x4.clone()], f32_ty.clone());
-        self.define_builtin("__simd_f32x4_load", vec![f32_ptr.clone()], f32x4.clone());
-        self.define_builtin("__simd_f32x4_store", vec![f32_ptr.clone(), f32x4.clone()], ResolvedType::unit());
-        
-        // SIMD intrinsics for f64x2
-        let f64x2 = ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 2);
-        self.define_builtin("f64x2_splat", vec![ResolvedType::Primitive(PrimitiveType::F64)], f64x2.clone());
-        self.define_builtin("f64x2_add", vec![f64x2.clone(), f64x2.clone()], f64x2.clone());
-        self.define_builtin("f64x2_mul", vec![f64x2.clone(), f64x2.clone()], f64x2.clone());
-        
-        // __simd_* prefixed versions for f64x2
-        self.define_builtin("__simd_f64x2_new", vec![f64_ty.clone(), f64_ty.clone()], f64x2.clone());
-        self.define_builtin("__simd_f64x2_splat", vec![f64_ty.clone()], f64x2.clone());
-        self.define_builtin("__simd_f64x2_add", vec![f64x2.clone(), f64x2.clone()], f64x2.clone());
-        self.define_builtin("__simd_f64x2_mul", vec![f64x2.clone(), f64x2.clone()], f64x2.clone());
-        
-        // SIMD intrinsics for i32x4
-        let i32x4 = ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 4);
-        self.define_builtin("i32x4_splat", vec![ResolvedType::Primitive(PrimitiveType::I32)], i32x4.clone());
-        self.define_builtin("i32x4_add", vec![i32x4.clone(), i32x4.clone()], i32x4.clone());
-        self.define_builtin("i32x4_mul", vec![i32x4.clone(), i32x4.clone()], i32x4.clone());
-        
-        // __simd_* prefixed versions for i32x4
-        self.define_builtin("__simd_i32x4_new", vec![i32_ty.clone(), i32_ty.clone(), i32_ty.clone(), i32_ty.clone()], i32x4.clone());
-        self.define_builtin("__simd_i32x4_splat", vec![i32_ty.clone()], i32x4.clone());
-        self.define_builtin("__simd_i32x4_add", vec![i32x4.clone(), i32x4.clone()], i32x4.clone());
-        self.define_builtin("__simd_i32x4_mul", vec![i32x4.clone(), i32x4.clone()], i32x4.clone());
+        self.register_vector_intrinsics();
     }
     
     /// Define a built-in function
@@ -688,7 +647,7 @@ impl SemanticAnalyzer {
     fn collect_definition(&mut self, item: &Item) -> Result<()> {
         match item {
             Item::Function(func) => {
-                if crate::intrinsics::memory(&func.name.name).is_some(){return Err(Error::Expected("non-reserved function name".into(),func.name.span));}
+                if crate::intrinsics::is_reserved(&func.name.name){return Err(Error::Expected("non-reserved function name".into(),func.name.span));}
                 self.symbols.enter_scope();
                 self.define_type_parameters(&func.type_params)?;
                 let params: Vec<ResolvedType> = func.params.iter()
@@ -880,6 +839,8 @@ impl SemanticAnalyzer {
                             if let Some(spec)=crate::intrinsics::memory(&name.name) {
                                 if spec.params()!=param_types || spec.result()!=ret {return Err(Error::Expected("canonical memory intrinsic signature".into(),name.span));}
                             }
+                            if crate::intrinsics::platform(&name.name).is_some() {return Err(Error::Expected("platform intrinsic is compiler-defined, not an extern symbol".into(),name.span));}
+                            if crate::intrinsics::vector(&name.name).is_some() {return Err(Error::Expected("SIMD intrinsic is compiler-defined, not an extern symbol".into(),name.span));}
                             let effects = self.foreign_effects(&name.name, annotations);
                             let signature = format!("{}:fn({})->{}:{}", ext.abi.as_deref().unwrap_or("C"),
                                 param_types.iter().map(Self::type_identity).collect::<Vec<_>>().join(","), Self::type_identity(&ret), variadic);
@@ -1170,7 +1131,7 @@ impl SemanticAnalyzer {
         
         // Add parameters to scope
         for param in &func.params {
-            if crate::intrinsics::memory(&param.name.name).is_some(){return Err(Error::Expected("non-reserved parameter name".into(),param.name.span));}
+            if crate::intrinsics::is_reserved(&param.name.name){return Err(Error::Expected("non-reserved parameter name".into(),param.name.span));}
             let ty = self.resolve_type(&param.ty)?;
             self.symbols.define(Symbol {
                 name: param.name.name.clone(),
@@ -1291,7 +1252,7 @@ impl SemanticAnalyzer {
     fn check_stmt(&mut self, stmt: &Stmt) -> Result<ResolvedType> {
         match stmt {
             Stmt::Let { name, mutable, ty, value, span } => {
-                if crate::intrinsics::memory(&name.name).is_some(){return Err(Error::Expected("non-reserved binding name".into(),name.span));}
+                if crate::intrinsics::is_reserved(&name.name){return Err(Error::Expected("non-reserved binding name".into(),name.span));}
                 let declared_ty = ty.as_ref()
                     .map(|t| self.resolve_type(t))
                     .transpose()?;
@@ -1525,7 +1486,7 @@ impl SemanticAnalyzer {
                             }
                         }
 
-                        if let Expr::Ident(name)=func.as_ref(){self.validate_memory_call(&name.name,args,*span)?;}
+                        if let Expr::Ident(name)=func.as_ref(){self.validate_memory_call(&name.name,args,*span)?;self.validate_vector_call(&name.name,*span)?;}
                         // Substitute generic params in return type
                         let actual_ret = self.substitute_type(&ret, &type_substitutions);
                         Ok(if diverges {ResolvedType::NEVER}else{actual_ret})
@@ -2171,6 +2132,13 @@ impl SemanticAnalyzer {
             return Ok(left.clone());
         }
         let compatible = self.types_compatible(left, right);
+        if let ResolvedType::Vector(element, _) = left {
+            let floating = matches!(element.as_ref(), ResolvedType::Primitive(p) if p.is_float());
+            if compatible && (matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) || (op == BinOp::Div && floating)) {
+                return Ok(left.clone());
+            }
+            return Err(Error::semantic_expected("E2100", "matching vector arithmetic operands; use SIMD comparison functions for integer lane masks", span));
+        }
         let valid = match op {
             BinOp::And | BinOp::Or => *left == ResolvedType::BOOL && *right == ResolvedType::BOOL,
             BinOp::Eq | BinOp::Ne => compatible && (Self::is_numeric(left) || matches!(left, ResolvedType::Pointer(_) | ResolvedType::Enum { .. }) || *left == ResolvedType::BOOL),

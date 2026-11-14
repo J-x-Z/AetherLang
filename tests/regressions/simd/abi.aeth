@@ -1,0 +1,16 @@
+use simd::{f32x4_new,f32x4_add,f32x4_splat,f32x4_extract,f64x2_new,f64x2_mul,f64x2_splat,f64x2_extract,i32x4_new,i32x4_add,i32x4_splat,i32x4_extract};
+extern "C" {
+    fn native_f32(value:f32x4)->f32x4;
+    fn native_f64(value:f64x2)->f64x2;
+    fn native_i32(value:i32x4)->i32x4;
+    fn vector_callback_check()->i32;
+}
+#[no_mangle] fn aether_f32(value:f32x4)->f32x4 {return f32x4_add(value,f32x4_splat(1.0));}
+#[no_mangle] fn aether_f64(value:f64x2)->f64x2 {return f64x2_mul(value,f64x2_splat(2.0));}
+#[no_mangle] fn aether_i32(value:i32x4)->i32x4 {return i32x4_add(value,i32x4_splat(3));}
+fn main()->i32 {
+    if f32x4_extract(native_f32(f32x4_new(1.0,2.0,3.0,4.0)),3)!=(8.0 as f32){return 1;}
+    if f64x2_extract(native_f64(f64x2_new(3.0,9.0)),1)!=6.0{return 2;}
+    if i32x4_extract(native_i32(i32x4_new(1,2,3,4)),2)!=(8 as i32){return 3;}
+    return vector_callback_check();
+}

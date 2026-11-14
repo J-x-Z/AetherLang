@@ -7,6 +7,9 @@ typedef struct __attribute__((packed)) { uint8_t tag; int64_t value; } Odd;
 typedef struct { float values[3]; } Floats;
 typedef struct { double values[2][2]; } Doubles;
 typedef struct { int64_t values[3]; } Large;
+typedef union { float values[2]; float single; } FloatUnion;
+FloatUnion c_float_union(FloatUnion x){ return (FloatUnion){.values={x.values[0]+1,x.values[1]+2}}; }
+extern FloatUnion aeth_float_union(FloatUnion);
 _Static_assert(sizeof(Tiny)==3 && sizeof(Odd)==9 && offsetof(Odd,value)==1,"ABI test layout");
 Pair c_pair(Pair x) { return (Pair){x.a+1,x.b+2}; }
 Tiny c_tiny(Tiny x) { return (Tiny){x.a+1,x.b+2,x.c+3}; }
@@ -37,5 +40,7 @@ int32_t abi_check(void) {
     if(d.values[0][0]!=11||d.values[0][1]!=22||d.values[1][0]!=33||d.values[1][1]!=44) return 15;
     if(input.values[0]!=10||l.values[0]!=11||l.values[1]!=22||l.values[2]!=33) return 16;
     if(s.a!=38||s.b!=22) return 17;
+    FloatUnion fu=aeth_float_union((FloatUnion){.values={10,20}});
+    if(fu.values[0]!=11||fu.values[1]!=22) return 18;
     return 0;
 }

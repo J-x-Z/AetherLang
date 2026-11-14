@@ -118,4 +118,12 @@ if 'llvm' in args.backends:
     assert 'i64 2147483648' in address_text and 'i64 4294967296' in address_text
     assert 'i32 -2147483648' not in address_text
 
+payload = root / 'union_payload_bytes.aeth'
+run('union payload/check', [compiler, 'check', payload])
+for backend in args.backends:
+    for level in [0, 2]:
+        binary = work / f'union-payload-{backend}-O{level}'
+        run(f'union payload/{backend}/O{level}/build', [compiler, payload, '--backend', backend, f'-O{level}', '-o', binary])
+        run(f'union payload/{backend}/O{level}/run', [binary])
+
 print(f'{len(records)} system checks passed; evidence: {work / "results.json"}')

@@ -20,6 +20,8 @@ use crate::types::type_system::{ResolvedType, PrimitiveType};
 mod enums;
 #[path = "ir_memory.rs"]
 mod memory;
+#[path = "ir_simd.rs"]
+mod simd;
 
 /// IR Generator
 pub struct IRGenerator {
@@ -618,7 +620,16 @@ impl IRGenerator {
                 
                 let dest = self.alloc_register();
                 let ty = self.get_value_type(&val).unwrap_or(IRType::I64);
-                self.emit_current_with_type(Instruction::UnaryOp { dest, op: ir_op, value: val }, ty);
+                if let IRType::Vector(element, _) = &ty {
+                    use crate::intrinsics::VectorKind;
+                    let zero = if matches!(element.as_ref(), IRType::F32 | IRType::F64) { Value::Constant(Constant::Float(-0.0)) } else { Value::Constant(Constant::Int(0)) };
+                    let zero = self.coerce_value(zero, element);
+                    let splat = self.alloc_register();
+                    self.emit_current_with_type(Instruction::Vector { dest: Some(splat), kind: VectorKind::Splat, ty: ty.clone(), args: vec![zero] }, ty.clone());
+                    self.emit_current_with_type(Instruction::Vector { dest: Some(dest), kind: VectorKind::Sub, ty: ty.clone(), args: vec![Value::Register(splat), val] }, ty);
+                } else {
+                    self.emit_current_with_type(Instruction::UnaryOp { dest, op: ir_op, value: val }, ty);
+                }
                 Ok(Value::Register(dest))
             }
 
@@ -638,9 +649,17 @@ impl IRGenerator {
                     "indirect".to_string()
                 };
 
+                if let Some(op) = crate::intrinsics::platform(&func_name) {
+                    if !args.is_empty() { return Err(crate::utils::Error::CodeGen("platform intrinsic arity mismatch".into())); }
+                    let dest = self.alloc_register();
+                    self.emit_current_with_type(Instruction::Platform { dest, op }, Self::resolved_type_to_ir(&op.result())?);
+                    return Ok(Value::Register(dest));
+                }
                 if crate::intrinsics::memory(&func_name).is_some() {
                     return self.generate_memory_call(&func_name, args, *span);
                 }
+
+                if crate::intrinsics::vector(&func_name).is_some() { return self.generate_vector_call(&func_name,args); }
 
                 // Generate argument values
                 let mut arg_vals: Vec<Value> = Vec::new();
@@ -1291,6 +1310,11 @@ impl IRGenerator {
         use crate::intrinsics::{MemoryKind, MemoryOrder};
         let function_volatile = self.current_fn.as_ref().is_some_and(|function| function.volatile);
         let inst = match inst {
+            Instruction::BinOp { dest, op, left, right } if matches!(self.get_value_type(&left), Some(IRType::Vector(..))) => {
+                use crate::intrinsics::VectorKind as K;
+                let kind = match op { IRBinOp::Add => K::Add, IRBinOp::Sub => K::Sub, IRBinOp::Mul => K::Mul, IRBinOp::Div => K::Div, _ => unreachable!("checked vector arithmetic") };
+                Instruction::Vector { dest: Some(dest), kind, ty: self.get_value_type(&left).unwrap(), args: vec![left, right] }
+            }
             Instruction::Load { dest, ptr, ty } if function_volatile || matches!(ty, IRType::Volatile(_)) => Instruction::Memory {
                 dest: Some(dest), kind: MemoryKind::VolatileRead, ty: ty.unqualified().clone(), args: vec![ptr],
                 order: MemoryOrder::SeqCst, failure_order: MemoryOrder::SeqCst,
@@ -1317,6 +1341,8 @@ impl IRGenerator {
                Instruction::UnaryOp { dest, .. } | 
                Instruction::Call { dest: Some(dest), .. } |
                Instruction::Memory { dest: Some(dest), .. } |
+               Instruction::Vector { dest: Some(dest), .. } |
+               Instruction::Platform { dest, .. } |
                Instruction::Alloca { dest, .. } | 
                Instruction::Load { dest, .. } | 
                Instruction::GetElementPtr { dest, .. } |

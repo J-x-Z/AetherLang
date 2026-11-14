@@ -175,3 +175,74 @@ pub fn validate_orders(
     }
     Ok(())
 }
+
+/// SIMD operations share one signature inventory with both lowering backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorKind { New, Splat, Add, Sub, Mul, Div, Sum, Extract, Load, Store, Eq, Ne, Lt, Le, Gt, Ge, All, Any }
+#[derive(Debug, Clone)]
+pub struct VectorSpec { pub kind: VectorKind, pub element: P, pub lanes: usize }
+impl VectorSpec {
+    pub fn vector(&self) -> T { T::Vector(Box::new(T::Primitive(self.element.clone())), self.lanes) }
+    pub fn params(&self) -> Vec<T> {
+        use VectorKind::*;
+        let scalar = T::Primitive(self.element.clone()); let vector = self.vector();
+        match self.kind {
+            New => vec![scalar; self.lanes], Splat => vec![scalar],
+            Load => vec![T::Pointer(Box::new(scalar))], Store => vec![T::Pointer(Box::new(scalar)), vector],
+            Extract => vec![vector, T::Primitive(P::Usize)],
+            Sum | All | Any => vec![vector], _ => vec![vector.clone(), vector],
+        }
+    }
+    pub fn result(&self) -> T {
+        use VectorKind::*;
+        match self.kind {
+            Sum | Extract => T::Primitive(self.element.clone()), Store => T::UNIT,
+            All | Any => T::BOOL,
+            Eq | Ne | Lt | Le | Gt | Ge => T::Vector(Box::new(T::Primitive(if matches!(self.element, P::F64 | P::I64) {P::I64} else {P::I32})),self.lanes),
+            _ => self.vector(),
+        }
+    }
+}
+pub fn vector(name: &str) -> Option<VectorSpec> {
+    let name = name.strip_prefix("__simd_").unwrap_or(name);
+    let (shape, operation) = name.rsplit_once('_')?;
+    let (element,lanes) = match shape { "f32x4"=>(P::F32,4), "f64x2"=>(P::F64,2), "i32x4"=>(P::I32,4), "i64x2"=>(P::I64,2), _=>return None };
+    use VectorKind::*;
+    let kind=match operation {"new"=>New,"splat"=>Splat,"add"=>Add,"sub"=>Sub,"mul"=>Mul,"div" if matches!(element,P::F32|P::F64)=>Div,"sum"=>Sum,"extract"=>Extract,"load"=>Load,"store"=>Store,"eq"=>Eq,"ne"=>Ne,"lt"=>Lt,"le"=>Le,"gt"=>Gt,"ge"=>Ge,"all" if matches!(element,P::I32|P::I64)=>All,"any" if matches!(element,P::I32|P::I64)=>Any,_=>return None};
+    Some(VectorSpec{kind,element,lanes})
+}
+pub fn vector_names() -> Vec<String> {
+    let mut names=vec![];
+    for shape in ["f32x4","f64x2","i32x4","i64x2"] {
+        for operation in ["new","splat","add","sub","mul","div","sum","extract","load","store","eq","ne","lt","le","gt","ge","all","any"] {
+            let name=format!("{shape}_{operation}");
+            if vector(&name).is_some() { names.push(format!("__simd_{name}")); names.push(name); }
+        }
+    }
+    names
+}
+
+/// Target-libc operations whose spelling/layout must not leak into source libraries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformOp { ErrnoGet }
+impl PlatformOp {
+    pub fn params(self) -> Vec<crate::types::ResolvedType> { vec![] }
+    pub fn result(self) -> crate::types::ResolvedType { crate::types::ResolvedType::I32 }
+    pub fn libc_symbol(self, target: &str) -> Result<&'static str, String> {
+        match self {
+            Self::ErrnoGet if target.contains("apple") => Ok("__error"),
+            Self::ErrnoGet if target.contains("android") => Ok("__errno"),
+            Self::ErrnoGet if target.contains("linux") => Ok("__errno_location"),
+            Self::ErrnoGet if target.contains("windows") => Ok("_errno"),
+            Self::ErrnoGet if target.contains("freebsd") => Ok("__error"),
+            _ => Err(format!("errno access is not implemented for target '{target}'")),
+        }
+    }
+}
+pub fn platform(name: &str) -> Option<PlatformOp> {
+    match name { "__errno_get" => Some(PlatformOp::ErrnoGet), _ => None }
+}
+pub fn platform_names() -> [&'static str; 1] { ["__errno_get"] }
+pub fn is_reserved(name: &str) -> bool {
+    memory(name).is_some() || (name.starts_with("__simd_") && vector(name).is_some()) || platform(name).is_some()
+}

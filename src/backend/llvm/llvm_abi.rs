@@ -27,10 +27,21 @@ impl LLVMCodeGen {
         }
     }
 
+    fn contains_vector(&self, ty: &IRType) -> bool {
+        match ty { IRType::Vector(..)=>true, IRType::Array(element,_)|IRType::Volatile(element)=>self.contains_vector(element),
+            IRType::Struct(name)=>self.type_definitions.get(name).is_some_and(|definition|definition.fields.iter().any(|(_,field)|self.contains_vector(field))), _=>false }
+    }
     unsafe fn classify_abi(&self, ty: &IRType, result: bool, c_abi: bool) -> Result<AbiValue> {
         let native = self.ir_type_to_llvm(ty);
         if *ty == IRType::Unit { return Ok(AbiValue::Ignore); }
         if !c_abi { return Ok(AbiValue::Direct(native)); }
+        if self.contains_vector(ty) {
+            if matches!(ty,IRType::Vector(..)) && LLVMABISizeOfType(self.target_data,native)==16
+                && self.target_triple.contains("apple") && (self.target_triple.contains("aarch64") || self.target_triple.contains("arm64")) {
+                return Ok(AbiValue::Direct(native));
+            }
+            return Err(Error::CodeGen("foreign vector ABI is verified only for direct 128-bit vectors on Apple arm64; use scalar-pointer FFI on other targets or for vector-containing aggregates".into()));
+        }
         if !matches!(ty, IRType::Array(_, _) | IRType::Struct(_)) { return Ok(AbiValue::Direct(native)); }
         if !(self.target_triple.contains("apple") && (self.target_triple.contains("aarch64") || self.target_triple.contains("arm64"))) {
             return Err(Error::CodeGen(format!("aggregate C ABI lowering is currently implemented for Apple arm64; target '{}' requires its own ABI classifier", self.target_triple)));
@@ -38,7 +49,10 @@ impl LLVMCodeGen {
         let size = LLVMABISizeOfType(self.target_data, native);
         if size == 0 { return Ok(AbiValue::Ignore); }
         if let Some((float, count)) = self.homogeneous_float(ty) {
-            return Ok(if result { AbiValue::Direct(native) } else { AbiValue::Coerce(LLVMArrayType2(float, count as u64)) });
+            // Coerce both edges from semantic HFA classification. Union
+            // storage is deliberately opaque bytes, so its LLVM body cannot
+            // communicate the foreign floating-register convention itself.
+            return Ok(AbiValue::Coerce(LLVMArrayType2(float, count as u64)));
         }
         if size > 16 { return Ok(AbiValue::Indirect); }
         Ok(AbiValue::Coerce(if size <= 8 {

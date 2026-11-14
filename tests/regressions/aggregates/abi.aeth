@@ -3,6 +3,7 @@
 @repr(packed) struct Odd { tag: u8, value: i64 }
 @repr(C) struct Floats { values: [f32; 3] }
 @repr(C) struct Doubles { values: [[f64; 2]; 2] }
+@repr(C) union FloatUnion { values:[f32;2], single:f32 }
 @repr(C) struct Large { values: [i64; 3] }
 extern "C" {
     fn c_pair(value: Pair) -> Pair;
@@ -11,6 +12,7 @@ extern "C" {
     fn c_floats(value: Floats) -> Floats;
     fn c_doubles(value: Doubles) -> Doubles;
     fn c_large(value: Large) -> Large;
+    fn c_float_union(value: FloatUnion) -> FloatUnion;
     fn c_spill(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, value: Pair) -> Pair;
     fn abi_check() -> i32;
 }
@@ -28,6 +30,8 @@ fn aeth_doubles(value: Doubles) -> Doubles { return Doubles { values: [[value.va
 fn aeth_large(value: Large) -> Large { return Large { values: [value.values[0] + 1, value.values[1] + 2, value.values[2] + 3] }; }
 #[no_mangle]
 fn aeth_spill(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, value: Pair) -> Pair { return Pair { a: value.a + a + b + c + d + e + f + g, b: value.b + 2 }; }
+#[no_mangle]
+fn aeth_float_union(value:FloatUnion)->FloatUnion { unsafe { return FloatUnion{values:[value.values[0]+(1.0 as f32),value.values[1]+(2.0 as f32)]}; } }
 fn main() -> i32 {
     unsafe {
         let pair: Pair = c_pair(Pair { a: 10, b: 20 });
@@ -45,6 +49,8 @@ fn main() -> i32 {
         if input.values[0] != 10 || output.values[0] != 11 || output.values[1] != 22 || output.values[2] != 33 { return 6; }
         let spill: Pair = c_spill(1,2,3,4,5,6,7,Pair { a:10, b:20 });
         if spill.a != 38 || spill.b != 22 { return 7; }
+        let float_union:FloatUnion=c_float_union(FloatUnion{values:[10.0,20.0]});
+        if float_union.values[0]!=(11.0 as f32) || float_union.values[1]!=(22.0 as f32) {return 8;}
         return abi_check();
     }
 }

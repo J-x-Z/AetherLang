@@ -112,6 +112,9 @@ impl Resolver {
         let mut modules = HashMap::new();
         for item in &items {
             if let Some((name, public)) = definition(item) {
+                if crate::intrinsics::is_reserved(name) {
+                    return Err(Error::ModuleError(format!("compiler intrinsic '{name}' cannot be redefined in {}", path.display())));
+                }
                 let preserve_abi = matches!(item, Item::Function(f) if f.annotations.iter().any(|a| a.name.name == "no_mangle"));
                 let resolved = if (root && name == "main") || preserve_abi { name.to_owned() } else { format!("__aeth_m{id}_{name}") };
                 if names.insert(name.to_owned(), resolved.clone()).is_some() {

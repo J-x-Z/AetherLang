@@ -229,6 +229,9 @@ impl fmt::Display for Register {
 /// IR Instruction (non-terminating)
 #[derive(Debug, Clone)]
 pub enum Instruction {
+    /// Typed SIMD operation with lane order independent of the host instruction set.
+    Platform { dest: Register, op: crate::intrinsics::PlatformOp },
+    Vector { dest: Option<Register>, kind: crate::intrinsics::VectorKind, ty: IRType, args: Vec<Value> },
     /// Typed volatile/atomic operations, with checked compile-time ordering.
     Memory { dest: Option<Register>, kind: crate::intrinsics::MemoryKind,
         ty: IRType, args: Vec<Value>, order: crate::intrinsics::MemoryOrder,

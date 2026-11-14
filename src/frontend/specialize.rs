@@ -114,6 +114,19 @@ impl Specializer {
                 }
             }
         }
+        for name in crate::intrinsics::vector_names() {
+            let spec = crate::intrinsics::vector(&name).expect("vector inventory");
+            let params = spec.params().iter().map(intrinsic_type).collect::<Option<Vec<_>>>();
+            if let (Some(params),Some(ret)) = (params,intrinsic_type(&spec.result())) {
+                this.signatures.insert(name,Signature {params,ret});
+            }
+        }
+        for name in crate::intrinsics::platform_names() {
+            let spec = crate::intrinsics::platform(name).expect("platform inventory");
+            this.signatures.insert(name.into(), Signature {
+                params: vec![], ret: intrinsic_type(&spec.result()).expect("platform result type"),
+            });
+        }
         Ok(this)
     }
 
@@ -1371,6 +1384,10 @@ fn intrinsic_type(ty: &crate::types::ResolvedType) -> Option<Type> {
         R::Primitive(P::Never) => Type::Never(span),
         R::Primitive(primitive) => named(&format!("{primitive:?}").to_lowercase(), span),
         R::Pointer(inner) => Type::Pointer(Box::new(intrinsic_type(inner)?), span),
+        R::Vector(inner,lanes) => match inner.as_ref() {
+            R::Primitive(primitive) => named(&format!("{primitive:?}x{lanes}").to_lowercase(),span),
+            _ => return None,
+        },
         _ => return None,
     })
 }

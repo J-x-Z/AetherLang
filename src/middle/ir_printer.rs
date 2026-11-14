@@ -79,6 +79,10 @@ impl IRPrinter {
     /// Print an instruction
     fn print_instruction(&mut self, inst: &Instruction) {
         match inst {
+            Instruction::Platform {dest, op} => { write!(self.output, "r{} = platform {:?}", dest.0, op).unwrap(); }
+            Instruction::Vector {dest,kind,ty,args} => {
+                write!(self.output,"{:?} = vector.{:?} {:?} ({})",dest,kind,ty,args.iter().map(|v|v.to_string()).collect::<Vec<_>>().join(", ")).unwrap();
+            }
             Instruction::Memory {dest,kind,ty,args,order,failure_order} => {
                 write!(self.output, "{:?} = {:?} {:?} {:?}, {:?}/{:?}",dest,kind,ty,args,order,failure_order).unwrap();
             }

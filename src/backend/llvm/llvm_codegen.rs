@@ -293,33 +293,7 @@ impl LLVMCodeGen {
                 }
             }
 
-            // Add SIMD optimization hints if function is marked simd
-            if func.simd {
-                // Add target-features for SIMD (AVX2 on x86_64, NEON on ARM)
-                let target_features = CString::new("target-features").unwrap();
-                let simd_features = CString::new("+avx2,+sse4.2").unwrap();
-                let attr = llvm_sys::core::LLVMCreateStringAttribute(
-                    self.context,
-                    target_features.as_ptr(),
-                    target_features.as_bytes().len() as u32,
-                    simd_features.as_ptr(),
-                    simd_features.as_bytes().len() as u32,
-                );
-                llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, u32::MAX, attr);
-
-                // Add "no-nans-fp-math" for faster floating point
-                let no_nans = CString::new("no-nans-fp-math").unwrap();
-                let true_val = CString::new("true").unwrap();
-                let no_nans_attr = llvm_sys::core::LLVMCreateStringAttribute(
-                    self.context,
-                    no_nans.as_ptr(),
-                    no_nans.as_bytes().len() as u32,
-                    true_val.as_ptr(),
-                    true_val.as_bytes().len() as u32,
-                );
-                llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, u32::MAX, no_nans_attr);
-            }
-
+            // @simd preserves IEEE semantics and the selected target machine.
             // Pre-scan: find registers that are assigned multiple times (need alloca)
             let mut assign_counts: std::collections::HashMap<Register, u32> = std::collections::HashMap::new();
             for block in &func.blocks {
@@ -560,6 +534,22 @@ impl LLVMCodeGen {
                     self.value_map.insert(*dest, result);
                 }
                 
+                Instruction::Platform {dest, op} => {
+                    let symbol = CString::new(op.libc_symbol(&self.target_triple).map_err(Error::CodeGen)?).unwrap();
+                    let pointer_type = LLVMPointerTypeInContext(self.context, 0);
+                    let function_type = LLVMFunctionType(pointer_type, ptr::null_mut(), 0, 0);
+                    let mut function = LLVMGetNamedFunction(self.module, symbol.as_ptr());
+                    if function.is_null() {
+                        function = LLVMAddFunction(self.module, symbol.as_ptr(), function_type);
+                    } else if LLVMGlobalGetValueType(function) != function_type {
+                        return Err(Error::CodeGen("incompatible declaration of target errno accessor".into()));
+                    }
+                    let address = LLVMBuildCall2(self.builder, function_type, function, ptr::null_mut(), 0, c"errno.address".as_ptr());
+                    let value = LLVMBuildLoad2(self.builder, LLVMInt32TypeInContext(self.context), address, c"errno.value".as_ptr());
+                    LLVMSetAlignment(value, 4);
+                    self.value_map.insert(*dest, value);
+                }
+                Instruction::Vector {dest,kind,ty,args} => {self.generate_vector(*dest,*kind,ty,args)?;}
                 Instruction::Memory {dest,kind,ty,args,order,failure_order} => {
                     self.generate_memory(*dest,*kind,ty,args,*order,*failure_order)?;
                 }
@@ -1172,9 +1162,12 @@ impl LLVMCodeGen {
                                 .unwrap_or(LLVMArrayType2(LLVMInt8TypeInContext(self.context), 0));
                             let align = LLVMABIAlignmentOfType(self.target_data, carrier) as u64;
                             let size = size.div_ceil(align) * align;
-                            let padding = size - LLVMABISizeOfType(self.target_data, carrier);
-                            field_types = vec![carrier];
-                            if padding > 0 { field_types.push(LLVMArrayType2(LLVMInt8TypeInContext(self.context), padding)); }
+                            // A union is opaque storage, not an inactive member value.
+                            // Loading a carrier containing i1 or padding would lose
+                            // another member's overlapping payload bits during copies.
+                            // A zero-sized anchor retains alignment without interpreting
+                            // any byte; the byte array preserves the entire representation.
+                            field_types = vec![LLVMArrayType2(carrier, 0), LLVMArrayType2(LLVMInt8TypeInContext(self.context), size)];
                         }
                     }
                     // Set struct body with appropriate packing based on repr
@@ -1307,3 +1300,6 @@ mod tests {
 
 #[path = "llvm_memory.rs"]
 mod memory;
+
+#[path = "llvm_simd.rs"]
+mod simd;

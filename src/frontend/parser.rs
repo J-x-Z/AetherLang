@@ -269,6 +269,12 @@ impl Parser {
                             alias.is_pub = true;
                             Ok(Item::TypeAlias(alias))
                         },
+                        TokenKind::Use => {
+                            self.advance();
+                            let mut item = self.parse_use()?;
+                            item.is_pub = true;
+                            Ok(Item::Use(item))
+                        },
                         TokenKind::Static => Ok(Item::Static(self.parse_static_item()?)),
                         TokenKind::Union => Ok(Item::Union(self.parse_union_with_attrs(attributes)?)),
                         _ => Err(Error::UnexpectedToken {

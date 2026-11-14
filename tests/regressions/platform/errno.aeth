@@ -1,0 +1,10 @@
+extern "C" { fn fopen(path: *u8, mode: *u8) -> *void; fn fclose(file: *void) -> i32; }
+fn main() -> i32 {
+    let file: *void = fopen("/aetherlang-test-parent-does-not-exist/file", "rb");
+    let error: i32 = __errno_get();
+    if file != 0 as *void { fclose(file); return 1; }
+    if error != 2 { return 2; }
+    // Reading the per-thread errno value itself must not change it.
+    if __errno_get() != error { return 3; }
+    return 0;
+}
