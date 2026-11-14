@@ -1,82 +1,95 @@
-# AetherLang 集中升级与问题闭合记录
+# AetherLang 集中升级交付
 
-2026-11-14；仓库 `J-x-Z/AetherLang`；分支 `work/aetherlang-upgrade`。起点 `aceff1522790df3edfe5c711db5884350ab1b44a`，最终编译器源码 `234f888`。全部提交保存在本地，未推送。源码、工具链、缓存、产物和证据均在 `/Volumes/WINDOWS/work`。
+2026-11-14，仓库 `J-x-Z/AetherLang`，本地分支 `work/aetherlang-upgrade`。原始起点为 `aceff1522790df3edfe5c711db5884350ab1b44a`。全部源码、工具链、缓存、产物和证据在 `/Volumes/WINDOWS/work`，没有推送远端。最终功能源码为 `0709b33`，主编译器源码为 `a017d18`；交付提交和产物 SHA 见外置 `release/manifest.json`。
 
-发布版本已完成真实程序验收，性能与资源数据来自最后冻结的编译器。
+这轮完成了主编译器正确性修复、系统与数学基础库重构、真实 Core 自举，以及 CUDA/cuBLAS 和 CUDA-Q 的实际运行。LLVM 仍是主后端；C 后端提供无 LLVM 的独立编译器、可移植实现和差分参照，并承担 Core 自举的机器码落地。没有把语言限定为 Shell 或插件语言。
 
-## 实际能力变化
+## 从起点到交付
 
-LLVM 保持主后端，C 保留为无需 LLVM 的备用实现及独立运行/ABI 对照。复用 LLVM 21.1.8，Rust/Cargo 固定为外置 1.100.0，没有修改全局 Rust 默认。`.ath` 与 `.aeth` 进入共同的解析后处理、类型检查和 IR；本轮没有另造一套 AI 专用运行规则。
-
-| 问题/能力 | 升级后的实际行为与证据 |
+| 范围 | 实际改善 |
 | --- | --- |
-| 固定数组、结构体、返回值 | 数组保留真实值类型；复制不别名、返回不悬垂，嵌套数组及含数组结构体正确；独立 C ABI 对照与 ASan/UBSan 覆盖原栈返回后访问和 packed 对齐问题 |
-| 初始化、引用和控制流 | 按声明身份而非变量名跟踪初始化、借用、字段投影、引用来源和逃逸；合法遮蔽/借用结束被接受，未初始化读取及局部引用通过函数/聚合逃逸被拒绝；NEVER 事实按具体函数与源码位置共享给 IR，return 后不再生成存储或覆盖终结指令 |
-| 数值与 C ABI | 浮点转整数定义为截断后饱和：NaN→0、上下越界钳位；两后端/优化等级一致。内部 LLVM 聚合调用与外部 C ABI 分离，Apple arm64 双向聚合 FFI 实测通过；packed C 声明修复 |
-| 泛型和错误值 | 按需实例化函数、结构体、枚举及类型别名；真实 tag+payload union 布局、匹配和 `Result ?`，允许成功类型变化、要求错误类型一致；没有哈希占位或统一降成 i64 |
-| 容器与资源 | `Vec<T>` 的创建、扩容、访问、修改、弹出、释放；分配失败保持旧缓冲区。`Option<T>`、`Result<T,E>`、`Vec<()>`/空结构体/零长度数组都实际运行。文件成功、打开失败、刷新失败及重新分配失败链路有断言 |
-| 系统能力 | static/extern static、初始化与地址重定位、union、size/align/offset 真正进入 IR；非法初始化与不安全 union 读取有诊断。LLVM 数组长度使用64位API，静态数组地址使用目标索引宽度，超过2^32的布局查询不截断 |
-| volatile 与原子 | `*volatile T` 保留访问限定，`@volatile` 与显式 intrinsic 使用同一 Memory IR；packed/ZST 访问有正确路径。u8/u16/u32/u64 原子、CAS 和 fence 真正生成对应指令，内存序是受检查的编译期常量 |
-| 基础库与 JXZ | 字符串、字节 I/O、文件、参数、路径和 POSIX 进程进入真实应用；普通输出不再把文本当格式串。服务保留首次 I/O 错误并完成关闭；JXZ 统一拒绝不支持的依赖 schema，原子更新全部自有产物记录，clean 保留用户文件 |
-| 工具链 | JSON 诊断含稳定分类、原文件 UTF-8 范围；`.ath` 位置映射、跨文件符号查询和真实 stdio LSP；未保存缓冲区/导入的诊断、hover、definition、references、completion 共用编译输入；LLVM IR 可在目标发射前导出 |
-| 接受但忽略的功能 | arbitrary extern ABI、错误方法、错误 `?`、错误类型/静态项不再静默通过；重复 extern 合并效果，不能擦掉 pure 限制。自举声明撤下，实验源码保留 |
+| 工具链 | Rust/Cargo 固定为外置 1.100.0；复用 LLVM 21.1.8。构建、诊断、测试、LLVM IR/对象输出和链接选项有统一入口；未修改全局 Rust 默认 |
+| 值与 ABI | 数组/结构体/枚举保留值语义；复制、返回、嵌套布局及 packed 访问正确。LLVM union 使用保留原始字节的存储，修复 Result 错误码被 bool 载体截断；独立 C ABI 检查覆盖 Apple arm64 双向聚合调用 |
+| 类型与语义 | 初始化和引用按声明身份与投影跟踪；局部引用逃逸、错误效果、错误方法和错误 `?` 被拒绝。递归引用摘要求解真正收敛；嵌套 enum/bool pattern 覆盖检查、引用数组索引和求值顺序修复 |
+| 数值 | 完整 i64/u64 字面量范围，包括负 MIN、十六进制、常量、匹配和泛型上下文；超范围拒绝。整数按位宽 wrap；除零及有符号 MIN/-1 trap；浮点转整数截断后饱和，NaN→0 |
+| 泛型与容器 | 函数、结构体、枚举、别名按需实例化；真实 tag+payload、Result 传播、Option、Vec 与零大小值可运行；扩容失败保留原缓冲区 |
+| 系统编程 | static/extern static、union、64位布局查询、raw pointer、C FFI、inline asm 保留；typed volatile、原子/CAS/fence、可移植 SIMD 均进入共同的类型/IR规则。目标 errno intrinsic 按 libc 选择符号 |
+| POSIX 进程 | fd、pipe、spawn/wait/poll、环境和 cwd、信号及多段流水线；处理 EINTR、短 I/O、exec 失败与 exit127 区别，失败时关闭/终止/回收子进程；1 MiB 真实流水线验证 |
+| 数学 | 用一套 CPU f64 rank0–4 张量替换重复/占位实现，支持形状与溢出检查、保留底层存储的切片/转置、矩阵乘法、tanh、反向 AD。matrix/autograd 复用相同实现，删除旧生成 C 副本 |
+| 自举 | 删除旧占位编译管线和过期 bootstrap 二进制，改为 Aether 自己实现完整 Core 词法、Pratt 解析、类型检查、C 生成和驱动；完成四代原生构建 |
+| 量子与 CUDA | Aether 实现电路、10类门、complex128 参考模拟器、Pauli 期望、参数移位与优化循环；小型原生 SDK 适配层接 CUDA-Q。CUDA runtime/cuBLAS 保留低层接口并新增可失败的 buffer/stream/handle 管理 |
+| JXZ 与工具 | 真实构建、argv、配置、产物原子记录和 clean 保留用户文件；不支持的依赖配置明确拒绝。JSON 诊断、UTF-8 原文件范围、`.ath` 映射、stdio LSP 与未保存缓冲区查询共用编译输入 |
 
-关键结构决定：语义流、效果推导、常量/初始化、枚举检查分别独立模块；前端与后端消费共同类型/常量/内存指令事实。数组、枚举和 Unit 不借用指针假装值；只有 ABI 边界执行寄存器/间接传递转换。低层原始指针、C FFI、inline asm 与 x86 端口指令保留。
+`.ath` 与 `.aeth` 共用后续类型检查和 IR。前端语义流、效果、常量/初始化、枚举检查拆成各自负责的模块；类型、常量、SIMD、内存与平台操作通过共同事实传给后端。重构用于消除跨层规则差异，而非仅移动文件。
 
-## 真实验收
+关键本地提交：`aa61728`（SIMD/errno/union/递归引用）、`975a266`（进程与 fd）、`06c91f3`（张量与 AD）、`f8274c4`（完整 Core 自举替换占位）、`ca9e1c9`（CUDA）、`a017d18`（完整整数/嵌套模式/引用索引/Linux PIC/外部导入）、`654d0aa`（CUDA-Q）、`0709b33`（16比特内存池与lease生命周期）。更早的主编译器、ABI、工具链改动也保留在分支历史中。
 
-主机 macOS / Apple Silicon，16 GiB；Cargo 并发3，同一时间只有一个 Cargo 构建。以下记录同时含检查、编译、运行及错误路径，不能简单相加当作独立语言特性数量。
+## 实际程序与验收
 
-| 入口 | 实际结果 |
+主机 macOS arm64、16 GiB；Cargo 并发3，构建串行，复用缓存。下表有些是构建/运行/拒绝检查记录，不应相加声称独立测试数量。
+
+| 验收入口 | 实际结果 |
 | --- | --- |
-| `scripts/test.sh llvm` | 完整入口通过：120单元，原有84个原生组合，driver14、entry1、tooling3，相对构建路径4；原始起点为42单元 |
-| `scripts/validate.py` | 22组真实负载：计算、持续服务和 `.ath`，LLVM/C及规定优化等级比较 |
-| `tests/aggregate_abi.py` | 49条检查/构建/运行记录，含双向 C ABI、数组复制/返回、浮点转换、packed、ASan/UBSan |
-| `tests/system_values.py` | 最终54条记录：全局/union/布局、Unit、typed volatile、>2^32布局/静态地址；大类型只查询或导出IR，不分配大对象 |
-| `tests/semantic_values.py` | 54条记录：合法借用/初始化/NEVER/Unit match四种后端优化组合运行；15类非法程序检查诊断代码、位置及两后端拒绝 |
-| `tests/runtime_foundation.py` | 6组测试；文件/进程/文本和服务 stdout、flush、close 的失败注入，核对首次错误及清理 |
-| `tests/generic_runtime.py` | 28项运行＋4项拒绝；容器、payload match、Result、文件错误和分配失败；另有4组生成C的ASan验收 |
-| `tests/memory_runtime.py --check-x86` | 8项原生运行＋6类拒绝＋2份优化LLVM IR检查＋2个x86对象；特权端口指令只编译，未执行 |
-| C-only独立构建 | 116单元、C原生矩阵、driver14/entry1/tooling3通过；独立release运行计算与零大小泛型，otool确认没有LLVM依赖 |
-| JXZ integration | LLVM/C各15项，包括配置、argv、失败退出、嵌套依赖表、改名后的旧产物和元数据写入失败 |
+| Cargo LLVM / C-only | 126 / 122 单元通过；各自 backend regression、driver14、entry1、recursive reference2、tooling3通过；原始起点42单元 |
+| `scripts/validate.py` | 22组计算、持续服务与 `.ath` 组合通过，最终 LLVM+C release 再验22组 |
+| aggregate / system / semantic | 49 / 71 / 54条记录通过；含独立 C ABI、packed、引用/初始化/NEVER 和 ASan/UBSan |
+| runtime / generic / memory | 基础库6组；泛型28运行+4拒绝；memory 8运行+6拒绝+2 IR检查，另有夹具构建与历史x86对象证据 |
+| SIMD / platform | 43 / 32条通过；Linux PIC 与裸机静态重定位分别核验；Linux GPU 的实际 PIE 链接也已通过 |
+| process / JXZ | process 88条（22场景×2后端×2优化）；最终 release JXZ LLVM/C各15项 |
+| math | 23条通过，最终 release 再验；12个参数有限差分、训练、视图存储生命周期、分配失败及 ASan/UBSan |
+| 自举 | LLVM seed 与最终 C-only release seed 均完成103项验收；另各执行83个 Core 语义样例的普通/消毒器版本 |
+| CUDA | 故障 shim 9步（含4次资源管理运行）；Linux RTX3060 真正 SGEMM/DGEMM，C/LLVM O0/O2四个程序通过 |
+| 量子参考/预算 | 参考12条及新增预算19条通过；含16比特GHZ、分配失败回滚和 ASan/UBSan |
+| CUDA-Q | Mac CPU 原生 SDK16条（原电路和16比特预算各4构建+4运行）；Linux NVIDIA 原生 SDK，C/LLVM O0/O2四个程序通过；SDK边界12项通过。16比特预算路径另在Mac CPU验收，见下文 |
 
-计算程序 `examples/upgrade/compute.aeth` 在 AetherLang 内实现32768元素堆排序、二分查找、伪随机序列、整数与浮点归约，输出：
+统一测试入口已接这些套件及自举。此次完整验收分成 `foundations-full-llvm.log` 与 `foundations-full-rest.log`：新增 bitwise 测试一处表达式括号修正后，从该套件续跑剩余检查；未把首次中断标作单次全套成功。之后的 Linux PIC、发布构建与量子预算改动分别执行关联验收。没有重复运行多个全量构建来消耗预算。
+
+计算负载由 Aether 完成32768元素堆排序、二分查找、伪随机数、整数与浮点归约，输出：
 
 ```text
 compute 17218136811 46 1048510 33332.833335
 ```
 
-持续服务 `examples/upgrade/accumulator.aeth` 在一个进程内处理 add/get/reset/quit，验证2000次连续更新、非法输入、EOF、journal及输出错误；状态机和资源清理由 AetherLang 完成。并发程序由 C 夹具只负责创建/join线程，AetherLang 执行4线程×100000次原子累加、锁保护计数及 release/acquire 数据发布。测试夹具没有接管语言核心算法。
+持续运行的 accumulator 在同一进程接受 add/get/reset/quit；验证2000次更新、非法输入、EOF、journal和输出错误。并发内存测试由 C 夹具负责创建/join线程，Aether 实现原子累加、锁保护计数和 release/acquire 发布。进程流水线的生产、变换和消费同样由 Aether 实现。
 
-最终release另独立重跑计算/服务22组合、基础库6组、泛型28运行+4拒绝、memory完整18项及JXZ各15，全部通过；记录了发布编译器哈希，未使用旧产物。
+数学验证的12参数有限差分最大误差为 **5.46057643547e-12**；240步训练损失从 **1.11046027306** 降至 **1.98453930174e-13**，权重 **1.19999881519**。另独立复核了转置/切片、释放父张量后保留视图、共享节点梯度累计、重复 backward 和梯度视图生命周期。
 
-最后定向审查补齐 Unit match 的 phi 前驱、64位数组布局和静态GEP索引；分别重跑关联语义/系统套件，未反复执行已闭合的全部测试。ASan/UBSan仅证明所运行路径，没有宣称全面泄漏检测或完整内存安全证明。
+Core 自举的七个模块拼接后 **77,824 B**。Rust种子→stage1→stage2→stage3→stage4；后续三份 C 均 **307,590 B**，SHA256 为 `7e718ccc2b9586620b3058a3bfc0e3621939861d7cac37b671c27fdb3fa31995`。stage2/3/4各 **70,856 B**；没有声称原生二进制哈希相同。自举包含递归堆结构、含 NUL 的文件、求值顺序、trap、输出保护、深 AST 拒绝及 ASan/UBSan 自编译，PATH trap 确认后续没有偷偷调用 Rust 编译器。完整范围见 [BOOTSTRAP](BOOTSTRAP.md)。
 
-跨目标：内部聚合、Unit泛型、x86端口指令已在x86_64 Linux/Darwin完成6个对象编译；之前的标量程序另有Linux aarch64与Windows x86_64对象证据。没有目标运行环境的组合未链接/运行。CI已接统一入口，但远端CI未执行。
+多轮审查修复了自举常量一元求值、结构体临时值字段读取、MIN/-1 行为和左深 AST 栈溢出；主编译器整数另经270个 Python 大整数期望值与 C/LLVM O3 差分。CUDA-Q 的 CPU 显示索引与底层振幅顺序不同，适配层已按逻辑 little-endian wire 读取，避免表面“同一电路”却得到错位状态。
+
+## GPU、统一内存与后续 Adreno
+
+Mac ARM 上的 CUDA-Q 使用 **CPU qpp**，没有 Metal 后端。Linux RTX3060 Laptop 6 GiB 上实际使用 **cuStateVec fp64**，程序确认 `on_gpu=1`。运行环境为 CUDA-Q 0.16.0.post1、cuStateVec 1.15.1、CUDA13.4、Clang23；Mac SDK 为0.16.0。SDK安装限任务目录，远端验证证据保存后已删除任务临时目录，没有修改全局工具链。[官方平台说明](https://nvidia.github.io/cuda-quantum/latest/using/quick_start.html)
+
+量子程序对八组混合三比特电路逐项比较复振幅，再由 Aether 执行40步变分优化，CPU/NVIDIA均得到 **-0.999999575958**。cuBLAS 程序使用17×19与19×13矩阵、alpha1.25/beta0.5，Aether 自己计算期望矩阵；两种精度的本次最大误差均0。这些证明正确执行，不是GPU加速比测量。SDK adapter只转换门记录、管理SDK对象并复制结果，不承担算法或优化器。
+
+最新设计约束是 **8 GiB统一内存优先、16 GiB扩展、16比特作为首个跨设备验收规模**。纯态向量只需 `2^n × complex_bytes`；16比特complex128为1 MiB，24比特256 MiB，28比特4 GiB。16比特的完整complex128密度矩阵却需64 GiB；不能把两种模拟模型混为一谈。
+
+新增 QuantumPool/QuantumLease 对主机振幅分配执行字节、qubit与同时存活状态数量限制；释放返还额度，关闭pool后现有lease保持有效。16比特/2状态/2 MiB为小配置。CPU参考和CUDA-Q输出采用同一准入接口。该预算不包括元数据、门列表、SDK/JIT内部工作区或额外设备副本，不能冒充整个进程RSS上限，也没有用16 GiB Mac结果宣称已在8 GiB手机验收。 在本机各一次的16比特O2原生测量中，参考程序RSS为 **3,866,624 B**，CUDA-Q CPU对照为 **60,325,888 B**；记录见 `foundations-release/quantum-16-memory.json`。新增池路径已验Mac CPU，NVIDIA证据对应此前未使用池的接口。
+
+Metal/Adreno 仍是后续真实后端任务，当前未实现通用异构调度器或GPU kernel编译器。后续应按能力查询精度、可用预算、队列和同步，再选择后端；Adreno可评估Vulkan compute。双精度不能成为所有设备的默认假设，`shaderFloat64`是需查询/启用的功能。[Vulkan能力定义](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceFeatures.html) 当前实现继续保持complex128语义，不以偷偷降精度换“兼容”。
 
 ## 实测性能与开销
 
-使用同一 `examples/upgrade/benchmark.aeth`，两百万步整数计算，所有运行必须输出`652496`。同机顺序执行，预热后各5次；耗时为中位数、RSS为生成阶段最大值。原版以Rust1.99构建，最终版以Rust1.100构建，因此是交付版本比较，不隔离单一代码改动。测量时本任务没有并行构建或验收。
+同一两百万步标量计算，必须输出`652496`；原始与最终release同机顺序执行，预热后各5次。耗时为中位数，RSS为生成阶段最大值。测量期间本任务无并行构建/测试。原始版Rust1.99、最终版Rust1.100，因此比较交付版本，不隔离某一处优化。
 
-| 指标 | LLVM 原始起点 → 最终版 | C 原始起点 → 最终版 |
+| 指标 | LLVM 原始→最终 | C 原始→最终 |
 | --- | --- | --- |
-| O0生成耗时（不含链接） | 16.504 ms → 23.736 ms | 9.574 ms → 8.452 ms |
-| 生成阶段最大RSS | 29,999,104 B → 29,720,576 B | 3,080,192 B → 4,521,984 B |
-| 生成文件大小（对象/C源码） | 1,096 B → 1,176 B | 1,476 B → 3,123 B |
-| O0运行耗时 | 16.604 ms → 18.691 ms | 25.347 ms → 37.197 ms |
-| O2运行耗时 | 15.432 ms → 13.328 ms | 13.819 ms → 13.444 ms |
-| O0程序大小 | 33,480 B → 33,496 B | 33,480 B → 33,560 B |
-| O2程序大小 | 33,480 B → 33,496 B | 33,480 B → 33,496 B |
-| 编译器文件大小 | 94,813,504 B → 3,753,464 B | 2,411,552 B → 3,636,344 B |
+| O0生成耗时，不含链接 | 14.355→20.065 ms | 5.808→6.389 ms |
+| 生成阶段最大RSS | 29,982,720→29,818,880 B | 3,096,576→4,784,128 B |
+| 对象/C源码大小 | 1,096→1,176 B | 1,476→4,375 B |
+| O0运行耗时 | 15.422→17.085 ms | 25.137→36.260 ms |
+| O2运行耗时 | 15.512→12.813 ms | 13.051→12.886 ms |
+| O0程序大小 | 33,480→33,496 B | 33,480→33,560 B |
+| O2程序大小 | 33,480→33,496 B | 33,480→33,496 B |
+| 编译器文件大小 | 94,813,504→3,832,856 B | 2,411,552→3,715,288 B |
 
-此短样本LLVM O2运行约快13.6%，但生成耗时约增加43.8%、O0运行约增加12.6%；C O0运行约增加46.7%，O2变化约2.7%。不能据此宣称普遍提速。当前提升主要是正确性、真实能力和工具链；编译检查更充分也有成本。
+该短样本LLVM O2运行约快17.4%，但生成约慢39.8%、O0运行约慢10.8%；C O0运行约慢44.2%，O2差异约1.3%。不据此宣称普遍加速。增加语义检查及定义明确的数值行为有成本；未来优化应保留这些语义。
 
-LLVM编译器文件大幅缩小主要来自共享LLVM，不能等同总安装体积下降。C-only文件变大且RSS增加。样本包含进程启动开销，5次采样没有给出总体性能置信区间。完整采样、clang版本、编译器哈希及链接时间保存在上述JSON。
+LLVM文件缩小主要因为改用共享LLVM，不能当作整体安装体积下降。C-only文件和RSS增加。短样本含进程启动，5次采样没有总体性能置信区间；GPU时长含SDK/JIT初始化，未作为加速比。详细采样、编译器SHA与原生链接时间在 `benchmarks/foundations-{llvm,c}/measurements.json`。
 
-复测：`python3 scripts/benchmark.py --backend llvm --baseline "$WORK/baseline/aethc-llvm" --current "$WORK/release/aethc" --work-dir "$WORK/benchmarks/repeat-llvm"`，其中`WORK=/Volumes/WINDOWS/work/aetherlang-upgrade-work`；C使用`--backend c`、`baseline/aethc`与`release/aethc-c`。
-
-
-## 构建、测试与产物
+## 构建、测试、交付文件
 
 ```sh
 cd /Volumes/WINDOWS/work/AetherLang
@@ -90,22 +103,27 @@ sh scripts/build.sh llvm
 sh scripts/test.sh llvm
 ```
 
-本机 CARGO_HOME 使用已验证的离线依赖缓存，避开其他项目的全局Cargo锁；其他机器可使用自己的常规缓存。`build.sh c`/`test.sh c`选择C-only，工具链脚本处理Homebrew遮蔽并打印实际版本。
+`build.sh c`/`test.sh c`选择无LLVM构建。这里的CARGO_HOME是外置离线缓存；其他机器可用自己的正常缓存。已有SDK时，设置 `AETHER_CUDAQ_BRIDGE` 增加原生SDK测试；GPU后端另设 `AETHER_CUDAQ_GPU=1`。CUDA GPU实测入口为 `tests/cuda_native.py`，无设备退出77而不是假装通过。命令详见 [QUANTUM](QUANTUM.md)、[MATH](MATH.md)、[BOOTSTRAP](BOOTSTRAP.md)。
 
-最终文件在 `/Volumes/WINDOWS/work/aetherlang-upgrade-work/release/`：`aethc`、`aethc-c`、`jxz`、`jxz-c`及`manifest.json`。LLVM版仍依赖本机共享LLVM；编译器文件体积不代表总安装体积。全部文件的源码提交和SHA-256由manifest记录。
+外置 `release/` 包含 `aethc`（LLVM+C）、`aethc-c`（C-only）、`aethc-core`（自编译stage4）、`jxz`、`jxz-c`及 `manifest.json`。C-only实查只依赖libSystem，LLVM版依赖本机共享LLVM。核心源码与stdlib保持在仓库中，不把当前主机二进制宣传为可直接复制到任意系统的安装包。
 
-证据根为 `/Volumes/WINDOWS/work/aetherlang-upgrade-work`：完整验收 `evidence/closure-full-llvm.log`；最后修复 `closure-final-corrections.log`、`closure-final-layout.log`；发布验收 `followup-release/`；性能 `benchmarks/final-{llvm,c}/measurements.json`；跨目标 `aggregate-fix/cross-objects/results.json`。中期问题原始证据保留于 `followup-analysis/`，当时编译器冻结为 `baseline/014f0a1-aethc`，不再冒充最终release。
+证据根 `/Volumes/WINDOWS/work/aetherlang-upgrade-work`：
 
-## 迁移与已知边界
+- `evidence/foundations-*`：主套件、C-only、release构建及性能日志。
+- `target/*/results.json`：完整功能套件；`foundations-release/`：发布二进制、C-only自举、JXZ和量子预算验收。
+- `cudaq/final/gpu-validation.json`：八个NVIDIA GPU原生程序的构建/运行、生成物SHA、工具链和设备；`remote-cleanup.json`记录任务目录清理。
+- `new-foundations/{integer-literals,relocations,math-review}/`：独立整数oracle、重定位与数学复核。
 
-- 浮点到整数转换采用上述饱和规则；数组是值，不能再依赖旧复制别名。`()`是size0/align1的值，和ABI void区分。
-- 使用 `Vec<T>` 和 `vec_*`、`option_*`、`result_*`自由函数；旧的 `Vec<T,A>`/generic impl接口原本没有完整实现。`Option`来自独立option模块，`Result::Ok`需要足够的错误类型上下文。
-- 未标效果的语言函数推导效果；`pure`及显式effect列表为上界。未知extern默认保守效果，可用真实`@reads/@writes/@io/@allocs/@panics/@pure`契约声明；重复声明不削弱已知效果。内联汇编和union读取需要unsafe，asm out允许初始化尚未赋值的绑定。
-- 原子默认seq_cst；named-order接口或`_explicit`＋ORDER_*常量选择合法顺序。`compiler_barrier`兼容名称目前提供更强的全fence。端口函数从`mmio`迁到`x86io`；raw atomic指针须指向存活、自然对齐的存储，并采用兼容并发访问方式。
-- 普通函数使用内部符号/调用约定，C可见定义写`#[no_mangle]`；对象输出用`--emit-obj`，LLVM文本用`--emit-llvm`，附加对象/库用`--link-object`和`--link-library`。
+跨目标状态分开记录：Mac arm64完成编译/链接/运行；Linux x86_64已完成本文GPU程序的编译/链接/运行，但未因此宣称Linux所有POSIX程序已验收；Windows、Android、其他裸机目标的现有证据仅为对象编译/IR或重定位检查，未冒充链接/运行。远端CI未运行。
 
-当前可以编写并实际运行：原生计算和数据结构程序、有状态输入服务、本地项目工具、直接C接口及受测试系统原语。它仍没有自动析构、完整资源所有权/trait/closure/async/const-generic体系；Vec、文件句柄等raw资源由调用者维持单一所有者并显式释放，复制资源容器不会自动深拷贝。未验证的旧标准库模块不算交付能力。
+## 迁移与仍需处理的问题
 
-LLVM foreign aggregate C ABI目前实现并验证Apple arm64，其他目标明确拒绝该外部ABI；内部聚合和C后端不受同一限制。JXZ依赖图/锁文件/注册表与Windows进程层未实现，相关配置不假成功。`src_aether`仍存在旧API及占位生成，未完成自举。
+- 数组采用值语义，浮点转整数采用饱和规则，默认整数为i64；u64上半区需要明确类型上下文，负MIN现在合法，超范围常量拒绝。
+- 使用 `Vec<T>`/`vec_*`、独立Option/Result模块。资源handle、张量、Tape、QuantumPool与lease仍有显式释放约定，复制raw owner不等于深拷贝或所有权转移。
+- 数学统一到tensor/autodiff；旧占位API不能继续当作已实现能力。`matrix`和`autograd`保留复用入口；具体操作和错误返回见MATH。
+- Core自举支持自己的函数/标量/指针/结构体/C FFI/控制流子集；不支持完整语言的模块、泛型、枚举、数组、引用等。主Rust/LLVM编译器继续提供这些能力。
+- 未标效果的函数推导效果，pure/显式列表为上界；未知extern保守处理，重复声明不能削弱效果。C可见函数写`#[no_mangle]`，对象输出`--emit-obj`，链接用`--link-object`/`--link-library`。
+- LLVM外部聚合C ABI目前实现并验证Apple arm64，其他目标明确拒绝；内部聚合与标量/指针外部接口不受该限制。JXZ依赖图/锁文件/注册表和Windows进程层仍未完成，相关配置明确拒绝。
+- 当前没有自动析构、完整所有权/trait/closure/async/const-generics体系；数学不是完整JAX/JIT/vmap，量子不是QPU实机验证；Metal/Adreno与自动异构调度未实现。旧标准库未验证的模块不计入交付能力。
 
-下一轮最值得投入的是可解释的资源所有权与析构协议（先防止拥有资源的容器被无意复制，再统一作用域退出清理），然后扩展并验证其他目标的外部聚合ABI、JXZ依赖图。当前复核中的已证实错误及本轮选定的完整能力已逐项闭合；这不等同于声称语言不存在其他缺陷，也不决定终端、Shell或其他项目应迁移到它。
+下一项应先建立资源拥有者的不可隐式复制语义与作用域退出清理，覆盖提前return、Result传播和多资源失败路径。异构计算下一里程碑是同一16比特电路在CPU、NVIDIA、Metal及Adreno上有明确精度、峰值内存与同步证据；应先实现一个真实的新后端和能力查询，再扩大调度器。Shell可复用这轮进程/文件/管道基础，但本轮不替用户决定具体项目迁移。
