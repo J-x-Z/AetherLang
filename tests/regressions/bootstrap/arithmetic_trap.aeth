@@ -1,0 +1,13 @@
+fn calculate(left:i32,right:i32,remainder:bool)->i32 {
+ if remainder {return left%right;}
+ return left/right;
+}
+fn main(argc:i32,argv:**u8)->i32 {
+ if argc!=2 {return 99;}
+ let mode:u8=argv[1][0];
+ if mode==48 {return calculate(17,0,false);}
+ if mode==49 {return calculate(-2147483648,-1,false);}
+ if mode==50 {return calculate(17,0,true);}
+ if mode==51 {return calculate(-2147483648,-1,true);}
+ return 99;
+}

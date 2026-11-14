@@ -1,0 +1,203 @@
+// Bootstrap lexer: owned token text lives in the context arena. Keywords stay
+// identifiers; the parser gives them meaning. Columns count source bytes.
+struct BootLexer {
+ context:*BootContext,position:u64,line:i32,column:i32,
+ token_line:i32,token_column:i32,tail:*BootToken
+}
+fn boot_lex_peek(lexer:*BootLexer,ahead:u64)->i32 {
+ let index:u64=lexer.position+ahead;
+ if index>=lexer.context.length { return -1; }
+ return lexer.context.source[index] as i32;
+}
+fn boot_lex_advance(lexer:*BootLexer) {
+ if lexer.position<lexer.context.length {
+  if lexer.context.source[lexer.position]==10 { lexer.line=lexer.line+1;lexer.column=1; }
+  else { lexer.column=lexer.column+1; }
+  lexer.position=lexer.position+1;
+ }
+}
+fn boot_lex_problem(lexer:*BootLexer,message:*u8)->bool {
+ let token:*BootToken=boot_alloc(lexer.context,size_of(BootToken) as u64) as *BootToken;
+ if token!=(0 as *BootToken) { token.line=lexer.token_line;token.column=lexer.token_column; }
+ boot_error(lexer.context,token,message);
+ return false;
+}
+fn boot_lex_token(lexer:*BootLexer,kind:i32,text:*u8,length:u64)->bool {
+ if text==(0 as *u8) { return false; }
+ let token:*BootToken=boot_alloc(lexer.context,size_of(BootToken) as u64) as *BootToken;
+ if token==(0 as *BootToken) { return false; }
+ token.kind=kind;token.text=text;token.length=length;
+ token.line=lexer.token_line;token.column=lexer.token_column;
+ if lexer.tail==(0 as *BootToken) { lexer.context.tokens=token; }
+ else { lexer.tail.next=token; }
+ lexer.tail=token;
+ return true;
+}
+fn boot_lex_digit(value:i32)->bool { return value>=48 && value<=57; }
+fn boot_lex_hex(value:i32)->i32 {
+ if value>=48 && value<=57 { return value-48; }
+ if value>=65 && value<=70 { return value-55; }
+ if value>=97 && value<=102 { return value-87; }
+ return -1;
+}
+fn boot_lex_ident_start(value:i32)->bool {
+ return (value>=65 && value<=90) || (value>=97 && value<=122) || value==95;
+}
+fn boot_lex_ident_part(value:i32)->bool { return boot_lex_ident_start(value) || boot_lex_digit(value); }
+fn boot_lex_digits(lexer:*BootLexer,hex:bool)->bool {
+ let mut count:u64=0;
+ let mut separator:bool=false;
+ while lexer.position<lexer.context.length {
+  let value:i32=boot_lex_peek(lexer,0);
+  let digit:bool=boot_lex_digit(value) || (hex && boot_lex_hex(value)>=0);
+  if digit { count=count+1;separator=false;boot_lex_advance(lexer); }
+  else {
+   if value!=95 { break; }
+   if count==0 || separator { return boot_lex_problem(lexer,"misplaced number separator\0" as *u8); }
+   separator=true;boot_lex_advance(lexer);
+  }
+ }
+ if count==0 || separator { return boot_lex_problem(lexer,"expected digits in number\0" as *u8); }
+ return true;
+}
+fn boot_lex_number(lexer:*BootLexer)->bool {
+ let start:u64=lexer.position;
+ let mut kind:i32=BT_INT;
+ if boot_lex_peek(lexer,0)==48 && (boot_lex_peek(lexer,1)==120 || boot_lex_peek(lexer,1)==88) {
+  boot_lex_advance(lexer);boot_lex_advance(lexer);
+  if !boot_lex_digits(lexer,true) { return false; }
+ } else {
+  if !boot_lex_digits(lexer,false) { return false; }
+  if boot_lex_peek(lexer,0)==46 && boot_lex_digit(boot_lex_peek(lexer,1)) {
+   kind=BT_FLOAT;boot_lex_advance(lexer);
+   if !boot_lex_digits(lexer,false) { return false; }
+  }
+  if boot_lex_peek(lexer,0)==101 || boot_lex_peek(lexer,0)==69 {
+   kind=BT_FLOAT;boot_lex_advance(lexer);
+   if boot_lex_peek(lexer,0)==43 || boot_lex_peek(lexer,0)==45 { boot_lex_advance(lexer); }
+   if !boot_lex_digits(lexer,false) { return false; }
+  }
+ }
+ if boot_lex_ident_part(boot_lex_peek(lexer,0)) { return boot_lex_problem(lexer,"invalid number suffix\0" as *u8); }
+ let text:*u8=boot_alloc(lexer.context,lexer.position-start+1) as *u8;
+ if text==(0 as *u8) { return false; }
+ let mut index:u64=start;let mut length:u64=0;
+ while index<lexer.position {
+  let value:u8=lexer.context.source[index];
+  if value!=95 { text[length]=value;length=length+1; }
+  index=index+1;
+ }
+ text[length]=0;
+ return boot_lex_token(lexer,kind,text,length);
+}
+fn boot_lex_escape(value:i32)->i32 {
+ if value==48 { return 0; }
+ if value==110 { return 10; }
+ if value==114 { return 13; }
+ if value==116 { return 9; }
+ if value==92 || value==34 || value==39 { return value; }
+ return -1;
+}
+fn boot_lex_string(lexer:*BootLexer)->bool {
+ boot_lex_advance(lexer);
+ let start:u64=lexer.position;let mut length:u64=0;
+ while boot_lex_peek(lexer,0)!=34 {
+  let value:i32=boot_lex_peek(lexer,0);
+  if value<0 || value==10 || value==13 || value==0 { return boot_lex_problem(lexer,"unterminated string\0" as *u8); }
+  boot_lex_advance(lexer);
+  if value==92 {
+   let escape:i32=boot_lex_peek(lexer,0);
+   if escape==120 {
+    boot_lex_advance(lexer);
+    if boot_lex_hex(boot_lex_peek(lexer,0))<0 || boot_lex_hex(boot_lex_peek(lexer,1))<0 {
+     return boot_lex_problem(lexer,"hex escape requires two digits\0" as *u8);
+    }
+    boot_lex_advance(lexer);boot_lex_advance(lexer);
+   } else {
+    if boot_lex_escape(escape)<0 { return boot_lex_problem(lexer,"unknown string escape\0" as *u8); }
+    boot_lex_advance(lexer);
+   }
+  }
+  length=length+1;
+ }
+ let end:u64=lexer.position;
+ boot_lex_advance(lexer);
+ let text:*u8=boot_alloc(lexer.context,length+1) as *u8;
+ if text==(0 as *u8) { return false; }
+ let mut index:u64=start;let mut output:u64=0;
+ while index<end {
+  let mut value:i32=lexer.context.source[index] as i32;index=index+1;
+  if value==92 {
+   value=lexer.context.source[index] as i32;index=index+1;
+   if value==120 {
+    value=boot_lex_hex(lexer.context.source[index] as i32)*16+boot_lex_hex(lexer.context.source[index+1] as i32);
+    index=index+2;
+   } else { value=boot_lex_escape(value); }
+  }
+  text[output]=value as u8;output=output+1;
+ }
+ text[length]=0;
+ return boot_lex_token(lexer,BT_STRING,text,length);
+}
+fn boot_lex_punctuation(lexer:*BootLexer)->bool {
+ let start:u64=lexer.position;
+ let value:i32=boot_lex_peek(lexer,0);let next:i32=boot_lex_peek(lexer,1);
+ let mut kind:i32=value;let mut length:u64=1;
+ if value==45 && next==62 { kind=BT_ARROW;length=2; }
+ if value==61 && next==61 { kind=BT_EQ;length=2; }
+ if value==33 && next==61 { kind=BT_NE;length=2; }
+ if value==60 && next==61 { kind=BT_LE;length=2; }
+ if value==62 && next==61 { kind=BT_GE;length=2; }
+ if value==38 && next==38 { kind=BT_AND;length=2; }
+ if value==124 && next==124 { kind=BT_OR;length=2; }
+ if value==60 && next==60 { kind=BT_SHL;length=2; }
+ if value==62 && next==62 { kind=BT_SHR;length=2; }
+ if value==46 && next==46 && boot_lex_peek(lexer,2)==46 { kind=BT_ELLIPSIS;length=3; }
+ if length==1 {
+  if value!=40 && value!=41 && value!=123 && value!=125 && value!=91 && value!=93 &&
+     value!=44 && value!=59 && value!=58 && value!=46 && value!=43 && value!=45 &&
+     value!=42 && value!=47 && value!=37 && value!=61 && value!=33 && value!=60 &&
+     value!=62 && value!=38 && value!=124 && value!=94 && value!=126 {
+   return boot_lex_problem(lexer,"unknown source character\0" as *u8);
+  }
+ }
+ let mut index:u64=0;
+ while index<length { boot_lex_advance(lexer);index=index+1; }
+ return boot_lex_token(lexer,kind,boot_copy(lexer.context,lexer.context.source+start,length),length);
+}
+fn boot_lex(ctx:*BootContext)->bool {
+ let lexer:*BootLexer=boot_alloc(ctx,size_of(BootLexer) as u64) as *BootLexer;
+ if lexer==(0 as *BootLexer) { return false; }
+ lexer.context=ctx;lexer.line=1;lexer.column=1;
+ while lexer.position<ctx.length {
+  lexer.token_line=lexer.line;lexer.token_column=lexer.column;
+  let value:i32=boot_lex_peek(lexer,0);
+  if value==32 || value==9 || value==10 || value==13 { boot_lex_advance(lexer); }
+  else { if value==47 && boot_lex_peek(lexer,1)==47 {
+   while lexer.position<ctx.length && boot_lex_peek(lexer,0)!=10 { boot_lex_advance(lexer); }
+  } else { if value==47 && boot_lex_peek(lexer,1)==42 {
+   boot_lex_advance(lexer);boot_lex_advance(lexer);let mut depth:i32=1;
+   while depth>0 {
+    if lexer.position>=ctx.length { return boot_lex_problem(lexer,"unterminated block comment\0" as *u8); }
+    if boot_lex_peek(lexer,0)==47 && boot_lex_peek(lexer,1)==42 {
+     depth=depth+1;boot_lex_advance(lexer);boot_lex_advance(lexer);
+    } else { if boot_lex_peek(lexer,0)==42 && boot_lex_peek(lexer,1)==47 {
+     depth=depth-1;boot_lex_advance(lexer);boot_lex_advance(lexer);
+    } else { boot_lex_advance(lexer); } }
+   }
+  } else { if boot_lex_ident_start(value) {
+   let start:u64=lexer.position;
+   while boot_lex_ident_part(boot_lex_peek(lexer,0)) { boot_lex_advance(lexer); }
+   let length:u64=lexer.position-start;
+   if !boot_lex_token(lexer,BT_IDENT,boot_copy(ctx,ctx.source+start,length),length) { return false; }
+  } else { if boot_lex_digit(value) {
+   if !boot_lex_number(lexer) { return false; }
+  } else { if value==34 {
+   if !boot_lex_string(lexer) { return false; }
+  } else { if !boot_lex_punctuation(lexer) { return false; } } } } } } }
+ }
+ lexer.token_line=lexer.line;lexer.token_column=lexer.column;
+ if !boot_lex_token(lexer,BT_EOF,boot_copy(ctx,ctx.source,0),0) { return false; }
+ ctx.cursor=ctx.tokens;
+ return !ctx.failed;
+}

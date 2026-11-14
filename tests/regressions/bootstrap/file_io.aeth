@@ -1,0 +1,26 @@
+extern "C" {
+ fn malloc(size:u64)->*void;fn free(pointer:*void);
+ fn fopen(path:*u8,mode:*u8)->*void;fn fclose(file:*void)->i32;
+ fn fread(data:*u8,size:u64,count:u64,file:*void)->u64;
+ fn fwrite(data:*u8,size:u64,count:u64,file:*void)->u64;
+ fn ferror(file:*void)->i32;fn fflush(file:*void)->i32;
+ fn rename(from:*u8,to:*u8)->i32;fn remove(path:*u8)->i32;
+ fn printf(format:*u8,...)->i32;
+}
+fn main(argc:i32,argv:**u8)->i32 {
+ if argc!=3 {return 1;}
+ let file:*void=fopen(argv[1],"wb");if file==(0 as *void){return 2;}
+ let size:u64=fwrite("A\0B%\n",1,5,file);
+ let flush:i32=fflush(file);let close:i32=fclose(file);
+ if size!=5 || flush!=0 || close!=0 {return 3;}
+ if rename(argv[1],argv[2])!=0 {return 4;}
+ let buffer:*u8=malloc(8) as *u8;if buffer==(0 as *u8){return 5;}
+ let input:*void=fopen(argv[2],"rb");if input==(0 as *void){free(buffer as *void);return 6;}
+ let count:u64=fread(buffer,1,8,input);
+ let error:i32=ferror(input);let closed:i32=fclose(input);
+ let valid:bool=count==5 && error==0 && closed==0 && buffer[0]==65 && buffer[1]==0 && buffer[2]==66 && buffer[3]==37 && buffer[4]==10;
+ free(buffer as *void);
+ if remove(argv[2])!=0 {return 7;}
+ if !valid {return 8;}
+ printf("file-bytes=5\n");return 0;
+}

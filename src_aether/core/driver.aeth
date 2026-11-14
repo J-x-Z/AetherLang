@@ -1,0 +1,97 @@
+// File/CLI boundary for the self-hosted Core compiler. The compiler never shells
+// out: its only output is checked C source. The build driver links that source.
+extern "C" {
+ fn realpath(path:*u8,resolved:*u8)->*u8;
+ fn mkstemp(path:*u8)->i32;
+ fn fdopen(descriptor:i32,mode:*u8)->*void;
+ fn close(descriptor:i32)->i32;
+ fn rename(source:*u8,destination:*u8)->i32;
+}
+fn boot_driver_message(message:*u8)->i32 {
+ printf("aether-core: %s\n\0" as *u8,message);
+ return 1;
+}
+fn main(argc:i32,argv:**u8)->i32 {
+ if argc<2 { return boot_driver_message("usage: aether-core input.aeth [-o output.c | --check]\0" as *u8); }
+ let mut input:*u8=0 as *u8;let mut output:*u8=0 as *u8;
+ let mut check:bool=false;let mut index:i32=1;
+ while index<argc {
+  let argument:*u8=argv[index];
+  if strcmp(argument,"--check\0" as *u8)==0 {
+   if check { return boot_driver_message("duplicate --check\0" as *u8); }
+   check=true;
+  } else { if strcmp(argument,"-o\0" as *u8)==0 {
+   index=index+1;
+   if index>=argc || output!=(0 as *u8) { return boot_driver_message("-o requires one output path\0" as *u8); }
+   output=argv[index];
+  } else {
+   if argument[0]==45 { return boot_driver_message("unknown command option\0" as *u8); }
+   if input!=(0 as *u8) { return boot_driver_message("expected one input file\0" as *u8); }
+   input=argument;
+  } }
+  index=index+1;
+ }
+ if input==(0 as *u8) { return boot_driver_message("missing input file\0" as *u8); }
+ if check && output!=(0 as *u8) { return boot_driver_message("--check does not accept -o\0" as *u8); }
+ if !check && output==(0 as *u8) { return boot_driver_message("generation requires -o output.c\0" as *u8); }
+ if output!=(0 as *u8) {
+  let input_real:*u8=realpath(input,0 as *u8);
+  let output_real:*u8=realpath(output,0 as *u8);
+  let mut same:bool=strcmp(input,output)==0;
+  if input_real!=(0 as *u8) && output_real!=(0 as *u8) { same=strcmp(input_real,output_real)==0; }
+  free(input_real as *void);free(output_real as *void);
+  if same { return boot_driver_message("input and output paths must differ\0" as *u8); }
+ }
+ let file:*void=fopen(input,"rb\0" as *u8);
+ if file==(0 as *void) { return boot_driver_message("cannot open input\0" as *u8); }
+ if fseek(file,0,2)!=0 { fclose(file);return boot_driver_message("cannot seek input\0" as *u8); }
+ let measured:i64=ftell(file);
+ if measured<0 || measured>33554432 { fclose(file);return boot_driver_message("input size must be at most 32 MiB\0" as *u8); }
+ if fseek(file,0,0)!=0 { fclose(file);return boot_driver_message("cannot rewind input\0" as *u8); }
+ let length:u64=measured as u64;
+ let source:*u8=malloc(length+1) as *u8;
+ if source==(0 as *u8) { fclose(file);return boot_driver_message("cannot allocate source buffer\0" as *u8); }
+ let count:u64=fread(source,1,length,file);
+ let read_error:i32=ferror(file);
+ let close_error:i32=fclose(file);
+ if count!=length || read_error!=0 || close_error!=0 {
+  free(source as *void);return boot_driver_message("cannot completely read input\0" as *u8);
+ }
+ source[length]=0;
+ let context:*BootContext=boot_context_new(source,length,input);
+ if context==(0 as *BootContext) { free(source as *void);return boot_driver_message("cannot allocate compiler context\0" as *u8); }
+ let mut success:bool=boot_lex(context);
+ if success { success=boot_parse(context); }
+ if success { success=boot_check(context); }
+ if success && !check {
+  let path_length:u64=strlen(output);
+  let temporary:*u8=malloc(path_length+12) as *u8;
+  if temporary==(0 as *u8) { success=false;boot_driver_message("cannot allocate output path\0" as *u8); }
+  else {
+   memcpy(temporary as *void,output as *void,path_length);
+   memcpy((temporary+path_length) as *void,".tmp.XXXXXX\0" as *u8 as *void,12);
+   let descriptor:i32=mkstemp(temporary);
+   if descriptor<0 { success=false;boot_driver_message("cannot create output temporary\0" as *u8); }
+   else {
+    context.output=fdopen(descriptor,"wb\0" as *u8);
+    if context.output==(0 as *void) { close(descriptor);success=false;boot_driver_message("cannot open output stream\0" as *u8); }
+    else {
+     success=boot_emit(context);
+     let write_error:i32=ferror(context.output);
+     let finish_error:i32=fclose(context.output);
+     context.output=0 as *void;
+     if write_error!=0 || finish_error!=0 { success=false;boot_driver_message("cannot completely write output\0" as *u8); }
+     if success {
+      if rename(temporary,output)!=0 { success=false;boot_driver_message("cannot replace output\0" as *u8); }
+     }
+    }
+    if !success { remove(temporary); }
+   }
+   free(temporary as *void);
+  }
+ }
+ boot_context_free(context);
+ free(source as *void);
+ if !success { return 1; }
+ return 0;
+}

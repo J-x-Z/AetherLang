@@ -1,0 +1,32 @@
+extern "C" {
+ fn malloc(size:u64)->*void;
+ fn free(pointer:*void);
+ fn printf(format:*u8,...)->i32;
+}
+struct Link { value:i64,next:*Link }
+fn factorial(n:i64)->i64 {
+ if n<=1 {return 1;}
+ return n*factorial(n-1);
+}
+fn fibonacci(n:i32)->i32 {
+ if n<2 {return n;}
+ return fibonacci(n-1)+fibonacci(n-2);
+}
+fn release(head:*Link) {
+ let mut node:*Link=head;
+ while node!=(0 as *Link) {let next:*Link=node.next;free(node as *void);node=next;}
+}
+fn main()->i32 {
+ let mut head:*Link=0 as *Link;let mut index:i64=0;
+ while index<10000 {
+  let node:*Link=malloc(size_of(Link) as u64) as *Link;
+  if node==(0 as *Link) {release(head);return 1;}
+  node.value=index;node.next=head;head=node;index=index+1;
+ }
+ let mut node:*Link=head;let mut sum:i64=0;
+ while node!=(0 as *Link) {sum=sum+node.value;node=node.next;}
+ release(head);
+ if sum!=49995000 || factorial(10)!=3628800 || fibonacci(20)!=6765 {return 2;}
+ printf("heap=%lld factorial=%lld fib=%d\n",sum,factorial(10),fibonacci(20));
+ return 0;
+}

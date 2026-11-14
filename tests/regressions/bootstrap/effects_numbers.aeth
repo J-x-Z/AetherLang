@@ -1,0 +1,23 @@
+extern "C" {fn printf(format:*u8,...)->i32;}
+fn touch(counter:*i32)->bool {*counter=*counter+1;return true;}
+fn next(counter:*i32)->i32 {*counter=*counter+1;return *counter;}
+fn digits(a:i32,b:i32,c:i32)->i32 {return a*100+b*10+c;}
+fn main()->i32 {
+ let mut count:i32=0;
+ let skipped:bool=false && touch(&count as *i32);
+ let skipped_again:bool=true || touch(&count as *i32);
+ if count!=0 || skipped || !skipped_again {return 1;}
+ if !(true && touch(&count as *i32)) || count!=1 {return 2;}
+ count=0;
+ if digits(next(&count as *i32),next(&count as *i32),next(&count as *i32))!=123 {return 3;}
+ let narrow:u8=250;let wrapped:u8=narrow+10;if wrapped!=4 {return 4;}
+ let maximum:i32=2147483647;let minimum:i32=maximum+1;
+ if minimum!=-2147483648 {return 5;}
+ let one:i32=1;if (one<<32)!=1 || ((-8 as i32)>>1)!=-4 {return 6;}
+ if (300.0 as u8)!=255 || (-300.0 as i8)!=-128 || (1e30 as i32)!=2147483647 {return 7;}
+ if ((0.0/0.0) as i32)!=0 || (42.9 as i32)!=42 {return 8;}
+ let decimal:i32=0012;if decimal!=12 {return 9;}
+ let text:*u8="A\0B\x43\n\"\\";
+ if text[0]!=65 || text[1]!=0 || text[2]!=66 || text[3]!=67 || text[4]!=10 || text[5]!=34 || text[6]!=92 || text[7]!=0 {return 10;}
+ printf("effects=123 wrap=4 decimal=12\n");return 0;
+}
