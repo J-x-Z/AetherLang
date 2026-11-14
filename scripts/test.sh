@@ -28,6 +28,9 @@ python3 "$root/scripts/test_build_paths.py"
 compiler="$CARGO_TARGET_DIR/debug/aethc"
 # $backends is an intentional list of fixed tokens selected above.
 python3 scripts/validate.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/validation" --backends $backends
+for suite in aggregate_abi system_values semantic_values runtime_foundation generic_runtime memory_runtime; do
+    python3 "tests/$suite.py" --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/$suite" --backends $backends
+done
 for backend in $backends; do
     jxz="$CARGO_TARGET_DIR/jxz-$backend"
     AETHC="$compiler" AETHER_BACKEND="$backend" jxz/build.sh "$jxz"

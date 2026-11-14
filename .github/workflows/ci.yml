@@ -18,11 +18,8 @@ jobs:
         with:
           toolchain: 1.100.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked --no-default-features
+      - run: sh scripts/test.sh c
       - run: cargo build --locked --release --no-default-features
-      - run: python3 scripts/validate.py --compiler target/release/aethc --work-dir target/validation --backends c
-      - run: AETHC="$PWD/target/release/aethc" jxz/build.sh "$PWD/target/jxz"
-      - run: python3 jxz/tests/integration.py --jxz target/jxz --aethc target/release/aethc --work-dir target/jxz-tests
   llvm:
     runs-on: ubuntu-latest
     env:
@@ -39,11 +36,8 @@ jobs:
           sudo ./llvm.sh 21
           sudo apt-get install -y llvm-21-dev libpolly-21-dev
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked --features llvm
+      - run: sh scripts/test.sh llvm
       - run: cargo build --locked --release --features llvm
-      - run: python3 scripts/validate.py --compiler target/release/aethc --work-dir target/validation
-      - run: AETHC="$PWD/target/release/aethc" jxz/build.sh "$PWD/target/jxz"
-      - run: python3 jxz/tests/integration.py --jxz target/jxz --aethc target/release/aethc --work-dir target/jxz-tests
   windows-c-build:
     runs-on: windows-latest
     steps:
