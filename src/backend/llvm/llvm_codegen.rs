@@ -130,13 +130,17 @@ impl LLVMCodeGen {
 
     /// Initialize LLVM targets
     fn init_targets() {
-        unsafe {
+        // LLVM target registration mutates process-global lists. Concurrent
+        // registration can corrupt them even when every module has its own
+        // context. Publish the complete registry exactly once per process.
+        static INITIALIZE: std::sync::Once = std::sync::Once::new();
+        INITIALIZE.call_once(|| unsafe {
             LLVM_InitializeAllTargetInfos();
             LLVM_InitializeAllTargets();
             LLVM_InitializeAllTargetMCs();
             LLVM_InitializeAllAsmParsers();
             LLVM_InitializeAllAsmPrinters();
-        }
+        });
     }
 
     /// Convert IR type to LLVM type
@@ -1294,6 +1298,19 @@ mod tests {
         let program = parser.parse_program().unwrap();
         let mut gen = IRGenerator::new("test");
         gen.generate(&program).unwrap()
+    }
+
+    #[test]
+    fn target_registration_is_safe_concurrently() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8).map(|_| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                LLVMCodeGen::init_targets();
+            })
+        }).collect();
+        for thread in threads { thread.join().unwrap(); }
     }
 
     #[test]
