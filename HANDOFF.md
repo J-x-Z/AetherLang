@@ -85,3 +85,12 @@ Shell报告当前冻结LLVM-O2主执行链已运行；这属于Shell线程报告
 新独立冻结包 `WORK/releases/literal-escapes-20261115/`：aethc（LLVM+C）、aethc-core、jxz、jxz-c、原版本匹配stdlib与manifest。主编译器SHA256 `8e67c244d52a6f04536504f4a8df7888d9ed02570c25329061c3479c630c008b`。使用其stdlib时显式-I/AETHER_PATH；可搬移查找I01仍未修。原release及JXZ独立包未覆盖；Shell pin未改。当前仅Mac arm64宿主包，LLVM21动态库依赖记录在manifest；Linux宿主包任务仍在T18。
 
 主线T01/T02/T16/T18增加已完成子项，没有将整项勾完；N01递归泛型与N02deployment偏差、29组基线问题仍待处理。下一项仍是B2/F05/B3/N01的已定型事实和类型身份传递，不重启全面审计。
+
+
+## Shell首阶段交付回执已归档
+
+Shell源码提交 `bfe01906da145b68ac434c3286b5480f9a68866e`，Glass验收索引指向 `a076daccd3f0b21d8dd9da6135812fa1ca72fdcb`；Shell可执行文件SHA256 `0585df506f1a1d0b77c832baf5374c3833698f987217f9cbceec43491204cc8e`。当前Shell继续pin原aethc b4d0d036、JXZ d8504047和stdlib5f84a3f，并使用既有adapter/绕过，没有采用24ceae3的新编译器。
+
+本线只读核对Shell HEAD、实际binary hash、lock中的编译器/JXZ/44个stdlib文件及原release manifest hash；9份receipt逐项与验收索引SHA匹配，快照归档至 `WORK/shell-acceptance/20261115-bfe0190/`。原结果包括51 CLI、27编辑PTY、12真实vi/job-control、两套Terminal PTY和GUI；完整单元及部分IME/Unicode结果按Shell交接复用前一候选，不能都说成最终hash重跑。本线没有重新启动GUI/PTY测试。
+
+T17/T28记为部分完成：已有旧pin的macOS产品验收；新工具链聚焦联验/显式更新lock、Linux x86_64宿主aethc/JXZ包及真实Linux验收仍未完成。原固定发布继续保留。当前没有新增阻塞macOS核心的语言接口需求，N01/N02等已知语言问题仍按主线修复，不把应用绕过当作闭合。
