@@ -147,11 +147,12 @@ The LLVM foreign aggregate ABI classifier is currently verified for Apple arm64;
 other targets reject those foreign aggregate calls explicitly. Internal LLVM
 aggregate calls and the C fallback do not share that foreign-ABI restriction.
 
-`src_aether/` contains an experimental compiler implementation. Its full entry
-point does not currently build a working compiler, and its pipeline still
-contains placeholder generation. AetherLang is **not currently self-hosting**.
-Old standalone binaries and generated C files are historical artifacts, not
-build inputs or acceptance evidence.
+`src_aether/core/` now contains a complete minimal self-hosting compiler written
+in Aether. It compiles its own lexer, parser, type checker and C emitter through
+four native stages with identical generated C. It intentionally implements a
+specified Core subset; the Rust/LLVM compiler remains the full language compiler.
+See [the reproducible bootstrap chain and subset](docs/BOOTSTRAP.md),
+[the tensor/autodiff API](docs/MATH.md), and [native quantum integration](docs/QUANTUM.md).
 
 See [upgrade results and migration notes](docs/UPGRADE.md) and
 [the current engineering handoff](HANDOFF.md). Older design documents describe

@@ -1,0 +1,25 @@
+use quantum::{Circuit,QuantumGate,Complex64,quantum_new,quantum_free,quantum_state_free,Q_INVALID,Q_LIMIT};
+use quantum_cudaq::quantum_cudaq;
+use result::Result;
+fn main()->i32 {
+ if size_of(QuantumGate)!=24 || align_of(QuantumGate)!=8 || offset_of(QuantumGate,kind)!=0 ||
+    offset_of(QuantumGate,target)!=4 || offset_of(QuantumGate,control)!=8 || offset_of(QuantumGate,angle)!=16 {return 1;}
+ if size_of(Complex64)!=16 || offset_of(Complex64,re)!=0 || offset_of(Complex64,im)!=8 {return 2;}
+ let mut error:[u8;8]=[65;8];let mut gpu:i32=7;
+ match quantum_cudaq(0 as *Circuit,8,&mut error[0] as *u8,4,&mut gpu as *i32) {
+  Result::Err(code)=>{if code!=Q_INVALID{return 3;}},
+  Result::Ok(state)=>{quantum_state_free(state);return 4;}
+ }
+ if gpu!=0 || error[0]==65 || error[4]!=65 || error[7]!=65 {return 5;}
+ let circuit:*Circuit=match quantum_new(2){Result::Ok(c)=>c,Result::Err(e)=>{return e;}};
+ error[0]=65;gpu=7;
+ let mut status:i32=0;
+ match quantum_cudaq(circuit,1,&mut error[0] as *u8,4,&mut gpu as *i32) {
+  Result::Err(code)=>{status=code;},
+  Result::Ok(state)=>{quantum_state_free(state);}
+ }
+ quantum_free(circuit);
+ if status!=Q_LIMIT{return 6;}
+ if gpu!=0 || error[0]==65 || error[4]!=65 || error[7]!=65{return 7;}
+ 0
+}

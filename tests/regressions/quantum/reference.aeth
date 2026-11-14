@@ -1,0 +1,66 @@
+use result::Result;
+use quantum::{Circuit, QuantumState, quantum_new, quantum_free, quantum_gate, quantum_set_angle,
+ quantum_simulate, quantum_state_free, quantum_probability, quantum_expect, quantum_gradient,
+ Q_H,Q_X,Q_Y,Q_Z,Q_RX,Q_RY,Q_RZ,Q_CX,Q_CZ,Q_SWAP};
+extern "C"{fn sin(x:f64)->f64;fn cos(x:f64)->f64;}
+fn near(a:f64,b:f64)->bool{let d:f64=a-b;d<0.000000001&&d> -0.000000001}
+fn work()->Result<i32,i32>{
+ let bell:*Circuit=quantum_new(2)?;
+ if quantum_gate(bell,Q_H,0,0,0.0)!=0||quantum_gate(bell,Q_CX,1,0,0.0)!=0{return Result::Err(10);}
+ let state:*QuantumState=quantum_simulate(bell,8)?;
+ if !near(quantum_probability(state,0)?,0.5)||!near(quantum_probability(state,3)?,0.5)||!near(quantum_probability(state,1)?,0.0){return Result::Err(11);}
+ if !near(quantum_expect(state,0,0)?,0.0){return Result::Err(12);}
+ quantum_state_free(state);quantum_free(bell);
+ // Check each phase-bearing gate against its analytical single-qubit state.
+ let mut kind:i32=Q_RX;
+ while kind<=Q_RZ{
+  let c:*Circuit=quantum_new(1)?;
+  if quantum_gate(c,kind,0,0,0.73)!=0{return Result::Err(13);}
+  let s:*QuantumState=quantum_simulate(c,1)?;
+  if kind==Q_RX{
+   if !near(s.amplitudes[0].re,cos(0.365))||!near(s.amplitudes[1].im,-sin(0.365)){return Result::Err(14);}
+   if !near(quantum_expect(s,0,2)?,-sin(0.73)){return Result::Err(15);}
+  }else if kind==Q_RY{
+   if !near(s.amplitudes[1].re,sin(0.365))||!near(quantum_expect(s,0,1)?,sin(0.73)){return Result::Err(16);}
+  }else if !near(s.amplitudes[0].im,-sin(0.365)){return Result::Err(17);}
+  quantum_state_free(s);quantum_free(c);kind=kind+1;
+ }
+ // Phase/sign and permutation checks (not just output probabilities).
+ let c:*Circuit=quantum_new(3)?;
+ quantum_gate(c,Q_Y,0,0,0.0);quantum_gate(c,Q_SWAP,2,0,0.0);
+ quantum_gate(c,Q_X,1,0,0.0);quantum_gate(c,Q_CZ,2,1,0.0);quantum_gate(c,Q_Z,1,0,0.0);
+ let s:*QuantumState=quantum_simulate(c,3)?;
+ if !near(s.amplitudes[6].im,1.0)||!near(quantum_probability(s,6)?,1.0){return Result::Err(18);}
+ quantum_state_free(s);quantum_free(c);
+ // Parameter-shift agrees with both analytic and central finite difference.
+ let train:*Circuit=quantum_new(1)?;quantum_gate(train,Q_RY,0,0,0.73);
+ let derivative:f64=quantum_gradient(train,0,0,0,1)?;
+ if !near(derivative,-sin(0.73))||train.gates.data[0].angle!=0.73{return Result::Err(19);}
+ quantum_set_angle(train,0,0.73001);let high:*QuantumState=quantum_simulate(train,1)?;
+ let hi:f64=quantum_expect(high,0,0)?;quantum_state_free(high);
+ quantum_set_angle(train,0,0.72999);let low:*QuantumState=quantum_simulate(train,1)?;
+ let lo:f64=quantum_expect(low,0,0)?;quantum_state_free(low);
+ if !near(derivative,(hi-lo)/0.00002){return Result::Err(20);}
+ // Variational minimization: Aether controls parameter updates and gradients.
+ let mut angle:f64=0.73;let mut step:i32=0;
+ while step<100{
+  quantum_set_angle(train,0,angle);
+  angle=angle-0.2*quantum_gradient(train,0,0,0,1)?;step=step+1;
+ }
+ quantum_set_angle(train,0,angle);let final_state:*QuantumState=quantum_simulate(train,1)?;
+ if quantum_expect(final_state,0,0)?> -0.999999{return Result::Err(21);}
+ quantum_state_free(final_state);
+ // Malformed gates fail without changing the circuit; budget failure restores angle.
+ let length:u64=train.gates.len;
+ if quantum_gate(train,Q_CX,0,0,0.0)==0||quantum_gate(train,Q_H,2,0,0.0)==0||quantum_gate(train,99,0,0,0.0)==0||train.gates.len!=length{return Result::Err(22);}
+ let failed:Result<f64,i32>=quantum_gradient(train,0,0,0,0);
+ match failed{Result::Ok(_)=>{return Result::Err(23);},Result::Err(_)=>{}}
+ if train.gates.data[0].angle!=angle{return Result::Err(24);}
+ quantum_set_angle(train,0,1e20);
+ if !near(quantum_gradient(train,0,0,0,1)?,-sin(1e20))||train.gates.data[0].angle!=1e20{return Result::Err(25);}
+ quantum_set_angle(train,0,-1e20);
+ if !near(quantum_gradient(train,0,0,0,1)?,-sin(-1e20)){return Result::Err(26);}
+ quantum_free(train);
+ Result::Ok(0)
+}
+fn main()->i32{match work(){Result::Ok(value)=>value,Result::Err(error)=>error}}

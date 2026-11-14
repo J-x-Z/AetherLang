@@ -31,3 +31,6 @@ ir_output.txt
 /dist/*.x86_64
 CLAUDE.md
 .claude/
+
+# Python regression runner cache
+__pycache__/

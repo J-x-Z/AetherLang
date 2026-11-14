@@ -1,0 +1,191 @@
+// Circuit and reference state-vector implementation. All algorithmic work is
+// Aether Core. Bit q is bit (1 << q) of the amplitude index (little endian).
+// Handles own their buffers: free once; copies are aliases, not new owners.
+use vec::{Vec, vec_new, vec_push, vec_free};
+use result::Result;
+extern "C" {
+    fn malloc(size:u64)->*void;
+    fn free(pointer:*void);
+    fn sin(x:f64)->f64;
+    fn cos(x:f64)->f64;
+}
+
+const Q_H:i32=1;
+const Q_X:i32=2;
+const Q_Y:i32=3;
+const Q_Z:i32=4;
+const Q_RX:i32=5;
+const Q_RY:i32=6;
+const Q_RZ:i32=7;
+const Q_CX:i32=8;
+const Q_CZ:i32=9;
+const Q_SWAP:i32=10;
+const Q_INVALID:i32=1;
+const Q_ALLOC:i32=2;
+const Q_LIMIT:i32=3;
+
+// Plain C layout is also the version-1 CUDA-Q bridge gate record.
+pub struct QuantumGate { kind:i32, target:u32, control:u32, angle:f64 }
+pub struct Circuit { qubits:u32, gates:Vec<QuantumGate> }
+pub struct Complex64 { re:f64, im:f64 }
+pub struct QuantumState { qubits:u32, length:u64, amplitudes:*Complex64 }
+
+pub fn quantum_new(qubits:u32)->Result<*Circuit,i32> {
+    if qubits==0 || qubits>62 {return Result::Err(Q_INVALID);}
+    let circuit:*Circuit=malloc(size_of(Circuit) as u64) as *Circuit;
+    if circuit==0 as *Circuit {return Result::Err(Q_ALLOC);}
+    circuit.qubits=qubits; circuit.gates=vec_new();
+    Result::Ok(circuit)
+}
+pub fn quantum_free(circuit:*Circuit) {
+    if circuit!=0 as *Circuit {vec_free(&mut circuit.gates as *Vec<QuantumGate>); free(circuit as *void);}
+}
+pub fn quantum_gate_valid(qubits:u32,gate:QuantumGate)->bool {
+    if qubits==0 || qubits>62 || gate.kind<Q_H || gate.kind>Q_SWAP || gate.target>=qubits {return false;}
+    if !(gate.angle<=1.7976931348623157e308 && gate.angle>= -1.7976931348623157e308) {return false;}
+    if gate.kind>=Q_CX {return gate.control<qubits && gate.control!=gate.target;}
+    true
+}
+pub fn quantum_gate(circuit:*Circuit,kind:i32,target:u32,control:u32,angle:f64)->i32 {
+    if circuit==0 as *Circuit {return Q_INVALID;}
+    let gate:QuantumGate=QuantumGate{kind:kind,target:target,control:control,angle:angle};
+    if !quantum_gate_valid(circuit.qubits,gate) {return Q_INVALID;}
+    if !vec_push(&mut circuit.gates as *Vec<QuantumGate>,gate) {return Q_ALLOC;}
+    0
+}
+pub fn quantum_set_angle(circuit:*Circuit,index:u64,angle:f64)->i32 {
+    if circuit==0 as *Circuit || index>=circuit.gates.len {return Q_INVALID;}
+    let mut gate:QuantumGate=circuit.gates.data[index];
+    if gate.kind<Q_RX || gate.kind>Q_RZ {return Q_INVALID;}
+    gate.angle=angle;
+    if !quantum_gate_valid(circuit.qubits,gate) {return Q_INVALID;}
+    circuit.gates.data[index]=gate; 0
+}
+pub fn quantum_validate(circuit:*Circuit)->bool {
+    if circuit==0 as *Circuit {return false;}
+    if circuit.qubits==0 || circuit.qubits>62 {return false;}
+    let mut i:u64=0;
+    while i<circuit.gates.len {
+        if !quantum_gate_valid(circuit.qubits,circuit.gates.data[i]) {return false;}
+        i=i+1;
+    }
+    true
+}
+pub fn quantum_state_free(state:*QuantumState) {
+    if state!=0 as *QuantumState {free(state.amplitudes as *void);free(state as *void);}
+}
+// Allocate at most max_qubits, with a hard 24-qubit CPU bound (256 MiB).
+// No allocation is attempted on invalid/beyond-budget requests.
+pub fn quantum_state_new(qubits:u32,max_qubits:u32)->Result<*QuantumState,i32> {
+    if qubits==0 || qubits>62 {return Result::Err(Q_INVALID);}
+    if qubits>max_qubits || qubits>24 {return Result::Err(Q_LIMIT);}
+    let length:u64=(1 as u64)<<(qubits as u64);
+    let state:*QuantumState=malloc(size_of(QuantumState) as u64) as *QuantumState;
+    if state==0 as *QuantumState {return Result::Err(Q_ALLOC);}
+    let amplitudes:*Complex64=malloc(length*(size_of(Complex64) as u64)) as *Complex64;
+    if amplitudes==0 as *Complex64 {free(state as *void);return Result::Err(Q_ALLOC);}
+    state.qubits=qubits;state.length=length;state.amplitudes=amplitudes;
+    let mut i:u64=0;
+    while i<length {amplitudes[i]=Complex64{re:0.0,im:0.0};i=i+1;}
+    amplitudes[0].re=1.0;
+    Result::Ok(state)
+}
+fn q_complex(re:f64,im:f64)->Complex64 {Complex64{re:re,im:im}}
+fn q_mul(a:Complex64,b:Complex64)->Complex64 {
+    q_complex(a.re*b.re-a.im*b.im,a.re*b.im+a.im*b.re)
+}
+fn q_add(a:Complex64,b:Complex64)->Complex64 {q_complex(a.re+b.re,a.im+b.im)}
+fn q_apply(state:*QuantumState,gate:QuantumGate) {
+    let target:u64=(1 as u64)<<(gate.target as u64);
+    let control:u64=(1 as u64)<<(gate.control as u64);
+    if gate.kind==Q_SWAP {
+        let mut i:u64=0;
+        while i<state.length {
+            if (i&target)==0 && (i&control)!=0 {
+                let j:u64=i^target^control;
+                let tmp:Complex64=state.amplitudes[i];
+                state.amplitudes[i]=state.amplitudes[j];state.amplitudes[j]=tmp;
+            }
+            i=i+1;
+        }
+        return;
+    }
+    let mut a:Complex64=q_complex(1.0,0.0);
+    let mut b:Complex64=q_complex(0.0,0.0);
+    let mut c:Complex64=q_complex(0.0,0.0);
+    let mut d:Complex64=q_complex(1.0,0.0);
+    if gate.kind==Q_H {
+        let s:f64=0.7071067811865475244;
+        a=q_complex(s,0.0);b=a;c=a;d=q_complex(-s,0.0);
+    } else if gate.kind==Q_X || gate.kind==Q_CX {
+        a=q_complex(0.0,0.0);d=a;b=q_complex(1.0,0.0);c=b;
+    } else if gate.kind==Q_Y {
+        a=q_complex(0.0,0.0);d=a;b=q_complex(0.0,-1.0);c=q_complex(0.0,1.0);
+    } else if gate.kind==Q_Z || gate.kind==Q_CZ {
+        d=q_complex(-1.0,0.0);
+    } else {
+        let co:f64=cos(gate.angle/2.0);let si:f64=sin(gate.angle/2.0);
+        if gate.kind==Q_RX {a=q_complex(co,0.0);d=a;b=q_complex(0.0,-si);c=b;}
+        else if gate.kind==Q_RY {a=q_complex(co,0.0);d=a;b=q_complex(-si,0.0);c=q_complex(si,0.0);}
+        else {a=q_complex(co,-si);d=q_complex(co,si);}
+    }
+    let mut i:u64=0;
+    while i<state.length {
+        if (i&target)==0 && (gate.kind<Q_CX || (i&control)!=0) {
+            let j:u64=i|target;let x:Complex64=state.amplitudes[i];let y:Complex64=state.amplitudes[j];
+            state.amplitudes[i]=q_add(q_mul(a,x),q_mul(b,y));
+            state.amplitudes[j]=q_add(q_mul(c,x),q_mul(d,y));
+        }
+        i=i+1;
+    }
+}
+// Apply the original rotation and a separate shift: angle + pi/2 loses the
+// shift entirely for large finite angles. Matrix composition keeps it exact.
+fn q_simulate_shift(circuit:*Circuit,max_qubits:u32,index:u64,shift:f64)->Result<*QuantumState,i32> {
+    if !quantum_validate(circuit) {return Result::Err(Q_INVALID);}
+    let state:*QuantumState=quantum_state_new(circuit.qubits,max_qubits)?;
+    let mut i:u64=0;
+    while i<circuit.gates.len {
+        let mut gate:QuantumGate=circuit.gates.data[i];q_apply(state,gate);
+        if i==index {gate.angle=shift;q_apply(state,gate);}
+        i=i+1;
+    }
+    Result::Ok(state)
+}
+pub fn quantum_simulate(circuit:*Circuit,max_qubits:u32)->Result<*QuantumState,i32> {
+    if circuit==0 as *Circuit {return Result::Err(Q_INVALID);}
+    q_simulate_shift(circuit,max_qubits,circuit.gates.len,0.0)
+}
+pub fn quantum_probability(state:*QuantumState,index:u64)->Result<f64,i32> {
+    if state==0 as *QuantumState || index>=state.length {return Result::Err(Q_INVALID);}
+    let a:Complex64=state.amplitudes[index];Result::Ok(a.re*a.re+a.im*a.im)
+}
+// axis 0 = Z, 1 = X, 2 = Y; no backend-dependent bitstring convention.
+pub fn quantum_expect(state:*QuantumState,qubit:u32,axis:i32)->Result<f64,i32> {
+    if state==0 as *QuantumState || qubit>=state.qubits || axis<0 || axis>2 {return Result::Err(Q_INVALID);}
+    let mask:u64=(1 as u64)<<(qubit as u64);let mut value:f64=0.0;let mut i:u64=0;
+    while i<state.length {
+        if (i&mask)==0 {
+            let a:Complex64=state.amplitudes[i];let b:Complex64=state.amplitudes[i|mask];
+            if axis==0 {value=value+a.re*a.re+a.im*a.im-b.re*b.re-b.im*b.im;}
+            else if axis==1 {value=value+2.0*(a.re*b.re+a.im*b.im);}
+            else {value=value+2.0*(a.re*b.im-a.im*b.re);}
+        }
+        i=i+1;
+    }
+    Result::Ok(value)
+}
+// Exact parameter-shift derivative for one Rx/Ry/Rz gate. Separate same-axis
+// rotations preserve the shift at arbitrarily large finite input angles.
+// The input circuit is never mutated, including on allocation/budget failure.
+pub fn quantum_gradient(circuit:*Circuit,index:u64,qubit:u32,axis:i32,max_qubits:u32)->Result<f64,i32> {
+    if !quantum_validate(circuit) || index>=circuit.gates.len || qubit>=circuit.qubits || axis<0 || axis>2 {return Result::Err(Q_INVALID);}
+    let gate:QuantumGate=circuit.gates.data[index];
+    if gate.kind<Q_RX || gate.kind>Q_RZ {return Result::Err(Q_INVALID);}
+    let shift:f64=1.5707963267948966192;
+    let plus:*QuantumState=q_simulate_shift(circuit,max_qubits,index,shift)?;
+    let high:Result<f64,i32>=quantum_expect(plus,qubit,axis);quantum_state_free(plus);
+    let minus:*QuantumState=q_simulate_shift(circuit,max_qubits,index,-shift)?;
+    let low:Result<f64,i32>=quantum_expect(minus,qubit,axis);quantum_state_free(minus);
+    Result::Ok((high?-low?)/2.0)
+}

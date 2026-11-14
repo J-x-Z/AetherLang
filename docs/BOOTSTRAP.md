@@ -18,7 +18,8 @@ modules verbatim, builds stage1 from stage0, then uses the Aether compiler to
 compile the same complete source into stages2, 3 and 4. Clang compiles generated
 C into machine code. Stages1 onward never invoke the Rust compiler; the runner
 places a failing `aethc` command in PATH to enforce that boundary. Every generated
-C file must be byte-identical, and every stage must execute real workloads.
+C file must be byte-identical; the self-compiled compiler must also compile
+and execute real workloads.
 
 Core v1 supports functions, C FFI and variadics, explicit scalar/pointer/struct
 types, constants, lexical locals, casts, fields, indexing, `size_of`, arithmetic,
