@@ -11,8 +11,10 @@ def run(name,cmd):
  r=subprocess.run(list(map(str,cmd)),text=True,capture_output=True,timeout=120)
  records.append(dict(name=name,command=list(map(str,cmd)),exit=r.returncode,stdout=r.stdout,stderr=r.stderr));(w/'results.json').write_text(json.dumps(records,indent=2))
  assert r.returncode==0,str(records[-1]);return r
-for backend in a.backends:
- for level in [0,2]:
-  binary=w/f'cudaq-{backend}-{level}';run('build SDK workload',[c,source,'--backend',backend,f'-O{level}','--link-object',bridge,'-o',binary])
-  r=run('run SDK workload',[binary]+(['gpu'] if a.gpu else []));assert f'on_gpu={int(a.gpu)}' in r.stdout
+for fixture in ['cudaq', 'cudaq_budget']:
+ source=source.with_name(fixture+'.aeth')
+ for backend in a.backends:
+  for level in [0,2]:
+   binary=w/f'{fixture}-{backend}-{level}';run('build SDK '+fixture,[c,source,'--backend',backend,f'-O{level}','--link-object',bridge,'-o',binary])
+   r=run('run SDK '+fixture,[binary]+(['gpu'] if a.gpu else []));assert f'on_gpu={int(a.gpu)}' in r.stdout
 print(f'{len(records)} native SDK checks passed')

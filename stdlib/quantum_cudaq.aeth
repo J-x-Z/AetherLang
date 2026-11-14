@@ -16,3 +16,17 @@ pub fn quantum_cudaq(circuit:*Circuit,max_qubits:u32,error:*u8,error_capacity:u6
  if status!=0 {quantum_state_free(state);return Result::Err(status);}
  Result::Ok(state)
 }
+
+// Host-output admission uses the same pool as the reference simulator. SDK
+// workspace and its internal device/host copies are NOT charged to this pool.
+use quantum::{QuantumPool,QuantumLease,quantum_pool_state,quantum_lease_free};
+pub fn quantum_cudaq_in_pool(circuit:*Circuit,pool:*QuantumPool,error:*u8,error_capacity:u64,out_on_gpu:*i32)->Result<*QuantumLease,i32> {
+ if error!=0 as *u8 && error_capacity>0 {error[0]=0;}
+ if out_on_gpu!=0 as *i32 {*out_on_gpu=0;}
+ if !quantum_validate(circuit)||aether_cudaq_abi_version()!=1 {return Result::Err(Q_INVALID);}
+ let lease:*QuantumLease=quantum_pool_state(pool,circuit.qubits)?;
+ let state:*QuantumState=lease.state;
+ let status:i32=aether_cudaq_state(circuit.qubits,circuit.gates.data,circuit.gates.len,state.amplitudes,state.length,error,error_capacity,out_on_gpu);
+ if status!=0 {quantum_lease_free(lease);return Result::Err(status);}
+ Result::Ok(lease)
+}

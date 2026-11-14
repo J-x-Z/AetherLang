@@ -1,0 +1,34 @@
+use result::Result;
+use quantum::{Circuit,QuantumPool,QuantumLease,quantum_new,quantum_free,quantum_gate,quantum_pool_new,quantum_pool_close,quantum_simulate_in_pool,quantum_lease_free,Q_H,Q_CX,Q_LIMIT,Q_CLOSED};
+use quantum_cudaq::quantum_cudaq_in_pool;
+extern "C" {fn printf(format:*u8,...)->i32;fn puts(text:*u8)->i32;}
+fn near(a:f64,b:f64)->bool {let d:f64=a-b;d<0.000000000001&&d> -0.000000000001}
+fn run(expected_gpu:i32)->Result<i32,i32> {
+ let c:*Circuit=quantum_new(16)?;
+ if quantum_gate(c,Q_H,0,0,0.0)!=0{return Result::Err(20);}
+ let mut q:u32=1;while q<16 {if quantum_gate(c,Q_CX,q,0,0.0)!=0{return Result::Err(21);}q=q+1;}
+ let pool:*QuantumPool=quantum_pool_new(2097152,16,2)?;
+ let cpu:*QuantumLease=quantum_simulate_in_pool(c,pool)?;
+ let mut error:[u8;256]=[0;256];let mut gpu:i32=-1;
+ let sdk:*QuantumLease=match quantum_cudaq_in_pool(c,pool,&mut error[0] as *u8,256,&mut gpu as *i32) {
+  Result::Ok(s)=>s,Result::Err(e)=>{puts(&error[0] as *u8);quantum_lease_free(cpu);quantum_pool_close(pool);quantum_free(c);return Result::Err(e);}
+ };
+ if gpu!=expected_gpu||pool.used_bytes!=2097152||pool.live_states!=2{return Result::Err(22);}
+ let mut i:u64=0;while i<65536 {
+  let mut expected:f64=0.0;if i==0||i==65535{expected=0.7071067811865475244;}
+  if !near(cpu.state.amplitudes[i].re,expected)||!near(cpu.state.amplitudes[i].im,0.0)||!near(sdk.state.amplitudes[i].re,expected)||!near(sdk.state.amplitudes[i].im,0.0){return Result::Err(23);}
+  i=i+1;
+ }
+ // Admission failure must clear placement/errors and leave the two leases live.
+ error[0]=120;gpu=9;
+ match quantum_cudaq_in_pool(c,pool,&mut error[0] as *u8,256,&mut gpu as *i32) {Result::Err(e)=>{if e!=Q_LIMIT{return Result::Err(24);}},Result::Ok(s)=>{quantum_lease_free(s);return Result::Err(25);}}
+ if pool.used_bytes!=2097152||pool.live_states!=2||gpu!=0||error[0]!=0{return Result::Err(26);}
+ quantum_pool_close(pool);
+ match quantum_cudaq_in_pool(c,pool,&mut error[0] as *u8,256,&mut gpu as *i32) {Result::Err(e)=>{if e!=Q_CLOSED{return Result::Err(27);}},Result::Ok(s)=>{quantum_lease_free(s);return Result::Err(28);}}
+ // Closing admission does not invalidate results already handed to the caller.
+ if !near(sdk.state.amplitudes[65535].re,0.7071067811865475244){return Result::Err(29);}
+ quantum_lease_free(cpu);quantum_lease_free(sdk);quantum_free(c);
+ printf("cudaq-budget on_gpu=%d qubits=16 managed_peak=2097152 live_peak=2\n",expected_gpu);
+ Result::Ok(0)
+}
+fn main(argc:i32,argv:**u8)->i32 {let mut gpu:i32=0;if argc>1{gpu=1;}match run(gpu){Result::Ok(v)=>v,Result::Err(e)=>e}}

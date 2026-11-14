@@ -1,0 +1,91 @@
+use quantum::{Circuit,QuantumState,QuantumPool,QuantumLease,quantum_new,quantum_free,quantum_gate,
+ quantum_state_new,quantum_state_free,quantum_state_bytes,quantum_probability,quantum_pool_new,
+ quantum_pool_state,quantum_pool_close,quantum_lease_free,quantum_simulate_in_pool,
+ Q_H,Q_CX,Q_INVALID,Q_LIMIT,Q_CLOSED};
+use result::Result;
+extern "C" {fn printf(format:*u8,...)->i32;}
+fn near(a:f64,b:f64)->bool {let d:f64=a-b;return d<0.000000000001 && d> -0.000000000001;}
+fn planner()->Result<(),i32> {
+ if quantum_state_bytes(16)?!=1048576 {return Result::Err(10);}
+ if quantum_state_bytes(59)?!=9223372036854775808 {return Result::Err(11);}
+ match quantum_state_bytes(60) {Result::Err(e)=>{if e!=Q_LIMIT{return Result::Err(12);}},Result::Ok(_)=>{return Result::Err(13);}}
+ match quantum_state_bytes(62) {Result::Err(e)=>{if e!=Q_LIMIT{return Result::Err(14);}},Result::Ok(_)=>{return Result::Err(15);}}
+ match quantum_state_bytes(0) {Result::Err(e)=>{if e!=Q_INVALID{return Result::Err(16);}},Result::Ok(_)=>{return Result::Err(17);}}
+ match quantum_pool_new(64,25,1) {Result::Err(e)=>{if e!=Q_LIMIT{return Result::Err(18);}},Result::Ok(p)=>{quantum_pool_close(p);return Result::Err(19);}}
+ Result::Ok(())
+}
+fn small_budgets()->Result<(),i32> {
+ let too_small:*QuantumPool=quantum_pool_new(31,1,1)?;
+ match quantum_pool_state(too_small,1) {Result::Err(e)=>{if e!=Q_LIMIT{return Result::Err(20);}},Result::Ok(s)=>{quantum_lease_free(s);return Result::Err(21);}}
+ if too_small.used_bytes!=0 || too_small.live_states!=0 || too_small.refs!=1 {return Result::Err(22);}
+ quantum_pool_close(too_small);
+ let pool:*QuantumPool=quantum_pool_new(64,1,3)?;
+ // Qubit cap rejects before allocation even though 2 qubits would fit bytes.
+ match quantum_pool_state(pool,2) {Result::Err(e)=>{if e!=Q_LIMIT{return Result::Err(23);}},Result::Ok(s)=>{quantum_lease_free(s);return Result::Err(24);}}
+ let a:*QuantumLease=quantum_pool_state(pool,1)?;
+ let b:*QuantumLease=quantum_pool_state(pool,1)?;
+ // Three live states are allowed, but the exact 64-byte budget admits two.
+ match quantum_pool_state(pool,1) {Result::Err(e)=>{if e!=Q_LIMIT{return Result::Err(25);}},Result::Ok(s)=>{quantum_lease_free(s);return Result::Err(26);}}
+ if pool.used_bytes!=64 || pool.live_states!=2 || pool.refs!=3 {return Result::Err(27);}
+ quantum_lease_free(a);
+ let replacement:*QuantumLease=quantum_pool_state(pool,1)?;
+ quantum_lease_free(b);quantum_lease_free(replacement);
+ if pool.used_bytes!=0 || pool.live_states!=0 || pool.refs!=1 {return Result::Err(28);}
+ quantum_pool_close(pool);
+ // Maximal declared limits do not wrap checked byte accounting or refs.
+ let maximum:u64=18446744073709551615;
+ let wide:*QuantumPool=quantum_pool_new(maximum,1,maximum)?;
+ let first:*QuantumLease=quantum_pool_state(wide,1)?;
+ let second:*QuantumLease=quantum_pool_state(wide,1)?;
+ if wide.used_bytes!=64 || wide.live_states!=2 || wide.refs!=3 {return Result::Err(29);}
+ quantum_pool_close(wide);
+ quantum_lease_free(first);
+ if !near(quantum_probability(second.state,0)?,1.0) {return Result::Err(30);}
+ quantum_lease_free(second);
+ Result::Ok(())
+}
+fn ghz16()->Result<(),i32> {
+ // Conservative host-state policy for an 8 GiB unified-memory device:
+ // two complex128 16-qubit states use 2 MiB, not the whole physical memory.
+ let pool:*QuantumPool=quantum_pool_new(2097152,16,2)?;
+ let zero:*QuantumLease=quantum_pool_state(pool,16)?;
+ let circuit:*Circuit=quantum_new(16)?;
+ if quantum_gate(circuit,Q_H,0,0,0.0)!=0 {return Result::Err(40);}
+ let mut qubit:u32=1;
+ while qubit<16 {
+  if quantum_gate(circuit,Q_CX,qubit,0,0.0)!=0 {return Result::Err(41);}
+  qubit=qubit+1;
+ }
+ let ghz:*QuantumLease=quantum_simulate_in_pool(circuit,pool)?;
+ quantum_free(circuit);
+ if pool.used_bytes!=2097152 || pool.live_states!=2 || pool.refs!=3 || ghz.charged_bytes!=1048576 {return Result::Err(42);}
+ // Even a 1-qubit request must respect the simultaneous-state cap.
+ match quantum_pool_state(pool,1) {Result::Err(e)=>{if e!=Q_LIMIT{return Result::Err(43);}},Result::Ok(s)=>{quantum_lease_free(s);return Result::Err(44);}}
+ quantum_lease_free(zero);
+ let reuse:*QuantumLease=quantum_pool_state(pool,1)?;
+ if pool.used_bytes!=1048608 || pool.live_states!=2 {return Result::Err(45);}
+ quantum_lease_free(reuse);
+ // The legacy unpooled API is unchanged and does not claim a pool charge.
+ let legacy:*QuantumState=quantum_state_new(1,1)?;
+ quantum_state_free(legacy);
+ if pool.used_bytes!=1048576 || pool.live_states!=1 {return Result::Err(46);}
+ quantum_pool_close(pool);
+ // ghz still retains the pool; this borrowed closed-pool check is valid.
+ match quantum_pool_state(pool,1) {Result::Err(e)=>{if e!=Q_CLOSED{return Result::Err(47);}},Result::Ok(s)=>{quantum_lease_free(s);return Result::Err(48);}}
+ if !pool.closed || pool.refs!=1 {return Result::Err(49);}
+ let mut norm:f64=0.0;let mut index:u64=0;
+ while index<ghz.state.length {
+  let probability:f64=quantum_probability(ghz.state,index)?;
+  if index==0 || index==65535 {
+   if !near(probability,0.5) {return Result::Err(50);}
+  } else {if !near(probability,0.0) {return Result::Err(51);}}
+  norm=norm+probability;index=index+1;
+ }
+ if !near(norm,1.0) {return Result::Err(52);}
+ printf("budget_ghz qubits=16 amplitude_bytes=%llu peak_live=2 norm=%.12f closed_owner_readable=1\n",ghz.charged_bytes,norm);
+ // Last lease frees the already-closed pool. Neither pointer may be reused.
+ quantum_lease_free(ghz);
+ Result::Ok(())
+}
+fn run()->Result<(),i32> {planner()?;small_budgets()?;ghz16()?;Result::Ok(())}
+fn main()->i32 {match run(){Result::Ok(_)=>0,Result::Err(error)=>{printf("budget failure=%d\n",error);error}}}

@@ -23,12 +23,89 @@ const Q_SWAP:i32=10;
 const Q_INVALID:i32=1;
 const Q_ALLOC:i32=2;
 const Q_LIMIT:i32=3;
+const Q_CLOSED:i32=4;
 
 // Plain C layout is also the version-1 CUDA-Q bridge gate record.
 pub struct QuantumGate { kind:i32, target:u32, control:u32, angle:f64 }
 pub struct Circuit { qubits:u32, gates:Vec<QuantumGate> }
 pub struct Complex64 { re:f64, im:f64 }
 pub struct QuantumState { qubits:u32, length:u64, amplitudes:*Complex64 }
+
+// A pool budgets requested host amplitude bytes and simultaneous owned states.
+// It does not include allocator overhead, circuit/pool/lease/state metadata,
+// CUDA-Q SDK workspace, device copies, or total process RSS. Calls on a pool
+// must be serialized by its owner; this is not a concurrent scheduler.
+// The pool owns one reference; every successful lease owns one more.
+// Pointer copies are borrowed aliases, not additional owning references.
+pub struct QuantumPool {
+    byte_limit:u64, used_bytes:u64, max_qubits:u32,
+    max_live_states:u64, live_states:u64, refs:u64, closed:bool
+}
+// state is borrowed from the lease: release through quantum_lease_free only.
+// Do not independently call quantum_state_free or edit the accounting fields.
+pub struct QuantumLease { state:*QuantumState, pool:*QuantumPool, charged_bytes:u64 }
+
+// Theoretical complex128 state-vector storage, independent of the CPU's
+// allocation cap. q59 is 2^63 bytes; q60 would overflow u64 and is rejected.
+// This does not claim support for another precision or execution backend.
+pub fn quantum_state_bytes(qubits:u32)->Result<u64,i32> {
+    if qubits==0 || qubits>62 {return Result::Err(Q_INVALID);}
+    let length:u64=(1 as u64)<<(qubits as u64);
+    let element_bytes:u64=size_of(Complex64) as u64;
+    let maximum:u64=18446744073709551615;
+    if length>maximum/element_bytes {return Result::Err(Q_LIMIT);}
+    Result::Ok(length*element_bytes)
+}
+pub fn quantum_pool_new(byte_limit:u64,max_qubits:u32,max_live_states:u64)->Result<*QuantumPool,i32> {
+    if byte_limit==0 || max_live_states==0 || max_qubits==0 || max_qubits>62 {return Result::Err(Q_INVALID);}
+    if max_qubits>24 {return Result::Err(Q_LIMIT);}
+    let pool:*QuantumPool=malloc(size_of(QuantumPool) as u64) as *QuantumPool;
+    if pool==0 as *QuantumPool {return Result::Err(Q_ALLOC);}
+    pool.byte_limit=byte_limit;pool.used_bytes=0;pool.max_qubits=max_qubits;
+    pool.max_live_states=max_live_states;pool.live_states=0;pool.refs=1;pool.closed=false;
+    Result::Ok(pool)
+}
+// Consumes the sole owner reference and forbids new allocations. Existing
+// leases remain readable/releasable. A closed pool may only be borrowed while
+// a live lease keeps it alive; without leases close frees it immediately.
+pub fn quantum_pool_close(pool:*QuantumPool) {
+    if pool==0 as *QuantumPool {return;}
+    if pool.closed {return;}
+    pool.closed=true;pool.refs=pool.refs-1;
+    if pool.refs==0 {free(pool as *void);}
+}
+pub fn quantum_pool_state(pool:*QuantumPool,qubits:u32)->Result<*QuantumLease,i32> {
+    if pool==0 as *QuantumPool || qubits==0 || qubits>62 {return Result::Err(Q_INVALID);}
+    if pool.closed {return Result::Err(Q_CLOSED);}
+    if qubits>pool.max_qubits || pool.live_states>=pool.max_live_states {return Result::Err(Q_LIMIT);}
+    let charge:u64=quantum_state_bytes(qubits)?;
+    // Subtract before comparing instead of adding a request to used_bytes.
+    // All supported states charge at least 32 bytes, so the byte limit also
+    // bounds refs/live_states well below u64 overflow even with maximal limits.
+    if charge>pool.byte_limit-pool.used_bytes {return Result::Err(Q_LIMIT);}
+    let state:*QuantumState=quantum_state_new(qubits,pool.max_qubits)?;
+    let lease:*QuantumLease=malloc(size_of(QuantumLease) as u64) as *QuantumLease;
+    if lease==0 as *QuantumLease {quantum_state_free(state);return Result::Err(Q_ALLOC);}
+    lease.state=state;lease.pool=pool;lease.charged_bytes=charge;
+    // Commit accounting only after every allocation succeeds.
+    pool.used_bytes=pool.used_bytes+charge;pool.live_states=pool.live_states+1;pool.refs=pool.refs+1;
+    Result::Ok(lease)
+}
+pub fn quantum_lease_free(lease:*QuantumLease) {
+    if lease==0 as *QuantumLease {return;}
+    let pool:*QuantumPool=lease.pool;let charge:u64=lease.charged_bytes;
+    quantum_state_free(lease.state);free(lease as *void);
+    pool.used_bytes=pool.used_bytes-charge;pool.live_states=pool.live_states-1;pool.refs=pool.refs-1;
+    if pool.refs==0 {free(pool as *void);}
+}
+// Reference simulation uses the same validated gates and q_apply algorithm.
+pub fn quantum_simulate_in_pool(circuit:*Circuit,pool:*QuantumPool)->Result<*QuantumLease,i32> {
+    if !quantum_validate(circuit) {return Result::Err(Q_INVALID);}
+    let lease:*QuantumLease=quantum_pool_state(pool,circuit.qubits)?;
+    let mut i:u64=0;
+    while i<circuit.gates.len {q_apply(lease.state,circuit.gates.data[i]);i=i+1;}
+    Result::Ok(lease)
+}
 
 pub fn quantum_new(qubits:u32)->Result<*Circuit,i32> {
     if qubits==0 || qubits>62 {return Result::Err(Q_INVALID);}

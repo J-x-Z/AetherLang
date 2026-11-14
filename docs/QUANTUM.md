@@ -80,3 +80,61 @@ every output; cuBLAS performs the device computation. All four runs reported
 `sgemm-max=0 dgemm-max=0` for these exact test inputs. The separate CUDA-Q GPU
 workload also passed C/LLVM O0/O2 with `on_gpu=1`. These results establish the
 tested native interoperability, not arbitrary target ABI coverage or a speedup.
+
+## Explicit host-state budgets
+
+The initial portable workload target is 16 qubits on devices with 8 GiB unified
+memory; 16 GiB is an expansion configuration. Physical RAM is not an allocation
+budget: the OS, application, runtime/JIT and device workspace need headroom.
+
+`quantum_pool_new(byte_limit, max_qubits, max_live_states)` creates an explicitly
+owned admission pool. For example `quantum_pool_new(2097152,16,2)` admits at most
+two complex128 16-qubit host states, with 2 MiB total requested amplitude bytes.
+Use `quantum_simulate_in_pool` or `quantum_cudaq_in_pool` to get a `QuantumLease`;
+its `.state` is borrowed. Release through `quantum_lease_free`, never by calling
+`quantum_state_free` separately. Allocation failure rolls back all allocations
+and accounting. Freeing a lease returns its byte and state slots.
+
+`quantum_pool_close` consumes the sole pool owner and refuses new allocations.
+Existing leases retain the pool and remain readable/releasable. With no leases,
+close frees the pool immediately; its raw pointer must then not be used. Pointer
+copies are borrowed aliases, not extra owners. Calls on one pool must be
+serialized; this is not an implementation of a concurrent GPU scheduler.
+The original unpooled API and QuantumState layout remain unchanged.
+
+The budget covers requested **host amplitude bytes only**. Metadata, gate lists,
+allocator overhead, SDK/JIT workspace and internal host/device copies are outside
+it. It is not a process RSS limit or GPU memory guarantee. `quantum_state_bytes`
+provides checked complex128 planning independently of the existing 24-qubit
+allocation ceiling; requests whose byte count overflows u64 are rejected.
+
+| Pure state qubits | complex64 theoretical | complex128 (current implementation) |
+| --- | --- | --- |
+| 16 | 512 KiB | 1 MiB |
+| 20 | 8 MiB | 16 MiB |
+| 24 | 128 MiB | 256 MiB |
+| 28 | 2 GiB | 4 GiB |
+
+These are `2^n` pure state vectors. A full 16-qubit complex128 density matrix is
+`4^16 * 16` bytes, or 64 GiB. Neither a density-matrix backend nor complex64
+execution is currently implemented here. Precision conversion must become an
+explicit backend capability and error contract when Metal/Adreno are added.
+For Vulkan, 64-bit shader floating point is a queried optional feature, not an
+assumption that can be made for every GPU. See [VkPhysicalDeviceFeatures](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceFeatures.html).
+
+New validation builds a 16-qubit GHZ state, checks all 65,536 amplitudes, exact
+budget boundaries, concurrent live-state admission, close-before-release, and
+allocation failure rollback. CPU reference and native CUDA-Q qpp versions pass
+C/LLVM O0/O2. On this 16 GiB Mac, single native O2 measurements report total RSS
+3,866,624 B for the reference fixture and 60,325,888 B for the SDK comparison;
+both use a 2 MiB managed host-state peak. These are not measurements from an
+8 GiB phone. The added pooled path was validated on Mac CPU; earlier NVIDIA
+validation covers the unpooled API, eight mixed circuits and optimization.
+
+```sh
+python3 tests/quantum_values.py --compiler /path/to/aethc \
+  --work-dir /external/work/quantum
+# Includes both the original mixed-circuit workload and the 16-qubit pool test:
+python3 tests/cudaq_runtime.py --compiler /path/to/aethc \
+  --bridge /external/work/libaether_cudaq.dylib --work-dir /external/work/cudaq-test
+```
