@@ -1,7 +1,7 @@
 # ⚠️ ARCHIVED - 历史文档
 
 > **注意**: 此文档创建于 2026-01-14，部分内容已过时。
-> **最新开发状态请参考**: [根目录 HANDOFF.md](../HANDOFF.md) 与 [当前执行清单](PROJECT_ROADMAP.md)
+> **最新开发状态请参考**: [根目录 HANDOFF.md](../HANDOFF.md) 与 [主线任务](../MAINLINE_TASKS.md)
 > **保留原因**: 包含 AI-Native 核心设计理念（API 可发现性、智能错误恢复、AI 自迭代接口）
 
 ---

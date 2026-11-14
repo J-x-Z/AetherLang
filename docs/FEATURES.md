@@ -1,6 +1,6 @@
 # AetherLang Feature Cheat Sheet
 
-> **历史语法速查，不是当前能力承诺。** 2026-11-15审计确认：非空tuple和closure存在检查/生成缺口，trait/impl、契约、效果和资源所有权尚不完整。以下旧示例需逐项迁移；请以 [当前执行清单](PROJECT_ROADMAP.md)、[交接](../HANDOFF.md)和实际消费者测试为准。
+> **历史语法速查，不是当前能力承诺。** 2026-11-15审计确认：非空tuple和closure存在检查/生成缺口，trait/impl、契约、效果和资源所有权尚不完整。以下旧示例需逐项迁移；请以 [主线任务](../MAINLINE_TASKS.md)、[交接](../HANDOFF.md)和实际消费者测试为准。
 
 ## 🎯 Type System
 

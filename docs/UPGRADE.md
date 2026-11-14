@@ -1,6 +1,6 @@
 # AetherLang 集中升级交付
 
-> 状态更新（2026-11-15）：本文记录2026-11-14快照及当时测试结果。追加多代理审计发现了数值/ABI、名称捕获、效果、分配对齐、JXZ错误处理等未修缺陷，不能将本文的通过记录解释为完整正确性保证。当前执行任务及证据入口见 [PROJECT_ROADMAP.md](PROJECT_ROADMAP.md)，交接见 [HANDOFF.md](../HANDOFF.md)。本次仅更新审计与任务状态，没有生成新的编译器发布。
+> 状态更新（2026-11-15）：本文记录2026-11-14快照及当时测试结果。追加多代理审计发现了数值/ABI、名称捕获、效果、分配对齐、JXZ错误处理等未修缺陷，不能将本文的通过记录解释为完整正确性保证。当前执行任务及证据入口见 [MAINLINE_TASKS.md](../MAINLINE_TASKS.md)，交接见 [HANDOFF.md](../HANDOFF.md)。本次仅更新审计与任务状态，没有生成新的编译器发布。
 
 2026-11-14，仓库 `J-x-Z/AetherLang`，本地分支 `work/aetherlang-upgrade`。原始起点为 `aceff1522790df3edfe5c711db5884350ab1b44a`。全部源码、工具链、缓存、产物和证据在 `/Volumes/WINDOWS/work`，没有推送远端。最终功能源码为 `0709b33`，主编译器源码为 `a017d18`；交付提交和产物 SHA 见外置 `release/manifest.json`。
 
