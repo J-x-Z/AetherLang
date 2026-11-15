@@ -106,3 +106,19 @@ T17/T28记为部分完成：已有旧pin的macOS产品验收；新工具链聚�
 独立包 `WORK/releases/extern-definitions-20261115/` 含aethc、aethc-core、重建JXZ双后端、44文件匹配stdlib和manifest。主编译器SHA256 `d3b915d2000e8242a2d09e1358b74f0584a6c070c0d251825a3c77f0558653ce`，3834616B，比上一开发版增加1248B；没有编译器RSS/运行速度改善声明。构建有Rust rust-objcopy缺libLLVM的非致命strip警告，产物构建和运行验证均成功，详见release-build.log。Mac arm64，仍依赖LLVM21动态库，安装stdlib需显式-I；Linux宿主交付待办不变。
 
 T02/T07/T18仅增加已验证子项。Shell当前固定发布、lock和trampoline未修改；本次新包供独立关联验收，不能把本线回调样例通过当作Shell产品已采用。原N01/N02及29组审计问题仍开放。下一项仍是B2/F05/B3/N01的已定型事实与类型身份传递，不重新全面审计。
+
+## 2026-11-15 Linux原固定源码LLVM宿主包已交付
+
+按Shell保持原工具链要求，使用完整`0709b338b2582906f02f12a2558ab16b783ad086`归档；已核对其src/Cargo/工具链/JXZ与`a017d18`完全一致，编译器src树`9eaf9033da8bd2a6120150389bee168b7b045e54`，44个stdlib文件SHA与Shell旧Mac lock一致。没有将当前N03/N04开发版混入宿主包，没有改Shell源码、Mac固定包或lock。
+
+远端包 `/home/jiaxi/build/aetherlang-frozen-linux-20261115/package`；本地包 `WORK/releases/linux-x86_64-frozen-5f84a3f-20261115/`。`release-manifest.json`（与manifest.json相同）SHA256 `ed04a0e7a5fcde6f1e38dea8b5422c33b6def0e65158f70878afc05b5137c62b`。归档 `WORK/linux-host-frozen-20261115/aetherlang-linux-x86_64-frozen-5f84a3f-20261115.tar.gz`，66954543B，SHA `bbbf2996033977478ff6d26a04cfbd6b8b67874e6070746595752454ff50e011`。
+
+原生ELF：aethc SHA `1bb55a113c58eb398785a8c27b28c8e9e53806ca228f0ca1b2e3ebf6e4d70b27`（4345688B）；JXZ SHA `cbd998659d49a12b8dfa8b2b542d232017f28d5300c63890ec520c69392727ba`（55824B）；最小Core SHA `b665c1adc3cb1efde367a074b1cd6a9fc0a7ee83ddd93e14e2acadfe5ec3d209`（64912B）。包内lib/libLLVM.so.21.1必须与aethc一起复制，RUNPATH为$ORIGIN/lib，不需要LD_LIBRARY_PATH。其他系统依赖见README与manifest；仅认证当前CachyOS，未认证其他Linux发行版。
+
+构建使用现有Rust/Cargo1.99.1、Clang23.1.4和任务目录解包的官方extra LLVM21.1.8-1，无系统安装/升级；55个已校验crate vendor离线复用。jobs1、nice10，开始前等待Glass Cargo结束。CARGO_HOME/target/tmp和全部构建产物在独立/home任务目录；本地资产仍全在外置WORK。README/reproduce保留源码/vendor归档、构建与验收脚本及LLVM包URL/SHA。
+
+真实Linux验收：126单元+20 CLI/LSP集成；LLVM JXZ15、process/fd44、runtime foundation10、11组计算/持续服务/Script/数据结构负载；完整stage0→1→2→3→4共103项及83语义用例×normal/sanitizer，生成C固定点与原Mac基线同SHA `7e718ccc2b9586620b3058a3bfc0e3621939861d7cac37b671c27fdb3fa31995`。复制到含空格路径、隐藏构建树stdlib并清除LD_LIBRARY_PATH后15项搬移检查通过，包含真实Vec分配/求和/释放、整数解析和JXZ构建/运行/清理。原始未设置stdlib的负例确实失败；使用AETHER_PATH或-I后通过，不能宣称修复安装自动发现。初次搬移fixture误用Rust turbofish语法，改为已有类型推断后通过，原失败记录保留。
+
+**N05未修且未隐藏**：C版JXZ在Clang23失败，因主编译器将*void渲染成struct __aeth_unit*而与FILE*冲突，指定C11/C17无效。最小tmpfile/fclose在C失败、LLVM运行通过；冻结5f84a3f与当前源码均存在该映射。首次失败run完整保留；后续验收明确只选LLVM，C jobs记not_selected，包不提供jxz-c。简单Vec/标量C程序仍可运行，但不代表该C失败闭合。后续修复需保持Unit值/ZST的布局与访问语义，不得全局Unit→Void或压低诊断。关联T02/T07/T18。
+
+Shell可将aethc、jxz、release-manifest.json、stdlib/及lib/装入其`.toolchain/linux-x86_64/`，使用host-lock-values.json中的Linux哈希；语言侧没有替它更新host lock或执行产品验收。T18/T28仅增加已验旧源码宿主子项。主线29组原问题以及N01/N02/N05仍待修复，下一项仍为B2/F05/B3/N01类型事实与身份传递；N05有独立最小复现可并行处理。

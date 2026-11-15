@@ -9,15 +9,17 @@ T01–T20保留本轮20项语言基础任务：让开发者能够安装工具链
 - `[ ]` 待完成；`[ ] 部分完成` 表示已有可验证子项，但整项尚未达标；只有验收条件、对应提交与证据齐备后改为`[x]`。
 - 每次实现先看本文件的“下一项具体实施”与根目录HANDOFF；完成一个子项就更新状态、提交和证据，避免重复全面审计。
 - 当前没有任何整项被标为完成。审计/整理清单已完成，不能代替实现。
-- 最新功能提交：`c964ccbf9eee4c294ac3bfb1f8641fe8eadcf395`，闭合N04兼容extern声明与唯一C ABI函数定义；此前N03字面量为`cd2569b`，JXZ数组接口为`a8a6c20`。29组原基线问题以及N01/N02仍待修复。
+- 最新功能提交：`c964ccbf9eee4c294ac3bfb1f8641fe8eadcf395`，闭合N04兼容extern声明与唯一C ABI函数定义；此前N03字面量为`cd2569b`，JXZ数组接口为`a8a6c20`。29组原基线问题以及N01/N02/N05仍待修复。
 - N04已完成：兼容的`extern "C"`声明可解析到同模块或其他已加载模块的唯一非泛型`#[no_mangle]`定义；类型/变参/重复函数体冲突仍拒绝，C ABI void规范化，真实函数体效果不被extern遮盖。独立包`WORK/releases/extern-definitions-20261115/manifest.json`；编译器SHA256 `d3b915d2000e8242a2d09e1358b74f0584a6c070c0d251825a3c77f0558653ce`。Shell pin未更新、产品未联验。
 - N03已完成：主前端与Script共用escape decoder，Core对齐字符串规则；未知/畸形转义报错，ASCII `\xHH`、Unicode `\u{...}`、UTF-8位置、字符码点转换和C后端NUL相邻数字均有真实运行回归。独立版本包`WORK/releases/literal-escapes-20261115/manifest.json`，编译器SHA256 `8e67c244d52a6f04536504f4a8df7888d9ed02570c25329061c3479c630c008b`。新工具链8e67c244的Shell GUI联验与pin更新未执行。
 - 追加实际阻塞N01：Shell的递归`Vec<Node>`元素保留空fields占位类型，合法引用转换被E2100拒绝。本线已用冻结编译器独立复现，归入T02/T04。证据在`WORK/language-blockers/recursive-value/language-side-receipt.json`；尚未修复。
 - 追加目标缺陷N02：本机macOS27.2/SDK27.0，冻结编译器LLVM native对象的minos为28.0，最终binary为27.0；显式`aarch64-apple-macosx27.0`时两者均为27.0。本线已独立编译/链接并检查Mach-O元数据，直接Clang链接确认newer-version警告；aethc成功链接路径丢弃stderr。未执行该探针程序、未修复，归T07/T18；证据`WORK/language-blockers/darwin-native-target/results.json`。
-- 平台交付需求：Shell在语言升级稳定后需要Linux x86_64可执行的冻结`aethc`和JXZ宿主产物，连同匹配stdlib、版本manifest与校验；挂T18/T28。Shell当前固定版本继续使用，关联验收后再更新pin。
+- 平台交付：原Shell固定源码`0709b33`的Linux x86_64 LLVM宿主包已在CachyOS原生构建/验收，`WORK/releases/linux-x86_64-frozen-5f84a3f-20261115/release-manifest.json`；保持原编译器/JXZ/44文件stdlib语义，新增独立ELF哈希。包内`lib/`必须与aethc一起复制。Shell Linux产品联验/host lock由Shell侧执行；这不是后续N03/N04开发版的Linux升级交付。T18/T28仍部分完成。
+- N05新增未修：冻结5f84a3f及当前源码将`*void`降为`Ptr(Unit)`，C输出`struct __aeth_unit*`，与stdio的`FILE*`冲突。CachyOS Clang23构建C版JXZ失败，C11/C17亦失败；最小tmpfile/fclose在C失败、LLVM实际执行通过。证据在Linux包`evidence/c-void-blocker/`及初始C失败日志，挂T02/T07/T18。未压制诊断，未修改冻结源码；Linux主交付限定已验LLVM路径。
 
 | 已有进展 | 所属主线任务 | 提交与证据 | 尚缺 |
 | --- | --- | --- | --- |
+| 原Shell固定源码的Linux x86_64 LLVM宿主包 | T18、T28 | 原源码`0709b33`（编译器与a634366相同）；manifest中aethc `1bb55a11…`、JXZ `cbd99865…`。CachyOS原生126单元+20集成、JXZ15、process44、foundation10、11工作负载、103自举及15搬移检查通过 | N05导致C版JXZ在Clang23失败，单独保留；Shell产品/host lock联验及新版语言工具链Linux升级未完成；必须携带lib并显式stdlib路径 |
 | N04：同/跨模块C ABI兼容声明合并到唯一Aether实现，省略/显式Unit返回统一 | T02、T07、T18 | `c964ccb`；`WORK/extern-definitions/receipt.json`：原4行复现check+双后端执行通过；160 Cargo、98定向检查、独立15命令、49 ABI、103完整自举、22工作负载及JXZ各19通过 | 未扩张Core子集；原窄整数ABI等T07缺陷仍待修；新包Shell关联验收与pin更新未执行 |
 | Shell macOS arm64首阶段可运行交付，沿用原冻结工具链 | T17、T28 | Shell `bfe01906`，Glass `a076dacc`；Shell binary SHA `0585df50…cc8e`。`WORK/shell-acceptance/20261115-bfe0190/receipt.json`：已核对9份验收receipt与产物/lock/44个stdlib哈希；51 CLI、27编辑PTY、12 vi/job-control，以及两套Terminal PTY/GUI的原始结果归档 | 本线核对证据，未重跑产品；部分GUI IME/Unicode和单元证据按原交接复用前一候选。新语言工具链关联验收、明确更新lock、Linux宿主包及原生验收仍待完成；N01/N02绕过不算语言修复 |
 | N03：严格且统一的字面量转义、Unicode/char→integer、NUL字节保真；自举Core字符串同步 | T01、T02、T16、T18 | `cd2569b`；`WORK/literal-escapes/verification-final.json`；134单元+14driver+3tooling，220定向检查，完整四代自举103检查及每模式98语义用例+字节运行，22工作负载，JXZ两后端各19 | 仅这些子项完成；T02的f32/Self/add/递归类型、T16的外部符号捕获/u64 cast等仍未闭合；全工程/GPU复验未重跑 |
@@ -87,7 +89,7 @@ T01–T20保留本轮20项语言基础任务：让开发者能够安装工具链
 3. **让项目可安装、可维护**：T14可独立先修；T12之后推进T13，T02/T13支持T15。T16的两个新回归可先修，受影响的语义改动落定后执行完整自举链。
 4. **真实负载、性能和最终复审**：T17贯穿实施，T18持续收录；最后T19/T20。每个修复先跑有区分力的定向测试，最终统一验收；只有新变化或新证据才重复既有全量测试。
 
-主机同时最多一个全量编译，Cargo并发沿用3；所有工具链和资产继续放外置卷。按逻辑本地提交，不推送。每个关键改进报告改动、验证和下一项；HANDOFF记录实际进度。以上是工程任务清单，不再沿用“52小时全部完成”等未经拆解的估算。
+Mac主机同时最多一个全量编译，Cargo并发沿用3；Linux宿主交付使用jobs1、nice10并复用独立缓存；所有工具链和资产继续放外置卷。按逻辑本地提交，不推送。每个关键改进报告改动、验证和下一项；HANDOFF记录实际进度。以上是工程任务清单，不再沿用“52小时全部完成”等未经拆解的估算。
 
 **下一项具体实施**：以B2/F05/B3为第一组，统一typed表达式、方法签名和callee向IR的传递并加入回归；同时纳入N01递归泛型元素占位回填的最小复现；可并行处理B1窄整数ABI和I05深表达式崩溃。复用已保存探针，先确认失效点后修改，不重新全面审计。
 

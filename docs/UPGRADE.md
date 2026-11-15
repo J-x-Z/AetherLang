@@ -135,3 +135,11 @@ sh scripts/test.sh llvm
 提交`c964ccb`使同一或不同已加载模块的兼容extern C声明能够指向唯一no_mangle Aether函数体，不再因E2003拒绝合法回调。保留签名/变参/名义类型/重复定义检查，C ABI的Unit返回规范化为void；泛型固定符号需改为具体包装函数。详见LANGUAGE.md和MIGRATION.md。此能力没有扩大Core自举子集。
 
 原4行问题已复现并闭合。160 Cargo测试、98两后端O0/O2/O3定向检查、15独立探针命令、49聚合ABI检查、103完整自举检查、22真实负载及JXZ每后端19项通过。证据`WORK/extern-definitions/receipt.json`；独立开发包`WORK/releases/extern-definitions-20261115/manifest.json`。编译器3834616B，比上一开发包增加1248B；没有新的RSS/运行性能对比。Shell保持旧pin，本次没有产品联验或Linux宿主交付；主线其余问题见MAINLINE_TASKS.md。
+
+## 2026-11-15原固定源码的Linux LLVM宿主交付
+
+Shell不升级编译器：从5f84a3f快照在CachyOS构建Linux x86_64 aethc/JXZ，编译器与a634366相同、44文件stdlib与Mac lock一致。使用既有Rust1.99.1、私有LLVM21.1.8和离线依赖，jobs1。包与校验在`WORK/releases/linux-x86_64-frozen-5f84a3f-20261115/`；归档66954543B。aethc4345688B、JXZ55824B；没有跨架构性能改善声明。
+
+原生126单元+20集成、LLVM JXZ15、process44、foundation10、11真实负载、103完整自举及15搬移检查通过；Core生成C固定点与原Mac版本相同。必须携带lib/并显式设置AETHER_PATH或-I。Shell产品与host lock联验由应用侧完成，本次未改其pin。
+
+C版JXZ在Clang23暴露N05：*void错误输出为Unit结构体指针，与FILE*不兼容。原失败、C11/C17对照和最小C失败/LLVM通过证据均保留；C没有被计入这次LLVM通过声明，也未通过抑制诊断绕过。该问题同样存在当前源码，已归主线T02/T07/T18待修。
