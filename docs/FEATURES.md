@@ -1,99 +1,18 @@
-# AetherLang Feature Cheat Sheet
+# AetherLang 能力与验收入口
 
-> 2026-11-18。非空元组、静态接口检查和纯函数契约的当前语义见[主线任务](../MAINLINE_TASKS.md)。捕获闭包和函数值会被检查器拒绝。下列历史语法中，所有权和生命周期仍有局限，原生资源需要显式释放。
+两种源文件进入相同的语义检查和 IR。下表对应 `c5ed0b6` 的 macOS arm64 基础开发包。更晚的主线实现和目标见[主线任务](../MAINLINE_TASKS.md)。
 
-## 🎯 Type System
+| 能力 | 语法与检查 | 生成、链接和执行 | 可复现入口 |
+| --- | --- | --- | --- |
+| Script 与 Core 源码 | `.ath` 支持缩进、函数、条件、计数循环、基础数值和字符串；`.aeth` 使用显式局部类型 | 同一程序用 C/LLVM 编译并运行。Script 诊断映回原行列 | `scripts/validate.py`、`tests/tooling.rs` |
+| 标量、聚合与泛型 | 目标位宽整数、f32/f64、具名结构、字段、数组、非空元组、泛型实例化、枚举有效载荷和 `?` | 两后端 O0/O2；值、数值及 ABI 定向比较 O3 | `tests/backend_regressions.rs`、`tests/{aggregate_abi,generic_runtime}.py` |
+| 模块和方法 | 导入、别名、私有成员、静态 interface/impl，检查完整签名和效果界限。泛型函数体按实例检查 | 重名模块、多包依赖和递归 Vec 有实际程序 | `tests/interfaces_methods.py`、`jxz/tests/integration.py` |
+| 生命周期与内存 | 跟踪初始化、引用来源和借用。opt-in `own Record` 对绑定的移动、使用和分支归并有检查 | 基础包显式释放 fd、向量、张量和量子 lease。裸指针仍由使用者保证有效性 | `tests/owned_values.rs`、`tests/{vec_alignment,memory_runtime,process_runtime}.py` |
+| 效果与契约 | 检查纯谓词、显式效果的上界、`requires`、`ensures` 及 `result` | 入口及正常出口执行检查，包括通过 `?` 返回；失败触发 trap | `tests/contracts.py` |
+| C 互调与系统入口 | C 函数/变量、`#[no_mangle]` 导出、union、布局查询、typed volatile、原子操作、受限 interrupt/naked | Apple arm64 双向 C ABI。wasm32 通过实际执行核实目标整数和 Vec。x86-64 裸机处理函数在 QEMU 中处理两种 CPU 帧 | `tests/{global_linkage,aggregate_abi,vec32,freestanding}.py` |
+| 数据与宿主库 | 带长度字节、严格 UTF-8、i64 字节键 Map、Option/Result 以及 POSIX 文件/进程接口 | 文件中的 NUL、无效 UTF-8、短读、错误码、子进程和分配失败均有原生用例 | `tests/{text_map,runtime_foundation,process_runtime}.py` |
+| 数学与量子 | CPU f64 张量/反向 AD、标量 DAG、电路与状态向量，OpenBLAS、Metal、CUDA-Q 的接口各自独立 | Mac 原生 OpenBLAS、Metal 通用计算和 CUDA-Q CPU 有实测；目标设备及其他版本见升级报告 | `tests/{math_values,quantum_values,ffi_modules,cudaq_runtime}.py` |
+| 项目、编辑器与安装 | JXZ 本地路径依赖、项目级 LSP、可校验的整包安装 | 目录移动、子进程退出、并发和中断恢复均有回归 | `jxz/tests/integration.py`、`tests/package_install.py` |
+| 自举 | 七模块 Core 的词法、解析、类型检查、C 输出用 Aether 实现 | C-only 与 LLVM 种子分别构建四代，检验生成的 C 固定点并执行消毒器及真实程序。主编译器由 Rust 构建 | `tests/bootstrap_core.py` |
 
-| Category | Feature | Syntax Example |
-|----------|---------|----------------|
-| **Primitives** | Integers | `i8, i16, i32, i64, u8, u16, u32, u64` |
-| | Floats | `f32, f64` |
-| | Boolean | `bool` (true/false) |
-| | Character | `char` |
-| **Pointers** | Raw Pointer | `*T`, `*mut T` |
-| | Reference | `&T`, `&mut T` |
-| | Lifetime | `&'a T`, `&'static T` |
-| **Composite** | Struct | `struct Point { x: i64, y: i64 }` |
-| | Enum | `enum Option<T> { Some(T), None }` |
-| | Tuple | `(i32, i64, bool)` |
-| | Array | `[i32; 10]` |
-| **Generics** | Type Params | `fn identity<T>(x: T) -> T` |
-| | Struct | `struct Vec<T> { data: *T, len: u64 }` |
-| **Aliases** | Type Alias | `type Int = i64;` |
-
-## 🔗 Module System
-
-| Feature | Syntax | Description |
-|---------|--------|-------------|
-| **Import Single** | `use foo::Bar` | Import one item |
-| **Import Multiple** | `use foo::{A, B, C}` | Import several items |
-| **Import All** | `use foo::*` | Import all public items |
-| **Public Export** | `pub struct X {}` | Make item visible to other modules |
-| **Search Paths** | `.`, `src_aether/`, `stdlib/` | Automatic module discovery |
-
-## 🎭 Traits & Interfaces
-
-```rust
-trait Display {
-    fn display(&self);
-}
-
-impl Display for Point {
-    fn display(&self) {
-        // ...
-    }
-}
-```
-
-## 🔒 Ownership & Safety
-
-| Feature | Syntax | Description |
-|---------|--------|-------------|
-| **Ownership** | `own T` | Exclusive ownership |
-| **Shared Ref** | `&T` | Immutable borrow |
-| **Mutable Ref** | `&mut T` | Mutable borrow |
-| **Lifetime** | `&'a T` | Explicit lifetime annotation |
-
-## ⚡ Effects & Contracts
-
-| Feature | Syntax | Description |
-|---------|--------|-------------|
-| **Pure Function** | `pure fn add(a: i32, b: i32) -> i32` | No side effects |
-| **Effect Annotation** | `effect[io] fn log(msg: &str)` | Declares IO effects |
-| **Precondition** | `requires x > 0` | Function precondition |
-| **Postcondition** | `ensures result > 0` | Function postcondition |
-
-## 🖥️ System Features
-
-| Feature | Syntax | Description |
-|---------|--------|-------------|
-| **FFI** | `extern "C" { fn puts(s: *u8) -> i32; }` | C function binding |
-| **Volatile** | `*volatile T` | Prevents optimization |
-| **Union** | `union Value { i: i64, f: f64 }` | Overlapping memory |
-| **Static** | `static GLOBAL: i32 = 42;` | Global variable |
-
-## 🏗️ Dual-Layer Architecture
-
-### Layer 0: Aether Core (`.aeth`)
-- Rust-like syntax with explicit ownership
-- Full system programming capabilities
-- Effect system and contracts
-
-### Layer 1: Aether Script (`.ath`)
-- Python-like indentation syntax
-- Mutable-by-default
-- Transpiles 1:1 to Layer 0
-
-## 📊 Comparison
-
-| Feature | C | Rust | AetherLang |
-|---------|:-:|:----:|:----------:|
-| Memory Safety | ❌ Manual | ✅ Borrow Checker | ✅ Ownership |
-| Null Safety | ❌ | ✅ Option<T> | ✅ Option<T> |
-| Generics | ❌ | ✅ | ✅ |
-| Traits | ❌ | ✅ | ✅ |
-| Lifetimes | ❌ | ✅ | ✅ |
-| Effects | ❌ | ❌ | ✅ |
-| Contracts | ❌ | Crate | ✅ Built-in |
-| Module System | ❌ Headers | ✅ | ✅ |
-| Self-Hosting | ❌ | ✅ | ✅ 100% |
+基础包对闭包/函数值报 E2403，对按值穿越 C ABI 的元组报 E2404。动态 trait、const 泛型、async 和主编译器全量迁移保留在 T25–T26。各平台测量与原始结果见[升级报告](UPGRADE.md)。

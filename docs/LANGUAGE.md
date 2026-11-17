@@ -175,11 +175,7 @@ let x = 10;
 let x: i32 = 10;
 let name: *u8 = "hello\0" as *u8;
 
-// ❌ 禁止 - 闭包参数无类型
-let f = |x| x + 1;
-
-// ✅ 必须 - 闭包参数显式类型
-let f: fn(i32) -> i32 = |x: i32| -> i32 { x + 1 };
+// 函数值和闭包由当前基础编译器在检查阶段报 E2403。
 ```
 
 ### 2.6 表达式
@@ -204,22 +200,11 @@ let f: fn(i32) -> i32 = |x: i32| -> i32 { x + 1 };
 
 ## 3. 类型系统
 
-### 3.1 所有权模式
+### 3.1 值、借用和资源
 
-| 模式 | 关键字 | 语义 |
-|------|--------|------|
-| 所有权 | `own` | 值的所有权转移 |
-| 不可变借用 | `ref`, `&` | 只读访问 |
-| 可变借用 | `mut`, `&mut` | 读写访问 |
-| 共享所有权 🆕 | `shared` | 引用计数共享 |
+数组、元组和具名结构按值传递。字段中的裸指针保留地址，复制含裸指针的记录可能产生资源别名。引用的初始化、投影及逃逸受到检查。
 
-### 3.2 所有权规则
-
-1. 每个值有且只有一个所有者
-2. 所有者离开作用域时值被释放
-3. 不可变借用可以有多个
-4. 可变借用同时只能有一个
-5. `shared` 使用引用计数
+`own Record` 为显式选择的资源建立移动语义。由手工管理值接管所有权，以及把 owner 交回手工 API，需要 `unsafe`。确切的可组合范围、析构策略与迁移例见[迁移说明](MIGRATION.md)。`shared` 尚无引用计数实现。
 
 ### 3.3 基本类型
 
@@ -238,119 +223,17 @@ let f: fn(i32) -> i32 = |x: i32| -> i32 { x + 1 };
 
 ## 4. AI-Native 特性
 
-### 4.1 契约编程
+### 4.1 效果与契约
 
 ```aether
-fn binary_search(arr: [i32], target: i32) -> i32 
-    [requires arr.len() > 0, requires target >= 0]
-{
-    // 编译器验证前置条件
-}
+fn increment(n:i32)->i32 [requires n>0, ensures result==n+1] pure { n+1 }
 ```
 
-| 子句 | 用途 |
-|------|------|
-| `requires` | 前置条件 (调用者必须满足) |
-| `ensures` | 后置条件 (函数保证) |
-| `invariant` | 不变量 (始终成立) |
+`pure` 要求没有可观察副作用，`effect[...]` 约束推断效果的上界。未标注的普通函数按函数体与实际调用推断效果。契约谓词必须纯且返回 bool。入口检查前置条件，每个正常出口检查后置条件，返回表达式只求值一次。失败触发 trap。函数上的 `invariant` 会在检查阶段被拒绝。
 
-### 4.2 效果系统
+### 4.2 错误值、容器与分配
 
-```aether
-// 纯函数 - 无副作用
-fn add(a: i32, b: i32) -> i32 pure {
-    a + b
-}
-
-// 显式副作用
-fn write_file(path: str) effect[io, alloc] {
-    // ...
-}
-```
-
-> ⚠️ **P5.2 效果系统强制执行**: 调用有副作用的函数时，调用者必须声明相同或更大的效果集。
-> 违反此规则会导致编译错误（硬错误），而非警告。
-
-```aether
-// ❌ 编译错误 - 调用 effect[io] 但未声明
-fn bad_caller() {
-    println("hello");  // Error: calling effect[io] without declaring it
-}
-
-// ✅ 正确 - 声明了 effect[io]
-fn good_caller() effect[io] {
-    println("hello");
-}
-```
-
-**规则**: 纯函数不能调用产生副作用的函数。
-
-| 效果 | 描述 |
-|------|------|
-| `io` | 输入/输出 |
-| `alloc` | 内存分配 |
-| `read` | 读取全局状态 |
-| `write` | 写入全局状态 |
-| `panic` | 可能 panic |
-
-### 4.3 Result/Option 类型 (P5.3)
-
-AetherLang 的 `Option<T>` 和 `Result<T, E>` 类型**故意不提供 `unwrap()` 方法**。
-这是为了强制安全的错误处理，减少运行时 panic。
-
-```aether
-use result::{Option, Result}
-
-// ❌ 不存在 - unwrap() 方法未定义
-let value: i32 = maybe_value.unwrap();
-
-// ✅ 使用 match
-let value: i32 = match maybe_value {
-    Option::Some(v) => v,
-    Option::None => 0,  // 提供默认值
-};
-
-// ✅ 使用 unwrap_or
-let value: i32 = maybe_value.unwrap_or(0);
-
-// ✅ 使用 ? 操作符 (在返回 Result 的函数中)
-let value: i32 = maybe_value?;
-```
-
-### 4.4 显式分配器 (P5.4)
-
-AetherLang 容器类型使用显式分配器泛型参数：
-
-```aether
-use alloc::{Allocator, GlobalAllocator, ArenaAllocator}
-
-// Vec 需要分配器参数
-pub struct Vec<T, A: Allocator> {
-    data: *T,
-    len: u64,
-    capacity: u64,
-    alloc: A,
-}
-
-// 使用全局分配器
-let v: Vec<i32, GlobalAllocator> = Vec::new_in(GlobalAllocator::new());
-
-// 使用 Arena 分配器 (批量释放)
-let arena: ArenaAllocator = ArenaAllocator::new(1024);
-let v: Vec<i32, ArenaAllocator> = Vec::new_in(arena);
-```
-
-### 4.5 渐进式严格性
-
-```aether
-@prototype  // 宽松模式 - 允许警告
-fn test() {}
-
-@production // 严格模式 - 警告变错误
-fn critical() {}
-```
-
----
+从 `option` 导入 `Option`，从 `result` 导入 `Result`。使用模式匹配或 `option_or`、`result_or`。返回 `Result` 的函数可用 `?` 传播相同错误类型。泛型向量使用 `Vec<T>`，通过 `vec_new`、`vec_push`、`vec_free` 管理。独立的 arena/stack API 见[分配器源码](../stdlib/alloc.aeth)。
 
 ## C ABI 声明与定义（2026-11-15实现）
 
@@ -373,6 +256,8 @@ fn main() -> i32 { native_callback(1) - 2 }
 
 此能力属于 Rust 实现的主编译器；最小自举 Core 的支持子集见 [BOOTSTRAP.md](BOOTSTRAP.md)，
 不因主编译器支持而自动扩大。C ABI 目标覆盖与已知限制仍以主线 T07 为准。
+
+普通私有函数、私有静态存储具有对象本地链接。要由其他对象访问稳定名称的存储，写 `#[no_mangle] static mut NAME:T=...;` 并使用相容的 C 声明。原有 `pub static` 保留模块修饰名。多个模块可用 `usize` 与目标同宽无符号类型声明同一个 C 符号。语义检查保留每处实际导入的类型，普通 Aether 函数仍区分两种类型。
 
 ## 实现参考
 
