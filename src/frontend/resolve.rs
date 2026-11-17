@@ -66,11 +66,13 @@ pub struct Resolver {
     module_owners: HashMap<Span, usize>,
     entrypoint_enabled: bool,
     overlays: HashMap<PathBuf, String>,
+    namespace: String,
+    source_identifiers: HashSet<String>,
 }
 
 impl Resolver {
     pub fn new(search: ModuleSearch) -> Self {
-        Self { sources: vec![], search, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, module_owners: HashMap::new(), entrypoint_enabled: true, overlays: HashMap::new() }
+        Self { sources: vec![], search, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, module_owners: HashMap::new(), entrypoint_enabled: true, overlays: HashMap::new(), namespace: "__aeth_m".into(), source_identifiers: HashSet::new() }
     }
 
     pub fn with_overlays(mut self, overlays: HashMap<PathBuf, String>) -> Self {
@@ -86,11 +88,51 @@ impl Resolver {
 
     pub fn resolve(&mut self, path: &Path, source: String) -> Result<Program> {
         let path = Self::source_path(path);
-        let program = self.parse(&path, source)?;
+        // An imported file can introduce an ABI symbol or lexical binding that
+        // looks like a name emitted earlier in the traversal. Retry the entire
+        // graph with a fresh namespace, using the text snapshots already read.
+        // Ordinary source keeps the established __aeth_mN_ spelling.
+        loop {
+            self.sources.clear();
+            self.loaded.clear();
+            self.loading.clear();
+            self.items.clear();
+            self.next_module = 0;
+            self.module_owners.clear();
+            let result = self.resolve_once(&path, source.clone());
+            if !self.source_identifiers.iter().any(|name| name.starts_with(&self.namespace)) {
+                return result;
+            }
+            // Snapshot only on the uncommon retry path; ordinary compilation
+            // keeps one copy of each source rather than duplicating the graph.
+            for source in &self.sources {
+                self.overlays.insert(source.path.clone(), source.text.clone());
+            }
+            let mut suffix = 1usize;
+            loop {
+                let candidate = format!("__aeth_{suffix}_m");
+                if !self.source_identifiers.iter().any(|name| name.starts_with(&candidate)) {
+                    self.namespace = candidate;
+                    break;
+                }
+                suffix += 1;
+            }
+        }
+    }
+
+    // Only this compilation's namespace is generated. A user identifier that
+    // resembles the default (or an earlier candidate) must retain its spelling.
+    pub fn original_name<'a>(&self, name: &'a str) -> Option<&'a str> {
+        let (module, original) = name.strip_prefix(&self.namespace)?.split_once('_')?;
+        if !module.is_empty() && module.bytes().all(|byte| byte.is_ascii_digit()) { Some(original) } else { None }
+    }
+
+    fn resolve_once(&mut self, path: &Path, source: String) -> Result<Program> {
+        let program = self.parse(path, source)?;
         let attrs = program.inner_attrs.clone();
         self.entrypoint_enabled = !attrs.iter().any(|attribute| attribute.name.name == "no_main");
-        self.loading.push(path.clone());
-        self.expand(program.items, &path, true)?;
+        self.loading.push(path.to_path_buf());
+        self.expand(program.items, path, true)?;
         self.loading.pop();
         // Struct/type definitions precede functions irrespective of import order.
         // Foreign declarations are shared ABI symbols, not module-local copies.
@@ -108,7 +150,13 @@ impl Resolver {
     fn parse(&mut self, path: &Path, text: String) -> Result<Program> {
         let id = self.sources.len();
         self.sources.push(SourceFile { path: path.into(), text });
-        Parser::new(Lexer::new(&self.sources[id].text, id)).parse_program()
+        let tokens = Lexer::new(&self.sources[id].text, id).tokenize();
+        for token in &tokens {
+            if let TokenKind::Ident(name) = &token.kind {
+                if name.starts_with("__aeth_") { self.source_identifiers.insert(name.clone()); }
+            }
+        }
+        Parser::from_tokens(tokens).parse_program()
     }
 
     fn load(&mut self, path: PathBuf) -> Result<Exports> {
@@ -162,7 +210,7 @@ impl Resolver {
                     return Err(Error::ModuleError(format!("compiler intrinsic '{name}' cannot be redefined in {}", path.display())));
                 }
                 let preserve_abi = matches!(item, Item::Function(f) if f.annotations.iter().any(|a| a.name.name == "no_mangle"));
-                let resolved = if (root && name == "main") || preserve_abi { name.to_owned() } else { format!("__aeth_m{id}_{name}") };
+                let resolved = if (root && name == "main") || preserve_abi { name.to_owned() } else { format!("{}{id}_{name}", self.namespace) };
                 if names.insert(name.to_owned(), resolved.clone()).is_some() {
                     return Err(Error::ModuleError(format!("duplicate definition '{name}' in {}", path.display())));
                 }
@@ -449,6 +497,30 @@ impl Rewriter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_namespace_collisions_replay_the_complete_overlay_snapshot() {
+        let directory = std::env::temp_dir().join(format!("aether-resolver-overlay-{}", std::process::id()));
+        let root = directory.join("main.aeth");
+        let late = directory.join("late.aeth");
+        let last = directory.join("last.aeth");
+        let late_text = "use last::other; extern \"C\" { fn __aeth_m0_local() -> i32; } pub fn foreign() -> i32 { __aeth_m0_local() + other() }";
+        let last_text = "extern \"C\" { fn __aeth_1_m0_local() -> i32; } pub fn other() -> i32 { __aeth_1_m0_local() }";
+        let mut resolver = Resolver::new(ModuleSearch::default()).with_overlays(HashMap::from([
+            (late.clone(), late_text.into()), (last.clone(), last_text.into()),
+        ]));
+        let program = resolver.resolve(&root, "use late::foreign; fn local() -> i32 { 7 } fn main() -> i32 { local() }".into()).unwrap();
+        assert_eq!(resolver.sources.len(), 3);
+        assert_eq!(resolver.sources.iter().find(|source| source.path == late).unwrap().text, late_text);
+        assert_eq!(resolver.sources.iter().find(|source| source.path == last).unwrap().text, last_text);
+        let local = program.items.iter().find_map(|item| match item {
+            Item::Function(function) if resolver.original_name(&function.name.name) == Some("local") => Some(function), _ => None,
+        }).unwrap();
+        assert_eq!(local.name.name, "__aeth_2_m0_local");
+        assert_eq!(resolver.original_name("__aeth_m0_local"), None);
+        assert_eq!(resolver.original_name("__aeth_1_m0_local"), None);
+        assert!(program.items.iter().filter_map(|item| match item { Item::Function(function) => Some(function.span.file_id), _ => None }).all(|id| id < 3));
+    }
 
     #[test]
     fn module_mangling_preserves_generic_type_and_const_bindings() {

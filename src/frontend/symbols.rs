@@ -41,28 +41,29 @@ impl SymbolIndex {
             .or_else(|| self.symbols.iter().filter(|s| contains(&s.definition)).min_by_key(|s| s.definition.end-s.definition.start))
     }
 }
-fn display_name(name: &str) -> String {
-    if let Some(rest) = name.strip_prefix("__aeth_m") { if let Some((_, original)) = rest.split_once('_') { return original.into(); } }
-    name.strip_prefix("__aeth_script_arg_").unwrap_or(name).into()
-}
-pub fn type_name(ty: &Type) -> String {
-    match ty {
-        Type::Named(name, _) => display_name(name), Type::Pointer(ty, _) => format!("*{}", type_name(ty)),
-        Type::Ref { mutable, inner, .. } => format!("&{}{}", if *mutable { "mut " } else { "" }, type_name(inner)),
-        Type::Array { elem, size, .. } => format!("[{}; {}]", type_name(elem), size),
-        Type::Slice(ty, _) => format!("[{}]", type_name(ty)),
-        Type::Tuple(types, _) => format!("({})", types.iter().map(type_name).collect::<Vec<_>>().join(", ")),
-        Type::Generic(name, args, _) => format!("{}<{}>", display_name(name), args.iter().map(type_name).collect::<Vec<_>>().join(", ")),
-        Type::GenericWithArgs { name, args, .. } => format!("{}<{}>", display_name(name), args.iter().map(|a| match a { GenericArg::Type(t) => type_name(t), GenericArg::Const(e) => format!("{:?}",e) }).collect::<Vec<_>>().join(", ")),
-        Type::Function { params, ret, .. } => format!("fn({}) -> {}", params.iter().map(type_name).collect::<Vec<_>>().join(", "),type_name(ret)),
-        Type::Unit(_) => "()".into(), Type::Never(_) => "!".into(), Type::Infer(_) => "_".into(),
-        Type::Owned { inner, .. } => format!("own {}", type_name(inner)), Type::Volatile(inner, _) => format!("*volatile {}", type_name(inner)),
-    }
-}
 impl Builder<'_> {
+    fn display_name(&self, name: &str) -> String {
+        if let Some(original) = self.session.resolver.original_name(name) { return original.into(); }
+        name.strip_prefix("__aeth_script_arg_").unwrap_or(name).into()
+    }
+    fn type_name(&self, ty: &Type) -> String {
+        match ty {
+            Type::Named(name, _) => self.display_name(name), Type::Pointer(ty, _) => format!("*{}", self.type_name(ty)),
+            Type::Ref { mutable, inner, .. } => format!("&{}{}", if *mutable { "mut " } else { "" }, self.type_name(inner)),
+            Type::Array { elem, size, .. } => format!("[{}; {}]", self.type_name(elem), size),
+            Type::Slice(ty, _) => format!("[{}]", self.type_name(ty)),
+            Type::Tuple(types, _) => format!("({})", types.iter().map(|ty| self.type_name(ty)).collect::<Vec<_>>().join(", ")),
+            Type::Generic(name, args, _) => format!("{}<{}>", self.display_name(name), args.iter().map(|ty| self.type_name(ty)).collect::<Vec<_>>().join(", ")),
+            Type::GenericWithArgs { name, args, .. } => format!("{}<{}>", self.display_name(name), args.iter().map(|a| match a { GenericArg::Type(t) => self.type_name(t), GenericArg::Const(e) => format!("{:?}",e) }).collect::<Vec<_>>().join(", ")),
+            Type::Function { params, ret, .. } => format!("fn({}) -> {}", params.iter().map(|ty| self.type_name(ty)).collect::<Vec<_>>().join(", "),self.type_name(ret)),
+            Type::Unit(_) => "()".into(), Type::Never(_) => "!".into(), Type::Infer(_) => "_".into(),
+            Type::Owned { inner, .. } => format!("own {}", self.type_name(inner)), Type::Volatile(inner, _) => format!("*volatile {}", self.type_name(inner)),
+        }
+    }
+
     fn define(&mut self, key: &str, name: &str, kind: &str, ty: String, span: Span) -> Option<usize> {
         let mut location = self.session.location(span)?;
-        let name = display_name(name);
+        let name = self.display_name(name);
         // Synthesized Script declarations map to a statement; narrow to the
         // actual source spelling rather than exposing a generated identifier.
         if let Some(text) = self.session.source(span.file_id) {
@@ -85,32 +86,32 @@ impl Builder<'_> {
             self.index.references.push(Reference { symbol, location });
         }
     }
-    fn signature(f: &Function) -> String {
-        format!("fn({}) -> {}", f.params.iter().map(|p| format!("{}: {}",display_name(&p.name.name),type_name(&p.ty))).collect::<Vec<_>>().join(", "), f.ret_type.as_ref().map(type_name).unwrap_or("()".into()))
+    fn signature(&self, f: &Function) -> String {
+        format!("fn({}) -> {}", f.params.iter().map(|p| format!("{}: {}",self.display_name(&p.name.name),self.type_name(&p.ty))).collect::<Vec<_>>().join(", "), f.ret_type.as_ref().map(|ty| self.type_name(ty)).unwrap_or("()".into()))
     }
     fn item_definition(&mut self, item: &Item) {
         match item {
-            Item::Function(f) => { self.define(&f.name.name,&f.name.name,"function",Self::signature(f),f.name.span); }
+            Item::Function(f) => { self.define(&f.name.name,&f.name.name,"function",self.signature(f),f.name.span); }
             Item::Struct(s) => {
-                self.define(&s.name.name,&s.name.name,"struct",display_name(&s.name.name),s.name.span);
+                self.define(&s.name.name,&s.name.name,"struct",self.display_name(&s.name.name),s.name.span);
                 let mut fields = HashMap::new();
                 for field in &s.fields {
                     let key = format!("{}::{}",s.name.name,field.name.name);
-                    if let Some(id) = self.define(&key,&field.name.name,"field",type_name(&field.ty),field.name.span) { fields.insert(field.name.name.clone(),id); }
+                    if let Some(id) = self.define(&key,&field.name.name,"field",self.type_name(&field.ty),field.name.span) { fields.insert(field.name.name.clone(),id); }
                 }
                 self.fields.insert(s.name.name.clone(), fields);
             }
-            Item::Enum(e) => { self.define(&e.name.name,&e.name.name,"enum",display_name(&e.name.name),e.name.span); }
-            Item::Union(u) => { self.define(&u.name.name,&u.name.name,"union",display_name(&u.name.name),u.name.span); }
-            Item::Const(c) => { self.define(&c.name.name,&c.name.name,"constant",c.ty.as_ref().map(type_name).unwrap_or("constant".into()),c.name.span); }
-            Item::Static(s) => { self.define(&s.name.name,&s.name.name,"static",type_name(&s.ty),s.name.span); }
-            Item::TypeAlias(t) => { self.define(&t.name.name,&t.name.name,"type",type_name(&t.ty),t.name.span); }
+            Item::Enum(e) => { self.define(&e.name.name,&e.name.name,"enum",self.display_name(&e.name.name),e.name.span); }
+            Item::Union(u) => { self.define(&u.name.name,&u.name.name,"union",self.display_name(&u.name.name),u.name.span); }
+            Item::Const(c) => { self.define(&c.name.name,&c.name.name,"constant",c.ty.as_ref().map(|ty| self.type_name(ty)).unwrap_or("constant".into()),c.name.span); }
+            Item::Static(s) => { self.define(&s.name.name,&s.name.name,"static",self.type_name(&s.ty),s.name.span); }
+            Item::TypeAlias(t) => { self.define(&t.name.name,&t.name.name,"type",self.type_name(&t.ty),t.name.span); }
             Item::Impl(i) => for f in &i.methods {
-                self.define(&format!("{}::{}",i.target.name,f.name.name),&f.name.name,"method",Self::signature(f),f.name.span);
+                self.define(&format!("{}::{}",i.target.name,f.name.name),&f.name.name,"method",self.signature(f),f.name.span);
             },
             Item::Extern(ext) => for item in &ext.items { match item {
-                ForeignItem::Fn { name, params, ret_type, .. } => { self.define(&name.name,&name.name,"extern function",format!("fn({}) -> {}",params.iter().map(|p|type_name(&p.ty)).collect::<Vec<_>>().join(", "),ret_type.as_ref().map(type_name).unwrap_or("()".into())),name.span); }
-                ForeignItem::Static { name, ty, .. } => { self.define(&name.name,&name.name,"extern static",type_name(ty),name.span); }
+                ForeignItem::Fn { name, params, ret_type, .. } => { self.define(&name.name,&name.name,"extern function",format!("fn({}) -> {}",params.iter().map(|p|self.type_name(&p.ty)).collect::<Vec<_>>().join(", "),ret_type.as_ref().map(|ty| self.type_name(ty)).unwrap_or("()".into())),name.span); }
+                ForeignItem::Static { name, ty, .. } => { self.define(&name.name,&name.name,"extern static",self.type_name(ty),name.span); }
             } },
             _ => {},
         }
@@ -130,7 +131,7 @@ impl Builder<'_> {
     }
     fn typed_binding(&mut self, name: &Ident, kind: &str, ty: Option<&Type>) {
         let Some(id) = self.define(&name.name, &name.name, kind,
-            ty.map(type_name).unwrap_or_else(|| "inferred".into()), name.span) else { return; };
+            ty.map(|ty| self.type_name(ty)).unwrap_or_else(|| "inferred".into()), name.span) else { return; };
         let Some(mut base) = ty else { return; };
         while let Type::Ref { inner, .. } | Type::Pointer(inner, _) | Type::Volatile(inner, _) = base {
             base = inner;

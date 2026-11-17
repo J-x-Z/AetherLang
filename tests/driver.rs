@@ -298,8 +298,7 @@ fn explicit_modules_accept_same_canonical_local_symlink() {
 
 #[test]
 fn explicit_modules_lsp_uses_mapped_sources_and_unsaved_overlays() {
-    use std::{io::Write, process::Stdio};
-    use serde_json::{json, Value};
+    use serde_json::json;
     let p = Project::new();
     let library = p.source("vendor/entry=real.aeth", "pub fn answer() -> i32 { 42 }");
     let text = "use api::answer;\nfn main() -> i32 { return answer(); }\n";
@@ -314,8 +313,19 @@ fn explicit_modules_lsp_uses_mapped_sources_and_unsaved_overlays() {
         json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
         json!({"jsonrpc":"2.0","method":"exit","params":null}),
     ];
+    let replies = lsp_round_trip(&p, &["--module", "api=vendor/entry=real.aeth"], messages);
+    assert_eq!(replies.iter().find(|reply| reply["id"] == 2).unwrap()["result"]["uri"], uri(&library));
+    let changes: Vec<_> = replies.iter().filter(|reply| reply["method"] == "textDocument/publishDiagnostics" && reply["params"]["uri"] == uri(&library)).collect();
+    assert!(changes.iter().any(|reply| !reply["params"]["diagnostics"].as_array().unwrap().is_empty()));
+    assert!(changes.last().unwrap()["params"]["diagnostics"].as_array().unwrap().is_empty());
+    assert_eq!(fs::read_to_string(library).unwrap(), "pub fn answer() -> i32 { 42 }");
+}
+
+fn lsp_round_trip(p: &Project, args: &[&str], messages: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    use std::{io::Write, process::Stdio};
+    use serde_json::Value;
     let mut server = Command::new(env!("CARGO_BIN_EXE_aethc")).current_dir(&p.0)
-        .args(["lsp", "--module", "api=vendor/entry=real.aeth"])
+        .arg("lsp").args(args)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let mut input = server.stdin.take().unwrap();
     for message in messages { let body = serde_json::to_vec(&message).unwrap(); write!(input, "Content-Length: {}\r\n\r\n", body.len()).unwrap(); input.write_all(&body).unwrap(); }
@@ -327,9 +337,85 @@ fn explicit_modules_lsp_uses_mapped_sources_and_unsaved_overlays() {
         let count: usize = std::str::from_utf8(&bytes[..boundary]).unwrap().strip_prefix("Content-Length: ").unwrap().parse().unwrap();
         bytes = &bytes[boundary + 4..]; replies.push(serde_json::from_slice(&bytes[..count]).unwrap()); bytes = &bytes[count..];
     }
-    assert_eq!(replies.iter().find(|reply| reply["id"] == 2).unwrap()["result"]["uri"], uri(&library));
-    let changes: Vec<_> = replies.iter().filter(|reply| reply["method"] == "textDocument/publishDiagnostics" && reply["params"]["uri"] == uri(&library)).collect();
-    assert!(changes.iter().any(|reply| !reply["params"]["diagnostics"].as_array().unwrap().is_empty()));
-    assert!(changes.last().unwrap()["params"]["diagnostics"].as_array().unwrap().is_empty());
-    assert_eq!(fs::read_to_string(library).unwrap(), "pub fn answer() -> i32 { 42 }");
+    replies
+}
+
+#[test]
+fn module_namespace_does_not_capture_real_foreign_abi_symbols() {
+    let p = Project::new();
+    let native = p.source("host.c", "#include <stdint.h>\nint32_t __aeth_m0_local(void) { return 99; }\nint32_t __aeth_1_m0_local(void) { return 98; }\n");
+    let output = Command::new(std::env::var_os("CC").unwrap_or_else(|| "clang".into()))
+        .arg("-c").arg(native).arg("-o").arg(p.0.join("host.o")).output().unwrap();
+    success(&output);
+    p.source("same.aeth", "extern \"C\" { fn __aeth_m0_local() -> i32; } fn local() -> i32 { 7 } fn main() -> i32 { if __aeth_m0_local() == 99 && local() == 7 { 0 } else { 1 } }");
+    p.source("late.aeth", "use later::second; extern \"C\" { fn __aeth_m0_local() -> i32; } pub fn foreign() -> i32 { if second() == 98 { __aeth_m0_local() } else { 0 } }");
+    p.source("later.aeth", "extern \"C\" { fn __aeth_1_m0_local() -> i32; } pub fn second() -> i32 { __aeth_1_m0_local() }");
+    p.source("main.aeth", "use late::foreign; fn local() -> i32 { 7 } fn main() -> i32 { if foreign() == 99 && local() == 7 { 0 } else { 1 } }");
+    for source in ["same.aeth", "main.aeth"] {
+        success(&p.compiler(&["check", source]));
+        for backend in backends() { for level in ["0", "2"] {
+            success(&p.compiler(&["build", source, "--backend", backend, "-O", level, "--link-object", "host.o", "-o", "program"]));
+            run(&p.0.join("program"), 0);
+        } }
+    }
+    let output = p.compiler(&["symbols", "main.aeth"]); success(&output);
+    let index: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let symbols = index["symbols"].as_array().unwrap();
+    for name in ["__aeth_m0_local", "__aeth_1_m0_local"] {
+        let foreign = symbols.iter().find(|symbol| symbol["name"] == name).unwrap();
+        assert_eq!(foreign["kind"], "extern function");
+        let text = fs::read_to_string(foreign["definition"]["file"].as_str().unwrap()).unwrap();
+        assert_eq!(&text[foreign["definition"]["start"].as_u64().unwrap() as usize..foreign["definition"]["end"].as_u64().unwrap() as usize], name);
+    }
+    assert_eq!(symbols.iter().filter(|symbol| symbol["name"] == "local").count(), 1);
+}
+
+#[test]
+fn module_namespace_cannot_be_captured_by_lexical_bindings() {
+    let p = Project::new();
+    let text = "struct Number { value:i32 } const answer:i32=7; fn main()->i32 { let __aeth_m0_answer:i32=99; let __aeth_1_m0_answer:i32=98; let number:Number=Number{value:answer}; if number.value==7 && __aeth_m0_answer==99 && __aeth_1_m0_answer==98 {0} else {1} }";
+    p.source("main.aeth", text);
+    for backend in backends() { for level in ["0", "2"] {
+        success(&p.compiler(&["build", "main.aeth", "--backend", backend, "-O", level, "-o", "program"]));
+        run(&p.0.join("program"), 0);
+    } }
+    let output = p.compiler(&["symbols", "main.aeth"]); success(&output);
+    let index: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let symbols = index["symbols"].as_array().unwrap();
+    for name in ["Number", "answer", "__aeth_m0_answer", "__aeth_1_m0_answer", "number"] {
+        let symbol = symbols.iter().find(|symbol| symbol["name"] == name).unwrap();
+        assert_eq!(&text[symbol["definition"]["start"].as_u64().unwrap() as usize..symbol["definition"]["end"].as_u64().unwrap() as usize], name);
+    }
+    assert_eq!(symbols.iter().find(|symbol| symbol["name"] == "number").unwrap()["type_name"], "Number");
+    let constant = symbols.iter().find(|symbol| symbol["name"] == "answer").unwrap();
+    let reference = index["references"].as_array().unwrap().iter().find(|reference| reference["symbol"] == constant["id"]).unwrap();
+    assert_eq!(reference["location"]["start"].as_u64().unwrap() as usize, text.find("value:answer").unwrap() + "value:".len());
+}
+
+#[test]
+fn module_namespace_preserves_normal_spelling_and_editor_source_names() {
+    use serde_json::json;
+    let p = Project::new();
+    p.source("ordinary.aeth", "// __aeth_m0_local in a comment is not an identifier\nfn local() -> i32 { 7 } fn main()->i32 { local() }");
+    success(&p.compiler(&["ordinary.aeth", "--emit-ir", "-o", "ordinary.ir"]));
+    let ir = fs::read_to_string(p.0.join("ordinary.ir")).unwrap();
+    assert!(ir.contains("__aeth_m0_local"));
+    assert!(!ir.contains("__aeth_1_m"));
+    let text = "const answer:i32=7;\nfn main()->i32 {\n    let __aeth_m0_answer:i32=99;\n    return answer;\n}\n";
+    let source = p.source("editor.aeth", text);
+    let uri = format!("file://{}", fs::canonicalize(source).unwrap().to_string_lossy().replace('%', "%25").replace(' ', "%20"));
+    let replies = lsp_round_trip(&p, &[], vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":text}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":uri}}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":uri},"position":{"line":2,"character":10}}}),
+        json!({"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{"textDocument":{"uri":uri},"position":{"line":3,"character":12}}}),
+        json!({"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ]);
+    let document = replies.iter().find(|reply| reply["id"] == 2).unwrap()["result"].as_array().unwrap();
+    assert!(document.iter().any(|symbol| symbol["name"] == "__aeth_m0_answer"));
+    assert_eq!(document.iter().filter(|symbol| symbol["name"] == "answer").count(), 1);
+    assert_eq!(replies.iter().find(|reply| reply["id"] == 3).unwrap()["result"]["contents"]["value"], "__aeth_m0_answer: i32");
+    assert_eq!(replies.iter().find(|reply| reply["id"] == 4).unwrap()["result"]["range"]["start"], json!({"line":0,"character":6}));
 }
