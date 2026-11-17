@@ -2,11 +2,13 @@
 """Pairwise contraction and Jacobi low-rank factorization with independent oracles."""
 import argparse, hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--compiler',type=Path,required=True);p.add_argument('--work-dir',type=Path,required=True)
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--compiler',type=Path);p.add_argument('--work-dir',type=Path,required=True)
 p.add_argument('--backends',nargs='+',choices=['c','llvm'],default=['c','llvm']);p.add_argument('--metal',action='store_true',default=os.environ.get('AETHER_TEST_METAL')=='1')
+p.add_argument('--verify-output',type=Path,nargs='+',help='Check captured program stdout from an explicit device using the same numerical oracle')
 p.add_argument('--provider',type=Path);p.add_argument('--device',choices=['metal','vulkan'],default='vulkan');p.add_argument('--no-sanitize',action='store_true');a=p.parse_args()
-if a.metal and (a.provider or sys.platform!='darwin'):p.error('--metal requires macOS and cannot be combined with --provider')
-r=Path(__file__).resolve().parents[1];w=a.work_dir.resolve();w.mkdir(parents=True,exist_ok=True);c=a.compiler.resolve();source=r/'tests/regressions/compute/planning.aeth'
+if not a.compiler and not a.verify_output:p.error('--compiler is required when building workloads')
+if not a.verify_output and a.metal and (a.provider or sys.platform!='darwin'):p.error('--metal requires macOS and cannot be combined with --provider')
+r=Path(__file__).resolve().parents[1];w=a.work_dir.resolve();w.mkdir(parents=True,exist_ok=True);c=a.compiler.resolve() if a.compiler else None;source=r/'tests/regressions/compute/planning.aeth'
 cc=os.environ.get('CC','clang');env={**os.environ,'TMPDIR':str(w)};results=[]
 def run(label,cmd,environment=env):
  cmd=list(map(str,cmd));start=time.perf_counter();value=subprocess.run(cmd,capture_output=True,text=True,timeout=60,env=environment)
@@ -37,6 +39,11 @@ def verify(text,device):
  assert max(abs(float(m[i+1])-expected) for i,expected in enumerate([4,2,.5,.5]))<2e-6 and 1<=int(m[5])<=64
  actual=list(map(float,m[6].split()));assert len(actual)==len(low) and max(abs(x-y) for x,y in zip(actual,low))<2e-6
  m=re.fullmatch(r'planning backend=(\d+) submitted=(\d+) peak=(\d+) remaining=(\d+)',lines[2]);assert m and int(m[1])=={'cpu':1,'metal':2,'vulkan':3}[device] and int(m[2])==5 and 0<int(m[3])<=1048576 and int(m[4])==0
+if a.verify_output:
+    for capture in a.verify_output:
+        verify(capture.read_text(), a.device)
+    print(f'{len(a.verify_output)} captured {a.device} workloads passed the numerical oracle')
+    sys.exit(0)
 loader=w/'loader.o';run('portable loader',[cc,'-std=c11','-O2','-c',r/'runtime/compute/loader.c','-o',loader]);provider=a.provider.resolve() if a.provider else None;device=a.device
 if a.metal:
  device='metal';provider=w/'metal.dylib';run('real Metal provider',[cc,'-O2','-fobjc-arc','-dynamiclib',r/'runtime/metal/provider.m',r/'runtime/metal/bridge.m','-framework','Metal','-framework','Foundation','-o',provider])

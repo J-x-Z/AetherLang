@@ -127,7 +127,7 @@ for backend in args.backends:
         assert 'qubits=16 amplitudes=65536' in execution_result.stdout
         assert 'submissions=42' in execution_result.stdout and execution_result.stdout.endswith('remaining=0\n')
 
-paths=[compiler,source,'--sysroot',repo,statevector,statevector.with_name("circuit16.aeth"),repo/"stdlib/quantum_compute.aeth",repo/"stdlib/quantum.aeth",fault_source,repo/'tests/regressions/compute/fault_provider.c',repo/'stdlib/compute.aeth',repo/'stdlib/compute_types.aeth',repo/'runtime/compute/loader.c',repo/'runtime/compute/provider.h']
+paths=[compiler,source,statevector,statevector.with_name("circuit16.aeth"),repo/"stdlib/quantum_compute.aeth",repo/"stdlib/quantum.aeth",fault_source,repo/'tests/regressions/compute/fault_provider.c',repo/'stdlib/compute.aeth',repo/'stdlib/compute_types.aeth',repo/'runtime/compute/loader.c',repo/'runtime/compute/provider.h']
 if args.metal: paths += [repo/'runtime/metal/provider.m',repo/'runtime/metal/bridge.m',repo/'runtime/metal/bridge.h']
 if provider: paths.append(provider)
 (work/'hashes.json').write_text(json.dumps({str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},indent=2))

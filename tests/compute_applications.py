@@ -3,17 +3,19 @@
 import argparse, hashlib, json, math, os, re, struct, subprocess, sys, time
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--compiler',type=Path,required=True)
+p.add_argument('--compiler',type=Path)
 p.add_argument('--work-dir',type=Path,required=True)
 p.add_argument('--backends',nargs='+',choices=['c','llvm'],default=['c','llvm'])
 p.add_argument('--metal',action='store_true',default=os.environ.get('AETHER_TEST_METAL')=='1')
+p.add_argument('--verify-output',type=Path,nargs='+',help='Check captured program stdout from an explicit device using the same numerical oracle')
 p.add_argument('--provider',type=Path)
 p.add_argument('--device',choices=['metal','vulkan'],default='vulkan')
 p.add_argument('--no-sanitize',action='store_true')
 a=p.parse_args()
-if a.metal and (a.provider or sys.platform!='darwin'):p.error('--metal requires macOS and cannot be combined with --provider')
+if not a.compiler and not a.verify_output:p.error('--compiler is required when building workloads')
+if not a.verify_output and a.metal and (a.provider or sys.platform!='darwin'):p.error('--metal requires macOS and cannot be combined with --provider')
 r=Path(__file__).resolve().parents[1];w=a.work_dir.resolve();w.mkdir(parents=True,exist_ok=True)
-c=a.compiler.resolve();source=r/'tests/regressions/compute/applications.aeth'
+c=a.compiler.resolve() if a.compiler else None;source=r/'tests/regressions/compute/applications.aeth'
 env={**os.environ,'TMPDIR':str(w)};cc=os.environ.get('CC','clang');results=[]
 def run(label,command,environment=env):
     command=list(map(str,command));started=time.perf_counter()
@@ -68,6 +70,11 @@ def verify(text,mode):
     backend,device,submissions,peak,remaining=map(int,match.groups());assert backend=={'cpu':1,'metal':2,'vulkan':3}[mode] and submissions==125 and 0<peak<=4194304 and remaining==0
     if mode=='cpu':assert device==0
     return dict(backend=backend,device=device,submissions=submissions,peak_bytes=peak,finance_error=abs(value-field[32]))
+if a.verify_output:
+    for capture in a.verify_output:
+        verify(capture.read_text(), a.device)
+    print(f'{len(a.verify_output)} captured {a.device} workloads passed the numerical oracle')
+    sys.exit(0)
 loader=w/'loader.o';run('portable loader',[cc,'-O2','-std=c11','-c',r/'runtime/compute/loader.c','-o',loader])
 provider=a.provider.resolve() if a.provider else None;device=a.device
 if a.metal:
@@ -93,7 +100,7 @@ if not a.no_sanitize:
     sanitizer={**env,'ASAN_OPTIONS':'halt_on_error=1:exitcode=86','UBSAN_OPTIONS':'halt_on_error=1:exitcode=87'}
     execution(binary,'cpu',environment=sanitizer)
     if provider:execution(binary,device,provider,sanitizer)
-paths=[c,source,'--sysroot',r,r/'stdlib/compute.aeth',r/'stdlib/compute_types.aeth',r/'stdlib/compute_ops.aeth',r/'stdlib/compute_sparse.aeth',r/'stdlib/compute_quant.aeth',r/'runtime/compute/provider.h',r/'runtime/compute/loader.c']
+paths=[c,source,r/'stdlib/compute.aeth',r/'stdlib/compute_types.aeth',r/'stdlib/compute_ops.aeth',r/'stdlib/compute_sparse.aeth',r/'stdlib/compute_quant.aeth',r/'runtime/compute/provider.h',r/'runtime/compute/loader.c']
 if provider:paths.append(provider)
 (w/'hashes.json').write_text(json.dumps({str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in paths},indent=2))
 print(f'{len(results)} application checks passed; GPU: {device if provider else "not requested"}; evidence: {w/"results.json"}')
