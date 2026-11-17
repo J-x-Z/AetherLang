@@ -4,10 +4,10 @@
 // vec_free; do not copy a live Vec. Element values have no implicit destructor.
 // get/set copy values; resource-owning elements remain the caller's responsibility.
 extern "C" {
-    fn malloc(size: u64) -> *void;
-    fn realloc(pointer: *void, size: u64) -> *void;
+    fn malloc(size: usize) -> *void;
+    fn realloc(pointer: *void, size: usize) -> *void;
     fn free(pointer: *void);
-    fn memcpy(destination: *void, source: *void, size: u64) -> *void;
+    fn memcpy(destination: *void, source: *void, size: usize) -> *void;
 }
 use option::Option;
 
@@ -33,6 +33,19 @@ fn vec_release_storage<T>(data: *T) {
     } else { free(data as *void); }
 }
 
+// Preserve the u64 logical capacity API while bounding each actual allocation
+// by the target's signed address space, before converting byte counts to size_t.
+fn vec_capacity_limit(size: u64, alignment: u64) -> u64 {
+    if size == 0 { return 9223372036854775807; }
+    let max_bytes: u64 = (((-1 as isize) as usize) >> 1) as u64;
+    if alignment > align_of(u64) as u64 {
+        let header_size: u64 = size_of(*void) as u64;
+        if alignment > max_bytes - header_size { return 0; }
+        return (max_bytes - (header_size + alignment - 1)) / size;
+    }
+    max_bytes / size
+}
+
 // Preserve the original buffer, length and capacity if allocation fails.
 // Bound byte counts by signed address space before multiplying.
 pub fn vec_reserve<T>(vector: *Vec<T>, capacity: u64) -> bool {
@@ -45,28 +58,25 @@ pub fn vec_reserve<T>(vector: *Vec<T>, capacity: u64) -> bool {
         vector.capacity = capacity;
         return true;
     }
-    let max_bytes: u64 = 9223372036854775807;
-    if capacity > max_bytes / element_size { return false; }
+    if capacity > vec_capacity_limit(size_of(T) as u64, align_of(T) as u64) { return false; }
     let alignment: u64 = align_of(T) as u64;
     if alignment > align_of(u64) as u64 {
         let header_size: u64 = size_of(*void) as u64;
-        if alignment > max_bytes - header_size { return false; }
         let overhead: u64 = header_size + alignment - 1;
-        if capacity > (max_bytes - overhead) / element_size { return false; }
-        let allocation: *void = malloc(capacity * element_size + overhead);
+        let allocation: *void = malloc((capacity * element_size + overhead) as usize);
         if allocation == (0 as *void) { return false; }
         let start: u64 = (allocation as u64) + header_size;
         let padding: u64 = (alignment - start % alignment) % alignment;
         let data: *T = (start + padding) as *T;
         let header: **void = ((data as u64) - header_size) as **void;
         *header = allocation;
-        if vector.len != 0 { memcpy(data as *void, vector.data as *void, vector.len * element_size); }
+        if vector.len != 0 { memcpy(data as *void, vector.data as *void, (vector.len * element_size) as usize); }
         vec_release_storage(vector.data);
         vector.data = data;
         vector.capacity = capacity;
         return true;
     }
-    let data: *T = realloc(vector.data as *void, capacity * element_size) as *T;
+    let data: *T = realloc(vector.data as *void, (capacity * element_size) as usize) as *T;
     if data == 0 as *T { return false; }
     vector.data = data;
     vector.capacity = capacity;
@@ -74,11 +84,11 @@ pub fn vec_reserve<T>(vector: *Vec<T>, capacity: u64) -> bool {
 }
 
 pub fn vec_push<T>(vector: *Vec<T>, value: T) -> bool {
-    let max_len: u64 = 9223372036854775807;
+    let max_len: u64 = vec_capacity_limit(size_of(T) as u64, align_of(T) as u64);
     if vector.len >= max_len { return false; }
     let required: u64 = vector.len + 1;
     if required > vector.capacity {
-        let mut capacity: u64 = 4;
+        let mut capacity: u64 = if max_len < 4 { required } else { 4 };
         if vector.capacity > 0 {
             if vector.capacity > max_len / 2 { capacity = required; }
             else { capacity = vector.capacity * 2; }

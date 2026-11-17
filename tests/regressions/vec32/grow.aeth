@@ -1,0 +1,47 @@
+#![no_std]
+#![no_main]
+use vec::{Vec, vec_new, vec_reserve, vec_push, vec_get, vec_pop, vec_free};
+use option::Option;
+extern "C" { fn r32_fail(); fn r32_calls() -> u32; fn r32_live() -> u32; }
+#[no_mangle] pub fn vec32() -> i32 {
+    if size_of(usize) != 4 { return 1; }
+    let mut values: Vec<u32> = vec_new();
+    let mut i: u64 = 0;
+    while i < 513 { if !vec_push(&mut values as *Vec<u32>, (i * 7 + 3) as u32) { return 2; } i += 1; }
+    i = 0;
+    while i < values.len {
+        match vec_get(&mut values as *Vec<u32>, i) { Option::Some(value) => { if value != (i * 7 + 3) as u32 { return 3; } }, Option::None => { return 4; }, }
+        i += 1;
+    }
+    match vec_pop(&mut values as *Vec<u32>) { Option::Some(value) => { if value != 3587 { return 5; } }, Option::None => { return 6; }, }
+    let pointer: *u32 = values.data; let capacity: u64 = values.capacity; let calls: u32 = r32_calls();
+    // 2 GiB, 4 GiB and beyond u32 cannot be safely allocated on this target.
+    if vec_reserve(&mut values as *Vec<u32>, 536870912) || vec_reserve(&mut values as *Vec<u32>, 1073741824) || vec_reserve(&mut values as *Vec<u32>, 4294967296) || vec_reserve(&mut values as *Vec<u32>, 18446744073709551615) { return 7; }
+    if r32_calls() != calls || values.data != pointer || values.capacity != capacity || values.len != 512 || values.data[511] != 3580 { return 8; }
+    r32_fail();
+    if vec_reserve(&mut values as *Vec<u32>, capacity * 2) { return 9; }
+    if values.data != pointer || values.capacity != capacity || values.len != 512 || values.data[511] != 3580 { return 10; }
+    if !vec_reserve(&mut values as *Vec<u32>, capacity * 2) || values.data[511] != 3580 { return 11; }
+    vec_free(&mut values as *Vec<u32>); vec_free(&mut values as *Vec<u32>);
+    if r32_live() != 0 || values.data != 0 as *u32 || values.capacity != 0 || values.len != 0 { return 12; }
+    // Exercise the aligned allocation/header/memcpy path with 32-bit size_t.
+    let mut aligned: Vec<f32x4> = vec_new();
+    if !vec_reserve(&mut aligned as *Vec<f32x4>, 1) { return 13; }
+    if (aligned.data as usize) % (align_of(f32x4) as usize) != 0 { return 14; }
+    let lanes: *f32 = aligned.data as *f32; lanes[0] = 1.0; lanes[1] = 2.0; lanes[2] = 3.0; lanes[3] = 4.0; aligned.len = 1;
+    let aligned_pointer: *f32x4 = aligned.data; let aligned_calls: u32 = r32_calls();
+    // Include the pointer header and alignment padding in the overflow bound.
+    let oversized: u64 = (2147483647 - (size_of(*void) + align_of(f32x4) - 1) as u64) / size_of(f32x4) as u64 + 1;
+    if vec_reserve(&mut aligned as *Vec<f32x4>, oversized) || r32_calls() != aligned_calls { return 15; }
+    r32_fail(); if vec_reserve(&mut aligned as *Vec<f32x4>, 8) { return 16; }
+    if aligned.data != aligned_pointer || aligned.capacity != 1 || (aligned.data as *f32)[3] != 4.0 { return 17; }
+    if !vec_reserve(&mut aligned as *Vec<f32x4>, 8) || (aligned.data as *f32)[3] != 4.0 { return 18; }
+    vec_free(&mut aligned as *Vec<f32x4>); if r32_live() != 0 { return 19; }
+    // Logical ZST capacities stay u64 and never allocate, even above 4 GiB.
+    let unit_calls: u32 = r32_calls(); let mut units: Vec<()> = vec_new();
+    if !vec_reserve(&mut units as *Vec<()>, 4294967296) || !vec_push(&mut units as *Vec<()>, ()) { return 20; }
+    if units.len != 1 || units.capacity != 4294967296 { return 21; }
+    match vec_pop(&mut units as *Vec<()>) { Option::Some(_) => {}, Option::None => { return 22; }, }
+    vec_free(&mut units as *Vec<()>) ; if r32_calls() != unit_calls || r32_live() != 0 { return 23; }
+    0
+}
