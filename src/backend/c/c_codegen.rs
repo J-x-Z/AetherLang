@@ -245,6 +245,12 @@ impl CCodeGen {
             IRType::U64 => "uint64_t".to_string(),
             IRType::F32 => "float".to_string(),
             IRType::F64 => "double".to_string(),
+            // `void` is the language unit alias, so both *void and *() carry
+            // Ptr(Unit) in IR. Their C storage/ABI type must be void*, which
+            // interoperates with opaque C objects such as FILE*. Keep the
+            // pointee's Unit IR type: loads, stores and GEP still use its
+            // zero-byte layout rather than C's sizeof(void) extension.
+            IRType::Ptr(inner) if matches!(inner.unqualified(), IRType::Unit) => "void*".to_string(),
             IRType::Ptr(inner) => format!("{}*", self.ir_type_to_c(inner)),
             IRType::Array(_, _) => format!("struct {}", Self::array_name(ty)),
             IRType::Struct(name) => format!("{} {}", if self.union_names.contains(name) { "union" } else { "struct" }, name),
@@ -1287,6 +1293,17 @@ mod tests {
             "\\303\\251A\\344\\270\\2557\\360\\237\\246\\200f\\000"
         );
         assert_eq!(CCodeGen::escape_for_c("\u{1}7\u{7f}F"), "\\0017\\177F");
+    }
+
+    #[test]
+    fn unit_pointer_uses_opaque_c_pointer_without_erasing_unit_values() {
+        let codegen = CCodeGen::new("x86_64-unknown-linux-gnu");
+        let unit_ptr = IRType::Ptr(Box::new(IRType::Unit));
+        assert_eq!(codegen.ir_type_to_c(&IRType::Unit), "struct __aeth_unit");
+        assert_eq!(codegen.ir_type_to_c(&unit_ptr), "void*");
+        assert_eq!(codegen.ir_type_to_c(&IRType::Ptr(Box::new(unit_ptr))), "void**");
+        assert_eq!(codegen.ir_type_to_c(&IRType::Ptr(Box::new(IRType::Volatile(Box::new(IRType::Unit))))), "void*");
+        assert_eq!(codegen.ir_type_to_c(&IRType::Ptr(Box::new(IRType::I32))), "int32_t*");
     }
 
     #[test]

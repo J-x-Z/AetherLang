@@ -1,0 +1,48 @@
+// void and () are aliases. Their raw pointers must interoperate with C void*,
+// including opaque FILE handles supplied by stdio.h.
+type Opaque = void;
+type Marker = ();
+
+extern "C" {
+    fn tmpfile() -> *void;
+    fn fputc(value: i32, file: *void) -> i32;
+    fn fgetc(file: *void) -> i32;
+    fn rewind(file: *void);
+    fn fclose(file: *void) -> i32;
+    fn malloc(size: u64) -> *void;
+    fn free(pointer: *void);
+    fn puts(value: *u8) -> i32;
+}
+
+#[no_mangle]
+fn n05_void_identity(pointer: *Opaque) -> *void { return pointer; }
+#[no_mangle]
+fn n05_unit_identity(pointer: *Marker) -> *() { return pointer; }
+#[no_mangle]
+fn n05_void_slot(pointer: **Opaque) -> **void { return pointer; }
+#[no_mangle]
+fn n05_unit_slot(pointer: **Marker) -> **() { return pointer; }
+
+fn main() -> i32 {
+    let mut file: *void = tmpfile();
+    if file == (0 as *void) { return 1; }
+    let alias: *() = n05_unit_identity(n05_void_identity(file));
+    let slot: **void = n05_void_slot(&file as **void);
+    let unit_slot: **() = n05_unit_slot(slot);
+    if *unit_slot != alias { fclose(file); return 2; }
+    if fputc(0, alias) != 0 || fputc(127, file) != 127 || fputc(255, file) != 255 {
+        fclose(file); return 3;
+    }
+    rewind(file);
+    let valid: bool = fgetc(alias) == 0 && fgetc(file) == 127 && fgetc(file) == 255 && fgetc(file) == -1;
+    let closed: i32 = fclose(file);
+    if !valid || closed != 0 { return 4; }
+    let storage: *void = malloc(1);
+    if storage == (0 as *void) { return 5; }
+    *(storage as *u8) = 97 as u8;
+    let byte: u8 = *(storage as *u8);
+    free(n05_unit_identity(storage));
+    if byte != (97 as u8) { return 6; }
+    puts("void-pointers=ok");
+    return 0;
+}

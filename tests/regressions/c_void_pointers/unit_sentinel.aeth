@@ -1,0 +1,20 @@
+// Unit occupies zero bytes. No memory access or pointer displacement may occur
+// when operating on the non-null aligned sentinel used by Vec<()>.
+extern "C" { fn puts(value: *u8) -> i32; }
+fn identity(value: ()) -> () { return value; }
+fn main() -> i32 {
+    let sentinel: *() = 1 as *();
+    *sentinel = ();
+    let value: () = *sentinel;
+    let stepped: *() = sentinel + 123;
+    if stepped != sentinel { return 1; }
+    *stepped = identity(value);
+    let mut units: [(); 3] = [(), (), ()];
+    units[2] = *stepped;
+    if size_of(()) != 0 || size_of([(); 3]) != 0 || align_of(()) != 1 { return 2; }
+    let first: *() = &units[0] as *();
+    let last: *() = &units[2] as *();
+    if first != last { return 3; }
+    puts("unit-sentinel=ok");
+    return 0;
+}
