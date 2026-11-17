@@ -5,7 +5,7 @@ use process::{process_run};
 use path::{path_join, make_directories};
 use posix::ENOENT;
 use build::{compile_source};
-use output::{output_lock, output_unlock, output_recover};
+use output::{output_lock, output_unlock, output_recover, output_compiler_inherits};
 extern "C" {
     fn fopen(path: *u8, mode: *u8) -> *void;
     fn fclose(file: *void) -> i32;
@@ -21,11 +21,16 @@ extern "C" {
     fn perror(path: *u8);
 }
 
-fn test_discover(list: *u8) -> i32 {
+fn test_discover(list: *u8, lock: *void) -> i32 {
     let mut args: [*u8; 9] = ["find\0" as *u8, "tests\0" as *u8,
         "-type\0" as *u8, "f\0" as *u8, "-name\0" as *u8,
         "test_*.aeth\0" as *u8, "-print0\0" as *u8, 0 as *u8, 0 as *u8];
-    return process_run(&args[0] as **u8, list);
+    // Discovery writes into the locked target directory too. Keep the lock
+    // alive if JXZ is killed while find still owns the output descriptor.
+    if !output_compiler_inherits(lock, true) { return 1; }
+    let mut status: i32 = process_run(&args[0] as **u8, list);
+    if !output_compiler_inherits(lock, false) { status = 1; }
+    return status;
 }
 
 fn test_execute(cfg: *Config, file: *void, executable: *u8, lock: *void) -> i32 {
@@ -97,7 +102,7 @@ pub fn run_tests() -> i32 {
                 if output[0] != 47 { executable = path_join(".\0" as *u8, output); }
             }
             if list != (0 as *u8) && executable != (0 as *u8) {
-                if test_discover(list) == 0 {
+                if test_discover(list, lock) == 0 {
                     let file: *void = fopen(list, "rb\0" as *u8);
                     if file != (0 as *void) {
                         status = test_execute(&cfg as *Config, file, executable, lock);

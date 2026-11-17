@@ -96,6 +96,8 @@ def install():
                 for name, checksum in entries:
                     check_file(release, name, checksum)
                 check_file(release, "manifest.json", key)
+            if not all(os.access(release / n, os.X_OK) for n in ("aethc", "jxz")):
+                raise ValueError("installed tools are missing executable permission")
             stage.mkdir(exist_ok=True)
             link = stage / "bin"
             link.symlink_to(Path(store.name) / key)

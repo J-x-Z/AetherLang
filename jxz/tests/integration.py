@@ -578,6 +578,39 @@ fn main(argc: i32, argv: **u8) -> i32 {
         self.assertEqual(subprocess.run([output]).returncode, 8)
         self.run_jxz('clean')
 
+    def test_killed_test_waits_for_its_live_discovery_writer(self):
+        self.manifest()
+        self.source()
+        self.source('tests/test_good.aeth')
+        tools = self.root / 'tools'
+        tools.mkdir()
+        finder = tools / 'find'
+        finder.write_text('#!' + sys.executable + '\nimport pathlib,sys,time\npathlib.Path("find-started").touch()\n'
+                          'deadline=time.monotonic()+20\nwhile not pathlib.Path("find-release").exists():\n'
+                          '    if time.monotonic()>deadline: sys.exit(88)\n    time.sleep(0.01)\n'
+                          'sys.stdout.buffer.write(b"tests/test_good.aeth\\0")\n')
+        finder.chmod(0o755)
+        environment = {**ENV, 'PATH': str(tools) + os.pathsep + ENV['PATH']}
+        process = subprocess.Popen([JXZ, 'test'], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, env=environment)
+        try:
+            deadline = time.monotonic() + 10
+            while not (self.root / 'find-started').exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue((self.root / 'find-started').exists())
+            process.kill()
+            self.assertEqual(process.wait(timeout=5), -signal.SIGKILL)
+            for command in ('clean', 'build', 'test'):
+                result = self.run_jxz(command, expected=1)
+                self.assertIn('busy or cannot be locked', result.stderr)
+                self.assertTrue((self.root / 'target/.jxz-test-list').is_file())
+        finally:
+            (self.root / 'find-release').touch()
+            # EOF also waits for the orphaned find to finish its last write.
+            process.communicate(timeout=30)
+        self.run_jxz('test')
+        self.run_jxz('clean')
+
     def test_build_preserves_unregistered_files_and_input_aliases(self):
         self.manifest()
         self.source()
