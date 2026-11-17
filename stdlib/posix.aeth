@@ -19,3 +19,5 @@ const SIGTERM: i32 = 15;
 const SIGINT: i32 = 2;
 const EBADF: i32 = 9;
 const EMFILE: i32 = 24;
+const LOCK_EX: i32 = 2;
+const LOCK_NB: i32 = 4;

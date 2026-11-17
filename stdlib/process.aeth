@@ -176,10 +176,15 @@ fn report_child_failure(descriptor: i32, stage: i32, code: i32) {
     _exit(127);
 }
 
+fn command_arguments_valid(command: *Command) -> bool {
+    if command == (0 as *Command) { return false; }
+    if command.argv == (0 as **u8) || command.argv[0] == (0 as *u8) { return false; }
+    if command.argv[0][0] == 0 { return false; }
+    command.stdin_fd >= -1 && command.stdout_fd >= -1 && command.stderr_fd >= -1
+}
+
 pub fn process_spawn(command: *Command) -> Result<Child, ProcessError> {
-    if command.argv == (0 as **u8) || command.argv[0] == (0 as *u8) { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
-    if command.argv[0][0] == 0 { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
-    if command.stdin_fd < -1 || command.stdout_fd < -1 || command.stderr_fd < -1 { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
+    if !command_arguments_valid(command) { return Result::Err(error(PROCESS_ARGUMENT, EINVAL)); }
     let empty_environment: [*u8; 1] = [0 as *u8];
     let inherited: **u8 = if environ == (0 as **u8) { &empty_environment[0] as **u8 } else { environ };
     let environment: **u8 = if command.envp == (0 as **u8) { inherited } else { command.envp };
@@ -293,6 +298,16 @@ pub fn pipeline_run(commands: *Command, count: u64, statuses: *ExitStatus) -> Re
         vec_free(&pipes as *Vec<Pipe>); vec_free(&children as *Vec<Child>); return Result::Err(error(PROCESS_MEMORY, ENOMEM));
     }
     let mut index: u64 = 0;
+    // Validate the complete command list before creating pipes or starting any
+    // child: an invalid later stage must have no earlier-stage side effects.
+    while index < count {
+        if !command_arguments_valid(&commands[index] as *Command) {
+            vec_free(&pipes as *Vec<Pipe>); vec_free(&children as *Vec<Child>);
+            return Result::Err(error(PROCESS_ARGUMENT, EINVAL));
+        }
+        index = index + 1;
+    }
+    index = 0;
     while index + 1 < count {
         match fd_pipe() {
             Result::Ok(value) => {
@@ -309,8 +324,8 @@ pub fn pipeline_run(commands: *Command, count: u64, statuses: *ExitStatus) -> Re
     index = 0;
     while index < count {
         let mut command: Command = commands[index];
-        if index > 0 && command.stdin_fd < 0 { command.stdin_fd = pipes.data[index - 1].reader.value; }
-        if index + 1 < count && command.stdout_fd < 0 { command.stdout_fd = pipes.data[index].writer.value; }
+        if index > 0 && command.stdin_fd == -1 { command.stdin_fd = pipes.data[index - 1].reader.value; }
+        if index + 1 < count && command.stdout_fd == -1 { command.stdout_fd = pipes.data[index].writer.value; }
         match process_spawn(&command as *Command) {
             Result::Ok(value) => {
                 let mut child: Child = value;

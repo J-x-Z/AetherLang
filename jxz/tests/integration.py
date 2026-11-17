@@ -5,6 +5,8 @@ import json
 import os
 import resource
 import signal
+import sys
+import time
 from pathlib import Path
 import subprocess
 import tempfile
@@ -23,6 +25,22 @@ WORK.mkdir(parents=True, exist_ok=True)
 ENV = {**os.environ, 'AETHC': AETHC, 'TMPDIR': str(WORK)}
 if ARGS.backend:
     ENV['AETHER_BACKEND'] = ARGS.backend
+TRANSACTION_INJECTION = None
+
+
+def transaction_fault(name):
+    global TRANSACTION_INJECTION
+    if TRANSACTION_INJECTION is None:
+        library = WORK / ('transaction_faults.dylib' if sys.platform == 'darwin' else 'transaction_faults.so')
+        flags = ['-dynamiclib'] if sys.platform == 'darwin' else ['-shared', '-fPIC']
+        command = [os.environ.get('CC', 'clang'), *flags, str(Path(__file__).with_name('transaction_faults.c')),
+                   '-o', str(library), *([] if sys.platform == 'darwin' else ['-ldl'])]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30, env=ENV)
+        if result.returncode:
+            raise AssertionError(result.stdout + result.stderr)
+        TRANSACTION_INJECTION = str(library)
+    key = 'DYLD_INSERT_LIBRARIES' if sys.platform == 'darwin' else 'LD_PRELOAD'
+    return {key: TRANSACTION_INJECTION, 'AETHER_JXZ_FAULT': name}
 
 
 class LocalCommands(unittest.TestCase):
@@ -169,7 +187,7 @@ fn main() -> i32 { if answer() == 42 { 0 } else { 9 } }
                         self.assert_compiler_args(
                             json.loads(capture.read_text()),
                             test_source if command == 'test' else 'src/main.aeth',
-                            './target/.jxz-test' if command == 'test' else 'target/program',
+                            './target/.jxz-test' if command == 'test' else 'target/.jxz-build/program',
                             roots, native_objects)
                         self.assertFalse((self.root / 'INJECTED').exists())
 
@@ -317,6 +335,47 @@ fn main(argc: i32, argv: **u8) -> i32 {
         self.assertFalse((self.root / 'STALE_RAN').exists())
         self.assertFalse(stale.exists())
 
+    def test_test_discovery_rejects_a_non_directory(self):
+        self.manifest()
+        (self.root / 'tests').write_text('user data')
+        result = self.run_jxz('test', expected=1)
+        self.assertIn('cannot open tests directory', result.stderr)
+        self.assertEqual((self.root / 'tests').read_text(), 'user data')
+        self.assertFalse((self.root / 'target').exists())
+
+    @unittest.skipUnless(os.name == 'posix' and os.geteuid() != 0, 'requires ordinary POSIX user permissions')
+    def test_test_discovery_reports_permission_denial(self):
+        self.manifest()
+        self.source('tests/test_failure.aeth', 'fn main() -> i32 { return 9; }')
+        self.run_jxz('test', expected=1)
+        directory = self.root / 'tests'
+        directory.chmod(0)
+        try:
+            with self.assertRaises(PermissionError):
+                list(directory.iterdir())
+            result = self.run_jxz('test', expected=1)
+            self.assertIn('cannot open tests directory', result.stderr)
+            self.assertNotIn('no tests directory', result.stdout)
+        finally:
+            directory.chmod(0o755)
+
+    @unittest.skipUnless(os.name == 'posix' and os.geteuid() != 0, 'requires ordinary POSIX user permissions')
+    def test_test_discovery_error_does_not_run_a_partial_list(self):
+        self.manifest()
+        self.source('tests/test_visible.aeth')
+        self.source('tests/hidden/test_unreadable.aeth')
+        capture, environment = self.capturing_compiler()
+        hidden = self.root / 'tests/hidden'
+        hidden.chmod(0)
+        try:
+            with self.assertRaises(PermissionError):
+                list(hidden.iterdir())
+            result = self.run_jxz('test', expected=1, env=environment)
+            self.assertIn('test discovery failed', result.stdout)
+            self.assertFalse(capture.exists())
+        finally:
+            hidden.chmod(0o755)
+
     def test_all_dependency_manifest_forms_are_rejected(self):
         self.source()
         declarations = [
@@ -372,6 +431,229 @@ fn main(argc: i32, argv: **u8) -> i32 {
         self.assertFalse((self.root / 'target/.jxz-outputs.tmp').exists())
         self.run_jxz('clean')
         self.assertFalse((self.root / 'target/first').exists())
+
+    def test_publication_failures_restore_artifact_and_records(self):
+        self.manifest(name='first')
+        self.source(text='fn main() -> i32 { return 7; }')
+        faults = ('record-open', 'record-write', 'record-close', 'binary-rename', 'record-rename')
+        for fault in faults:
+            with self.subTest(output='initial', fault=fault):
+                self.run_jxz('build', expected=1, env=transaction_fault(fault))
+                self.assertFalse((self.root / 'target/first').exists())
+                self.assertFalse((self.root / 'target/.jxz-outputs').exists())
+                self.assertFalse((self.root / 'target/.jxz-build').exists())
+        self.run_jxz('build')
+        output = self.root / 'target/first'
+        record = self.root / 'target/.jxz-outputs'
+        before, records_before = output.read_bytes(), record.read_bytes()
+        self.source(text='fn main() -> i32 { return 8; }')
+        legacy_temporary = self.root / 'target/.jxz-outputs.tmp'
+        legacy_temporary.write_bytes(b'INCOMPLETE PREVIOUS RECORD')
+        self.manifest(name='second')
+        self.run_jxz('build', expected=1)
+        self.assertEqual(output.read_bytes(), before)
+        self.assertEqual(record.read_bytes(), records_before)
+        self.assertFalse((self.root / 'target/second').exists())
+        self.assertEqual(legacy_temporary.read_bytes(), b'INCOMPLETE PREVIOUS RECORD')
+        legacy_temporary.unlink()
+        for name in ('first', 'second'):
+            self.manifest(name=name)
+            for fault in faults:
+                with self.subTest(output=name, fault=fault):
+                    self.run_jxz('build', expected=1, env=transaction_fault(fault))
+                    self.assertEqual(output.read_bytes(), before)
+                    self.assertEqual(record.read_bytes(), records_before)
+                    self.assertFalse((self.root / 'target/second').exists())
+                    self.assertFalse((self.root / 'target/.jxz-build').exists())
+        self.run_jxz('build')
+        self.assertEqual(record.read_text(), 'first\nsecond\n')
+        self.run_jxz('clean')
+        self.assertFalse(output.exists())
+        self.assertFalse((self.root / 'target/second').exists())
+
+    def test_interrupted_publication_and_failed_rollback_are_recoverable(self):
+        self.manifest()
+        self.source(text='fn main() -> i32 { return 7; }')
+        for fault in ('kill-before-record', 'kill-before-settled'):
+            self.run_jxz('build', expected=-signal.SIGKILL, env=transaction_fault(fault))
+            self.assertTrue((self.root / 'target/.jxz-build').is_dir())
+            self.run_jxz('clean')
+            self.assertFalse((self.root / 'target').exists())
+        self.run_jxz('build')
+        output = self.root / 'target/program'
+        record = self.root / 'target/.jxz-outputs'
+        before, records_before = output.read_bytes(), record.read_bytes()
+        self.source(text='fn main() -> i32 { return 8; }')
+        failures = [(name, -signal.SIGKILL) for name in ('kill-before-owner', 'kill-after-owner', 'kill-before-ready',
+                                                      'kill-before-record', 'kill-before-settled')]
+        failures.append(('rollback-failure', 1))
+        for fault, expected in failures:
+            with self.subTest(fault=fault):
+                self.run_jxz('build', expected=expected, env=transaction_fault(fault))
+                transaction = self.root / 'target/.jxz-build'
+                self.assertTrue(transaction.is_dir())
+                if (transaction / 'old-output').exists():
+                    self.assertEqual((transaction / 'old-output').read_bytes(), before)
+                else:
+                    self.assertEqual(output.read_bytes(), before)
+                # The next invocation restores the old pair before attempting
+                # its deliberately unavailable compiler; no stale lock remains.
+                self.run_jxz('build', expected=127, env={'AETHC': '/no/such/aethc'})
+                self.assertEqual(output.read_bytes(), before)
+                self.assertEqual(record.read_bytes(), records_before)
+                self.assertFalse(transaction.exists())
+        self.run_jxz('build')
+        self.assertEqual(subprocess.run([output]).returncode, 8)
+        self.run_jxz('clean')
+
+    def test_build_lock_excludes_clean_and_other_builds(self):
+        self.manifest()
+        self.source(text='fn main() -> i32 { return 7; }')
+        self.run_jxz('build')
+        output = self.root / 'target/program'
+        before = output.read_bytes()
+        self.source(text='fn main() -> i32 { return 8; }')
+        compiler = self.root / 'waiting compiler'
+        compiler.write_text('#!' + sys.executable + '\nimport os,pathlib,sys,time\npathlib.Path("compiler-started").touch()\n'
+                            'deadline=time.monotonic()+20\nwhile not pathlib.Path("compiler-release").exists():\n'
+                            '    if time.monotonic()>deadline: sys.exit(88)\n    time.sleep(0.01)\n'
+                            'os.execv(os.environ["REAL_AETHC"],[os.environ["REAL_AETHC"],*sys.argv[1:]])\n')
+        compiler.chmod(0o755)
+        process = subprocess.Popen([JXZ, 'build'], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, env={**ENV, 'AETHC': str(compiler), 'REAL_AETHC': AETHC})
+        try:
+            deadline = time.monotonic() + 10
+            while not (self.root / 'compiler-started').exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue((self.root / 'compiler-started').exists())
+            for command in ('build', 'clean'):
+                result = self.run_jxz(command, expected=1)
+                self.assertIn('busy or cannot be locked', result.stderr)
+                self.assertEqual(output.read_bytes(), before)
+        finally:
+            (self.root / 'compiler-release').touch()
+            stdout, stderr = process.communicate(timeout=30)
+        self.assertEqual(process.returncode, 0, stdout + stderr)
+        self.assertEqual(subprocess.run([output]).returncode, 8)
+        self.run_jxz('clean')
+
+    def test_killed_build_waits_for_its_live_compiler_before_recovery(self):
+        self.manifest()
+        self.source(text='fn main() -> i32 { return 7; }')
+        self.run_jxz('build')
+        output = self.root / 'target/program'
+        record = self.root / 'target/.jxz-outputs'
+        before, records_before = output.read_bytes(), record.read_bytes()
+        self.source(text='fn main() -> i32 { return 8; }')
+        compiler = self.root / 'orphaned compiler'
+        compiler.write_text('#!' + sys.executable + '\nimport os,pathlib,sys,time\npathlib.Path("compiler-started").touch()\n'
+                            'deadline=time.monotonic()+20\nwhile not pathlib.Path("compiler-release").exists():\n'
+                            '    if time.monotonic()>deadline: sys.exit(88)\n    time.sleep(0.01)\n'
+                            'os.execv(os.environ["REAL_AETHC"],[os.environ["REAL_AETHC"],*sys.argv[1:]])\n')
+        compiler.chmod(0o755)
+        process = subprocess.Popen([JXZ, 'build'], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, env={**ENV, 'AETHC': str(compiler), 'REAL_AETHC': AETHC})
+        try:
+            deadline = time.monotonic() + 10
+            while not (self.root / 'compiler-started').exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue((self.root / 'compiler-started').exists())
+            process.kill()
+            self.assertEqual(process.wait(timeout=5), -signal.SIGKILL)
+            for command in ('build', 'clean'):
+                result = self.run_jxz(command, expected=1)
+                self.assertIn('busy or cannot be locked', result.stderr)
+                self.assertEqual(output.read_bytes(), before)
+                self.assertEqual(record.read_bytes(), records_before)
+        finally:
+            (self.root / 'compiler-release').touch()
+            # The compiler inherits these pipes as well as the lock: EOF proves
+            # it has exited before the next invocation attempts recovery.
+            process.communicate(timeout=30)
+        self.run_jxz('build', expected=127, env={'AETHC': '/no/such/aethc'})
+        self.assertEqual(output.read_bytes(), before)
+        self.assertEqual(record.read_bytes(), records_before)
+        self.assertFalse((self.root / 'target/.jxz-build').exists())
+        self.run_jxz('build')
+        self.assertEqual(subprocess.run([output]).returncode, 8)
+        self.run_jxz('clean')
+
+    def test_build_preserves_unregistered_files_and_input_aliases(self):
+        self.manifest()
+        self.source()
+        target = self.root / 'target'
+        target.mkdir()
+        output = target / 'program'
+        output.write_text('USER FILE')
+        result = self.run_jxz('build', expected=1)
+        self.assertIn('unregistered existing output', result.stdout)
+        self.assertEqual(output.read_text(), 'USER FILE')
+        output.unlink()
+        output.symlink_to('missing-user-target')
+        self.run_jxz('build', expected=1)
+        self.assertTrue(output.is_symlink())
+        output.unlink()
+        transaction = target / '.jxz-build'
+        transaction.mkdir()
+        (transaction / 'user-data').write_text('USER TRANSACTION FILE')
+        self.run_jxz('build', expected=1)
+        self.run_jxz('clean', expected=1)
+        self.assertEqual((transaction / 'user-data').read_text(), 'USER TRANSACTION FILE')
+        (transaction / 'user-data').unlink()
+        transaction.rmdir()
+        self.manifest(name='main.aeth', target='src')
+        before = (self.root / 'src/main.aeth').read_bytes()
+        result = self.run_jxz('build', expected=1)
+        self.assertIn('must not replace the input source', result.stdout)
+        self.assertEqual((self.root / 'src/main.aeth').read_bytes(), before)
+
+    def test_background_test_process_does_not_inherit_output_lock(self):
+        self.manifest()
+        self.source(path='tests/test_background.aeth', text='''extern "C" {
+    fn fork() -> i32; fn getpid() -> i32; fn close(fd: i32) -> i32;
+    fn access(path: *u8, mode: i32) -> i32; fn usleep(delay: u32) -> i32;
+    fn fopen(path: *u8, mode: *u8) -> *void; fn fclose(file: *void) -> i32;
+    fn fprintf(file: *void, format: *u8, ...) -> i32; fn _exit(code: i32);
+}
+fn main() -> i32 {
+    let pid: i32 = fork();
+    if pid < 0 { return 1; }
+    if pid == 0 {
+        close(0); close(1); close(2);
+        let file: *void = fopen("background-pid" as *u8, "wb" as *u8);
+        if file == (0 as *void) { _exit(2); return 2; }
+        fprintf(file, "%d" as *u8, getpid()); fclose(file);
+        let mut count: i32 = 0;
+        while access("background-release" as *u8, 0) != 0 && count < 2000 {
+            usleep(10000); count = count + 1;
+        }
+        _exit(0);
+    }
+    return 0;
+}''')
+        try:
+            self.run_jxz('test')
+            pidfile = self.root / 'background-pid'
+            deadline = time.monotonic() + 5
+            while not pidfile.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(pidfile.exists())
+            os.kill(int(pidfile.read_text()), 0)
+            self.run_jxz('clean')
+        finally:
+            (self.root / 'background-release').touch()
+
+    def test_legacy_owned_output_can_be_upgraded(self):
+        self.manifest()
+        self.source()
+        target = self.root / 'target'
+        target.mkdir()
+        (target / 'program').write_bytes(b'PREVIOUS OWNED OUTPUT')
+        (target / '.jxz-output-name').write_text('program')
+        self.run_jxz('build')
+        self.assertEqual((target / '.jxz-outputs').read_text(), 'program\n')
+        self.assertEqual(subprocess.run([target / 'program']).returncode, 0)
+        self.run_jxz('clean')
 
     def test_clean_rejects_incomplete_or_corrupt_ownership_records(self):
         self.manifest()

@@ -41,12 +41,14 @@ ssize_t REPLACE(write, unused)(int fd,const void *buffer,size_t size) {
 }
 pid_t REPLACE(fork, unused)(void) {
     static int calls;
+    if(mode("forbid-fork")){errno=ENOMEM;return -1;}
     if(mode("fork-failure") && ++calls==2){errno=ENOMEM;return -1;}
     return REAL(fork,pid_t(*)(void))();
 }
 static int first_pipe_descriptor=-1;
 int REPLACE(pipe, unused)(int *descriptors) {
     static int calls;
+    if(mode("forbid-pipe")){errno=EMFILE;return -1;}
     ++calls;
     if((mode("pipe-failure") && calls==2)||(mode("late-pipe-failure") && calls==4)){errno=EMFILE;return -1;}
     int result=REAL(pipe,int(*)(int*))(descriptors);

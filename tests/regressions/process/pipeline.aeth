@@ -61,9 +61,43 @@ fn consumer() -> i32 {
     23
 }
 fn empty_status() -> ExitStatus { ExitStatus { exited: false, code: 0, signal: 0, raw: 0 } }
+fn invalid_options(program: *u8) -> i32 {
+    let args: [*u8; 3] = [program, "exit127\0" as *u8, 0 as *u8];
+    let no_args: [*u8; 1] = [0 as *u8];
+    let empty_args: [*u8; 2] = ["\0" as *u8, 0 as *u8];
+    let before: i32 = descriptor_count();
+    let mut position: u64 = 0;
+    while position < 3 {
+        let mut field: u64 = 0;
+        while field < 6 {
+            let mut commands: [Command; 3] = [command_new(&args[0] as **u8), command_new(&args[0] as **u8), command_new(&args[0] as **u8)];
+            if field == 0 { commands[position].stdin_fd = -2; }
+            if field == 1 { commands[position].stdout_fd = -2; }
+            if field == 2 { commands[position].stderr_fd = -2; }
+            if field == 3 { commands[position].argv = 0 as **u8; }
+            if field == 4 { commands[position].argv = &no_args[0] as **u8; }
+            if field == 5 { commands[position].argv = &empty_args[0] as **u8; }
+            match process_spawn(&commands[position] as *Command) {
+                Result::Err(failure) => { if failure.stage != PROCESS_ARGUMENT || failure.code != EINVAL { return 50; } },
+                Result::Ok(value) => { let mut child: Child = value; child_wait(&child as *Child); return 51; },
+            }
+            let mut statuses: [ExitStatus; 3] = [empty_status(), empty_status(), empty_status()];
+            match pipeline_run(&commands[0] as *Command, 3, &statuses[0] as *ExitStatus) {
+                Result::Err(failure) => { if failure.stage != PROCESS_ARGUMENT || failure.code != EINVAL { return 52; } },
+                Result::Ok(_) => { return 53; },
+            }
+            if statuses[0].raw != 0 || statuses[1].raw != 0 || statuses[2].raw != 0 { return 54; }
+            if descriptor_count() != before || !no_children() { return 55; }
+            field = field + 1;
+        }
+        position = position + 1;
+    }
+    return 0;
+}
 fn main(argc: i32, argv: **u8) -> i32 {
     if argc < 2 { return 1; }
     let mode: *u8 = argv[1];
+    if same(mode, "invalid-options\0" as *u8) { return invalid_options(argv[0]); }
     if same(mode, "write-zero\0" as *u8) {
         match fd_write_all(1,"x\0" as *u8,1) {Result::Err(code)=>{if code==EIO{return 0;}return 90;},Result::Ok(_)=>{return 91;},}
     }

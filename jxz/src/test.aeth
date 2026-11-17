@@ -2,8 +2,10 @@
 // execution, status aggregation and resource ownership are AetherLang code.
 use config::{Config, config_load, config_free};
 use process::{process_run};
-use path::{path_join, make_directories, directory_exists};
+use path::{path_join, make_directories};
+use posix::ENOENT;
 use build::{compile_source};
+use output::{output_lock, output_unlock, output_recover};
 extern "C" {
     fn fopen(path: *u8, mode: *u8) -> *void;
     fn fclose(file: *void) -> i32;
@@ -14,6 +16,9 @@ extern "C" {
     fn free(ptr: *void);
     fn remove(path: *u8) -> i32;
     fn puts(s: *u8) -> i32;
+    fn opendir(path: *u8) -> *void;
+    fn closedir(directory: *void) -> i32;
+    fn perror(path: *u8);
 }
 
 fn test_discover(list: *u8) -> i32 {
@@ -23,7 +28,7 @@ fn test_discover(list: *u8) -> i32 {
     return process_run(&args[0] as **u8, list);
 }
 
-fn test_execute(cfg: *Config, file: *void, executable: *u8) -> i32 {
+fn test_execute(cfg: *Config, file: *void, executable: *u8, lock: *void) -> i32 {
     let mut capacity: u64 = 256;
     let mut path: *u8 = malloc(capacity) as *u8;
     if path == (0 as *u8) { return 1; }
@@ -45,7 +50,7 @@ fn test_execute(cfg: *Config, file: *void, executable: *u8) -> i32 {
                 puts(path);
                 // Never run a previous executable after a compile/link error.
                 remove(executable);
-                let compiled: i32 = compile_source(cfg, path, executable, false);
+                let compiled: i32 = compile_source(cfg, path, executable, false, lock);
                 if compiled == 0 {
                     let mut args: [*u8; 2] = [executable, 0 as *u8];
                     if process_run(&args[0] as **u8, 0 as *u8) != 0 { failed = true; }
@@ -68,12 +73,23 @@ pub fn run_tests() -> i32 {
     let mut cfg: Config = config_load();
     let mut status: i32 = 1;
     if cfg.valid {
-        if !directory_exists("tests\0" as *u8) {
-            puts("jxz: no tests directory\0" as *u8);
+        let directory: *void = opendir("tests\0" as *u8);
+        if directory == (0 as *void) {
+            let missing: bool = __errno_get() == ENOENT;
+            if missing { puts("jxz: no tests directory\0" as *u8); }
+            else { perror("jxz: cannot open tests directory\0" as *u8); }
             config_free(&cfg as *Config);
-            return 0;
+            return if missing { 0 } else { 1 };
+        }
+        if closedir(directory) != 0 {
+            perror("jxz: cannot close tests directory\0" as *u8);
+            config_free(&cfg as *Config);
+            return 1;
         }
         if make_directories(cfg.target_dir) {
+            let lock: *void = output_lock(cfg.target_dir);
+            if lock == (0 as *void) { config_free(&cfg as *Config); return 1; }
+            if !output_recover(cfg.target_dir) { output_unlock(lock); config_free(&cfg as *Config); return 1; }
             let list: *u8 = path_join(cfg.target_dir, ".jxz-test-list\0" as *u8);
             let output: *u8 = path_join(cfg.target_dir, ".jxz-test\0" as *u8);
             let mut executable: *u8 = output;
@@ -84,15 +100,16 @@ pub fn run_tests() -> i32 {
                 if test_discover(list) == 0 {
                     let file: *void = fopen(list, "rb\0" as *u8);
                     if file != (0 as *void) {
-                        status = test_execute(&cfg as *Config, file, executable);
+                        status = test_execute(&cfg as *Config, file, executable, lock);
                         if fclose(file) != 0 { status = 1; }
                     }
-                }
+                } else { puts("jxz: test discovery failed\0" as *u8); }
             }
             if list != (0 as *u8) { remove(list); }
             free(list as *void);
             if executable != output { free(executable as *void); }
             free(output as *void);
+            if !output_unlock(lock) { status = 1; }
         }
     }
     config_free(&cfg as *Config);

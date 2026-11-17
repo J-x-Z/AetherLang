@@ -1,0 +1,254 @@
+// Build publication and crash recovery. Callers hold the target directory lock
+// throughout prepare/compile/publish or clean; flock is released on process exit.
+use path::path_join;
+use config::package_name_valid;
+use posix::{ENOENT, F_SETFD, FD_CLOEXEC, LOCK_EX, LOCK_NB};
+extern "C" {
+    fn opendir(path: *u8) -> *void; fn closedir(directory: *void) -> i32;
+    fn dirfd(directory: *void) -> i32; fn flock(descriptor: i32, operation: i32) -> i32;
+    fn fcntl(descriptor: i32, operation: i32, ...) -> i32;
+    fn fopen(path: *u8, mode: *u8) -> *void; fn fclose(file: *void) -> i32;
+    fn fgetc(file: *void) -> i32; fn fputc(byte: i32, file: *void) -> i32;
+    fn fputs(text: *u8, file: *void) -> i32; fn ferror(file: *void) -> i32;
+    fn mkdir(path: *u8, mode: u32) -> i32; fn rmdir(path: *u8) -> i32;
+    fn access(path: *u8, mode: i32) -> i32; fn readlink(path: *u8, buffer: *u8, size: u64) -> i64;
+    fn link(old: *u8, new: *u8) -> i32; fn rename(old: *u8, new: *u8) -> i32;
+    fn symlink(target: *u8, path: *u8) -> i32;
+    fn remove(path: *u8) -> i32; fn free(pointer: *void);
+    fn strcmp(a: *u8, b: *u8) -> i32; fn puts(text: *u8) -> i32; fn perror(text: *u8);
+}
+
+pub struct Publication {
+    directory: *u8, stage: *u8, output: *u8, record: *u8,
+    pub staged: *u8, records: *u8, old_output: *u8, old_record: *u8,
+    owner: *u8, journal: *u8, ready: *u8, settled: *u8,
+    pub valid: bool,
+}
+
+pub fn output_lock(directory: *u8) -> *void {
+    let handle: *void = opendir(directory);
+    if handle == (0 as *void) { perror("jxz: cannot open target directory\0" as *u8); return handle; }
+    let descriptor: i32 = dirfd(handle);
+    if descriptor < 0 || fcntl(descriptor, F_SETFD, FD_CLOEXEC) != 0 || flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+        perror("jxz: target directory is busy or cannot be locked\0" as *u8);
+        closedir(handle); return 0 as *void;
+    }
+    return handle;
+}
+pub fn output_unlock(handle: *void) -> bool { return closedir(handle) == 0; }
+pub fn output_compiler_inherits(handle: *void, inherit: bool) -> bool {
+    // Only compiler/linker children retain the lock after exec. If JXZ is
+    // killed, recovery waits for these writers; user programs never inherit it.
+    let descriptor: i32 = dirfd(handle);
+    let flags: i32 = if inherit { 0 } else { FD_CLOEXEC };
+    return descriptor >= 0 && fcntl(descriptor, F_SETFD, flags) == 0;
+}
+
+// Inspect the directory entry as well as its target: an unowned dangling
+// symlink must not be mistaken for a free output pathname.
+fn presence(path: *u8) -> i32 {
+    let mut byte: u8 = 0;
+    if readlink(path, &byte as *u8, 1) >= 0 { return 1; }
+    if access(path, 0) == 0 { return 1; }
+    return if __errno_get() == ENOENT { 0 } else { -1 };
+}
+fn remove_owned(path: *u8) -> bool {
+    if remove(path) == 0 { return true; }
+    return __errno_get() == ENOENT;
+}
+fn paths(directory: *u8, name: *u8) -> Publication {
+    let stage: *u8 = path_join(directory, ".jxz-build\0" as *u8);
+    let mut transaction: Publication = Publication {
+        directory: directory, stage: stage, output: 0 as *u8,
+        record: path_join(directory, ".jxz-outputs\0" as *u8),
+        staged: 0 as *u8, records: 0 as *u8, old_output: 0 as *u8, old_record: 0 as *u8,
+        owner: 0 as *u8, journal: 0 as *u8, ready: 0 as *u8, settled: 0 as *u8, valid: false,
+    };
+    if name != (0 as *u8) { transaction.output = path_join(directory, name); }
+    if stage != (0 as *u8) {
+        transaction.staged = path_join(stage, "program\0" as *u8);
+        transaction.records = path_join(stage, "records\0" as *u8);
+        transaction.old_output = path_join(stage, "old-output\0" as *u8);
+        transaction.old_record = path_join(stage, "old-records\0" as *u8);
+        transaction.owner = path_join(stage, "owner\0" as *u8);
+        transaction.journal = path_join(stage, "journal\0" as *u8);
+        transaction.ready = path_join(stage, "ready\0" as *u8);
+        transaction.settled = path_join(stage, "settled\0" as *u8);
+    }
+    transaction.valid = transaction.record != (0 as *u8) && transaction.staged != (0 as *u8) && transaction.records != (0 as *u8) && transaction.old_output != (0 as *u8) && transaction.old_record != (0 as *u8) && transaction.owner != (0 as *u8) && transaction.journal != (0 as *u8) && transaction.ready != (0 as *u8) && transaction.settled != (0 as *u8);
+    return transaction;
+}
+pub fn publication_free(transaction: *Publication) {
+    free(transaction.stage as *void); free(transaction.output as *void); free(transaction.record as *void);
+    free(transaction.staged as *void); free(transaction.records as *void);
+    free(transaction.old_output as *void); free(transaction.old_record as *void);
+    free(transaction.owner as *void); free(transaction.journal as *void);
+    free(transaction.ready as *void); free(transaction.settled as *void);
+    transaction.valid = false;
+}
+fn cleanup(transaction: *Publication) -> bool {
+    // Keep recovery markers until all data/backup cleanup has succeeded.
+    let entries: [*u8; 8] = [transaction.staged, transaction.records, transaction.old_output, transaction.old_record,
+        transaction.ready, transaction.settled, transaction.journal, transaction.owner];
+    let mut index: u64 = 0;
+    while index < 8 { if !remove_owned(entries[index]) { return false; } index = index + 1; }
+    return rmdir(transaction.stage) == 0;
+}
+fn marker_valid(path: *u8, expected: *u8) -> bool {
+    let mut text: [u8; 65] = [0; 65];
+    let length: i64 = readlink(path, &text[0] as *u8, 64);
+    if length <= 0 || length >= 64 { return false; }
+    text[length as u64] = 0;
+    return strcmp(&text[0] as *u8, expected) == 0;
+}
+fn journal_read(transaction: *Publication, name: *u8, had_output: *bool, had_record: *bool) -> bool {
+    let file: *void = fopen(transaction.journal, "rb\0" as *u8);
+    if file == (0 as *void) { return false; }
+    let first: i32 = fgetc(file); let second: i32 = fgetc(file); let newline: i32 = fgetc(file);
+    let mut ok: bool = (first == 48 || first == 49) && (second == 48 || second == 49) && newline == 10;
+    *had_output = first == 49; *had_record = second == 49;
+    let mut length: u64 = 0; let mut byte: i32 = fgetc(file);
+    while byte >= 0 && byte != 10 && length < 256 { name[length] = byte as u8; length = length + 1; byte = fgetc(file); }
+    name[length] = 0;
+    if byte != 10 || !package_name_valid(name) || fgetc(file) >= 0 || ferror(file) != 0 { ok = false; }
+    if fclose(file) != 0 { ok = false; }
+    return ok;
+}
+fn restore_backup(backup: *u8, destination: *u8, temporary: *u8) -> bool {
+    // Preserve the backup itself, so a second recovery attempt is safe even if
+    // another restore/rename fails after this one has succeeded.
+    if !remove_owned(temporary) || link(backup, temporary) != 0 { return false; }
+    return rename(temporary, destination) == 0;
+}
+pub fn output_recover(directory: *u8) -> bool {
+    let mut transaction: Publication = paths(directory, 0 as *u8);
+    if !transaction.valid { publication_free(&transaction as *Publication); return false; }
+    let exists: i32 = presence(transaction.stage);
+    if exists == 0 { publication_free(&transaction as *Publication); return true; }
+    let mut ok: bool = exists == 1;
+    if ok && !marker_valid(transaction.owner, "JXZ-BUILD-1\0" as *u8) {
+        // A crash immediately after mkdir can leave only an empty directory.
+        // Never recursively delete an unrecognized directory or user contents.
+        ok = rmdir(transaction.stage) == 0;
+        publication_free(&transaction as *Publication);
+        if !ok { puts("jxz: unrecognized build transaction; preserving its files\0" as *u8); }
+        return ok;
+    }
+    let ready: i32 = presence(transaction.ready); let settled: i32 = presence(transaction.settled);
+    if ready < 0 || settled < 0 { ok = false; }
+    if ready == 1 && !marker_valid(transaction.ready, "JXZ-BUILD-READY\0" as *u8) { ok = false; }
+    if settled == 1 && !marker_valid(transaction.settled, "JXZ-BUILD-SETTLED\0" as *u8) { ok = false; }
+    if ok && ready == 1 && settled == 0 {
+        let mut name: [u8; 257] = [0; 257]; let mut had_output: bool = false; let mut had_record: bool = false;
+        ok = journal_read(&transaction as *Publication, &name[0] as *u8, &had_output as *bool, &had_record as *bool);
+        if ok {
+            transaction.output = path_join(directory, &name[0] as *u8);
+            if transaction.output == (0 as *u8) { ok = false; }
+            else {
+                if had_output { ok = restore_backup(transaction.old_output, transaction.output, transaction.staged); }
+                else { ok = remove_owned(transaction.output); }
+                if ok {
+                    if had_record { ok = restore_backup(transaction.old_record, transaction.record, transaction.records); }
+                    else { ok = remove_owned(transaction.record); }
+                }
+            }
+        }
+        // A completed rollback is also settled. Mark it before deleting any
+        // backup, so cleanup can safely resume after another interruption.
+        if ok && symlink("JXZ-BUILD-SETTLED\0" as *u8, transaction.settled) != 0 { ok = false; }
+    }
+    if ok { ok = cleanup(&transaction as *Publication); }
+    if !ok { puts("jxz: build recovery pending; preserving transaction and backups\0" as *u8); }
+    publication_free(&transaction as *Publication);
+    return ok;
+}
+
+fn copy_records(input: *void, output: *void, current: *u8, found: *bool) -> bool {
+    let mut name: [u8; 257] = [0; 257]; let mut length: u64 = 0; let mut byte: i32 = fgetc(input);
+    while byte >= 0 {
+        if byte == 10 {
+            name[length] = 0; if !package_name_valid(&name[0] as *u8) { return false; }
+            if strcmp(&name[0] as *u8, current) == 0 { *found = true; }
+            length = 0;
+        } else { if length >= 255 || byte == 0 { return false; } name[length] = byte as u8; length = length + 1; }
+        if fputc(byte, output) < 0 { return false; }
+        byte = fgetc(input);
+    }
+    return length == 0 && ferror(input) == 0;
+}
+fn legacy_owner(directory: *u8, current: *u8) -> i32 {
+    let path: *u8 = path_join(directory, ".jxz-output-name\0" as *u8);
+    if path == (0 as *u8) { return -1; }
+    let exists: i32 = presence(path);
+    if exists != 1 { free(path as *void); return exists; }
+    let file: *void = fopen(path, "rb\0" as *u8); free(path as *void);
+    if file == (0 as *void) { return -1; }
+    let mut name: [u8; 257] = [0; 257]; let mut length: u64 = 0; let mut byte: i32 = fgetc(file);
+    while byte >= 0 && byte != 10 && length < 256 { name[length] = byte as u8; length = length + 1; byte = fgetc(file); }
+    name[length] = 0;
+    if byte == 10 { byte = fgetc(file); }
+    let mut ok: bool = byte < 0 && ferror(file) == 0 && package_name_valid(&name[0] as *u8);
+    if fclose(file) != 0 { ok = false; }
+    if !ok { return -1; }
+    return if strcmp(&name[0] as *u8, current) == 0 { 1 } else { 0 };
+}
+fn prepare(transaction: *Publication, name: *u8) -> bool {
+    // Atomic marker creation avoids a half-written ownership marker after
+    // SIGKILL. Before this syscall the new directory is empty and recoverable.
+    if symlink("JXZ-BUILD-1\0" as *u8, transaction.owner) != 0 { return false; }
+    let mut ok: bool = true;
+    let output: *void = fopen(transaction.records, "wx\0" as *u8);
+    if output == (0 as *void) { return false; }
+    let mut found: bool = false;
+    let had_record: i32 = presence(transaction.record);
+    if had_record < 0 { ok = false; }
+    if had_record == 1 {
+        let input: *void = fopen(transaction.record, "rb\0" as *u8);
+        if input == (0 as *void) { ok = false; }
+        else { ok = copy_records(input, output, name, &found as *bool); if fclose(input) != 0 { ok = false; } }
+    }
+    if ok && !found { if fputs(name, output) < 0 || fputc(10, output) < 0 { ok = false; } }
+    if fclose(output) != 0 { ok = false; }
+    if !ok { return false; }
+    let had_output: i32 = presence(transaction.output);
+    if had_output < 0 { return false; }
+    if had_output == 1 && !found {
+        if legacy_owner(transaction.directory, name) != 1 {
+            puts("jxz: refusing to overwrite an unregistered existing output\0" as *u8); return false;
+        }
+    }
+    if had_output == 1 && link(transaction.output, transaction.old_output) != 0 { return false; }
+    if had_record == 1 && link(transaction.record, transaction.old_record) != 0 { return false; }
+    let journal: *void = fopen(transaction.journal, "wx\0" as *u8);
+    if journal == (0 as *void) { return false; }
+    ok = fputc(if had_output == 1 { 49 } else { 48 }, journal) >= 0;
+    if fputc(if had_record == 1 { 49 } else { 48 }, journal) < 0 || fputc(10, journal) < 0 || fputs(name, journal) < 0 || fputc(10, journal) < 0 { ok = false; }
+    if fclose(journal) != 0 { ok = false; }
+    return ok && symlink("JXZ-BUILD-READY\0" as *u8, transaction.ready) == 0;
+}
+pub fn publication_prepare(directory: *u8, name: *u8) -> Publication {
+    let mut transaction: Publication = paths(directory, name);
+    if !transaction.valid || transaction.output == (0 as *u8) { transaction.valid = false; return transaction; }
+    transaction.valid = output_recover(directory);
+    if !transaction.valid { return transaction; }
+    let legacy_temporary: *u8 = path_join(directory, ".jxz-outputs.tmp\0" as *u8);
+    if legacy_temporary == (0 as *u8) { transaction.valid = false; return transaction; }
+    let blocked: bool = presence(legacy_temporary) != 0;
+    free(legacy_temporary as *void);
+    if blocked { puts("jxz: legacy output record temporary exists; run clean or resolve it first\0" as *u8); transaction.valid = false; return transaction; }
+    if mkdir(transaction.stage, 448) != 0 { perror(transaction.stage); transaction.valid = false; return transaction; }
+    transaction.valid = prepare(&transaction as *Publication, name);
+    if !transaction.valid {
+        puts("jxz: cannot prepare build publication; previous outputs unchanged\0" as *u8);
+        if !cleanup(&transaction as *Publication) { puts("jxz: incomplete transaction preserved\0" as *u8); }
+    }
+    return transaction;
+}
+pub fn publication_publish(transaction: *Publication) -> bool {
+    if rename(transaction.staged, transaction.output) != 0 || rename(transaction.records, transaction.record) != 0 || symlink("JXZ-BUILD-SETTLED\0" as *u8, transaction.settled) != 0 {
+        perror("jxz: cannot publish build; restoring previous output\0" as *u8);
+        output_recover(transaction.directory);
+        return false;
+    }
+    return cleanup(transaction);
+}

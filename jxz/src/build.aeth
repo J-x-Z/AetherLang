@@ -2,6 +2,8 @@
 use config::{Config, config_load, config_free, package_name_valid};
 use process::{process_run, environment_tool};
 use path::{path_join, make_directories};
+use output::{Publication, output_lock, output_unlock, output_compiler_inherits, output_recover, publication_prepare, publication_publish, publication_free};
+use posix::ENOENT;
 
 extern "C" {
     fn malloc(size: u64) -> *void;
@@ -20,6 +22,7 @@ extern "C" {
     fn rename(old_path: *u8, new_path: *u8) -> i32;
     fn ferror(file: *void) -> i32;
     fn strlen(s: *u8) -> u64;
+    fn realpath(path: *u8, resolved: *u8) -> *u8;
 }
 
 // Option/response-file-looking relative paths need an owned ./ prefix. Other
@@ -47,7 +50,7 @@ fn compiler_args_free(cfg: *Config, args: **u8) {
     free(args as *void);
 }
 
-pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool) -> i32 {
+pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool, lock: *void) -> i32 {
     let compiler: *u8 = environment_tool("AETHC\0" as *u8, "aethc\0" as *u8);
     let backend: *u8 = environment_tool("AETHER_BACKEND\0" as *u8, "\0" as *u8);
     let mut optimization: *u8 = "0\0" as *u8;
@@ -83,13 +86,17 @@ pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool) -> 
         count = count + 2;
     }
     args[count] = "--\0" as *u8; args[count + 1] = source;
-    let status: i32 = process_run(args, 0 as *u8);
+    if !output_compiler_inherits(lock, true) { compiler_args_free(cfg, args); return 1; }
+    let mut status: i32 = process_run(args, 0 as *u8);
+    if !output_compiler_inherits(lock, false) { status = 1; }
     compiler_args_free(cfg, args);
     return status;
 }
 
 pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
     if !make_directories(cfg.target_dir) { return 1; }
+    let lock: *void = output_lock(cfg.target_dir);
+    if lock == (0 as *void) { return 1; }
     let output: *u8 = path_join(cfg.target_dir, cfg.name);
     let mut source: *u8 = cfg.main_file;
     let mut owns_source: bool = false;
@@ -99,15 +106,25 @@ pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
     }
     let mut status: i32 = 1;
     if source != (0 as *u8) && output != (0 as *u8) {
-        puts("jxz: compiling\0" as *u8);
-        puts(source);
-        status = compile_source(cfg, source, output, release);
-        if status == 0 {
-            if !record_output(cfg.target_dir, cfg.name) { status = 1; }
+        let resolved_source: *u8 = realpath(source, 0 as *u8);
+        let resolved_output: *u8 = realpath(output, 0 as *u8);
+        let same_source: bool = resolved_source != (0 as *u8) && resolved_output != (0 as *u8) && strcmp(resolved_source, resolved_output) == 0;
+        free(resolved_source as *void); free(resolved_output as *void);
+        if same_source { puts("jxz: output must not replace the input source\0" as *u8); }
+        else {
+            let mut transaction: Publication = publication_prepare(cfg.target_dir, cfg.name);
+            if transaction.valid {
+                puts("jxz: compiling\0" as *u8); puts(source);
+                status = compile_source(cfg, source, transaction.staged, release, lock);
+                if status == 0 { if !publication_publish(&transaction as *Publication) { status = 1; } }
+                else { output_recover(cfg.target_dir); }
+            }
+            publication_free(&transaction as *Publication);
         }
     }
     if owns_source { free(source as *void); }
     free(output as *void);
+    if !output_unlock(lock) { status = 1; }
     return status;
 }
 
@@ -144,60 +161,6 @@ pub fn run_project(argc: i32, argv: **u8) -> i32 {
     }
     config_free(&cfg as *Config);
     return status;
-}
-
-fn copy_owned_records(input: *void, output: *void, current: *u8, found: *bool) -> bool {
-    let mut name: [u8; 257] = [0; 257];
-    let mut length: u64 = 0;
-    let mut byte: i32 = fgetc(input);
-    while byte >= 0 {
-        if byte == 10 {
-            name[length] = 0;
-            if !package_name_valid(&name[0] as *u8) { return false; }
-            if strcmp(&name[0] as *u8, current) == 0 { *found = true; }
-            length = 0;
-        } else {
-            if length >= 255 || byte == 0 { return false; }
-            name[length] = byte as u8;
-            length = length + 1;
-        }
-        if fputc(byte, output) < 0 { return false; }
-        byte = fgetc(input);
-    }
-    return length == 0 && ferror(input) == 0;
-}
-
-fn record_output(directory: *u8, name: *u8) -> bool {
-    let path: *u8 = path_join(directory, ".jxz-outputs\0" as *u8);
-    let temporary: *u8 = path_join(directory, ".jxz-outputs.tmp\0" as *u8);
-    if path == (0 as *u8) || temporary == (0 as *u8) {
-        free(path as *void); free(temporary as *void); return false;
-    }
-    // Never append after a partial write: validate and atomically replace the
-    // complete collection. Exclusive creation also prevents concurrent writers.
-    let output: *void = fopen(temporary, "wx\0" as *u8);
-    if output == (0 as *void) {
-        perror(temporary); free(path as *void); free(temporary as *void); return false;
-    }
-    let mut ok: bool = true;
-    let mut found: bool = false;
-    if access(path, 0) == 0 {
-        let input: *void = fopen(path, "rb\0" as *u8);
-        if input == (0 as *void) { ok = false; }
-        else {
-            ok = copy_owned_records(input, output, name, &found as *bool);
-            if fclose(input) != 0 { ok = false; }
-        }
-    }
-    if ok && !found {
-        if fputs(name, output) < 0 { ok = false; }
-        if fputc(10, output) < 0 { ok = false; }
-    }
-    if fclose(output) != 0 { ok = false; }
-    if ok { if rename(temporary, path) != 0 { ok = false; } }
-    if !ok { remove(temporary); puts("jxz: could not update build output records\0" as *u8); }
-    free(path as *void); free(temporary as *void);
-    return ok;
 }
 
 fn clean_owned_record(directory: *u8, filename: *u8, legacy: bool) -> bool {
@@ -253,6 +216,14 @@ pub fn clean_project() -> i32 {
     let mut cfg: Config = config_load();
     let mut status: i32 = 1;
     if cfg.valid {
+        if access(cfg.target_dir, 0) != 0 {
+            let missing: bool = __errno_get() == ENOENT;
+            config_free(&cfg as *Config);
+            return if missing { 0 } else { 1 };
+        }
+        let lock: *void = output_lock(cfg.target_dir);
+        if lock == (0 as *void) { config_free(&cfg as *Config); return 1; }
+        if !output_recover(cfg.target_dir) { output_unlock(lock); config_free(&cfg as *Config); return 1; }
         status = 0;
         if !clean_owned_record(cfg.target_dir, ".jxz-outputs\0" as *u8, false) { status = 1; }
         if !clean_owned_record(cfg.target_dir, ".jxz-output-name\0" as *u8, true) { status = 1; }
@@ -261,6 +232,7 @@ pub fn clean_project() -> i32 {
         if !clean_file(cfg.target_dir, ".jxz-test-list\0" as *u8) { status = 1; }
         // Only remove an empty directory: unrelated files and source C survive.
         rmdir(cfg.target_dir);
+        if !output_unlock(lock) { status = 1; }
     }
     config_free(&cfg as *Config);
     return status;
