@@ -562,7 +562,8 @@ impl Parser {
         let name = self.parse_ident()?;
         self.expect(TokenKind::Colon)?;
 
-        let ownership = if self.consume(&TokenKind::Own) {
+        let explicit_own = self.consume(&TokenKind::Own);
+        let ownership = if explicit_own {
             Ownership::Own
         } else if self.consume(&TokenKind::Ref) {
             Ownership::Ref
@@ -573,6 +574,7 @@ impl Parser {
         };
 
         let ty = self.parse_type()?;
+        let ty = if explicit_own { Type::Owned { inner: Box::new(ty), ownership: Ownership::Own, span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span) } } else { ty };
 
         Ok(Param {
             name,

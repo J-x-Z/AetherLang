@@ -1,0 +1,17 @@
+// Opt-in affine descriptor operations. Obtain an owner with an explicit unsafe
+// adoption: `raw_descriptor as own Descriptor`. Adoption transfers the unique
+// raw descriptor; do not use its old manual aliases afterwards. Ownership does
+// not imply automatic cleanup: call owned_fd_close on every successful path.
+use fd::{Descriptor, fd_close};
+use result::Result;
+
+pub fn owned_fd_number(descriptor: &own Descriptor) -> i32 {
+    descriptor.value
+}
+
+// Consumes the owner even if close reports an error: retrying close can close a
+// newly reused number. The raw fd implementation invalidates before the syscall.
+pub fn owned_fd_close(descriptor: own Descriptor) -> Result<(), i32> {
+    let mut raw: Descriptor = unsafe { descriptor as Descriptor };
+    fd_close(&mut raw as *Descriptor)
+}

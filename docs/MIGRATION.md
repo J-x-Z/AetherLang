@@ -147,3 +147,33 @@ behavior are no longer emitted. Use an explicit diagnostic and `exit(code)`
 when an application requires a particular message or process status.
 `atof` and `strcmp` carry the `read` effect because they inspect pointed-to
 memory; wrappers must include it when declaring an explicit effect bound.
+
+## Explicit affine resource values (first stage)
+
+`own Descriptor` now retains a distinct canonical type. A by-value assignment,
+argument, or return moves the owner; later reads of the old binding fail with
+`E2301`, including paths on which only one branch moved it. `&own Descriptor`
+borrows without transferring ownership. Moving while a live reference still
+uses the owner is rejected. A mutable slot may be reused after its previous
+owner has been consumed on every incoming path.
+
+Adopting a manual value requires an explicit `unsafe` conversion of the same
+nominal payload: `unsafe { raw as own Descriptor }`. This is a transfer contract:
+the caller must already own the raw resource uniquely and must not subsequently
+use aliases retained by the old manual representation. Conversion back to
+`Descriptor` likewise requires `unsafe` and consumes the affine value. Ordinary
+raw pointers and ordinary `Descriptor`, `Vec`, `Tensor`, or `QuantumLease` APIs
+retain their existing manual lifetime contracts.
+
+`owned_fd::owned_fd_number(&descriptor)` borrows its numeric descriptor;
+`owned_fd::owned_fd_close(descriptor)` consumes and explicitly closes it, even
+when close reports an error. There is **no implicit destructor or scope cleanup**
+yet: abandoned affine values can leak. Close every successfully acquired owner
+on the paths that finish using it; returning it transfers that responsibility.
+
+This first stage accepts named struct payloads without reference or owner fields.
+Owner values inside arrays, tuples, records, enum payloads, globals, raw-pointer
+storage, C ABI signatures, pattern matches, and contract snapshots are rejected
+with `E2405` until their move and cleanup rules are implemented. References to
+owners may be borrowed in ordinary language functions. The old `shared T`
+placeholder is now rejected rather than being treated as an ordinary copy.

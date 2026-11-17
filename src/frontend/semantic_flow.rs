@@ -148,6 +148,8 @@ impl Initialization {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Slot {
+    // May still own a resource on some incoming path, distinct from definite initialization.
+    owned_live: bool,
     initialized: Initialization,
     written: Initialization,
     value: Value,
@@ -287,6 +289,7 @@ impl<'a> Flow<'a> {
                 .clone()
                 .ok_or_else(|| self.error("impl Self type", ty.span())),
             Type::Pointer(inner, _) => Ok(ResolvedType::Pointer(Box::new(self.resolve(inner)?))),
+            Type::Owned { inner, .. } => Ok(ResolvedType::Owned(Box::new(self.resolve(inner)?))),
             Type::Ref { mutable, inner, .. } => Ok(ResolvedType::Reference {
                 mutable: *mutable,
                 inner: Box::new(self.resolve(inner)?),
@@ -392,6 +395,7 @@ impl<'a> Flow<'a> {
         self.state.slots.insert(
             id,
             Slot {
+                owned_live: value.is_some() && matches!(ty.unqualified(), ResolvedType::Owned(_)),
                 initialized: Initialization::new(value.is_some()),
                 written: Initialization::new(value.is_some()),
                 value: {
@@ -410,6 +414,7 @@ impl<'a> Flow<'a> {
             .find_map(|scope| scope.get(name).copied())
     }
     fn fields(&self, ty: &ResolvedType) -> Vec<(String, ResolvedType)> {
+        if let ResolvedType::Owned(inner) = ty.unqualified() { return self.fields(inner); }
         if let ResolvedType::Struct { name, fields } = ty.unqualified() {
             if let Some(Symbol {
                 kind: SymbolKind::Struct { fields, .. },
@@ -425,6 +430,7 @@ impl<'a> Flow<'a> {
         }
     }
     fn child_type(&self, ty: &ResolvedType, projection: &Projection) -> ResolvedType {
+        if let ResolvedType::Owned(inner) = ty.unqualified() { return self.child_type(inner, projection); }
         let qualified = matches!(ty, ResolvedType::Volatile(_));
         let result = match (ty.unqualified(), projection) {
             (_, Projection::Reachable(region)) => region.ty.clone(),
@@ -650,7 +656,11 @@ impl<'a> Flow<'a> {
         Ok(value)
     }
     fn read_one(&mut self, address: &Address, consume: bool, span: Span) -> Result<Value> {
-        self.access(address, false, span)?;
+        let owned = matches!(address.ty.unqualified(), ResolvedType::Owned(_));
+        if self.validate && consume && owned && (!matches!(address.place.root, Root::Local(_)) || !address.place.path.is_empty() || !address.permits.is_empty()) {
+            return Err(Error::semantic_expected("E2405", "move from a direct owned binding, not borrowed or projected storage", span));
+        }
+        self.access(address, consume && owned, span)?;
         let mut value = match address.place.root {
             Root::Local(id) => {
                 let slot = self
@@ -658,6 +668,9 @@ impl<'a> Flow<'a> {
                     .slots
                     .get(&id)
                     .ok_or_else(|| self.error("reference to live local storage", span))?;
+                if self.validate && matches!(self.bindings[id].ty.unqualified(), ResolvedType::Owned(_)) && !slot.initialized.default {
+                    return Err(Error::semantic_expected("E2301", format!("'{}' definitely initialized before use (it may be uninitialized or moved)", self.bindings[id].name), span));
+                }
                 let init = slot.initialized.at(&address.place.path);
                 let ready = if let Some(index) = address
                     .place
@@ -682,8 +695,9 @@ impl<'a> Flow<'a> {
                 let mut value =
                     self.project_value(&slot.value, &address.place.path, address.ty.clone());
                 value.holders.insert(id);
-                if consume && value.references.iter().any(|reference| reference.mutable) {
+                if consume && (owned || value.references.iter().any(|reference| reference.mutable)) {
                     let slot = self.state.slots.get_mut(&id).unwrap();
+                    if owned { slot.owned_live = false; }
                     slot.initialized.set(&address.place.path, false);
                     slot.value
                         .references
@@ -862,6 +876,15 @@ impl<'a> Flow<'a> {
         definite: bool,
         span: Span,
     ) -> Result<()> {
+        if self.validate && matches!(address.ty.unqualified(), ResolvedType::Owned(_)) {
+            let Root::Local(id) = address.place.root else { return Err(Error::semantic_expected("E2405", "owned assignment to a direct local binding", span)); };
+            if !address.place.path.is_empty() || !address.permits.is_empty() {
+                return Err(Error::semantic_expected("E2405", "owned assignment to a direct local binding", span));
+            }
+            if self.state.slots.get(&id).is_some_and(|slot| slot.owned_live) {
+                return Err(Error::semantic_expected("E2405", "consume the previous owned value before replacing it", span));
+            }
+        }
         value.ty = address.ty.clone();
         for reference in &mut value.references {
             Self::normalize_reference(reference);
@@ -897,6 +920,7 @@ impl<'a> Flow<'a> {
                         slot.initialized.set(&address.place.path, true);
                     }
                     slot.written.set(&address.place.path, true);
+                    if matches!(address.ty.unqualified(), ResolvedType::Owned(_)) { slot.owned_live = true; }
                     Self::replace_references(
                         &mut slot.value,
                         &address.place.path,
@@ -954,6 +978,7 @@ impl<'a> Flow<'a> {
                 if let Some(other) = state.slots.get(id) {
                     slot.initialized = slot.initialized.meet(&other.initialized);
                     slot.written = slot.written.join(&other.written);
+                    slot.owned_live |= other.owned_live;
                     Self::union_value(&mut slot.value, &other.value);
                     true
                 } else {
@@ -1311,6 +1336,9 @@ impl<'a> Flow<'a> {
             self.writable(&alternate, span)?;
         }
         if let Root::Local(id) = address.place.root {
+            if self.validate && !address.place.path.is_empty() && matches!(self.bindings[id].ty.unqualified(), ResolvedType::Owned(_)) && self.state.slots.get(&id).is_some_and(|slot| !slot.initialized.default) {
+                return Err(Error::semantic_expected("E2301", "initialized owner before accessing its fields", span));
+            }
             if self.validate && address.permits.is_empty() && !self.bindings[id].mutable {
                 if let Some(slot) = self.state.slots.get(&id) {
                     let path = if let Some(index) = address
@@ -1363,7 +1391,7 @@ impl<'a> Flow<'a> {
 
     fn value_aggregate(&self, expression: &Expr) -> bool {
         !self.has_storage(expression) && self.projection_type(expression)
-            .is_some_and(|ty| matches!(ty.unqualified(), ResolvedType::Tuple(_) | ResolvedType::Struct { .. } | ResolvedType::Array { .. }))
+            .is_some_and(|ty| matches!(ty.unqualified(), ResolvedType::Tuple(_) | ResolvedType::Struct { .. } | ResolvedType::Array { .. } | ResolvedType::Owned(_)))
     }
 
     fn expr(
@@ -1405,6 +1433,9 @@ impl<'a> Flow<'a> {
                 let Some(address) = self.address(expression, live)? else {
                     return Ok(None);
                 };
+                if self.validate && consume && matches!(address.ty.unqualified(), ResolvedType::Owned(_)) && !matches!(expression, Expr::Ident(_)) {
+                    return Err(Error::semantic_expected("E2405", "move from a direct owned binding, not borrowed or projected storage", expression.span()));
+                }
                 self.read(&address, consume, expression.span())?
             }
             Expr::Path { segments, .. } => Value::empty(

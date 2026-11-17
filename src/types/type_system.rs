@@ -59,6 +59,8 @@ pub enum ResolvedType {
     Pointer(Box<ResolvedType>),
     /// Qualifies pointee storage, not the value produced by a read.
     Volatile(Box<ResolvedType>),
+    /// Opt-in affine value; identical runtime layout, distinct source identity.
+    Owned(Box<ResolvedType>),
     Reference { mutable: bool, inner: Box<ResolvedType> },
     Array { elem: Box<ResolvedType>, size: usize },
     Slice(Box<ResolvedType>),

@@ -980,8 +980,9 @@ impl IRGenerator {
             Expr::Unsafe { body, .. } => Ok(self.generate_block(body)?.unwrap_or(Value::Unit)),
             Expr::Cast { expr, ty, .. } => {
                 let val = self.generate_expr(expr)?;
-                let dest = self.alloc_register();
                 let target_ty = self.ast_type_to_ir(ty);
+                if self.get_value_type(&val).as_ref() == Some(&target_ty) { return Ok(val); }
+                let dest = self.alloc_register();
                 self.emit_current_with_type(Instruction::Cast {
                     dest,
                     value: val,
@@ -1487,6 +1488,7 @@ impl IRGenerator {
             },
             ResolvedType::Pointer(inner) | ResolvedType::Reference { inner, .. } => IRType::Ptr(Box::new(Self::resolved_type_to_ir(inner)?)),
             ResolvedType::Volatile(inner) => IRType::Volatile(Box::new(Self::resolved_type_to_ir(inner)?)),
+            ResolvedType::Owned(inner) => Self::resolved_type_to_ir(inner)?,
             ResolvedType::Array { elem, size } => IRType::Array(Box::new(Self::resolved_type_to_ir(elem)?), *size),
             ResolvedType::Struct { name, .. } | ResolvedType::Enum { name } => IRType::Struct(name.clone()),
             ResolvedType::String => IRType::Ptr(Box::new(IRType::U8)),
@@ -1582,6 +1584,7 @@ impl IRGenerator {
                 }
             }
             AstType::Unit(_) => IRType::Unit,
+            AstType::Owned { inner, .. } => self.ast_type_to_ir(inner),
             _ => IRType::Void,
         }
     }

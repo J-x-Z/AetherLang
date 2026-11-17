@@ -33,6 +33,8 @@ mod contracts;
 mod tuples;
 #[path = "semantic_host.rs"]
 mod host;
+#[path = "semantic_owned.rs"]
+mod owned;
 #[path = "semantic_enums.rs"]
 mod enums;
 #[path = "semantic_memory.rs"]
@@ -315,6 +317,7 @@ impl SemanticAnalyzer {
         self.collect_interfaces(program)?;
         self.collect_methods(program)?;
         self.check_interface_implementations(program)?;
+        self.check_owned_declarations(program)?;
         self.prepare_constant_facts()?;
 
         // Pass 2: Type check all items
@@ -367,6 +370,7 @@ impl SemanticAnalyzer {
             ResolvedType::Enum { name } => format!("enum {}", name),
             ResolvedType::Pointer(inner) => format!("*{}", nested(inner)),
             ResolvedType::Volatile(inner) => format!("volatile {}", nested(inner)),
+            ResolvedType::Owned(inner) => format!("own {}", nested(inner)),
             ResolvedType::Reference { mutable, inner } => format!("&{}{}", mutable, nested(inner)),
             ResolvedType::Array { elem, size } => format!("[{};{}]", nested(elem), size),
             ResolvedType::Slice(inner) => format!("[{}]", nested(inner)),
@@ -396,6 +400,7 @@ impl SemanticAnalyzer {
                 .filter(|symbol| matches!(symbol.kind, SymbolKind::Struct { .. }))
                 .map(|symbol| symbol.ty.clone()).unwrap_or(ty),
             ResolvedType::Volatile(inner) => ResolvedType::Volatile(Box::new(self.refresh_nominal_type(*inner))),
+            ResolvedType::Owned(inner) => ResolvedType::Owned(Box::new(self.refresh_nominal_type(*inner))),
             other => other,
         }
     }
@@ -962,6 +967,7 @@ impl SemanticAnalyzer {
     }
     fn check_expr(&mut self, expr: &Expr) -> Result<ResolvedType> {
         let ty=self.check_expr_inner(expr)?;
+        self.validate_owned_shape(&ty, true, expr.span())?;
         self.remember_expr_type(expr,&ty);
         self.remember_place(expr, &ty);
         Ok(ty)
@@ -1133,6 +1139,7 @@ impl SemanticAnalyzer {
                                 // Variadic arguments still need semantic checking.
                                 let argument = self.check_expr(arg)?;
                                 self.check_tuple_abi_type(&argument, arg.span())?;
+                                if self.contains_owned(&argument) { return Err(Error::semantic_expected("E2405", "no owned values in C variadic arguments", arg.span())); }
                                 diverges |= argument == ResolvedType::NEVER;
                             }
                         }
@@ -1274,7 +1281,10 @@ impl SemanticAnalyzer {
 
             Expr::Deref { .. } | Expr::Index { .. } => Ok(self.check_place_type(expr)?.unqualified().clone()),
 
-            Expr::Match { expr, arms, span } => self.check_match(expr, arms, *span, None),
+            Expr::Match { expr, arms, span } => {
+                self.check_owned_match(expr)?;
+                self.check_match(expr, arms, *span, None)
+            },
 
             Expr::Unsafe { body, .. } => {
                 self.symbols.enter_scope(); self.unsafe_depth+=1;
@@ -1363,6 +1373,10 @@ impl SemanticAnalyzer {
                     self.check_expected_expr(expr, &context)?
                 } else { self.check_expr(expr)? };
                 if source_ty==ResolvedType::NEVER {return Ok(source_ty);}
+                if matches!(&source_ty,ResolvedType::Owned(_)) || matches!(&target_ty,ResolvedType::Owned(_)) {
+                    self.check_owned_cast(&source_ty,&target_ty,*span)?;
+                    return Ok(target_ty);
+                }
                 
                 // Allow explicit casts in the following cases:
                 // 1. Integer to Integer (any size)
@@ -1546,6 +1560,7 @@ impl SemanticAnalyzer {
 
     fn check_expected_expr(&mut self, expr: &Expr, expected: &ResolvedType) -> Result<ResolvedType> {
         let ty=self.check_expected_expr_inner(expr,expected)?;
+        self.validate_owned_shape(&ty, true, expr.span())?;
         self.remember_expr_type(expr,&ty);
         Ok(ty)
     }
@@ -1588,6 +1603,7 @@ impl SemanticAnalyzer {
         // Propagate context into aggregate elements and branch values.
         match (expr, expected) {
             (Expr::Match { expr: value, arms, span }, _) => {
+                self.check_owned_match(value)?;
                 return self.check_match(value, arms, *span, Some(expected));
             }
             (Expr::Array { elements, span }, ResolvedType::Array { elem, size }) => {
@@ -1759,6 +1775,7 @@ impl SemanticAnalyzer {
                         _ => break,
                     }
                 }
+                if let ResolvedType::Owned(inner) = base.unqualified() { base = (**inner).clone(); }
                 let volatile = matches!(base, ResolvedType::Volatile(_));
                 if let ResolvedType::Tuple(elements) = base.unqualified() {
                     let ty = field.name.parse::<usize>().ok().and_then(|index| elements.get(index)).cloned()
@@ -1878,6 +1895,11 @@ impl SemanticAnalyzer {
 
     /// Resolve an AST type to a ResolvedType
     fn resolve_type(&self, ty: &Type) -> Result<ResolvedType> {
+        let resolved = self.resolve_type_inner(ty)?;
+        self.validate_owned_shape(&resolved, true, ty.span())?;
+        Ok(resolved)
+    }
+    fn resolve_type_inner(&self, ty: &Type) -> Result<ResolvedType> {
         match ty {
             Type::Named(name, span) => {
                 match name.as_str() {
@@ -1985,8 +2007,8 @@ impl SemanticAnalyzer {
             Type::Unit(_) => Ok(ResolvedType::unit()),
             Type::Never(_) => Ok(ResolvedType::never()),
             Type::Infer(span) => Err(Error::Expected("concrete type annotation; placeholder '_' inference is not implemented".into(), *span)),
-            // For now, just resolve the inner type (ownership is handled separately)
-            Type::Owned { inner, .. } => self.resolve_type(inner),
+            // Ownership identity survives resolution; flow checks actual transfers.
+            Type::Owned { inner, ownership, span } => self.resolve_owned_type(inner, *ownership, *span),
             // Volatile type (Phase 8) - resolve inner type, volatile semantics handled at IR level
             Type::Volatile(inner, _) => {
                 Ok(ResolvedType::Pointer(Box::new(ResolvedType::Volatile(Box::new(self.resolve_type(inner)?)))))
@@ -2067,6 +2089,7 @@ impl SemanticAnalyzer {
             (ResolvedType::Primitive(a), ResolvedType::Primitive(b)) => a == b,
             (ResolvedType::Pointer(a), ResolvedType::Pointer(b)) => self.types_compatible(a, b),
             (ResolvedType::Volatile(a), ResolvedType::Volatile(b)) => self.types_compatible(a, b),
+            (ResolvedType::Owned(a), ResolvedType::Owned(b)) => Self::types_identical(a,b),
             (ResolvedType::Reference { mutable: ma, inner: ia, .. }, 
              ResolvedType::Reference { mutable: mb, inner: ib, .. }) => {
                 // Mutable reference can be used where immutable is expected

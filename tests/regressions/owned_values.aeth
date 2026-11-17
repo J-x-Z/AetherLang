@@ -1,0 +1,44 @@
+use fd::{Descriptor, Pipe, fd_pipe, fd_duplicate_to, fd_close, fd_read, fd_write_all};
+use owned_fd::{owned_fd_number, owned_fd_close};
+use posix::F_GETFD;
+use result::Result;
+extern "C" { fn fcntl(fd:i32, command:i32, ...) -> i32; }
+
+fn transfer(value: own Descriptor) -> own Descriptor { value }
+fn choose(value: own Descriptor, early:bool) -> own Descriptor {
+    if early { return value; }
+    value
+}
+fn closed(value: own Descriptor) -> bool {
+    match owned_fd_close(value) { Result::Ok(_) => true, Result::Err(_) => false }
+}
+
+fn main() -> i32 {
+    let connection: Pipe = match fd_pipe() { Result::Ok(value) => value, Result::Err(_) => {return 1;} };
+    // From this adoption onward, connection's manual aliases are not used.
+    let reader: own Descriptor = unsafe { connection.reader as own Descriptor };
+    let writer: own Descriptor = unsafe { connection.writer as own Descriptor };
+    let reader_number:i32=owned_fd_number(&reader);
+    let writer_number:i32=owned_fd_number(&writer);
+    let moved:own Descriptor=transfer(reader);
+    let selected:own Descriptor=choose(moved,true);
+    let mut assigned:own Descriptor;
+    assigned=choose(selected,false);
+    let bytes:[u8;3]=[65,0,90];
+    match fd_write_all(writer_number,&bytes[0] as *u8,3) { Result::Ok(_) => {}, Result::Err(_) => {closed(writer);closed(assigned);return 2;} }
+    let mut output:[u8;3]=[0,0,0];
+    let count:u64=match fd_read(reader_number,&mut output[0] as *u8,3){Result::Ok(value)=>value,Result::Err(_)=>{closed(writer);closed(assigned);return 3;}};
+    if count!=3 || output[0]!=65 || output[1]!=0 || output[2]!=90 {closed(writer);closed(assigned);return 4;}
+    if !closed(assigned) {closed(writer);return 5;}
+    if fcntl(reader_number,F_GETFD)>=0 {closed(writer);return 6;}
+    // Reuse the exact old number. There is no live owned alias that could close
+    // this replacement; the negative corpus rejects attempting that stale use.
+    match fd_duplicate_to(writer_number,reader_number) {Result::Ok(_)=>{},Result::Err(_)=>{closed(writer);return 7;}}
+    let replacement:Descriptor=Descriptor{value:reader_number};
+    assigned=unsafe{replacement as own Descriptor};
+    if fcntl(owned_fd_number(&assigned),F_GETFD)<0 {closed(writer);closed(assigned);return 8;}
+    if !closed(assigned) {closed(writer);return 9;}
+    if !closed(writer) {return 10;}
+    if fcntl(reader_number,F_GETFD)>=0 || fcntl(writer_number,F_GETFD)>=0 {return 11;}
+    return 0;
+}
