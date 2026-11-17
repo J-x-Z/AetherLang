@@ -1,0 +1,48 @@
+use resolved_methods_module::{RemoteCounter, remote_counter};
+// Method identities and signatures are decided before IR generation.
+struct Counter { value: i32 }
+type CounterRef = &Counter;
+impl Counter {
+    fn new(value: i32) -> Self { return Counter { value: value }; }
+    fn add(self: &Self, delta: i32) -> i32 { return self.value + delta; }
+    fn nested(self: &Self, delta: i32) -> i32 { return self.add(delta) + self.add(1); }
+    fn bump(self: &mut Self, delta: i32) { self.value += delta; }
+    fn view(self: &Self) -> &Self { return self; }
+    fn alias(self: CounterRef) -> i32 { return self.value; }
+    fn copy(self: Self) -> Self { let result: Self = self; return result; }
+    fn raw(self: *Self, delta: i32) -> i32 { return self.value + delta; }
+}
+// Same method spelling on another receiver must not contaminate effects.
+struct PureReceiver { }
+struct NoisyReceiver { }
+impl PureReceiver { fn run(self: &Self) -> i32 pure { return 7; } }
+impl NoisyReceiver { fn run(self: &Self) -> i32 effect[io] { puts("wrong callee"); return 9; } }
+fn exact_receiver(value: &PureReceiver) -> i32 pure { return value.run(); }
+static mut TRACE: i32 = 0;
+fn receiver(p: *Counter) -> *Counter { TRACE = TRACE * 10 + 1; return p; }
+fn argument() -> i32 { TRACE = TRACE * 10 + 2; return 7; }
+fn swap_pointer(p: **Counter, next: *Counter) -> i32 { *p = next; return 3; }
+fn main() -> i32 {
+    let mut counter: Counter = Counter::new(20);
+    if counter.add(3) != 23 || counter.nested(2) != 43 { return 1; }
+    counter.bump(5);
+    if counter.alias() != 25 { return 2; }
+    let borrowed: &Counter = &counter;
+    if borrowed.add(4) != 29 || borrowed.view().add(5) != 30 { return 3; }
+    let copy: Counter = counter.copy();
+    if copy.value != 25 { return 4; }
+    let mut values: [Counter; 2] = [Counter { value: 40 }, Counter { value: 60 }];
+    let p: *Counter = (&mut values[0]) as *Counter;
+    let next: *Counter = p.add(1);
+    if next.value != 60 || next.raw(2) != 62 { return 5; }
+    if receiver(p).raw(argument()) != 47 || TRACE != 12 { return 6; }
+    // Raw pointer receiver is captured before arguments mutate its local slot.
+    let mut moving: *Counter = p;
+    if moving.raw(swap_pointer((&mut moving) as **Counter, next)) != 43 { return 7; }
+    if moving.value != 60 { return 8; }
+    let remote: RemoteCounter = remote_counter();
+    if remote.read() != 73 { return 9; }
+    let pure_value: PureReceiver = PureReceiver { };
+    if exact_receiver(&pure_value) != 7 { return 10; }
+    return 0;
+}

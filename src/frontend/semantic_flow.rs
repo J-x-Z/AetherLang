@@ -204,6 +204,7 @@ struct Flow<'a> {
     validate: bool,
     protected_live: Vec<HashSet<BindingId>>,
     self_type: Option<ResolvedType>,
+    function_key: String,
     return_type: ResolvedType,
 }
 
@@ -272,6 +273,7 @@ impl<'a> Flow<'a> {
             validate,
             protected_live: vec![],
             self_type: None,
+            function_key: String::new(),
             return_type: ResolvedType::UNIT,
         }
     }
@@ -297,6 +299,8 @@ impl<'a> Flow<'a> {
         }
     }
     fn function(mut self, function: &Function) -> Result<FunctionFlow> {
+        self.function_key = self.analyzer.facts.method_signatures.get(&function.name.name)
+            .map(|signature| signature.emitted_name.clone()).unwrap_or_else(|| function.name.name.clone());
         if let Some((target, _)) = function.name.name.rsplit_once("::") {
             self.self_type = self.analyzer.declared_types.get(target).cloned();
         }
@@ -1655,64 +1659,29 @@ impl<'a> Flow<'a> {
                 result
             }
             Expr::Call { func, args, span } => return self.call(func, args, *span, live),
-            Expr::MethodCall {
-                expr,
-                method,
-                args,
-                span,
-            } => {
-                let ty = self.expression_type(expr);
-                if method.name == "add" && matches!(ty, ResolvedType::Pointer(_)) {
-                    let Some(value) = self.expr(expr, false, live)? else {
-                        return Ok(None);
-                    };
-                    for arg in args {
-                        if self.expr(arg, true, live)?.is_none() {
-                            return Ok(None);
+            Expr::MethodCall { expr, args, span, .. } => {
+                let resolved = self.analyzer.facts.method_calls.get(&(self.function_key.clone(), *span))
+                    .cloned().ok_or_else(|| self.error("resolved method call", *span))?;
+                match resolved {
+                    ResolvedMethodCall::DivergingReceiver => return self.expr(expr, false, live),
+                    ResolvedMethodCall::PointerAdd { .. } => {
+                        let Some(value) = self.expr(expr, false, live)? else { return Ok(None); };
+                        for arg in args {
+                            if self.expr(arg, true, live)?.is_none() { return Ok(None); }
                         }
+                        value
                     }
-                    value
-                } else {
-                    let base = match &ty {
-                        ResolvedType::Reference { inner, .. } | ResolvedType::Pointer(inner) => {
-                            inner.as_ref()
-                        }
-                        other => other,
-                    };
-                    let name = match base.unqualified() {
-                        ResolvedType::Struct { name, .. } | ResolvedType::Enum { name } => {
-                            format!("{}::{}", name, method.name)
-                        }
-                        _ => return Err(self.error("known receiver type", *span)),
-                    };
-                    let first = self.analyzer.symbols.lookup(&name).and_then(|symbol| {
-                        if let SymbolKind::Function { params, .. } = &symbol.kind {
-                            params.first().cloned()
-                        } else {
-                            None
-                        }
-                    });
-                    let receiver = if let Some(ResolvedType::Reference { mutable, .. }) = first {
-                        if matches!(ty, ResolvedType::Reference { .. }) {
-                            expr.as_ref().clone()
-                        } else {
-                            Expr::Ref {
-                                mutable,
-                                expr: expr.clone(),
-                                span: expr.span(),
-                            }
-                        }
-                    } else {
-                        expr.as_ref().clone()
-                    };
-                    let mut full_args = vec![receiver];
-                    full_args.extend(args.iter().cloned());
-                    return self.call(
-                        &Expr::Ident(Ident { name, span: *span }),
-                        &full_args,
-                        *span,
-                        live,
-                    );
+                    ResolvedMethodCall::Function { symbol, receiver } => {
+                        let receiver = match receiver {
+                            ReceiverAdjustment::Value => expr.as_ref().clone(),
+                            ReceiverAdjustment::Borrow { mutable } => Expr::Ref {
+                                mutable, expr: expr.clone(), span: expr.span(),
+                            },
+                        };
+                        let mut full_args = vec![receiver];
+                        full_args.extend(args.iter().cloned());
+                        return self.call(&Expr::Ident(Ident { name: symbol, span: *span }), &full_args, *span, live);
+                    }
                 }
             }
             Expr::Range { start, end, .. } => {
@@ -1815,76 +1784,6 @@ impl<'a> Flow<'a> {
                 return Ok(Some(Value::unit()));
             }
             head = next;
-        }
-    }
-    fn expression_type(&self, expr: &Expr) -> ResolvedType {
-        match expr {
-            Expr::Ident(name) => self
-                .binding(&name.name)
-                .map(|id| self.bindings[id].ty.clone())
-                .or_else(|| {
-                    self.analyzer
-                        .symbols
-                        .lookup(&name.name)
-                        .map(|s| s.ty.clone())
-                })
-                .unwrap_or(ResolvedType::Unknown),
-            Expr::StructLit { name, .. } => self
-                .resolve(&Type::Named(name.name.clone(), name.span))
-                .unwrap_or(ResolvedType::Unknown),
-            Expr::Cast { ty, .. } => self.resolve(ty).unwrap_or(ResolvedType::Unknown),
-            Expr::Deref { expr, .. } => {
-                self.child_type(&self.expression_type(expr), &Projection::Deref)
-            }
-            Expr::Ref { expr, mutable, .. } => ResolvedType::Reference {
-                mutable: *mutable,
-                inner: Box::new(self.expression_type(expr)),
-            },
-            Expr::Field { expr, field, .. } => {
-                let mut ty = self.expression_type(expr);
-                if matches!(
-                    ty,
-                    ResolvedType::Reference { .. } | ResolvedType::Pointer(_)
-                ) {
-                    ty = self.child_type(&ty, &Projection::Deref);
-                }
-                self.child_type(&ty, &Projection::Field(field.name.clone()))
-            }
-            Expr::Index { expr, .. } => {
-                let mut ty = self.expression_type(expr);
-                while let ResolvedType::Reference { inner, .. } = ty.unqualified() {
-                    ty = (**inner).clone();
-                }
-                self.child_type(&ty, &Projection::Index(None))
-            }
-            Expr::Call { func, .. } => match self.expression_type(func) {
-                ResolvedType::Function { ret, .. } => *ret,
-                _ => ResolvedType::Unknown,
-            },
-            Expr::Path { segments, .. } => self
-                .analyzer
-                .symbols
-                .lookup(
-                    &segments
-                        .iter()
-                        .map(|s| s.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join("::"),
-                )
-                .map(|s| s.ty.clone())
-                .unwrap_or(ResolvedType::Unknown),
-            Expr::Block(body) | Expr::Unsafe { body, .. } => body
-                .stmts
-                .last()
-                .and_then(|statement| {
-                    if let Stmt::Expr(expr) = statement {
-                        Some(self.expression_type(expr))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(ResolvedType::UNIT),
-            _ => ResolvedType::Unknown,
         }
     }
     fn bind_pattern(&mut self, pattern: &Pattern, value: &Value) -> Result<()> {

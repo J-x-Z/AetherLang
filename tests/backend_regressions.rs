@@ -8,7 +8,7 @@ fn native_semantics_matrix() {
     fs::create_dir_all(&directory).unwrap();
     let mut backends = vec!["c"];
     if cfg!(feature = "llvm") { backends.push("llvm"); }
-    for name in ["control_flow", "short_circuit", "numeric_types", "integer_literals", "places", "struct_returns", "ffi_variadic", "string_bytes", "scalar_match", "struct_layouts", "integer_wrapping", "divide_zero", "divide_overflow", "constants_aliases"] {
+    for name in ["control_flow", "short_circuit", "numeric_types", "floating_context", "integer_literals", "places", "struct_returns", "ffi_variadic", "string_bytes", "scalar_match", "struct_layouts", "integer_wrapping", "divide_zero", "divide_overflow", "constants_aliases", "recursive_vec", "resolved_methods", "projection_effects"] {
         for backend in &backends {
             for level in [0, 2, 3] {
                 let executable = directory.join(format!("{name}-{backend}-{level}{}", std::env::consts::EXE_SUFFIX));

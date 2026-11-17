@@ -1,0 +1,33 @@
+// Effect bounds describe actual external memory access, not projection spelling.
+struct S { x: i32 }
+struct Holder { target: *S }
+impl S {
+    fn set(self: &mut Self, value: i32) effect[write] { self.x = value; }
+    fn read(self: &Self) -> i32 effect[read] { return self.x; }
+}
+static mut GLOBAL: S = S { x: 0 };
+fn change(s: &mut S, a: &mut [i32; 1]) effect[write] { s.x = 7; a[0] = 9; }
+fn nested(holder: Holder) effect[write] { holder.target.x = 11; }
+fn bump(s: &mut S) effect[read,write] { s.x += 2; }
+fn global_set(value: i32) effect[write] { GLOBAL.x = value; }
+fn shadow() -> i32 pure { let mut GLOBAL: S = S { x: 1 }; GLOBAL.x = 17; return GLOBAL.x; }
+fn local() -> i32 pure {
+    let mut s: S = S { x: 0 };
+    let mut a: [i32; 1] = [0];
+    s.x = 3; a[0] = 5;
+    return s.x + a[0];
+}
+fn main() -> i32 {
+    let mut s: S = S { x: 0 };
+    let mut a: [i32; 1] = [0];
+    change(&mut s, &mut a);
+    if s.x != 7 || a[0] != 9 { return 1; }
+    nested(Holder { target: (&mut s) as *S });
+    bump(&mut s);
+    if s.read() != 13 { return 2; }
+    s.set(19);
+    if s.read() != 19 { return 3; }
+    global_set(23);
+    if GLOBAL.x != 23 || shadow() != 17 || local() != 8 { return 4; }
+    return 0;
+}

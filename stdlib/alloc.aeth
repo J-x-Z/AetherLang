@@ -13,14 +13,14 @@ use core::{malloc, free, realloc}
 pub trait Allocator {
     /// Allocate memory of given size and alignment
     /// Returns null pointer on failure
-    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[alloc];
+    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[read, write, alloc];
 
     /// Deallocate previously allocated memory
-    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[alloc];
+    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[read, write, alloc];
 
     /// Reallocate memory to a new size
     /// Returns null pointer on failure (original memory unchanged)
-    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[alloc];
+    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[read, write, alloc];
 }
 
 // =============================================================================
@@ -111,7 +111,7 @@ impl ArenaAllocator {
 }
 
 impl Allocator for ArenaAllocator {
-    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[alloc] {
+    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[read, write, alloc] {
         // Align the current position
         let aligned_pos: u64 = (self.pos + align - 1) & !(align - 1);
 
@@ -130,7 +130,7 @@ impl Allocator for ArenaAllocator {
         // Memory is reclaimed when arena is reset or dropped
     }
 
-    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[alloc] {
+    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[read, write, alloc] {
         // Arena can't reallocate - allocate new and copy
         let new_ptr: *u8 = self.allocate(new_size, align);
         if new_ptr as u64 != 0 {
@@ -147,7 +147,7 @@ impl Allocator for ArenaAllocator {
 }
 
 impl Drop for ArenaAllocator {
-    fn drop(self: &mut ArenaAllocator) effect[alloc] {
+    fn drop(self: &mut ArenaAllocator) effect[read, alloc] {
         if self.base as u64 != 0 {
             free(self.base);
         }
@@ -180,7 +180,7 @@ impl StackAllocator {
 }
 
 impl Allocator for StackAllocator {
-    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[alloc] {
+    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[read, write, alloc] {
         let aligned_pos: u64 = (self.pos + align - 1) & !(align - 1);
 
         if aligned_pos + size > self.capacity {
@@ -193,7 +193,7 @@ impl Allocator for StackAllocator {
         result
     }
 
-    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[alloc] {
+    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[read, write, alloc] {
         // Only deallocate if this was the last allocation
         // (simplified check - production code should verify ptr)
         if size == self.last_alloc_size {
@@ -202,7 +202,7 @@ impl Allocator for StackAllocator {
         // Otherwise: memory leak (caller error)
     }
 
-    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[alloc] {
+    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[read, write, alloc] {
         // Can only grow the last allocation in place
         if old_size == self.last_alloc_size {
             let additional: u64 = new_size - old_size;
@@ -227,7 +227,7 @@ impl Allocator for StackAllocator {
 }
 
 impl Drop for StackAllocator {
-    fn drop(self: &mut StackAllocator) effect[alloc] {
+    fn drop(self: &mut StackAllocator) effect[read, alloc] {
         if self.base as u64 != 0 {
             free(self.base);
         }

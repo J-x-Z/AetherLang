@@ -62,57 +62,6 @@ impl SemanticAnalyzer {
             effects,
         }
     }
-    pub(super) fn collect_methods(&mut self, program: &Program) -> Result<()> {
-        for item in &program.items {
-            let Item::Impl(block) = item else {
-                continue;
-            };
-            let target =
-                self.resolve_type(&Type::Named(block.target.name.clone(), block.target.span))?;
-            for method in &block.methods {
-                self.symbols.enter_scope();
-                self.symbols.define(Symbol {
-                    name: "Self".into(),
-                    kind: SymbolKind::TypeAlias {
-                        target: target.clone(),
-                    },
-                    ty: target.clone(),
-                    span: block.span,
-                    mutable: false,
-                })?;
-                self.define_type_parameters(&method.type_params)?;
-                let params = method
-                    .params
-                    .iter()
-                    .map(|p| self.resolve_type(&p.ty))
-                    .collect::<Result<Vec<_>>>()?;
-                let ret = method
-                    .ret_type
-                    .as_ref()
-                    .map(|ty| self.resolve_type(ty))
-                    .transpose()?
-                    .unwrap_or(ResolvedType::UNIT);
-                self.symbols.exit_scope();
-                self.symbols.define(Symbol {
-                    name: format!("{}::{}", block.target.name, method.name.name),
-                    kind: SymbolKind::Function {
-                        params: params.clone(),
-                        ret: ret.clone(),
-                        type_params: method.type_params.iter().map(|p| p.name.clone()).collect(),
-                        const_params: vec![],
-                        effects: method.effects.clone(),
-                    },
-                    ty: ResolvedType::Function {
-                        params,
-                        ret: Box::new(ret),
-                    },
-                    span: method.span,
-                    mutable: false,
-                })?;
-            }
-        }
-        Ok(())
-    }
     pub(super) fn infer_effects(&mut self, program: &Program) -> Result<()> {
         let mut functions = vec![];
         for item in &program.items {
@@ -134,7 +83,18 @@ impl SemanticAnalyzer {
         for (name, function) in &functions {
             let mut effects = vec![];
             let mut callees = vec![];
-            visit_block(&function.body, &mut |expr| match expr {
+            let function_key = self.facts.method_signatures.get(name)
+                .map(|signature| &signature.emitted_name).unwrap_or(name);
+            let walker = EffectWalker { facts: &self.facts, function: function_key };
+            walker.block(&function.body, &mut |expr, access| {
+                if let Some(place) = self.facts.places.get(&(function_key.clone(), expr.span())) {
+                    if place.origin != PlaceOrigin::Local {
+                        if matches!(access, Access::Read | Access::ReadWrite) { extend(&mut effects, &[Effect::Read]); }
+                        if matches!(access, Access::Write | Access::ReadWrite) { extend(&mut effects, &[Effect::Write]); }
+                    }
+                    if place.address_reads { extend(&mut effects, &[Effect::Read]); }
+                }
+                match expr {
                 Expr::Call { func, .. } => {
                     let callee = match &**func {
                         Expr::Ident(name) => Some(name.name.clone()),
@@ -153,38 +113,18 @@ impl SemanticAnalyzer {
                         extend(&mut effects, &ALL);
                     }
                 }
-                Expr::MethodCall { method, .. } if method.name != "add" => {
-                    let suffix = format!("::{}", method.name);
-                    let targets: Vec<_> = functions
-                        .iter()
-                        .filter(|(name, _)| name.ends_with(&suffix))
-                        .map(|(name, _)| name.clone())
-                        .collect();
-                    if targets.is_empty() {
-                        extend(&mut effects, &ALL);
-                    } else {
-                        callees.extend(targets);
+                Expr::MethodCall { span, .. } => {
+                    let function_key = self.facts.method_signatures.get(name)
+                        .map(|signature| &signature.emitted_name).unwrap_or(name);
+                    match self.facts.method_calls.get(&(function_key.clone(), *span)) {
+                        Some(ResolvedMethodCall::Function { symbol, .. }) => callees.push(symbol.clone()),
+                        Some(ResolvedMethodCall::PointerAdd { .. } | ResolvedMethodCall::DivergingReceiver) => {},
+                        None => extend(&mut effects, &ALL),
                     }
-                }
-                Expr::Ident(name) if self.facts.global_types.contains_key(&name.name) => {
-                    extend(&mut effects, &[Effect::Read])
-                }
-                Expr::Deref { .. } => extend(&mut effects, &[Effect::Read]),
-                Expr::Binary { left, op, .. }
-                    if matches!(
-                        op,
-                        BinOp::Assign
-                            | BinOp::AddAssign
-                            | BinOp::SubAssign
-                            | BinOp::MulAssign
-                            | BinOp::DivAssign
-                    ) && (matches!(&**left, Expr::Deref { .. })
-                        || matches!(&**left,Expr::Ident(name) if self.facts.global_types.contains_key(&name.name))) =>
-                {
-                    extend(&mut effects, &[Effect::Write])
                 }
                 Expr::Asm { .. } => extend(&mut effects, &ALL),
                 _ => {}
+                }
             });
             direct.insert(name.clone(), effects);
             calls.insert(name.clone(), callees);
@@ -256,106 +196,76 @@ impl SemanticAnalyzer {
         Ok(())
     }
 }
-fn visit_block(block: &Block, visitor: &mut impl FnMut(&Expr)) {
-    for statement in &block.stmts {
-        match statement {
-            Stmt::Let {
-                value: Some(expr), ..
+/// Computing an address is distinct from reading or writing its contents.
+/// Index operands and pointer-valued bases still execute/read normally.
+#[derive(Clone, Copy)]
+enum Access { Read, Write, ReadWrite, Address }
+
+struct EffectWalker<'a> { facts: &'a SemanticFacts, function: &'a str }
+impl EffectWalker<'_> {
+    fn block(&self, block: &Block, visitor: &mut impl FnMut(&Expr, Access)) {
+        for statement in &block.stmts {
+            match statement {
+                Stmt::Let { value: Some(expr), .. } | Stmt::Return { value: Some(expr), .. }
+                | Stmt::Expr(expr) | Stmt::Semi(expr) => self.expr(expr, Access::Read, visitor),
+                _ => {}
             }
-            | Stmt::Return {
-                value: Some(expr), ..
-            }
-            | Stmt::Expr(expr)
-            | Stmt::Semi(expr) => visit_expr(expr, visitor),
-            _ => {}
         }
     }
-}
-fn visit_expr(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
-    visitor(expr);
-    match expr {
-        Expr::Binary { left, right, .. } => {
-            visit_expr(left, visitor);
-            visit_expr(right, visitor);
-        }
-        Expr::Unary { expr, .. }
-        | Expr::Deref { expr, .. }
-        | Expr::Ref { expr, .. }
-        | Expr::Cast { expr, .. }
-        | Expr::Field { expr, .. }
-        | Expr::Try { expr, .. } => visit_expr(expr, visitor),
-        Expr::Call { func, args, .. } => {
-            visit_expr(func, visitor);
-            for arg in args {
-                visit_expr(arg, visitor);
+    fn expr(&self, expr: &Expr, access: Access, visitor: &mut impl FnMut(&Expr, Access)) {
+        visitor(expr, access);
+        match expr {
+            Expr::Binary { left, op, right, .. } => {
+                let left_access = match op {
+                    BinOp::Assign => Access::Write,
+                    BinOp::AddAssign | BinOp::SubAssign | BinOp::MulAssign | BinOp::DivAssign => Access::ReadWrite,
+                    _ => Access::Read,
+                };
+                self.expr(left, left_access, visitor);
+                self.expr(right, Access::Read, visitor);
             }
-        }
-        Expr::MethodCall { expr, args, .. } => {
-            visit_expr(expr, visitor);
-            for arg in args {
-                visit_expr(arg, visitor);
+            Expr::Ref { expr, .. } => self.expr(expr, Access::Address, visitor),
+            Expr::Unary { expr, .. } | Expr::Deref { expr, .. } | Expr::Cast { expr, .. }
+            | Expr::Try { expr, .. } => self.expr(expr, Access::Read, visitor),
+            Expr::Field { expr: base, .. } | Expr::Index { expr: base, .. } => {
+                let indirect = self.facts.places.get(&(self.function.to_owned(), base.span()))
+                    .is_some_and(|place| matches!(place.ty.unqualified(), ResolvedType::Reference { .. } | ResolvedType::Pointer(_) | ResolvedType::Slice(_)));
+                self.expr(base, if indirect { Access::Read } else { Access::Address }, visitor);
+                if let Expr::Index { index, .. } = expr { self.expr(index, Access::Read, visitor); }
             }
-        }
-        Expr::Index { expr, index, .. } => {
-            visit_expr(expr, visitor);
-            visit_expr(index, visitor);
-        }
-        Expr::Block(body) | Expr::Unsafe { body, .. } | Expr::Loop { body, .. } => {
-            visit_block(body, visitor)
-        }
-        Expr::If {
-            cond,
-            then_block,
-            else_block,
-            ..
-        } => {
-            visit_expr(cond, visitor);
-            visit_block(then_block, visitor);
-            if let Some(body) = else_block {
-                visit_block(body, visitor);
+            Expr::Call { func, args, .. } => {
+                self.expr(func, Access::Read, visitor);
+                for arg in args { self.expr(arg, Access::Read, visitor); }
             }
-        }
-        Expr::While { cond, body, .. } => {
-            visit_expr(cond, visitor);
-            visit_block(body, visitor);
-        }
-        Expr::For { iter, body, .. } => {
-            visit_expr(iter, visitor);
-            visit_block(body, visitor);
-        }
-        Expr::Match { expr, arms, .. } => {
-            visit_expr(expr, visitor);
-            for arm in arms {
-                if let Some(guard) = &arm.guard {
-                    visit_expr(guard, visitor);
-                }
-                visit_expr(&arm.body, visitor);
+            Expr::MethodCall { expr, args, span, .. } => {
+                let borrowed = matches!(self.facts.method_calls.get(&(self.function.to_owned(), *span)),
+                    Some(ResolvedMethodCall::Function { receiver: ReceiverAdjustment::Borrow { .. }, .. }));
+                self.expr(expr, if borrowed { Access::Address } else { Access::Read }, visitor);
+                for arg in args { self.expr(arg, Access::Read, visitor); }
             }
-        }
-        Expr::StructLit { fields, .. } => {
-            for (_, expr) in fields {
-                visit_expr(expr, visitor);
+            Expr::Block(body) | Expr::Unsafe { body, .. } | Expr::Loop { body, .. } => self.block(body, visitor),
+            Expr::If { cond, then_block, else_block, .. } => {
+                self.expr(cond, Access::Read, visitor); self.block(then_block, visitor);
+                if let Some(body) = else_block { self.block(body, visitor); }
             }
-        }
-        Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => {
-            for expr in elements {
-                visit_expr(expr, visitor);
-            }
-        }
-        Expr::Range { start, end, .. } => {
-            for expr in [start, end].into_iter().flatten() {
-                visit_expr(expr, visitor);
-            }
-        }
-        Expr::Asm { operands, .. } => {
-            for operand in operands {
-                if let Some(expr) = &operand.expr {
-                    visit_expr(expr, visitor);
+            Expr::While { cond, body, .. } => { self.expr(cond, Access::Read, visitor); self.block(body, visitor); }
+            Expr::For { iter, body, .. } => { self.expr(iter, Access::Read, visitor); self.block(body, visitor); }
+            Expr::Match { expr, arms, .. } => {
+                self.expr(expr, Access::Read, visitor);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard { self.expr(guard, Access::Read, visitor); }
+                    self.expr(&arm.body, Access::Read, visitor);
                 }
             }
+            Expr::StructLit { fields, .. } => { for (_, expr) in fields { self.expr(expr, Access::Read, visitor); } }
+            Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => { for expr in elements { self.expr(expr, Access::Read, visitor); } }
+            Expr::Range { start, end, .. } => { for expr in [start, end].into_iter().flatten() { self.expr(expr, Access::Read, visitor); } }
+            Expr::Asm { operands, .. } => {
+                for operand in operands { if let Some(expr) = &operand.expr { self.expr(expr, Access::Read, visitor); } }
+            }
+            Expr::Closure { body, .. } => self.expr(body, Access::Read, visitor),
+            _ => {}
         }
-        Expr::Closure { body, .. } => visit_expr(body, visitor),
-        _ => {}
     }
 }
 
@@ -374,4 +284,42 @@ mod tests {
             assert_eq!(SemanticAnalyzer::new().analyze(&program).is_ok(),ok,"{source}");
         }
     }
+    #[test]
+    fn projection_effects_distinguish_contents_from_address_computation() {
+        let structure = "struct S{x:i32} struct Outer{inner:S} struct Holder{p:*S} ";
+        for body in [
+            "fn change(s:&mut S) pure{s.x=7;}",
+            "fn change(a:&mut [i32;1]) pure{a[0]=9;}",
+            "fn change(a:*i32) pure{a[0]=9;}",
+            "fn change(s:&mut Outer) pure{s.inner.x=7;}",
+            "fn change(h:Holder) pure{h.p.x=7;}",
+            "static mut GLOBAL:S=S{x:0};fn change() pure{GLOBAL.x=7;}",
+            "fn change(s:&mut S){s.x=7;}fn wrapper(s:&mut S) pure{change(s);}",
+            "impl S{fn change(self:&mut Self) pure{self.x=7;}}",
+            "fn change(s:&mut S) effect[write]{s.x+=1;}",
+            "fn read(s:&S)->i32 pure{s.x}",
+            "fn index()->i64{puts(\"io\");0}fn change(a:&mut [i32;1]) effect[write]{a[index()]=1;}",
+            "fn change(s:**S) effect[write]{s.x=7;}",
+        ] {
+            let source = format!("{structure}{body}");
+            let program = Parser::new(Lexer::new(&source, 0)).parse_program().unwrap();
+            let error = SemanticAnalyzer::new().analyze(&program).expect_err(&source);
+            assert!(matches!(error, Error::EffectViolation {..}), "{source}: {error:?}");
+        }
+        for body in [
+            "fn change(s:&mut S,a:&mut [i32;1]) effect[write]{s.x=7;a[0]=9;}",
+            "fn change(s:&mut S) effect[read,write]{s.x+=1;}",
+            "fn read(s:&S)->i32 effect[read]{s.x}",
+            "fn address(s:&mut S)->&mut i32 pure{&mut s.x}",
+            "fn local()->i32 pure{let mut s:S=S{x:1};let mut a:[i32;1]=[2];s.x=7;a[0]=9;s.x+a[0]}",
+            "static mut GLOBAL:S=S{x:0};fn shadow()->i32 pure{let mut GLOBAL:S=S{x:1};GLOBAL.x=7;GLOBAL.x}",
+            "static mut GLOBAL:S=S{x:0};fn change() effect[write]{GLOBAL.x=7;}",
+            "fn change(s:**S) effect[read,write]{s.x=7;}",
+        ] {
+            let source = format!("{structure}{body}");
+            let program = Parser::new(Lexer::new(&source, 0)).parse_program().unwrap();
+            SemanticAnalyzer::new().analyze(&program).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        }
+    }
+
 }

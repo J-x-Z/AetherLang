@@ -20,12 +20,18 @@ mod constants;
 mod flow;
 #[path = "semantic_effects.rs"]
 mod effects;
+#[path = "semantic_methods.rs"]
+mod methods;
+#[path = "semantic_places.rs"]
+mod places;
 #[path = "semantic_enums.rs"]
 mod enums;
 #[path = "semantic_memory.rs"]
 mod memory;
 #[path = "semantic_simd.rs"]
 mod simd;
+pub use places::{ResolvedPlace, PlaceOrigin};
+pub use methods::{ResolvedMethodSignature, ResolvedMethodCall, ReceiverAdjustment};
 pub use constants::{ScalarConstant, SemanticFacts, TypedConstant, TypedInitializer, InitializerValue};
 
 // ==================== Symbol Table ====================
@@ -522,7 +528,6 @@ impl SemanticAnalyzer {
 
         self.collect_enum_facts(program)?;
         self.collect_methods(program)?;
-        self.infer_effects(program)?;
         self.prepare_constant_facts()?;
 
         // Pass 2: Type check all items
@@ -530,6 +535,9 @@ impl SemanticAnalyzer {
             self.check_item(item)?;
         }
 
+        // Call identities and receiver adjustments are now known; effects use
+        // those same facts instead of guessing from a method suffix.
+        self.infer_effects(program)?;
         self.analyze_flows(program)?;
         if self.errors.is_empty() {
             Ok(())
@@ -566,7 +574,31 @@ impl SemanticAnalyzer {
             ResolvedType::Slice(inner) => format!("[{}]", Self::type_identity(inner)),
             ResolvedType::Tuple(types) => format!("({})", types.iter().map(Self::type_identity).collect::<Vec<_>>().join(",")),
             ResolvedType::Function { params, ret } => format!("fn({})->{}", params.iter().map(Self::type_identity).collect::<Vec<_>>().join(","), Self::type_identity(ret)),
+            ResolvedType::Vector(inner, lanes) => format!("vector<{};{}>", Self::type_identity(inner), lanes),
+            ResolvedType::Generic(name, args) => format!("generic {}<{}>", name, args.iter().map(Self::type_identity).collect::<Vec<_>>().join(",")),
+            ResolvedType::GenericWithConsts { name, type_args, const_args } => format!("generic {}<{};{:?}>", name, type_args.iter().map(Self::type_identity).collect::<Vec<_>>().join(","), const_args),
+            ResolvedType::ConstParam { name, ty } => format!("const {}:{}", name, Self::type_identity(ty)),
             _ => format!("{:?}", ty),
+        }
+    }
+
+    /// Recursive nominal types cannot contain an infinitely expanded field tree.
+    /// A forward declaration and a later field snapshot have the same identity;
+    /// exact conversions must not compare those snapshots structurally.
+    fn types_identical(left: &ResolvedType, right: &ResolvedType) -> bool {
+        Self::type_identity(left) == Self::type_identity(right)
+    }
+
+    /// Refresh only the current nominal projection from its completed definition.
+    /// Its fields may still refer back to nominal placeholders; following another
+    /// field/index/deref resolves that next projection without recursive expansion.
+    fn refresh_nominal_type(&self, ty: ResolvedType) -> ResolvedType {
+        match ty {
+            ResolvedType::Struct { ref name, .. } => self.symbols.scopes[0].symbols.get(name)
+                .filter(|symbol| matches!(symbol.kind, SymbolKind::Struct { .. }))
+                .map(|symbol| symbol.ty.clone()).unwrap_or(ty),
+            ResolvedType::Volatile(inner) => ResolvedType::Volatile(Box::new(self.refresh_nominal_type(*inner))),
+            other => other,
         }
     }
 
@@ -1252,7 +1284,8 @@ impl SemanticAnalyzer {
         self.symbols.define(Symbol { name: "Self".into(), kind: SymbolKind::TypeAlias { target: target.clone() },
             ty: target, span: impl_block.span, mutable: false })?;
         for method in &impl_block.methods {
-            let mut lowered=method.clone();lowered.name.name=format!("{}_{}",impl_block.target.name,method.name.name);
+            let signature = &self.facts.method_signatures[&format!("{}::{}", impl_block.target.name, method.name.name)];
+            let mut lowered=method.clone();lowered.name.name=signature.emitted_name.clone();
             self.check_function(&lowered)?;
         }
         self.symbols.exit_scope();
@@ -1345,6 +1378,7 @@ impl SemanticAnalyzer {
     fn check_expr(&mut self, expr: &Expr) -> Result<ResolvedType> {
         let ty=self.check_expr_inner(expr)?;
         self.remember_expr_type(expr,&ty);
+        self.remember_place(expr, &ty);
         Ok(ty)
     }
     fn check_expr_inner(&mut self, expr: &Expr) -> Result<ResolvedType> {
@@ -1668,30 +1702,7 @@ impl SemanticAnalyzer {
                 result
             }
 
-            Expr::MethodCall { expr, method, args, span } => {
-                let receiver_ty = self.check_expr(expr)?;
-                if let ResolvedType::Pointer(inner) = &receiver_ty {
-                    if method.name == "add" {
-                        if args.len()!=1 {return Err(Error::ArgCountMismatch {func_name:"ptr.add".into(),expected:1,got:args.len(),span:*span});}
-                        let offset=self.check_expr(&args[0])?;
-                        if !Self::is_integer(&offset) {return Err(Error::TypeMismatch {expected:"integer".into(),got:format!("{:?}",offset),span:args[0].span()});}
-                        return Ok(ResolvedType::Pointer(inner.clone()));
-                    }
-                }
-                let base = match &receiver_ty {ResolvedType::Reference {inner,..}|ResolvedType::Pointer(inner)=>inner.as_ref(),other=>other};
-                let name = match base {ResolvedType::Struct {name,..}|ResolvedType::Enum {name}=>format!("{}::{}",name,method.name),_=>return Err(Error::UndefinedVariable {name:method.name.clone(),span:*span})};
-                let signature=self.symbols.lookup(&name).map(|s|s.ty.clone()).ok_or_else(||Error::UndefinedVariable {name:name.clone(),span:*span})?;
-                let ResolvedType::Function {params,ret}=signature else {return Err(Error::Expected("method function".into(),*span));};
-                if params.is_empty() || params.len()!=args.len()+1 {return Err(Error::ArgCountMismatch {func_name:name,expected:params.len().saturating_sub(1),got:args.len(),span:*span});}
-                if let ResolvedType::Reference {mutable,inner}=&params[0] {
-                    if !matches!(receiver_ty,ResolvedType::Reference {..}) {
-                        self.require_type(inner,&receiver_ty,*span)?;
-                        if *mutable {self.check_assignable(expr)?;}
-                    } else {self.require_type(&params[0],&receiver_ty,*span)?;}
-                } else {self.require_type(&params[0],&receiver_ty,*span)?;}
-                for (arg,ty) in args.iter().zip(&params[1..]) {self.check_expected_expr(arg,ty)?;}
-                Ok(*ret)
-            }
+            Expr::MethodCall { expr, method, args, span } => self.check_method_call(expr, method, args, *span),
 
             Expr::StructLit { name, fields, span } => {
                 // First, check struct exists and get field info
@@ -1781,7 +1792,7 @@ impl SemanticAnalyzer {
                 
                 let is_valid_cast = match (&source_ty, &target_ty) {
                     // Same type
-                    (s, t) if s == t => true,
+                    (s, t) if Self::types_identical(s, t) => true,
 
                     // A character's scalar value may be explicitly converted
                     // to an integer. The reverse direction requires validation.
@@ -1806,7 +1817,7 @@ impl SemanticAnalyzer {
                     
                     // Reference to Pointer (same inner type or compatible)
                     (ResolvedType::Reference { inner, .. }, ResolvedType::Pointer(ptr_inner)) => {
-                        inner.unqualified() == ptr_inner.unqualified()
+                        Self::types_identical(inner.unqualified(), ptr_inner.unqualified())
                     },
                     
                     // Unknown source (permissive for now)
@@ -1897,7 +1908,7 @@ impl SemanticAnalyzer {
     fn literal_type(&self, lit: &Literal) -> ResolvedType {
         match lit {
             Literal::Int(_, _) => ResolvedType::Primitive(PrimitiveType::I64), // Default to i64
-            Literal::Float(_, _) => ResolvedType::Primitive(PrimitiveType::F32),
+            Literal::Float(_, _) => ResolvedType::F64,
             Literal::String(_, _) => ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8))), // C-style string pointer
             Literal::Char(_, _) => ResolvedType::Primitive(PrimitiveType::Char),
             Literal::Bool(_, _) => ResolvedType::Primitive(PrimitiveType::Bool),
@@ -2173,9 +2184,15 @@ impl SemanticAnalyzer {
     /// Storage qualifiers survive projections/reborrows. Reading a place removes
     /// only its outer qualifier; pointer-valued fields retain their pointee type.
     fn check_place_type(&mut self, expr: &Expr) -> Result<ResolvedType> {
+        let ty = self.check_place_type_inner(expr)?;
+        self.remember_place(expr, &ty);
+        Ok(ty)
+    }
+
+    fn check_place_type_inner(&mut self, expr: &Expr) -> Result<ResolvedType> {
         match expr {
             Expr::Deref { expr, span } => match self.check_expr(expr)? {
-                ResolvedType::Pointer(inner) | ResolvedType::Reference { inner, .. } => Ok(*inner),
+                ResolvedType::Pointer(inner) | ResolvedType::Reference { inner, .. } => Ok(self.refresh_nominal_type(*inner)),
                 ty if ty == ResolvedType::NEVER => Ok(ty),
                 _ => Err(Error::CannotDeref { span: *span }),
             },
@@ -2191,8 +2208,8 @@ impl SemanticAnalyzer {
                     base = (**inner).clone();
                 }
                 match base.unqualified() {
-                    ResolvedType::Array { elem, .. } | ResolvedType::Slice(elem) => Ok(if matches!(base, ResolvedType::Volatile(_)) { ResolvedType::Volatile(elem.clone()) } else { (**elem).clone() }),
-                    ResolvedType::Pointer(elem) => Ok((**elem).clone()),
+                    ResolvedType::Array { elem, .. } | ResolvedType::Slice(elem) => Ok(self.refresh_nominal_type(if matches!(base, ResolvedType::Volatile(_)) { ResolvedType::Volatile(elem.clone()) } else { (**elem).clone() })),
+                    ResolvedType::Pointer(elem) => Ok(self.refresh_nominal_type((**elem).clone())),
                     _ => Err(Error::NotIndexable { span: *span }),
                 }
             }
@@ -2208,10 +2225,10 @@ impl SemanticAnalyzer {
                 let volatile = matches!(base, ResolvedType::Volatile(_));
                 let ResolvedType::Struct { name, fields } = base.unqualified() else { return Err(Error::NotAStruct { span: *span }); };
                 if self.facts.unions.contains(name) && self.unsafe_depth == 0 { return Err(Error::semantic_expected("E2401","unsafe block for union field access", *span)); }
-                let fields = match self.symbols.lookup(name) { Some(Symbol { kind: SymbolKind::Struct { fields, .. }, .. }) => fields, _ => fields };
+                let fields = match self.symbols.scopes[0].symbols.get(name) { Some(Symbol { kind: SymbolKind::Struct { fields, .. }, .. }) => fields, _ => fields };
                 let ty = fields.iter().find(|(name, _)| *name == field.name).map(|(_, ty)| ty.clone())
                     .ok_or_else(|| Error::UnknownField { field: field.name.clone(), span: field.span })?;
-                Ok(if volatile { ResolvedType::Volatile(Box::new(ty)) } else { ty })
+                Ok(self.refresh_nominal_type(if volatile { ResolvedType::Volatile(Box::new(ty)) } else { ty }))
             }
             _ => self.check_expr(expr),
         }
@@ -2349,8 +2366,8 @@ impl SemanticAnalyzer {
                         if let Some(symbol) = self.symbols.lookup(name) {
                             match &symbol.kind {
                                 SymbolKind::TypeParam => return Ok(ResolvedType::GenericParam(name.clone())),
-                                SymbolKind::TypeAlias { target } => return Ok(target.clone()),
-                                SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => return Ok(symbol.ty.clone()),
+                                SymbolKind::TypeAlias { target } => return Ok(self.refresh_nominal_type(target.clone())),
+                                SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => return Ok(self.refresh_nominal_type(symbol.ty.clone())),
                                 _ => {}
                             }
                         }
@@ -2548,6 +2565,30 @@ mod tests {
         let program = parser.parse_program()?;
         let mut analyzer = SemanticAnalyzer::new();
         analyzer.analyze(&program)
+    }
+
+    #[test]
+    fn recursive_nominal_projections_and_reference_casts_share_identity() {
+        let declarations = "struct Children { data: *Node, len: u64 } struct Node { number: i32, children: Children } type Alias = Node;";
+        analyze(&format!("{declarations} fn child(node: *Node) -> *Alias {{ &node.children.data[0] as *Alias }} fn number(node: *Node) -> i32 {{ node.children.data[0].number }}")).unwrap();
+        let bad = format!("{declarations} struct Other {{ number: i32, children: Children }} fn bad(node: *Node) -> *Other {{ &node.children.data[0] as *Other }}");
+        assert!(matches!(analyze(&bad), Err(Error::TypeMismatch { .. })));
+        let missing = format!("{declarations} fn bad(node: *Node) -> i32 {{ node.children.data[0].missing }}");
+        assert!(matches!(analyze(&missing), Err(Error::UnknownField { .. })));
+        let mutable = format!("{declarations} fn bad(node: *Node) {{ let value: &mut Node = &node.children.data[0]; }}");
+        assert!(matches!(analyze(&mutable), Err(Error::TypeMismatch { .. })));
+    }
+
+    #[test]
+    fn exact_type_identity_ignores_nominal_snapshots_but_retains_wrappers() {
+        let forward = ResolvedType::Struct { name: "Node".into(), fields: vec![] };
+        let complete = ResolvedType::Struct { name: "Node".into(), fields: vec![("number".into(), ResolvedType::I32)] };
+        let reference = |ty, mutable| ResolvedType::Reference { mutable, inner: Box::new(ty) };
+        let array = |ty| ResolvedType::Array { elem: Box::new(ty), size: 2 };
+        assert!(SemanticAnalyzer::types_identical(&reference(array(forward.clone()), false), &reference(array(complete.clone()), false)));
+        assert!(!SemanticAnalyzer::types_identical(&reference(forward.clone(), false), &reference(complete.clone(), true)));
+        assert!(!SemanticAnalyzer::types_identical(&ResolvedType::Pointer(Box::new(forward.clone())), &ResolvedType::Pointer(Box::new(ResolvedType::Volatile(Box::new(complete.clone()))))));
+        assert!(!SemanticAnalyzer::types_identical(&forward, &ResolvedType::Struct { name: "Other".into(), fields: vec![("number".into(), ResolvedType::I32)] }));
     }
 
     #[test]

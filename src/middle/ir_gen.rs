@@ -13,7 +13,7 @@ use crate::middle::ir::{
     BinOp as IRBinOp, IRAsmOperand, IRAsmOperandKind, IRExtern,
 };
 use crate::utils::Result;
-use crate::frontend::semantic::{SemanticFacts, ScalarConstant, TypedInitializer, InitializerValue};
+use crate::frontend::semantic::{SemanticFacts, ScalarConstant, TypedInitializer, InitializerValue, ResolvedMethodCall, ReceiverAdjustment};
 use crate::types::type_system::{ResolvedType, PrimitiveType};
 
 #[path = "ir_enum.rs"]
@@ -22,6 +22,8 @@ mod enums;
 mod memory;
 #[path = "ir_simd.rs"]
 mod simd;
+#[path = "ir_methods.rs"]
+mod methods;
 
 /// IR Generator
 pub struct IRGenerator {
@@ -116,7 +118,7 @@ impl IRGenerator {
         
         // Phase 1: Collect all function signatures (for forward reference)
         for item in &program.items {
-            self.collect_signatures(item);
+            self.collect_signatures(item)?;
         }
         
         // Layouts and external declarations are order independent, like function signatures.
@@ -200,6 +202,15 @@ impl IRGenerator {
 
     /// Register C library extern functions for self-hosting
     fn register_c_library_externs(&mut self) {
+        // `puts` is a typed semantic builtin. Its ABI must go through the
+        // same declaration registry as explicit externs on every backend.
+        self.module.externs.push(IRExtern {
+            name: "puts".to_string(),
+            variadic: false,
+            params: vec![("s".to_string(), IRType::Ptr(Box::new(IRType::U8)))],
+            ret_type: IRType::I32,
+        });
+
         // atof - string to float conversion
         self.module.externs.push(IRExtern {
             name: "atof".to_string(),
@@ -237,7 +248,7 @@ impl IRGenerator {
     }
     
     /// Collect function signatures for forward reference
-    fn collect_signatures(&mut self, item: &Item) {
+    fn collect_signatures(&mut self, item: &Item) -> Result<()> {
         match item {
             Item::Function(func) => {
                 let func_name = func.name.name.clone();
@@ -247,24 +258,27 @@ impl IRGenerator {
                 self.function_signatures.insert(func_name, ret_type);
             }
             Item::Impl(impl_block) => {
-                let type_name = &impl_block.target.name;
                 for method in &impl_block.methods {
-                    let func_name = format!("{}_{}", type_name, method.name.name);
-                    let ret_type = self.function_return_type(method.ret_type.as_ref(), Self::function_has_c_abi(method, &func_name));
-                    
-                    self.function_parameters.insert(func_name.clone(), method.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect());
-                    self.function_signatures.insert(func_name, ret_type);
+                    let signature = self.resolved_method_signature(&impl_block.target.name, &method.name.name)?;
+                    let params = signature.params.iter().map(Self::resolved_type_to_ir).collect::<Result<Vec<_>>>()?;
+                    let ret_type = if method.ret_type.is_none() { IRType::Void } else {
+                        let ty = Self::resolved_type_to_ir(&signature.ret)?;
+                        if Self::function_has_c_abi(method, &signature.emitted_name) && ty == IRType::Unit { IRType::Void } else { ty }
+                    };
+                    self.function_parameters.insert(signature.emitted_name.clone(), params);
+                    self.function_signatures.insert(signature.emitted_name, ret_type);
                 }
             }
             Item::Module(m) => {
                 if let Some(items) = &m.items {
                     for sub_item in items {
-                        self.collect_signatures(sub_item);
+                        self.collect_signatures(sub_item)?;
                     }
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     /// Generate IR for a top-level item
@@ -371,11 +385,15 @@ impl IRGenerator {
         }
     }
     
-    /// Generate IR for a method with Type_method naming convention
+    /// The semantic signature owns both the emitted symbol and resolved Self.
     fn generate_method(&mut self, type_name: &str, func: &ast::Function) -> Result<()> {
-        // Create a modified function name with type prefix
-        let prefixed_name = format!("{}_{}", type_name, func.name.name);
-        self.generate_function_with_name(func, &prefixed_name)
+        let signature = self.resolved_method_signature(type_name, &func.name.name)?;
+        let self_type = Self::resolved_type_to_ir(&signature.target)?;
+        let previous = self.resolved_aliases.insert("Self".into(), self_type);
+        let result = self.generate_function_with_name(func, &signature.emitted_name);
+        if let Some(previous) = previous { self.resolved_aliases.insert("Self".into(), previous); }
+        else { self.resolved_aliases.remove("Self"); }
+        result
     }
 
     fn generate_function(&mut self, func: &ast::Function) -> Result<()> {
@@ -390,8 +408,10 @@ impl IRGenerator {
         self.local_addresses.clear();
         self.reg_types.clear();
         self.loop_targets.clear();
-        let params: Vec<_> = func.params.iter().map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty))).collect();
-        let ret_type = self.function_return_type(func.ret_type.as_ref(), Self::function_has_c_abi(func, name));
+        let parameter_types = self.function_parameters.get(name).ok_or_else(|| crate::utils::Error::CodeGen(format!("missing collected signature for '{}'", name)))?;
+        if parameter_types.len() != func.params.len() { return Err(crate::utils::Error::CodeGen(format!("parameter count changed after checking '{}'", name))); }
+        let params: Vec<_> = func.params.iter().zip(parameter_types).map(|(p, ty)| (p.name.name.clone(), ty.clone())).collect();
+        let ret_type = self.function_signatures.get(name).cloned().ok_or_else(|| crate::utils::Error::CodeGen(format!("missing collected return type for '{}'", name)))?;
         let mut ir_func = IRFunction::new(name, params.clone(), ret_type);
         for annotation in &func.annotations {
             match annotation.name.name.as_str() {
@@ -497,15 +517,18 @@ impl IRGenerator {
     fn generate_expr(&mut self, expr: &ast::Expr) -> Result<Value> {
         if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
         let value = self.generate_expr_inner(expr)?;
-        let checked_type = self.semantic_facts.as_ref().and_then(|facts| self.current_fn.as_ref().and_then(|function| facts.expr_types.get(&(function.name.clone(),expr.span())))).cloned();
-        if checked_type == Some(ResolvedType::NEVER) {
+        let checked_type = self.checked_expr_type(expr);
+        if checked_type == Some(&ResolvedType::NEVER) {
             if self.get_current_terminator().is_none() { self.set_terminator_current(Terminator::Unreachable); }
             return Ok(Value::Unit);
         }
-        // Constants carry raw 64-bit bits in IR. Apply the semantic signedness
-        // before consumers select division, comparisons, shifts or conversion.
-        if matches!(&checked_type, Some(ResolvedType::Primitive(primitive)) if primitive.is_integer() || *primitive == PrimitiveType::Char) {
-            return Ok(self.coerce_value(value, &Self::resolved_type_to_ir(checked_type.as_ref().unwrap())?));
+        // IR constants store i64/f64 bits. Materialize their language types
+        // before a parent instruction chooses precision, signedness or promotion.
+        if let Some(ty @ ResolvedType::Primitive(primitive)) = checked_type {
+            if primitive.is_integer() || primitive.is_float() || *primitive == PrimitiveType::Char {
+                let ty = Self::resolved_type_to_ir(ty)?;
+                return Ok(self.coerce_value(value, &ty));
+            }
         }
         Ok(value)
     }
@@ -579,13 +602,8 @@ impl IRGenerator {
                     self.emit_current(Instruction::Store { ptr: address, value: value.clone() });
                     return Ok(value);
                 }
-                let mut left_val = self.generate_expr(left)?;
+                let left_val = self.generate_expr(left)?;
                 let right_val = self.generate_expr(right)?;
-                if Self::numeric_literal(left) {
-                    if let Some(ty) = self.get_value_type(&right_val) {
-                        left_val = self.coerce_value(left_val, &ty);
-                    }
-                }
 
                 // Check for pointer arithmetic: ptr + offset or ptr - offset
                 let left_ty = self.get_value_type(&left_val);
@@ -675,7 +693,10 @@ impl IRGenerator {
                 let func_name = if let Expr::Ident(ident) = func.as_ref() {
                     ident.name.clone()
                 } else if let Expr::Path { segments, .. } = func.as_ref() {
-                    segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("_")
+                    let symbol = segments.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join("::");
+                    self.semantic_facts.as_ref().and_then(|facts| facts.method_signatures.get(&symbol))
+                        .map(|signature| signature.emitted_name.clone())
+                        .unwrap_or_else(|| segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("_"))
                 } else {
                     let _val = self.generate_expr(func)?;
                     "indirect".to_string()
@@ -965,98 +986,7 @@ impl IRGenerator {
             Expr::Tuple { elements, .. } if elements.is_empty() => Ok(Value::Unit),
             Expr::Tuple { .. } => Err(crate::utils::Error::CodeGen("tuple values are not implemented".into())),
 
-            Expr::MethodCall { expr: receiver, method, args, .. } => {
-                 if method.name == "add" && args.len() == 1 {
-                     let ptr_val = self.generate_expr(receiver)?;
-                     let offset_val = self.generate_expr(&args[0])?;
-                     
-                     // Get pointer type
-                     if let Some(IRType::Ptr(inner)) = self.get_value_type(&ptr_val) {
-                         let dest = self.alloc_register();
-                         // Result is same type as ptr
-                         let result_ty = IRType::Ptr(inner.clone());
-                         
-                         self.emit_current_with_type(Instruction::GetElementPtr {
-                             dest,
-                             ptr: ptr_val,
-                             index: offset_val,
-                             elem_ty: (*inner).clone(),
-                         }, result_ty);
-                         
-                         Ok(Value::Register(dest))
-                     } else {
-                         // Should not happen if Semantic pass passed
-                         Ok(Value::Unit) 
-                     }
-                 } else {
-                     // General method call: receiver.method(args...) 
-                     // -> Struct_method(&receiver, args...)
-                     let (receiver_address, receiver_type) = self.address_or_temporary(receiver)?;
-                     let receiver_ty = Some(receiver_type.clone());
-                     
-                     // Determine struct name from receiver type
-                     let struct_name = match &receiver_ty {
-                         Some(IRType::Ptr(inner)) => match inner.as_ref() {
-                             IRType::Struct(name) => Some(name.clone()),
-                             IRType::Ptr(inner2) => match inner2.as_ref() {
-                                 IRType::Struct(name) => Some(name.clone()),
-                                 _ => None,
-                             },
-                             _ => None,
-                         },
-                         Some(IRType::Struct(name)) => Some(name.clone()),
-                         _ => None,
-                     };
-                     
-                     if let Some(struct_name) = struct_name {
-                         // Generate mangled function name: Struct_method
-                         let func_name = format!("{}_{}", struct_name, method.name);
-                         
-                         // Generate arg values
-                         let parameters = self.function_parameters.get(&func_name).cloned().unwrap_or_default();
-                         let receiver_val = if parameters.first() == Some(&IRType::Ptr(Box::new(receiver_type.clone()))) {
-                             receiver_address
-                         } else { self.load_address(receiver_address, receiver_type) };
-                         let mut arg_vals = vec![receiver_val];
-                         for (index, arg) in args.iter().enumerate() {
-                             arg_vals.push(self.generate_expr_expected(arg, parameters.get(index + 1))?);
-                         }
-                         
-                         // Resolve the semantic return type.
-                         let ret_type = self.function_signatures.get(&func_name)
-                             .cloned()
-                             .or_else(|| {
-                                 // Fallback to module.functions if not in signatures
-                                 self.module.functions.iter()
-                                     .find(|f| f.name == func_name)
-                                     .map(|f| f.ret_type.clone())
-                             })
-                             .unwrap_or(IRType::Void);
-                         
-                         if ret_type == IRType::Void {
-                             // Void return
-                             self.emit_current_with_type(Instruction::Call {
-                                 dest: None,
-                                 func: func_name,
-                                 args: arg_vals,
-                             }, IRType::Void);
-                             Ok(Value::Unit)
-                         } else {
-                             // Returns a value
-                             let dest = self.alloc_register();
-                             self.emit_current_with_type(Instruction::Call {
-                                 dest: Some(dest),
-                                 func: func_name,
-                                 args: arg_vals,
-                             }, ret_type);
-                             Ok(Value::Register(dest))
-                         }
-                     } else {
-                         // Unknown struct type for method call
-                         Ok(Value::Unit)
-                     }
-                 }
-            },
+            Expr::MethodCall { expr: receiver, args, span, .. } => self.generate_method_call(receiver, args, *span),
             Expr::Ref { expr: inner, .. } => {
                 let (address, _) = self.generate_place(inner)?;
                 Ok(address)
@@ -1126,9 +1056,9 @@ impl IRGenerator {
 
     // ==================== Helper Methods ====================
 
-    fn numeric_literal(expr: &Expr) -> bool {
-        matches!(expr, Expr::Literal(ast::Literal::Int(_, _) | ast::Literal::Float(_, _)))
-            || matches!(expr, Expr::Unary { op: ast::UnOp::Neg, expr, .. } if Self::numeric_literal(expr))
+    fn checked_expr_type(&self, expr: &Expr) -> Option<&ResolvedType> {
+        let function = self.current_fn.as_ref()?;
+        self.semantic_facts.as_ref()?.expr_types.get(&(function.name.clone(), expr.span()))
     }
 
     fn generate_expr_expected(&mut self, expr: &Expr, expected: Option<&IRType>) -> Result<Value> {
@@ -1209,11 +1139,7 @@ impl IRGenerator {
                 // indexing has different source semantics: &array indexes its
                 // elements, while *[T; N] advances by a whole array. Preserve
                 // that distinction using the checked expression type.
-                let mut source_ty = self.semantic_facts.as_ref().and_then(|facts| {
-                    self.current_fn.as_ref().and_then(|function| {
-                        facts.expr_types.get(&(function.name.clone(), expr.span())).cloned()
-                    })
-                });
+                let mut source_ty = self.checked_expr_type(expr).cloned();
                 while let Some(ResolvedType::Reference { inner, .. }) = source_ty {
                     let pointee = match base_ty.unqualified() {
                         IRType::Ptr(inner) => (**inner).clone(),

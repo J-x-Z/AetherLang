@@ -3,6 +3,9 @@ use super::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct SemanticFacts {
+    pub places: HashMap<(String, Span), ResolvedPlace>,
+    pub method_signatures: HashMap<String, ResolvedMethodSignature>,
+    pub method_calls: HashMap<(String, Span), ResolvedMethodCall>,
     pub expr_types: HashMap<(String, Span), ResolvedType>,
     pub memory_orders: HashMap<Span, (crate::intrinsics::MemoryOrder, crate::intrinsics::MemoryOrder)>,
     pub enum_variants: HashMap<String, Vec<(String, Vec<ResolvedType>)>>,

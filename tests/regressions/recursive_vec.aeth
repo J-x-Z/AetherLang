@@ -1,0 +1,76 @@
+use vec::{Vec, vec_new, vec_push, vec_free};
+
+// Vec owns a buffer of complete Node values, including nested Vec metadata.
+// Ownership of inserted values is transferred explicitly; release descendants
+// before their containing buffer. This also exercises growth beyond capacity 4.
+pub struct Node { number: i32, children: Vec<Node> }
+type NodeAlias = Node;
+
+fn child_at(node: *Node, index: u64) -> *Node {
+    &node.children.data[index] as *Node
+}
+fn add_child(node: *Node, number: i32) -> bool {
+    let child: Node = Node { number: number, children: vec_new() };
+    vec_push(&node.children as *Vec<Node>, child)
+}
+fn total(node: *Node) -> i64 {
+    let mut value: i64 = node.number as i64;
+    let mut index: u64 = 0;
+    while index < node.children.len {
+        value = value + total(child_at(node, index));
+        index = index + 1;
+    }
+    value
+}
+fn release(node: *Node) {
+    let mut index: u64 = 0;
+    while index < node.children.len {
+        release(child_at(node, index));
+        index = index + 1;
+    }
+    vec_free(&node.children as *Vec<Node>);
+}
+
+// Mutually recursive nominal types terminate through a raw pointer, even when
+// the referenced definition occurs after the generic container field.
+struct Branch { leaves: Vec<Leaf> }
+struct Leaf { owner: *Branch, number: i32 }
+fn mutual_values() -> i32 {
+    let mut branch: Branch = Branch { leaves: vec_new() };
+    let leaf: Leaf = Leaf { owner: &branch as *Branch, number: 17 };
+    if !vec_push(&branch.leaves as *Vec<Leaf>, leaf) {
+        vec_free(&branch.leaves as *Vec<Leaf>); return 10;
+    }
+    let stored: *Leaf = &branch.leaves.data[0] as *Leaf;
+    let valid: bool = stored.number == 17 && stored.owner.leaves.len == 1;
+    vec_free(&branch.leaves as *Vec<Leaf>);
+    if !valid { return 11; }
+    0
+}
+
+fn main() -> i32 {
+    let mut root: Node = Node { number: 1, children: vec_new() };
+    let root_ptr: *Node = &root as *Node;
+    let mut index: i32 = 2;
+    while index < 14 {
+        if !add_child(root_ptr, index) { release(root_ptr); return 1; }
+        index = index + 1;
+    }
+    let first: *NodeAlias = &root.children.data[0] as *NodeAlias;
+    let borrowed: &Node = &root.children.data[0];
+    let shared_raw: *Node = borrowed as *Node;
+    let first_slot: **Node = &first as **Node;
+    if shared_raw.number != 2 || (*first_slot).number != 2 {
+        release(root_ptr); return 2;
+    }
+    if !add_child(first, 100) || !add_child(first, 101) || !add_child(child_at(root_ptr, 11), 200) {
+        release(root_ptr); return 3;
+    }
+    let sum: i64 = total(root_ptr);
+    let nested: i32 = root.children.data[0].children.data[1].number;
+    release(root_ptr);
+    if sum != 492 || nested != 101 { return 4; }
+    if root.children.len != 0 || root.children.data != (0 as *Node) { return 5; }
+    release(root_ptr);
+    mutual_values()
+}

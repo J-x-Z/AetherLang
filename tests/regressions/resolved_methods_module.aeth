@@ -1,0 +1,6 @@
+// Cross-module &Self must retain the resolver's concrete nominal identity.
+pub struct RemoteCounter { value: i32 }
+impl RemoteCounter {
+    pub fn read(self: &Self) -> i32 { return self.value; }
+}
+pub fn remote_counter() -> RemoteCounter { return RemoteCounter { value: 73 }; }

@@ -47,6 +47,12 @@ negative = {
     'borrow_write': 'fn main()->i32{let mut x:i32=1;let r:&i32=&x;x=2;*r}',
     'move_mutable_reference': 'fn main()->i32{let mut x:i32=1;let r:&mut i32=&mut x;let q:&mut i32=r;*q=2;*r}',
     'effect_wrapper': 'extern "C"{fn puts(p:*u8)->i32;}fn emit(){puts("x");}fn main()->i32 pure{emit();0}',
+    'effect_field_reference': 'struct S{x:i32}fn change(s:&mut S) pure{s.x=7;}fn main()->i32{0}',
+    'effect_index_reference': 'fn change(a:&mut [i32;1]) pure{a[0]=9;}fn main()->i32{0}',
+    'effect_nested_pointer': 'struct S{x:i32}struct H{p:*S}fn change(h:H) pure{h.p.x=7;}fn main()->i32{0}',
+    'effect_projected_global': 'struct S{x:i32}static mut G:S=S{x:0};fn change() pure{G.x=7;}fn main()->i32{0}',
+    'effect_method_add': 'struct S{x:i32}impl S{fn add(self:&Self,n:i32)->i32{puts("io");n}}fn f(s:&S)->i32 pure{s.add(2)}fn main()->i32{0}',
+    'effect_index_evaluation': 'fn index()->i64{puts("io");0}fn change(a:&mut [i32;1]) effect[write]{a[index()]=7;}fn main()->i32{0}',
     'unknown_abi': 'extern "mystery"{fn external();}fn main()->i32{0}',
     'unknown_method': 'struct S{x:i32}fn main()->i32{S::missing();0}',
     'invalid_try': 'fn main()->i32{1?}',
@@ -58,7 +64,8 @@ for name, text in negative.items():
     result = run(f'{name}/check', [compiler, 'check', '--error-format', 'json', path], success=False)
     diagnostic = json.loads(result.stderr)
     expected = ('E2301' if name in ['uninitialized', 'partial_branch', 'zero_iteration', 'partial_aggregate', 'move_mutable_reference']
-                else {'effect_wrapper': 'E2200', 'unknown_abi': 'E2202', 'unknown_method': 'E2001',
+                else 'E2200' if name.startswith('effect_')
+                else { 'unknown_abi': 'E2202', 'unknown_method': 'E2001',
                       'invalid_try': 'E2104', 'type_as_value': 'E2104'}.get(name, 'E2302'))
     assert diagnostic['code'] == expected, f'{name}: {diagnostic}'
     assert diagnostic.get('location'), f'{name}: missing source location' 
