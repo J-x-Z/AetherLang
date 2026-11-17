@@ -1,5 +1,6 @@
 use model::*;
 use runtime::*;
+use type_model::*;
 // Recursive-descent declarations/statements and a Pratt expression parser.
 // Every accepted construct produces a real AST node; unsupported syntax fails.
 fn boot_p_kind(ctx:*BootContext)->i32 {
@@ -45,6 +46,13 @@ fn boot_p_type(ctx:*BootContext)->*BootType {
  ctx.depth=ctx.depth-1;return ty;
 }
 fn boot_p_type_inner(ctx:*BootContext)->*BootType {
+ if boot_p_take(ctx,91){
+  let inner:*BootType=boot_p_type(ctx);if inner==(0 as *BootType){return inner;}
+  if !boot_p_expect(ctx,59,"expected ';' in array type"){return 0 as *BootType;}
+  let count:u64=boot_p_array_count(ctx);if ctx.failed{return 0 as *BootType;}
+  if !boot_p_expect(ctx,93,"expected ']' after array type"){return 0 as *BootType;}
+  return boot_array_type(ctx,inner,count);
+ }
  if boot_p_take(ctx,42) {
   let inner:*BootType=boot_p_type(ctx);
   if inner==0 as *BootType {return inner;}
@@ -120,6 +128,7 @@ fn boot_p_expression(ctx:*BootContext,minimum:i32)->*BootNode {
 fn boot_p_primary(ctx:*BootContext)->*BootNode {
  let token:*BootToken=ctx.cursor;
  let kind:i32=boot_p_kind(ctx);
+ if kind==91{return boot_p_array_value(ctx);}
  if kind==BT_INT || kind==BT_FLOAT || kind==BT_STRING {
   let mut node_kind:i32=BN_INT;
   if kind==BT_FLOAT {node_kind=BN_FLOAT;} else if kind==BT_STRING {node_kind=BN_STRING;}
@@ -285,6 +294,11 @@ fn boot_p_statement(ctx:*BootContext)->*BootNode {
   return node;
  }
  if boot_p_word(ctx,"if") {let branch:*BootNode=boot_p_if(ctx);if branch!=(0 as *BootNode)&&!boot_p_take(ctx,59){branch.flags=branch.flags|16;}return branch;}
+ if boot_p_word(ctx,"loop") {
+  boot_p_advance(ctx);let condition:*BootNode=boot_node(ctx,BN_BOOL,token);if condition==(0 as *BootNode){return condition;}condition.value=1;
+  let body:*BootNode=boot_p_block(ctx);if body==(0 as *BootNode){return body;}
+  let node:*BootNode=boot_node(ctx,BN_WHILE,token);if node!=(0 as *BootNode){node.left=condition;node.body=body;}return node;
+ }
  if boot_p_word(ctx,"while") {
   boot_p_advance(ctx);
   let saved_condition:bool=ctx.parse_condition;ctx.parse_condition=true;
@@ -315,12 +329,14 @@ fn boot_p_statement(ctx:*BootContext)->*BootNode {
  if boot_p_kind(ctx)==123 {let block:*BootNode=boot_p_block(ctx);if block!=(0 as *BootNode)&&!boot_p_take(ctx,59){block.flags=block.flags|16;}return block;}
  let left:*BootNode=boot_p_expression(ctx,0);
  if left==0 as *BootNode {return left;}
- if boot_p_take(ctx,61) {
+ let assignment:i32=boot_p_kind(ctx);
+ if assignment==61||assignment>BT_ASSIGN_BASE {
+  boot_p_advance(ctx);
   let right:*BootNode=boot_p_expression(ctx,0);
   if right==0 as *BootNode {return right;}
   boot_p_take(ctx,59);
   let node:*BootNode=boot_node(ctx,BN_ASSIGN,token);
-  if node!=0 as *BootNode {node.left=left;node.right=right;}
+  if node!=0 as *BootNode {node.left=left;node.right=right;if assignment>BT_ASSIGN_BASE{node.op=assignment-BT_ASSIGN_BASE;}}
   return node;
  }
  let semicolon:bool=boot_p_take(ctx,59);
@@ -464,6 +480,7 @@ pub fn boot_parse(ctx:*BootContext)->bool {
    if boot_p_word(ctx,"fn") {node=boot_p_function(ctx,false);}
    else if boot_p_word(ctx,"struct") {node=boot_p_struct(ctx);}
    else if boot_p_word(ctx,"const") {node=boot_p_constant(ctx);}
+   else if boot_p_word(ctx,"type") {node=boot_p_alias(ctx);}
    else {boot_error(ctx,ctx.cursor,"expected fn, struct, const or extern \"C\"; construct outside Core v1");return false;}
    if node==0 as *BootNode {return false;}
    if public {node.flags=node.flags|8;}
@@ -499,4 +516,33 @@ fn boot_p_struct_value(ctx:*BootContext,node:*BootNode)->*BootNode{
  }
  if !boot_p_expect(ctx,125,"expected '}' after struct initializer"){return 0 as *BootNode;}
  return node;
+}
+
+fn boot_p_alias(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);let name:*BootToken=boot_p_name(ctx);if name==(0 as *BootToken){return 0 as *BootNode;}
+ let ty:*BootType=boot_named_type(ctx,name.text);if ty==(0 as *BootType){return 0 as *BootNode;}
+ if ty.complete{boot_error(ctx,name,"duplicate type definition");return 0 as *BootNode;}
+ if !boot_p_expect(ctx,61,"expected '=' in type alias"){return 0 as *BootNode;}
+ let target:*BootType=boot_p_type(ctx);if target==(0 as *BootType){return 0 as *BootNode;}boot_p_take(ctx,59);
+ ty.kind=BY_ALIAS;ty.inner=target;ty.complete=true;
+ let node:*BootNode=boot_node(ctx,BN_ALIAS,token);if node!=(0 as *BootNode){node.name=name.text;node.ty=ty;}return node;
+}
+
+fn boot_p_array_count(ctx:*BootContext)->u64{
+ if boot_p_kind(ctx)!=BT_INT{boot_error(ctx,ctx.cursor,"Core array length requires a nonnegative integer literal");return 0;}
+ let mut count:u64=0;if !boot_integer_value(ctx,ctx.cursor,9223372036854775807,&mut count as *u64){return 0;}boot_p_advance(ctx);return count;
+}
+fn boot_p_array_value(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);let node:*BootNode=boot_node(ctx,BN_ARRAY,token);if node==(0 as *BootNode){return node;}
+ let mut tail:*BootNode=0 as *BootNode;let mut count:i64=0;
+ while !ctx.failed&&boot_p_kind(ctx)!=93{
+  let element:*BootNode=boot_p_expression(ctx,0);if element==(0 as *BootNode){return element;}
+  if tail==(0 as *BootNode){node.params=element;}else{tail.next=element;}tail=element;count=count+1;
+  if boot_p_take(ctx,59){
+   if count!=1{boot_error(ctx,ctx.cursor,"repeat array requires one element");return 0 as *BootNode;}
+   node.kind=BN_REPEAT;node.left=element;node.params=0 as *BootNode;count=boot_p_array_count(ctx) as i64;break;
+  }
+  if !boot_p_take(ctx,44){break;}
+ }
+ if !boot_p_expect(ctx,93,"expected ']' after array value"){return 0 as *BootNode;}node.value=count;return node;
 }

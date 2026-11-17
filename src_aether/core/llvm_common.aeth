@@ -7,6 +7,7 @@ pub fn ll_id(ctx:*BootContext)->i32{ctx.llvm_serial=ctx.llvm_serial+1;return ctx
 pub fn ll_type(ctx:*BootContext,ty:*BootType){
  if ty.kind==BY_VOID {ll_text(ctx,"void");return;}
  if ty.kind==BY_PTR {ll_text(ctx,"ptr");return;}
+ if ty.kind==BY_ARRAY{fprintf(ctx.output,"[%llu x ",ty.extent);ll_type(ctx,ty.inner);ll_text(ctx,"]");return;}
  if ty.kind==BY_STRUCT {fprintf(ctx.output,"%%a%d_s%d",ctx.c_namespace,ty.id);return;}
  if ty.kind==BY_F32 {ll_text(ctx,"float");return;}if ty.kind==BY_F64 {ll_text(ctx,"double");return;}
  fprintf(ctx.output,"i%d",ll_bits(ty));
@@ -98,6 +99,9 @@ pub fn ll_allocas(ctx:*BootContext,node:*BootNode){
  let mut item:*BootNode=node;
  while item!=(0 as *BootNode){
   if item.kind==BN_LET||item.kind==BN_PARAM{fprintf(ctx.output,"  %%v%d = alloca ",item.id);ll_type(ctx,item.ty);ll_text(ctx,"\n");}
-  ll_allocas(ctx,item.body);ll_allocas(ctx,item.third);item=item.next;
+  if item.kind==BN_ARRAY||item.kind==BN_REPEAT||(item.kind==BN_INDEX&&item.left.ty.kind==BY_ARRAY&&!boot_place_form(item.left)){
+   let mut ty:*BootType=item.ty;if item.kind==BN_INDEX{ty=item.left.ty;}fprintf(ctx.output,"  %%arr%d = alloca ",item.id);ll_type(ctx,ty);ll_text(ctx,"\n");
+  }
+  ll_allocas(ctx,item.left);ll_allocas(ctx,item.right);ll_allocas(ctx,item.body);ll_allocas(ctx,item.third);ll_allocas(ctx,item.params);item=item.next;
  }
 }

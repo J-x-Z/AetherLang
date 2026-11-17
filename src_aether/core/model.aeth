@@ -19,11 +19,13 @@ pub const BT_ARROW:i32=256; pub const BT_EQ:i32=257; pub const BT_NE:i32=258;
 pub const BT_LE:i32=259; pub const BT_GE:i32=260; pub const BT_AND:i32=261;
 pub const BT_OR:i32=262; pub const BT_SHL:i32=263; pub const BT_SHR:i32=264;
 pub const BT_ELLIPSIS:i32=265;
+// Compound assignment tokens encode their underlying binary operator.
+pub const BT_ASSIGN_BASE:i32=512;
 // Primitive type kinds; pointer/struct types are interned in BootContext.types.
 pub const BY_VOID:i32=0; pub const BY_BOOL:i32=1; pub const BY_I8:i32=2; pub const BY_U8:i32=3;
 pub const BY_I16:i32=4; pub const BY_U16:i32=5; pub const BY_I32:i32=6; pub const BY_U32:i32=7;
 pub const BY_I64:i32=8; pub const BY_U64:i32=9; pub const BY_F32:i32=10; pub const BY_F64:i32=11;
-pub const BY_PTR:i32=12; pub const BY_STRUCT:i32=13;
+pub const BY_PTR:i32=12; pub const BY_STRUCT:i32=13; pub const BY_ARRAY:i32=14; pub const BY_ALIAS:i32=15;
 // Node fields by kind:
 // PROGRAM: body=top-level list. STRUCT: name, body=FIELD list, ty.
 // FN: name, params=PARAM list, ty=return type, body=BLOCK or null (extern).
@@ -45,11 +47,11 @@ pub const BN_BINARY:i32=16; pub const BN_UNARY:i32=17; pub const BN_MEMBER:i32=1
 pub const BN_INDEX:i32=19; pub const BN_CAST:i32=20; pub const BN_SIZEOF:i32=21;
 pub const BN_INT:i32=22; pub const BN_FLOAT:i32=23; pub const BN_STRING:i32=24;
 pub const BN_IDENT:i32=25; pub const BN_BOOL:i32=26; pub const BN_CONST:i32=27;
-pub const BN_STRUCT_VALUE:i32=28;
+pub const BN_STRUCT_VALUE:i32=28; pub const BN_ARRAY:i32=29; pub const BN_REPEAT:i32=30; pub const BN_ALIAS:i32=31;
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
 pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
-pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule }
+pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,layout_size:u64,layout_align:u64 }
 pub struct BootNode {
  kind:i32,id:i32,op:i32,flags:i32,tree_depth:i32,value:i64,name:*u8,token:*BootToken,
  ty:*BootType,aux:*BootType,decl:*BootNode,left:*BootNode,right:*BootNode,

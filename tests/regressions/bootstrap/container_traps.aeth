@@ -1,0 +1,13 @@
+fn main(argc:i32,argv:**u8)->i32{
+ if argc!=2{return 90;}let mode:u8=argv[1][0];
+ let mut values:[i32;2]=[1,2];let negative:i32=-1;let large:u64=18446744073709551615;
+ if mode==48{return values[negative];}
+ if mode==49{values[large]=3;return 91;}
+ if mode==50{let empty:[i32;0]=[];return empty[0];}
+ let mut n:i32=-2147483647-1;let minus:i32=-1;let zero:i32=0;
+ if mode==51{n/=minus;return 92;}
+ if mode==52{n%=minus;return 93;}
+ if mode==53{n/=zero;return 94;}
+ if mode==54{n%=zero;return 95;}
+ return 96;
+}

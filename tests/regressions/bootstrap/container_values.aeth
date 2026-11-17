@@ -1,0 +1,33 @@
+extern "C" {fn puts(text:*u8)->i32;}
+type Number=Later;
+type Later=i32;
+type Numbers=[Number;3];
+struct Row{values:Numbers,tail:i32}
+fn make()->Numbers{[10,20,30]}
+fn row()->Row{Row{values:make(),tail:7}}
+fn tick(counter:*i32,value:i32)->i32{*counter+=1;return value;}
+fn index(counter:*i32,values:*Numbers)->i32{*counter+=1;(*values)[0]=40;return 0;}
+fn rhs(counter:*i32,values:*Numbers)->i32{*counter+=1;(*values)[0]=90;return 2;}
+fn nested_loop()->i32{loop{loop{break;}return 7;break;}}
+fn forever()->i32{loop{continue;}}
+fn main()->i32{
+ let mut values:Numbers=make();let copied:Numbers=values;
+ let mut calls:i32=0;
+ values[index(&calls,&values)]+=rhs(&calls,&values);
+ if values[0]!=42||calls!=2||copied[0]!=10{return 1;}
+ if values[index(&calls,&values)]!=40||calls!=3{return 2;}
+ let aggregate:Row=Row{values:values,tail:9};
+ if aggregate.values[0]!=40||row().values[2]!=30||make()[1]!=20{return 3;}
+ let repeated:[i32;4]=[tick(&calls,6);4];
+ let empty:[i32;0]=[tick(&calls,8);0];let empty2:[i32;0]=[];
+ if calls!=5||repeated[3]!=6||size_of([i32;0])!=0{return 4;}
+ let nested:[[i32;3];2]=[values,copied];if nested[0][0]!=40||nested[1][0]!=10{return 5;}
+ let ordered:[i32;2]=[tick(&calls,1),tick(&calls,calls)];if ordered[1]!=6||calls!=7{return 6;}
+ let mut n:i8=127;n+=1;if n!=(-128 as i8){return 7;}n-=1;if n!=127{return 8;}
+ let mut u:u8=200;u*=2;if u!=144{return 9;}u/=3;u%=7;u|=128;u&=250;u^=2;u<<=8;u>>=1;if u!=64{return 10;}
+ let mut f:f64=1.5;f+=2.0;f*=2.0;f/=2.0;f-=1.0;if f!=2.5{return 11;}
+ let mut p:*i32=&values[0];p+=2;p-=1;if *p!=20{return 12;}
+ let mut count:i32=0;loop{count+=1;if count<3{continue;}break;}
+ if count!=3||nested_loop()!=7{return 13;}
+ puts("containers=ok");return 0;
+}

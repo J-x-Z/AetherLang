@@ -88,8 +88,7 @@ def run(name, command, expected=0, timeout=120, **options):
     return result
 
 
-modules = ['main', 'model', 'runtime', 'lexer', 'parser', 'semantic', 'emitter', 'project', 'driver', 'llvm_common', 'llvm_expr', 'llvm_stmt', 'emitter_llvm']
-paths = [root / 'src_aether' / 'core' / f'{name}.aeth' for name in modules]
+paths = sorted((root / 'src_aether' / 'core').glob('*.aeth'))
 source_tree = work / 'core-source'
 source_tree.mkdir(exist_ok=True)
 # File copies only: the compiler itself finds, reads and resolves every import.

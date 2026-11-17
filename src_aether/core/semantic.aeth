@@ -1,5 +1,6 @@
 use model::*;
 use runtime::*;
+use type_model::*;
 // Core v1 type and scope checker, executed by every bootstrap stage.
 // Raw pointers are a manual memory boundary. No borrow-checking claim is made.
 extern "C" { fn strtod(text:*u8,end:**u8)->f64; }
@@ -38,9 +39,11 @@ fn boot_type_valid(ctx:*BootContext,ty:*BootType,token:*BootToken,allow_void:boo
  if ty.kind==BY_VOID && !allow_void { boot_error(ctx,token,"void is not a value type");return false; }
  if ty.kind==BY_STRUCT && !ty.complete { boot_error(ctx,token,"unknown struct type");return false; }
  if ty.kind==BY_PTR { return boot_type_valid(ctx,ty.inner,token,true); }
+ if ty.kind==BY_ARRAY {if !boot_type_valid(ctx,ty.inner,token,false){return false;}return boot_layout(ctx,ty,0,token);}
  return true;
 }
 fn boot_struct_finite(ctx:*BootContext,ty:*BootType,trail:*BootTypeTrail,token:*BootToken)->bool {
+ if ty.kind==BY_ARRAY{return boot_struct_finite(ctx,ty.inner,trail,token);}
  if ty.kind!=BY_STRUCT { return true; }
  let mut prior:*BootTypeTrail=trail;
  while prior!=(0 as *BootTypeTrail) {
@@ -70,22 +73,8 @@ fn boot_integer_literal(ctx:*BootContext,node:*BootNode,ty:*BootType,negative:bo
   if !boot_signed(ty) { boot_error(ctx,node.token,"negative literal requires a signed integer type");return false; }
   maximum=maximum+1;
  }
- let text:*u8=node.token.text;
- let mut base:u64=10;let mut index:u64=0;
- if text[0]==48 && (text[1]==120 || text[1]==88) { base=16;index=2; }
  let mut value:u64=0;
- while text[index]!=0 {
-  let byte:i32=text[index] as i32;
-  let mut digit:i32=byte-48;
-  if byte>=65 && byte<=70 { digit=byte-65+10; }
-  if byte>=97 && byte<=102 { digit=byte-97+10; }
-  if digit<0 || (digit as u64)>=base { boot_error(ctx,node.token,"invalid integer literal");return false; }
-  let unsigned:u64=digit as u64;
-  if value>maximum/base || (value==maximum/base && unsigned>maximum%base) {
-   boot_error(ctx,node.token,"integer literal is outside its type range");return false;
-  }
-  value=value*base+unsigned;index=index+1;
- }
+ if !boot_integer_value(ctx,node.token,maximum,&mut value as *u64){return false;}
  node.value=value as i64;node.ty=ty;return true;
 }
 fn boot_literal_number(node:*BootNode)->bool {
@@ -110,7 +99,8 @@ fn boot_place_writable(ctx:*BootContext,node:*BootNode)->bool {
   if node.left.ty.kind==BY_PTR { return true; }
   return boot_place_writable(ctx,node.left);
  }
- if node.kind==BN_INDEX || (node.kind==BN_UNARY && node.op==42) { return true; }
+ if node.kind==BN_INDEX{if node.left.ty.kind==BY_ARRAY{return boot_place_writable(ctx,node.left);}return true;}
+ if node.kind==BN_UNARY && node.op==42 { return true; }
  boot_error(ctx,node.token,"expected an assignable place");return false;
 }
 fn boot_place_addressable(ctx:*BootContext,node:*BootNode)->bool {
@@ -122,7 +112,8 @@ fn boot_place_addressable(ctx:*BootContext,node:*BootNode)->bool {
   if node.left.ty.kind==BY_PTR { return true; }
   return boot_place_addressable(ctx,node.left);
  }
- if node.kind==BN_INDEX || (node.kind==BN_UNARY && node.op==42) { return true; }
+ if node.kind==BN_INDEX{if node.left.ty.kind==BY_ARRAY{return boot_place_addressable(ctx,node.left);}return true;}
+ if node.kind==BN_UNARY && node.op==42 { return true; }
  boot_error(ctx,node.token,"address requires a place");return false;
 }
 fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType {
@@ -152,6 +143,20 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   } else {node.decl=boot_find_binding(ctx,node.name,node.token);}
   if node.decl==(0 as *BootNode) { boot_error(ctx,node.token,"unknown value name");return 0 as *BootType; }
   node.ty=node.decl.ty;return node.ty;
+ }
+ if kind==BN_ARRAY||kind==BN_REPEAT{
+  let mut element:*BootType=0 as *BootType;
+  if expected!=(0 as *BootType)&&expected.kind==BY_ARRAY{
+   if expected.extent!=(node.value as u64){boot_error(ctx,node.token,"array initializer length mismatch");return 0 as *BootType;}element=expected.inner;
+  }
+  let mut item:*BootNode=node.params;if kind==BN_REPEAT{item=node.left;}
+  while item!=(0 as *BootNode){
+   let actual:*BootType=boot_check_expr(ctx,item,element);if ctx.failed{return 0 as *BootType;}
+   if element==(0 as *BootType){element=actual;}else{if !boot_expect(ctx,item,actual,element){return 0 as *BootType;}}
+   item=item.next;
+  }
+  if element==(0 as *BootType){boot_error(ctx,node.token,"empty array needs an element type context");return 0 as *BootType;}
+  node.ty=boot_array_type(ctx,element,node.value as u64);if !boot_type_valid(ctx,node.ty,node.token,false){return 0 as *BootType;}return node.ty;
  }
  if kind==BN_STRUCT_VALUE {
   if !boot_type_valid(ctx,node.ty,node.token,false) || node.ty.kind!=BY_STRUCT {boot_error(ctx,node.token,"struct initializer requires a struct type");return 0 as *BootType;}
@@ -211,7 +216,7 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   let base:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);
   let index:*BootType=boot_check_expr(ctx,node.right,0 as *BootType);
   if ctx.failed { return 0 as *BootType; }
-  if base.kind!=BY_PTR || base.inner.kind==BY_VOID || !boot_integer(index) {
+  if (base.kind!=BY_PTR&&base.kind!=BY_ARRAY) || base.inner.kind==BY_VOID || !boot_integer(index) {
    boot_error(ctx,node.token,"index requires a typed pointer and integer index");return 0 as *BootType;
   }
   node.ty=base.inner;return node.ty;
@@ -256,7 +261,7 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   while arg!=(0 as *BootNode) {
    let actual:*BootType=boot_check_expr(ctx,arg,0 as *BootType);
    if ctx.failed { return 0 as *BootType; }
-   if actual.kind==BY_VOID || actual.kind==BY_STRUCT { boot_error(ctx,arg.token,"variadic arguments must be scalar or pointer");return 0 as *BootType; }
+   if actual.kind==BY_VOID || actual.kind==BY_STRUCT || actual.kind==BY_ARRAY { boot_error(ctx,arg.token,"variadic arguments must be scalar or pointer");return 0 as *BootType; }
    arg=arg.next;
   }
   node.ty=function.ty;return node.ty;
@@ -327,6 +332,12 @@ fn boot_check_statement(ctx:*BootContext,node:*BootNode)->bool {
   let target:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);
   if ctx.failed { return false; }
   if !boot_place_writable(ctx,node.left) { return false; }
+  node.ty=target;
+  if node.op!=0{
+   let operation:*BootNode=boot_node(ctx,BN_BINARY,node.token);if operation==(0 as *BootNode){return false;}
+   operation.op=node.op;operation.left=node.left;operation.right=node.right;
+   let result:*BootType=boot_check_expr(ctx,operation,target);if !ctx.failed{boot_expect(ctx,node,result,target);}return false;
+  }
   let value:*BootType=boot_check_expr(ctx,node.right,target);
   if ctx.failed { return false; }
   boot_expect(ctx,node,value,target);return false;
@@ -418,6 +429,7 @@ fn boot_check_entry(ctx:*BootContext,item:*BootNode)->bool {
 }
 pub fn boot_check(ctx:*BootContext)->bool {
  if ctx.failed || ctx.program==(0 as *BootNode) { return false; }
+ if !boot_normalize(ctx){return false;}
  // Register all declarations before any body, allowing forward calls/types.
  let mut item:*BootNode=ctx.program.body;
  while item!=(0 as *BootNode) && !ctx.failed {
@@ -443,16 +455,19 @@ pub fn boot_check(ctx:*BootContext)->bool {
     field=field.next;
    }
    if !boot_struct_finite(ctx,item.ty,0 as *BootTypeTrail,item.token) { return false; }
+   if !boot_layout(ctx,item.ty,0,item.token){return false;}
   } else {
-   if !boot_type_valid(ctx,item.ty,item.token,item.kind==BN_FN) { return false; }
+   if !boot_type_valid(ctx,item.ty,item.token,(item.kind==BN_FN||item.kind==BN_ALIAS)) { return false; }
    if item.kind==BN_FN {
     if (item.flags&4)!=0 && ((item.flags&2)==0 || item.params==(0 as *BootNode)) {
      boot_error(ctx,item.token,"variadic signature requires a foreign function with a fixed parameter");return false;
     }
     if !boot_check_entry(ctx,item) { return false; }
+    if (item.flags&2)!=0&&item.ty.kind==BY_ARRAY{boot_error(ctx,item.token,"foreign array value ABI is not supported");return false;}
     let mut param:*BootNode=item.params;
     while param!=(0 as *BootNode) {
      if !boot_type_valid(ctx,param.ty,param.token,false) { return false; }
+     if (item.flags&2)!=0&&param.ty.kind==BY_ARRAY{boot_error(ctx,param.token,"foreign array value ABI is not supported");return false;}
      let mut previous:*BootNode=item.params;
      while previous!=param {
       if strcmp(previous.name,param.name)==0 { boot_error(ctx,param.token,"duplicate function parameter");return false; }
@@ -479,8 +494,8 @@ pub fn boot_check(ctx:*BootContext)->bool {
    ctx.function=item;ctx.depth=0;ctx.loop_depth=0;ctx.bindings=0 as *BootBinding;
    let mut param:*BootNode=item.params;
    while param!=(0 as *BootNode) { if !boot_bind(ctx,param) { return false; } param=param.next; }
-   let returned:bool=boot_check_statement(ctx,item.body);
-   if !ctx.failed && item.ty.kind!=BY_VOID && !returned { boot_error(ctx,item.token,"function may finish without returning a value"); }
+   boot_check_statement(ctx,item.body);
+   if !ctx.failed && item.ty.kind!=BY_VOID && (boot_flow(item.body)&1)!=0 { boot_error(ctx,item.token,"function may finish without returning a value"); }
    ctx.bindings=0 as *BootBinding;ctx.function=0 as *BootNode;
   }
   item=item.next;

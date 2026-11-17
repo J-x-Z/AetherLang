@@ -8,7 +8,11 @@ pub fn ll_statement(ctx:*BootContext,node:*BootNode){
  if node.kind==BN_LET{
   let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  store ");ll_value(ctx,node.ty,value);fprintf(ctx.output,", ptr %%v%d\n",node.id);return;
  }
- if node.kind==BN_ASSIGN{let place:i32=ll_place(ctx,node.left);let value:i32=ll_expr(ctx,node.right);ll_store(ctx,node.left.ty,value,place);return;}
+ if node.kind==BN_ASSIGN{
+  let place:i32=ll_place(ctx,node.left);let mut previous:i32=0;if node.op!=0{previous=ll_load(ctx,node.left.ty,place);}
+  let mut value:i32=ll_expr(ctx,node.right);if node.op!=0{value=ll_binary_values(ctx,node,previous,value);}
+  ll_store(ctx,node.left.ty,value,place);return;
+ }
  if node.kind==BN_EXPR{ll_expr(ctx,node.left);return;}
  if node.kind==BN_RETURN{
   if node.left==(0 as *BootNode){ll_text(ctx,"  ret void\n");}else{let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  ret ");ll_value(ctx,node.left.ty,value);ll_text(ctx,"\n");}

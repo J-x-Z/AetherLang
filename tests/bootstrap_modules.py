@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
+import resource
 import subprocess
 import time
 
@@ -26,6 +28,7 @@ cc = shutil.which(args.cc)
 if not cc:
     raise SystemExit(f'C compiler not found: {args.cc}')
 records = []
+resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 emit_flags = ['--emit-llvm'] if args.format == 'llvm' else []
 env = {**os.environ, 'TMPDIR': str(work)}
 
@@ -45,7 +48,8 @@ def run(name, command, expected=0, stdout=None, diagnostic=None):
         result = subprocess.run(command, cwd=work, env=env, capture_output=True, text=True, timeout=45)
     except subprocess.TimeoutExpired:
         record(name, False, command=command, error='timeout')
-    record(name, result.returncode == expected and (stdout is None or result.stdout == stdout)
+    correct_exit = result.returncode in expected if isinstance(expected, list) else result.returncode == expected
+    record(name, correct_exit and (stdout is None or result.stdout == stdout)
            and (diagnostic is None or diagnostic in result.stdout + result.stderr),
            command=command, exit=result.returncode, expected_exit=expected,
            stdout=result.stdout, stderr=result.stderr, diagnostic=diagnostic,
@@ -129,7 +133,29 @@ positive('imported-main-private', {
  'main.aeth':'use library;fn main()->i32{return library::value()-42;}',
  'library.aeth':'fn main(value:i64)->i64{return value;}pub fn value()->i32{return main(42) as i32;}'})
 
+positive('late-import-and-type-alias', {
+ 'main.aeth':'extern "C"{fn puts(s:*u8)->i32;}fn main()->i32{let values:Pair=[20,22];return sum(values)-42;}use lib::{Pair,sum};',
+ 'lib.aeth':'pub type Pair=[i32;2];pub fn sum(values:Pair)->i32{values[0]+values[1]}'},levels=('0','2'))
+positive('alias-forward-pointer', {
+ 'main.aeth':'type First=Later;fn take(p:*First)->i32{*p}type Later=i32;fn main()->i32{let x:i32=42;return take(&x)-42;}'})
+positive('container-values', {'main.aeth':(root/'tests/regressions/bootstrap/container_values.aeth').read_text()},
+         expected='containers=ok\n',levels=('0','2'))
+
 bad = {
+ 'array-wrong-length': ({'main.aeth':'fn main(){let a:[i32;2]=[1];}'}, 'array initializer length'),
+ 'array-wrong-element': ({'main.aeth':'fn main(){let a:[i32;1]=[true];}'}, 'type mismatch'),
+ 'array-repeat-length': ({'main.aeth':'fn main(){let a:[i32;2]=[1;3];}'}, 'array initializer length'),
+ 'array-negative-length': ({'main.aeth':'fn main(){let a:[i32;-1]=[];}'}, 'nonnegative integer'),
+ 'array-size-overflow': ({'main.aeth':'fn main(){let p:*[i64;1152921504606846976]=0 as *[i64;1152921504606846976];}'}, 'array object exceeds'),
+ 'alias-cycle': ({'main.aeth':'type A=B;type B=A;fn main(){}'}, 'cyclic'),
+ 'alias-pointer-cycle': ({'main.aeth':'type A=*A;fn main(){}'}, 'cyclic'),
+ 'array-immutable': ({'main.aeth':'fn main(){let a:[i32;2]=[1,2];a[0]=3;}'}, 'immutable'),
+ 'compound-immutable': ({'main.aeth':'fn main(){let a:i32=1;a+=2;}'}, 'immutable'),
+ 'compound-wrong-type': ({'main.aeth':'fn main(){let mut a:i32=1;a+=true;}'}, 'binary operand types'),
+ 'compound-array': ({'main.aeth':'fn main(){let mut a:[i32;1]=[1];a+=[2];}'}, 'invalid binary'),
+ 'foreign-array': ({'main.aeth':'extern "C"{fn foreign(a:[i32;2]);}fn main(){}'}, 'foreign array value ABI'),
+ 'loop-reachable-break': ({'main.aeth':'fn f()->i32{loop{break;}}fn main(){}'}, 'function may finish without returning'),
+ 'alias-private': ({'main.aeth':'use lib;fn main(){let x:lib::Hidden=0;}','lib.aeth':'type Hidden=i32;'}, 'unknown or private'),
  'group-separator': ({'main.aeth':'use lib::{a b};fn main(){}','lib.aeth':'pub fn a(){}pub fn b(){}'}, "expected ',' or '}'"),
  'struct-duplicate': ({'main.aeth':'struct S{x:i32}fn main(){let x:S=S{x:1,x:2};}'}, 'duplicate struct initializer field'),
  'struct-missing': ({'main.aeth':'struct S{x:i32,y:i32}fn main(){let x:S=S{x:1};}'}, 'missing struct initializer field'),
@@ -150,7 +176,6 @@ bad = {
  'nominal': ({'main.aeth':'use a;use b;fn main(){let p:*a::Value=0 as *a::Value;b::take(p);}', 'a.aeth':'pub struct Value{x:i32}', 'b.aeth':'pub struct Value{x:i32}pub fn take(p:*Value){}'}, 'type mismatch'),
  'foreign-alias-collision': ({'main.aeth':'use lib::foo as bar;extern \"C\"{fn bar(x:i32)->i32;}fn main()->i32{return bar(1);}','lib.aeth':'extern \"C\"{fn foo(x:i32)->i32;}'}, 'local declaration conflicts'),
  'foreign-mismatch': ({'main.aeth':'use a;use b;fn main(){}','a.aeth':'extern "C"{fn foreign(value:i32);}','b.aeth':'extern "C"{fn foreign(value:i64);}'}, 'incompatible cross-module foreign declarations'),
- 'late-import': ({'main.aeth':'fn main(){}use lib;','lib.aeth':'pub fn f(){}'}, 'construct outside Core'),
  'malformed-import': ({'main.aeth':'use lib:'}, 'expected ::'),
  'imported-syntax': ({'main.aeth':'use lib;fn main(){}','lib.aeth':'\npub fn broken( {'}, 'lib.aeth:2:'),
  'imported-type': ({'main.aeth':'use lib;fn main(){}','lib.aeth':'\npub fn broken()->i32{return true;}'}, 'lib.aeth:2:'),
@@ -165,6 +190,15 @@ for name, (contents, diagnostic) in bad.items():
     run(name+'-check-rejected', [compiler, folder / 'main.aeth', '--check'], expected=1, diagnostic=diagnostic)
     run(name+'-emit-rejected', [compiler, folder / 'main.aeth', *emit_flags, '-o', output], expected=1, diagnostic=diagnostic)
     record(name+'-output-preserved', output.read_text() == 'USER CONTENT\n')
+
+trap_folder = files('container-traps', {'main.aeth':(root/'tests/regressions/bootstrap/container_traps.aeth').read_text()})
+trap_source = trap_folder / ('output.ll' if args.format=='llvm' else 'output.c')
+run('container-traps-emit',[compiler,trap_folder/'main.aeth',*emit_flags,'-o',trap_source])
+for level in ['0','2']:
+    binary=trap_folder/('program-O'+level)
+    run('container-traps-build-O'+level,[cc,'-O'+level,*native_flags,trap_source,'-o',binary])
+    for case in range(7):
+        run(f'container-trap-{case}-O{level}',[binary,str(case)],expected=[-signal.SIGILL,-signal.SIGTRAP])
 
 originals = {str(p): p.read_bytes() for p in project.rglob('*.aeth')}
 imported = project / 'reader.aeth'

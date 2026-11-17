@@ -14,7 +14,7 @@ python3 tests/bootstrap_core.py --compiler /path/to/aethc \
   --work-dir /external/work/bootstrap --backend llvm
 ```
 
-Use `--backend c` for a C-only seed. The runner copies the thirteen source files
+Use `--backend c` for a C-only seed. The runner copies the Core source files
 verbatim into its work directory and builds stage1 from the real entry
 `src_aether/core/main.aeth`. Each Aether compiler then finds, opens, lexes and
 parses its own module graph to generate stages2, 3 and 4. No source concatenation,
@@ -32,7 +32,7 @@ aethc-core project/main.aeth -I shared/modules -o program.c
 clang -std=c11 -O2 program.c -lm -o program
 ```
 
-Imports must precede declarations. Supported forms are `use library;`,
+Imports may appear between top-level declarations. Supported forms are `use library;`,
 `use library as alias;`, `use library::item;`, `use library::item as alias;`,
 and `use library::*;`. Flat groups such as
 `use library::{first, second as alias};` are supported. Named imports permit `library::function()`,
@@ -56,9 +56,10 @@ the executable `main`; an imported file's private `main` remains an ordinary
 function. Diagnostics retain the originating file, line and column.
 
 Core v1 supports functions, C FFI and variadics, explicit scalar/pointer/struct
-types, constants, lexical locals, casts, fields, indexing, `size_of`, arithmetic,
+types, fixed arrays, transparent type aliases, constants, lexical locals, casts, fields, indexing, `size_of`, arithmetic,
 conditionals, loops, returns, and raw-address operations. All locals require an
-initializer. Non-void functions must explicitly return on every reachable path.
+initializer. Non-void functions must return a value on every reachable finishing path; a
+provably diverging `loop` or `while true` does not require a trailing return.
 Only `main()` or `main(argc:i32, argv:**u8)` is an entry point, returning void/i32.
 Semicolons are optional at the same token boundaries as the primary parser. A
 final expression without a semicolon supplies a non-void function value,
@@ -66,6 +67,20 @@ including final blocks and `if` branches; a semicolon discards that value.
 Struct values can be constructed, copied and returned; recursive layouts require
 pointers. Initializers must supply every field exactly once, may use shorthand
 names, and evaluate fields in source order regardless of declaration order.
+Fixed arrays use `[T; N]` types with a nonnegative integer literal extent, `[a, b]`
+values and `[value; N]` repeat values. They can be copied, passed and returned by
+value, nested, or stored in structs. A repeat evaluates its initializer once,
+including when `N` is zero. Array indexing traps before access when the index is
+negative or outside the extent; raw pointer indexing retains its unchecked
+system-programming semantics. Impossible object sizes are rejected before native
+compilation. Foreign by-value arrays remain explicitly unsupported.
+
+`type Name = Type` and `pub type Name = Type` are transparent, including forward
+aliases and imported aliases; cyclic aliases are rejected. `loop`, `break` and
+`continue` use the same reachable-exit rules as ordinary `while` statements.
+Compound arithmetic and bitwise assignments evaluate the place once, load its
+old value, then evaluate the right operand before storing the result.
+
 Integer operations wrap by width except division/remainder by zero and signed
 MIN/-1, which trap. Operand and argument evaluation is left-to-right, Boolean
 operators short-circuit, and float-to-integer casts saturate (NaN becomes zero).
@@ -82,7 +97,7 @@ escapes to a Unicode scalar such as `\u{e9}` (UTF-8 `c3 a9`), or write numeric
 Core still has no character-literal syntax. The semantic corpus includes
 native byte checks for UTF-8 boundaries, NUL, ASCII escapes, and raw Unicode.
 
-The bootstrap compiler still rejects generics, enums, methods, arrays,
+The bootstrap compiler still rejects generics, enums, methods,
 references, attributes and other syntax outside this subset. These features
 remain available in the primary compiler. The Core compiler targets the
 existing 64-bit host C ABI; its `usize`/`isize` and libc declarations do not yet
@@ -130,7 +145,7 @@ python3 tests/bootstrap_llvm.py --compiler /external/work/bootstrap/stage4 \
 ```
 
 This second runner starts with an already self-hosted Core compiler. That
-compiler builds the new compiler's thirteen-source module graph through C;
+compiler builds the new compiler's complete module graph through C;
 the resulting compiler emits LLVM IR for its complete source. Three consecutive
 LLVM-built generations must reproduce identical `.ll` bytes. The LLVM-built
 compiler must also reproduce the C seed's generated C exactly. The runner
