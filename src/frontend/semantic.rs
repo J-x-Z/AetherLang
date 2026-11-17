@@ -184,8 +184,8 @@ pub struct SemanticAnalyzer {
     constant_defs: HashMap<String, ConstDef>,
     facts: SemanticFacts,
     foreign_signatures: HashMap<String, String>,
-    /// C ABI symbols whose single body is supplied by this program. Declarations
-    /// may share their identity, but must never replace the body's semantics.
+    /// C ABI symbols whose single definition is supplied by this program.
+    /// Declarations may share the identity, never replace its semantics.
     c_abi_definitions: HashSet<String>,
     check_entrypoint: bool,
     system_target: String,
@@ -594,9 +594,27 @@ impl SemanticAnalyzer {
             }
             Item::Static(definition) => {
                 let ty = self.resolve_type(&definition.ty)?;
+                for annotation in &definition.annotations {
+                    if annotation.name.name != "no_mangle" || !annotation.args.is_empty() {
+                        return Err(Error::semantic_expected("E2202", "only #[no_mangle] is supported on static definitions", annotation.span));
+                    }
+                }
+                let is_c_abi = definition.annotations.iter().any(|annotation| annotation.name.name == "no_mangle");
+                let replaces_declaration = if is_c_abi {
+                    if !self.c_abi_definitions.insert(definition.name.name.clone()) {
+                        return Err(Error::DuplicateDefinition { name: definition.name.name.clone(), span: definition.span });
+                    }
+                    let signature = format!("static:{}:{}", Self::type_identity(&ty), definition.is_mut);
+                    !self.register_foreign(&definition.name.name, signature, definition.name.span)?
+                } else { false };
                 self.facts.global_types.insert(definition.name.name.clone(), ty.clone());
-                self.symbols.define(Symbol { name: definition.name.name.clone(), kind: SymbolKind::Variable, ty,
-                    span: definition.span, mutable: definition.is_mut })?;
+                let symbol = Symbol { name: definition.name.name.clone(), kind: SymbolKind::Variable, ty,
+                    span: definition.span, mutable: definition.is_mut };
+                if replaces_declaration {
+                    self.symbols.scopes[0].symbols.insert(symbol.name.clone(), symbol);
+                } else {
+                    self.symbols.define(symbol)?;
+                }
             }
             Item::Enum(e) => {
                 self.symbols.enter_scope();
@@ -2065,6 +2083,24 @@ mod tests {
         let program = parser.parse_program()?;
         let mut analyzer = SemanticAnalyzer::new();
         analyzer.analyze(&program)
+    }
+
+    #[test]
+    fn static_c_abi_definitions_validate_kind_type_and_mutability() {
+        for (declaration, definition) in [
+            ("extern \"C\" { static mut ABI:i64; }", "#[no_mangle] static mut ABI:i32=1;"),
+            ("extern \"C\" { static mut ABI:i64; }", "#[no_mangle] static ABI:i64=1;"),
+            ("extern \"C\" { fn ABI(); }", "#[no_mangle] static mut ABI:i64=1;"),
+            ("extern \"C\" { static mut ABI:i64; }", "#[no_mangle] fn ABI() {}"),
+        ] {
+            for source in [format!("{declaration} {definition}"), format!("{definition} {declaration}")] {
+                let error = analyze(&source).unwrap_err();
+                assert!(error.to_string().contains("conflicting foreign declarations or definition"), "{error}");
+            }
+        }
+        assert!(analyze("#[no_mangle] static mut ABI:i64=1; #[no_mangle] static mut ABI:i64=2;").is_err());
+        let error = analyze("#[volatile] static mut ABI:i64=1;").unwrap_err();
+        assert!(error.to_string().contains("only #[no_mangle]"), "{error}");
     }
 
     #[test]

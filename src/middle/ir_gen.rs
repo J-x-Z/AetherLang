@@ -142,6 +142,21 @@ impl IRGenerator {
         Ok(self.module.clone())
     }
 
+    fn register_global(&mut self, global: IRGlobal) -> Result<()> {
+        if let Some(previous) = self.module.globals.iter_mut().find(|previous| previous.name == global.name) {
+            if previous.ty != global.ty || previous.mutable != global.mutable || previous.exported != global.exported {
+                return Err(crate::utils::Error::CodeGen(format!("inconsistent static declaration and definition for '{}'", global.name)));
+            }
+            if previous.initializer.is_some() && global.initializer.is_some() {
+                return Err(crate::utils::Error::CodeGen(format!("duplicate static definition for '{}'", global.name)));
+            }
+            if global.initializer.is_some() { *previous = global; }
+        } else {
+            self.module.globals.push(global);
+        }
+        Ok(())
+    }
+
     fn function_has_c_abi(func: &ast::Function, name: &str) -> bool {
         name == "main" || func.annotations.iter().any(|annotation| matches!(annotation.name.name.as_str(), "no_mangle" | "interrupt" | "naked"))
     }
@@ -315,9 +330,7 @@ impl IRGenerator {
                         ast::ForeignItem::Static { name, ty, is_mut, .. } => {
                             let ty = self.ast_type_to_ir(ty);
                             self.global_types.insert(name.name.clone(), ty.clone());
-                            if !self.module.globals.iter().any(|global| global.name == name.name) {
-                                self.module.globals.push(IRGlobal { name: name.name.clone(), ty, mutable: *is_mut, initializer: None });
-                            }
+                            self.register_global(IRGlobal { name: name.name.clone(), ty, mutable: *is_mut, exported: true, initializer: None })?;
                         }
                     }
                 }
@@ -328,8 +341,9 @@ impl IRGenerator {
                     .ok_or_else(|| crate::utils::Error::CodeGen(format!("global '{}' has no validated initializer", definition.name.name)))?;
                 let ty = self.ast_type_to_ir(&definition.ty);
                 self.global_types.insert(definition.name.name.clone(), ty.clone());
-                self.module.globals.push(IRGlobal { name: definition.name.name.clone(), ty, mutable: definition.is_mut,
-                    initializer: Some(self.lower_initializer(&initializer)?) });
+                self.register_global(IRGlobal { name: definition.name.name.clone(), ty, mutable: definition.is_mut,
+                    exported: definition.is_pub || definition.annotations.iter().any(|annotation| annotation.name.name == "no_mangle"),
+                    initializer: Some(self.lower_initializer(&initializer)?) })?;
                 Ok(())
             }
             Item::Union(definition) => {
@@ -1585,6 +1599,24 @@ mod tests {
         let program = parser.parse_program()?;
         let mut gen = IRGenerator::new("test");
         gen.generate(&program)
+    }
+
+    #[test]
+    fn static_linkage_and_compatible_foreign_declarations_survive_lowering() {
+        let declaration = "type Count=i64; extern \"C\" { static mut ABI:Count; }";
+        let definition = "#[no_mangle] static mut ABI:i64=7;";
+        for source in [format!("{declaration} {definition}"), format!("{definition} {declaration}")] {
+            let source = format!("{source} static PRIVATE:i64=1; pub static PUBLIC:i64=2;");
+            let program = Parser::new(Lexer::new(&source, 0)).parse_program().unwrap();
+            let mut analyzer = crate::frontend::semantic::SemanticAnalyzer::new();
+            analyzer.analyze(&program).unwrap();
+            let module = IRGenerator::new("test").with_semantic_facts(analyzer.facts().clone()).generate(&program).unwrap();
+            assert_eq!(module.globals.len(), 3);
+            let abi = module.globals.iter().find(|global| global.name == "ABI").unwrap();
+            assert!(abi.exported && abi.mutable && abi.initializer.is_some());
+            assert!(!module.globals.iter().find(|global| global.name == "PRIVATE").unwrap().exported);
+            assert!(module.globals.iter().find(|global| global.name == "PUBLIC").unwrap().exported);
+        }
     }
 
     #[test]

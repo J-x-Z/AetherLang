@@ -4,13 +4,15 @@
 @repr(C) struct Record { tag: u8, word: Word, data: [i32; 3] }
 @repr(C) struct Padded { first: u8, data: Wide, tail: u8 }
 @repr(C) struct PackedHolder { first: u8, value: Compact, tail: u8 }
-static ELEMENT: *i32 = &mut BUFFER[1] as *i32;
-static mut COUNTER: i64 = 7;
-static mut BUFFER: [i32; 3] = [1,2,3];
-static mut RECORD: Record = Record { tag: 4, word: Word { number: 1.0 }, data: [5,6,7] };
-static mut ZERO: Record;
-static WORD_POINTER: *Word = &mut RECORD.word as *Word;
-static LABEL: *u8 = "static bytes" as *u8;
+// These storage definitions expose explicit C ABI names to the layout oracle.
+// Ordinary private statics stay local to their compiled object.
+#[no_mangle] static ELEMENT: *i32 = &mut BUFFER[1] as *i32;
+#[no_mangle] static mut COUNTER: i64 = 7;
+#[no_mangle] static mut BUFFER: [i32; 3] = [1,2,3];
+#[no_mangle] static mut RECORD: Record = Record { tag: 4, word: Word { number: 1.0 }, data: [5,6,7] };
+#[no_mangle] static mut ZERO: Record;
+#[no_mangle] static WORD_POINTER: *Word = &mut RECORD.word as *Word;
+#[no_mangle] static LABEL: *u8 = "static bytes" as *u8;
 static LAYOUT: usize = size_of(Padded);
 extern "C" {
     static mut native_counter: i64;

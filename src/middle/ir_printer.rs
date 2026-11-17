@@ -28,7 +28,7 @@ impl IRPrinter {
         writeln!(self.output, "; Functions: {}", module.functions.len()).unwrap();
         writeln!(self.output).unwrap();
 
-        for global in &module.globals { writeln!(self.output, "global {}: {} = {:?}", global.name, self.type_str(&global.ty), global.initializer).unwrap(); }
+        for global in &module.globals { writeln!(self.output, "{} global {}: {} = {:?}", if global.exported { "external" } else { "internal" }, global.name, self.type_str(&global.ty), global.initializer).unwrap(); }
         for func in &module.functions {
             self.print_function(func);
             writeln!(self.output).unwrap();

@@ -72,6 +72,9 @@ pub struct IRGlobal {
     pub name: String,
     pub ty: IRType,
     pub mutable: bool,
+    /// Public Aether definitions keep their mangled external symbol. Foreign
+    /// declarations are external; private definitions have translation-unit linkage.
+    pub exported: bool,
     pub initializer: Option<IRInitializer>,
 }
 

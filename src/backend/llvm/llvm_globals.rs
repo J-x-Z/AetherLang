@@ -117,6 +117,9 @@ impl LLVMCodeGen {
                 } else { self.ir_type_to_llvm(&global.ty) };
                 let name = CString::new(global.name.as_str()).unwrap();
                 let value = LLVMAddGlobal(self.module, native, name.as_ptr());
+                if global.initializer.is_some() && !global.exported {
+                    LLVMSetLinkage(value, llvm_sys::LLVMLinkage::LLVMInternalLinkage);
+                }
                 LLVMSetAlignment(value, LLVMABIAlignmentOfType(self.target_data, self.ir_type_to_llvm(&global.ty)));
                 LLVMSetGlobalConstant(value, (!global.mutable) as i32);
             }

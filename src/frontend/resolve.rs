@@ -209,7 +209,11 @@ impl Resolver {
                 if crate::intrinsics::is_reserved(name) {
                     return Err(Error::ModuleError(format!("compiler intrinsic '{name}' cannot be redefined in {}", path.display())));
                 }
-                let preserve_abi = matches!(item, Item::Function(f) if f.annotations.iter().any(|a| a.name.name == "no_mangle"));
+                let preserve_abi = match item {
+                    Item::Function(f) => f.annotations.iter().any(|a| a.name.name == "no_mangle"),
+                    Item::Static(s) => s.annotations.iter().any(|a| a.name.name == "no_mangle"),
+                    _ => false,
+                };
                 let resolved = if (root && name == "main") || preserve_abi { name.to_owned() } else { format!("{}{id}_{name}", self.namespace) };
                 if names.insert(name.to_owned(), resolved.clone()).is_some() {
                     return Err(Error::ModuleError(format!("duplicate definition '{name}' in {}", path.display())));

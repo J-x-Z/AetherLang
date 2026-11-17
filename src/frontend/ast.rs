@@ -417,6 +417,7 @@ pub struct StaticDef {
     pub value: Option<Expr>,
     pub is_mut: bool,
     pub is_pub: bool,
+    pub annotations: Vec<Annotation>,
     pub span: Span,
 }
 

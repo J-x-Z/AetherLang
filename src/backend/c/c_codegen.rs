@@ -990,12 +990,13 @@ impl CCodeGen {
         }
         // Declarations precede initializers, allowing forward symbol addresses.
         for global in &module.globals {
-            self.writeln(&format!("extern {}{} {};", self.ir_type_to_c(&global.ty), if global.mutable { "" } else { " const" }, global.name));
+            let storage = if global.initializer.is_some() && !global.exported { "static" } else { "extern" };
+            self.writeln(&format!("{} {}{} {};", storage, self.ir_type_to_c(&global.ty), if global.mutable { "" } else { " const" }, global.name));
         }
         for global in &module.globals {
             if let Some(initializer) = &global.initializer {
                 let value = self.initializer_to_c(initializer, &global.ty)?;
-                self.writeln(&format!("{}{} {} = {};", self.ir_type_to_c(&global.ty), if global.mutable { "" } else { " const" }, global.name, value));
+                self.writeln(&format!("{}{}{} {} = {};", if global.exported { "" } else { "static " }, self.ir_type_to_c(&global.ty), if global.mutable { "" } else { " const" }, global.name, value));
             }
         }
         // Enum definitions (tagged unions)

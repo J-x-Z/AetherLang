@@ -299,7 +299,7 @@ impl Parser {
                             item.is_pub = true;
                             Ok(Item::Use(item))
                         },
-                        TokenKind::Static => Ok(Item::Static(self.parse_static_item()?)),
+                        TokenKind::Static => Ok(Item::Static(self.parse_static_item(attributes)?)),
                         TokenKind::Union => Ok(Item::Union(self.parse_union_with_attrs(attributes)?)),
                         _ => Err(Error::UnexpectedToken {
                             expected: "fn, struct, enum, impl, interface or type after pub".to_string(),
@@ -327,7 +327,7 @@ impl Parser {
             TokenKind::Const => Ok(Item::Const(self.parse_const()?)),
             // Phase 8: System features
             TokenKind::Extern => Ok(Item::Extern(self.parse_extern_block()?)),
-            TokenKind::Static => Ok(Item::Static(self.parse_static_item()?)),
+            TokenKind::Static => Ok(Item::Static(self.parse_static_item(attributes)?)),
             TokenKind::Union => Ok(Item::Union(self.parse_union_with_attrs(attributes)?)),
             // P1 Phase B: Trait and Type alias
             TokenKind::Trait => Ok(Item::Trait(self.parse_trait_def()?)),
@@ -2178,7 +2178,7 @@ impl Parser {
     }
 
     /// Parse static variable: static [mut] name: type = value;
-    fn parse_static_item(&mut self) -> Result<StaticDef> {
+    fn parse_static_item(&mut self, annotations: Vec<Annotation>) -> Result<StaticDef> {
         let start = self.current().span;
         let is_pub = self.consume(&TokenKind::Pub);
         self.expect(TokenKind::Static)?;
@@ -2203,6 +2203,7 @@ impl Parser {
             value,
             is_mut,
             is_pub,
+            annotations,
             span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
         })
     }
@@ -2487,6 +2488,17 @@ mod tests {
         let program = parse("extern \"C\" { @pure fn abs(x:i32)->i32; }").unwrap();
         let Item::Extern(ext) = &program.items[0] else {panic!("extern")};
         assert!(matches!(&ext.items[0], ForeignItem::Fn { annotations, .. } if annotations[0].name.name == "pure"));
+    }
+
+    #[test]
+    fn static_annotations_are_retained_for_linkage() {
+        let program = parse("#[no_mangle] static mut ABI:i64=7; @no_mangle pub static ALSO:i32=2; pub static PUBLIC:i32=1;").unwrap();
+        for item in &program.items[..2] {
+            let Item::Static(definition) = item else { panic!("static") };
+            assert_eq!(definition.annotations.len(), 1);
+            assert_eq!(definition.annotations[0].name.name, "no_mangle");
+        }
+        assert!(matches!(&program.items[2], Item::Static(definition) if definition.is_pub && definition.annotations.is_empty()));
     }
 
     #[test]
