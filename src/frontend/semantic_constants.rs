@@ -54,6 +54,8 @@ pub enum InitializerValue {
 }
 
 impl SemanticAnalyzer {
+    pub fn into_facts(self) -> SemanticFacts { self.facts }
+
     pub fn facts(&self) -> &SemanticFacts { &self.facts }
 
     /// The pre-semantics specializer uses the same checked evaluator and target

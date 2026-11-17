@@ -71,7 +71,7 @@ impl Session {
     pub fn check(&self, target: &str) -> Result<SemanticFacts, Diagnostic> {
         let mut analyzer = SemanticAnalyzer::for_target(target).map_err(Diagnostic::from)?;
         analyzer.analyze(&self.program).map_err(|e| self.diagnostic(&e))?;
-        Ok(analyzer.facts().clone())
+        Ok(analyzer.into_facts())
     }
     pub fn diagnostic(&self, error: &Error) -> Diagnostic {
         Self::make_diagnostic(&self.resolver, self.script_map.as_ref(), error)

@@ -138,6 +138,29 @@ impl ConstValue {
 }
 
 impl ResolvedType {
+    /// The concrete built-in type vocabulary shared by checking and lowering.
+    pub fn core_builtin(name: &str, width: PointerWidth) -> Option<Self> {
+        use PrimitiveType as P;
+        let scalar = match name {
+            "i8" => P::I8, "i16" => P::I16, "i32" => P::I32, "i64" => P::I64,
+            "u8" => P::U8, "u16" => P::U16, "u32" => P::U32, "u64" => P::U64,
+            "isize" => P::Isize(width), "usize" => P::Usize(width),
+            "f32" => P::F32, "f64" => P::F64, "void" => P::Unit,
+            "bool" => P::Bool, "char" => P::Char,
+            _ => {
+                let (element, lanes) = match name {
+                    "f32x4" => (P::F32,4), "f32x8" => (P::F32,8),
+                    "f64x2" => (P::F64,2), "f64x4" => (P::F64,4),
+                    "i32x4" => (P::I32,4), "i32x8" => (P::I32,8),
+                    "i64x2" => (P::I64,2), "i64x4" => (P::I64,4),
+                    _ => return None,
+                };
+                return Some(Self::Vector(Box::new(Self::Primitive(element)),lanes));
+            }
+        };
+        Some(Self::Primitive(scalar))
+    }
+
     pub fn unqualified(&self) -> &Self {
         match self { Self::Volatile(inner) => inner.unqualified(), other => other }
     }

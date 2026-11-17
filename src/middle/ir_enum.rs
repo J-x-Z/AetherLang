@@ -51,15 +51,15 @@ impl IRGenerator {
             definition
                 .variants
                 .iter()
-                .map(|variant| IRVariant {
+                .map(|variant| Ok(IRVariant {
                     name: variant.name.name.clone(),
                     fields: variant
                         .fields
                         .iter()
                         .map(|ty| self.ast_type_to_ir(ty))
-                        .collect(),
-                })
-                .collect()
+                        .collect::<Result<_>>()?,
+                }))
+                .collect::<Result<_>>()?
         };
         let name = &definition.name.name;
         let mut payload_fields = vec![];
@@ -387,10 +387,9 @@ impl IRGenerator {
             if self.get_current_terminator().is_none() {
                 reaches_exit = true;
                 self.transfer_owned_value(&result);
-                if !matches!(self.get_value_type(&result), Some(IRType::Unit | IRType::Void)) {
-                    let ty = result_ty
-                        .get_or_insert_with(|| self.get_value_type(&result).unwrap_or(IRType::I64))
-                        .clone();
+                let arm_type = self.require_value_type(&result)?;
+                if !matches!(arm_type, IRType::Unit | IRType::Void) {
+                    let ty = result_ty.get_or_insert(arm_type).clone();
                     let result = self.coerce_value(result, &ty);
                     incoming.push((result, self.current_block));
                 }

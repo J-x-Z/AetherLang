@@ -921,7 +921,8 @@ impl SemanticAnalyzer {
                     }
                     (Some(expected), None) => expected,
                     (None, Some(value)) => { let ty = self.check_expr(value)?; diverges = ty == ResolvedType::NEVER; ty },
-                    (None, None) => ResolvedType::Unknown,
+                    (None, None) => return Err(Error::semantic_expected("E2100",
+                        format!("a type annotation or initializer for local '{}'", name.name), name.span)),
                 };
 
                 self.symbols.define(Symbol {
@@ -1913,44 +1914,19 @@ impl SemanticAnalyzer {
     fn resolve_type_inner(&self, ty: &Type) -> Result<ResolvedType> {
         match ty {
             Type::Named(name, span) => {
-                match name.as_str() {
-                    "i8" => Ok(ResolvedType::Primitive(PrimitiveType::I8)),
-                    "i16" => Ok(ResolvedType::Primitive(PrimitiveType::I16)),
-                    "i32" => Ok(ResolvedType::Primitive(PrimitiveType::I32)),
-                    "i64" => Ok(ResolvedType::Primitive(PrimitiveType::I64)),
-                    "isize" => Ok(ResolvedType::Primitive(PrimitiveType::Isize(self.facts.pointer_width))),
-                    "u8" => Ok(ResolvedType::Primitive(PrimitiveType::U8)),
-                    "u16" => Ok(ResolvedType::Primitive(PrimitiveType::U16)),
-                    "u32" => Ok(ResolvedType::Primitive(PrimitiveType::U32)),
-                    "u64" => Ok(ResolvedType::Primitive(PrimitiveType::U64)),
-                    "usize" => Ok(ResolvedType::Primitive(PrimitiveType::Usize(self.facts.pointer_width))),
-                    "f32" => Ok(ResolvedType::Primitive(PrimitiveType::F32)),
-                    "f64" => Ok(ResolvedType::Primitive(PrimitiveType::F64)),
-                    "bool" => Ok(ResolvedType::Primitive(PrimitiveType::Bool)),
-                    "void" => Ok(ResolvedType::UNIT),
-                    "char" => Ok(ResolvedType::Primitive(PrimitiveType::Char)),
-                    // SIMD vector types
-                    "f32x4" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 4)),
-                    "f32x8" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 8)),
-                    "f64x2" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 2)),
-                    "f64x4" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 4)),
-                    "i32x4" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 4)),
-                    "i32x8" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 8)),
-                    "i64x2" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I64)), 2)),
-                    "i64x4" => Ok(ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I64)), 4)),
-                    _ => {
-                        if let Some(symbol) = self.symbols.lookup(name) {
-                            match &symbol.kind {
-                                SymbolKind::TypeParam => return Ok(ResolvedType::GenericParam(name.clone())),
-                                SymbolKind::TypeAlias { target } => return Ok(self.refresh_nominal_type(target.clone())),
-                                SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => return Ok(self.refresh_nominal_type(symbol.ty.clone())),
-                                _ => {}
-                            }
-                        }
-                        if let Some(alias) = self.type_aliases.get(name) { return self.resolve_type(alias); }
-                        self.declared_types.get(name).cloned().ok_or_else(|| Error::UndefinedType { name: name.clone(), span: *span })
+                if let Some(ty) = ResolvedType::core_builtin(name, self.facts.pointer_width) {
+                    return Ok(ty);
+                }
+                if let Some(symbol) = self.symbols.lookup(name) {
+                    match &symbol.kind {
+                        SymbolKind::TypeParam => return Ok(ResolvedType::GenericParam(name.clone())),
+                        SymbolKind::TypeAlias { target } => return Ok(self.refresh_nominal_type(target.clone())),
+                        SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => return Ok(self.refresh_nominal_type(symbol.ty.clone())),
+                        _ => {}
                     }
                 }
+                if let Some(alias) = self.type_aliases.get(name) { return self.resolve_type(alias); }
+                self.declared_types.get(name).cloned().ok_or_else(|| Error::UndefinedType { name: name.clone(), span: *span })
             }
             Type::Pointer(inner, _) => {
                 Ok(ResolvedType::Pointer(Box::new(self.resolve_type(inner)?)))
@@ -1968,9 +1944,8 @@ impl SemanticAnalyzer {
                 })
             }
             Type::ArrayExpr {span,..} => Err(Error::semantic_expected("E2500","a concrete array length after specialization",*span)),
-            Type::Slice(elem, _) => {
-                Ok(ResolvedType::Slice(Box::new(self.resolve_type(elem)?)))
-            }
+            Type::Slice(_, span) => Err(Error::semantic_expected("E2406",
+                "a sized type; use [T; N] or an explicit pointer and length for a dynamic view", *span)),
             Type::Tuple(types, _) => {
                 let resolved: Vec<ResolvedType> = types.iter()
                     .map(|t| self.resolve_type(t))

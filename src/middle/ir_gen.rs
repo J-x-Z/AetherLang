@@ -3,7 +3,7 @@
 //! Converts the typed AST into three-address code IR.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::frontend::ast::{
     self, Program, Item, Stmt, Expr, Type as AstType,
 };
@@ -36,7 +36,9 @@ mod host;
 /// IR Generator
 pub struct IRGenerator {
     owned: owned::OwnedScopes,
+    emission_error: Option<crate::utils::Error>,
     semantic_facts: Option<SemanticFacts>,
+    nominal_types: HashSet<String>,
     resolved_aliases: HashMap<String, IRType>,
     constants: HashMap<String, (IRType, Constant)>,
     /// Current module being built
@@ -70,8 +72,10 @@ impl IRGenerator {
     pub fn new(module_name: &str) -> Self {
         Self {
             owned: owned::OwnedScopes::default(),
+            emission_error: None,
             module: IRModule::new(module_name),
             semantic_facts: None,
+            nominal_types: HashSet::new(),
             resolved_aliases: HashMap::new(),
             constants: HashMap::new(),
             current_fn: None,
@@ -97,25 +101,32 @@ impl IRGenerator {
     }
 
     /// Generate IR for a program
-    pub fn generate(&mut self, program: &Program) -> Result<IRModule> {
+    pub fn generate(mut self, program: &Program) -> Result<IRModule> {
+        for item in &program.items {
+            let name = match item {
+                Item::Struct(def) => &def.name, Item::Union(def) => &def.name,
+                Item::Enum(def) => &def.name, _ => continue,
+            };
+            self.nominal_types.insert(name.name.clone());
+        }
         self.register_resolved_tuple_layouts()?;
-        if let Some(facts) = self.semantic_facts.clone() {
-            for (name, ty) in facts.aliases {
-                self.resolved_aliases.insert(name, Self::resolved_type_to_ir(&ty)?);
+        if let Some(facts) = &self.semantic_facts {
+            for (name, ty) in &facts.aliases {
+                self.resolved_aliases.insert(name.clone(), Self::resolved_type_to_ir(ty)?);
             }
-            for (name, ty) in facts.global_types {
-                self.global_types.insert(name, Self::resolved_type_to_ir(&ty)?);
+            for (name, ty) in &facts.global_types {
+                self.global_types.insert(name.clone(), Self::resolved_type_to_ir(ty)?);
             }
-            for (name, constant) in facts.constants {
+            for (name, constant) in &facts.constants {
                 let ty = Self::resolved_type_to_ir(&constant.ty)?;
-                let value = match constant.value {
-                    ScalarConstant::Int(value) => Constant::Int(value),
-                    ScalarConstant::Float(value) => Constant::Float(value),
-                    ScalarConstant::Bool(value) => Constant::Bool(value),
-                    ScalarConstant::Char(value) => Constant::Int(value as i64),
-                    ScalarConstant::String(value) => Constant::String(value),
+                let value = match &constant.value {
+                    ScalarConstant::Int(value) => Constant::Int(*value),
+                    ScalarConstant::Float(value) => Constant::Float(*value),
+                    ScalarConstant::Bool(value) => Constant::Bool(*value),
+                    ScalarConstant::Char(value) => Constant::Int(*value as i64),
+                    ScalarConstant::String(value) => Constant::String(value.clone()),
                 };
-                self.constants.insert(name, (ty, value));
+                self.constants.insert(name.clone(), (ty, value));
             }
         }
         // Process inner attributes: #![no_std], #![no_main]
@@ -143,7 +154,7 @@ impl IRGenerator {
         self.coalesce_defined_externs()?;
         self.finish_tuple_layouts()?;
         self.order_struct_layouts()?;
-        Ok(self.module.clone())
+        Ok(self.module)
     }
 
     fn register_global(&mut self, global: IRGlobal) -> Result<()> {
@@ -167,9 +178,9 @@ impl IRGenerator {
 
     /// Unit remains a language value, but a C ABI function has no result slot
     /// for it. Omitted and explicit unit returns must produce the same signature.
-    fn function_return_type(&self, ty: Option<&AstType>, c_abi: bool) -> IRType {
-        let ty = ty.map(|ty| self.ast_type_to_ir(ty)).unwrap_or(IRType::Void);
-        if c_abi && ty == IRType::Unit { IRType::Void } else { ty }
+    fn function_return_type(&self, ty: Option<&AstType>, c_abi: bool) -> Result<IRType> {
+        let ty = ty.map(|ty| self.ast_type_to_ir(ty)).transpose()?.unwrap_or(IRType::Void);
+        Ok(if c_abi && ty == IRType::Unit { IRType::Void } else { ty })
     }
 
     /// Semantic analysis permits compatible declarations plus one C ABI body.
@@ -232,10 +243,13 @@ impl IRGenerator {
     fn collect_signatures(&mut self, item: &Item) -> Result<()> {
         match item {
             Item::Function(func) => {
+                if !func.generic_params.is_empty() || !func.type_params.is_empty() {
+                    return Err(crate::utils::Error::CodeGen("generic function reached IR before specialization".into()));
+                }
                 let func_name = func.name.name.clone();
-                let ret_type = self.function_return_type(func.ret_type.as_ref(), Self::function_has_c_abi(func, &func_name));
+                let ret_type = self.function_return_type(func.ret_type.as_ref(), Self::function_has_c_abi(func, &func_name))?;
                 
-                self.function_parameters.insert(func_name.clone(), func.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect());
+                self.function_parameters.insert(func_name.clone(), func.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect::<Result<_>>()?);
                 self.function_signatures.insert(func_name, ret_type);
             }
             Item::Impl(impl_block) => {
@@ -271,8 +285,8 @@ impl IRGenerator {
                     return Err(crate::utils::Error::CodeGen("generic struct specialization is not implemented".into()));
                 }
                 let fields: Vec<_> = struct_def.fields.iter()
-                    .map(|f| (f.name.name.clone(), self.ast_type_to_ir(&f.ty)))
-                    .collect();
+                    .map(|f| Ok((f.name.name.clone(), self.ast_type_to_ir(&f.ty)?)))
+                    .collect::<Result<_>>()?;
                 
                 // Extract repr from annotations
                 let mut repr = crate::middle::ir::StructRepr::Default;
@@ -320,9 +334,9 @@ impl IRGenerator {
                     match foreign_item {
                         ast::ForeignItem::Fn { name, params, ret_type, variadic, .. } => {
                             let ir_params: Vec<(String, IRType)> = params.iter()
-                                .map(|p| (p.name.name.clone(), self.ast_type_to_ir(&p.ty)))
-                                .collect();
-                            let ir_ret = self.function_return_type(ret_type.as_ref(), true);
+                                .map(|p| Ok((p.name.name.clone(), self.ast_type_to_ir(&p.ty)?)))
+                    .collect::<Result<_>>()?;
+                            let ir_ret = self.function_return_type(ret_type.as_ref(), true)?;
                             
                             if let Some(existing) = self.module.externs.iter_mut().find(|ext| ext.name == name.name) {
                                 // Explicit validated ABI declarations override implicit libc defaults.
@@ -332,7 +346,7 @@ impl IRGenerator {
                             }
                         }
                         ast::ForeignItem::Static { name, ty, is_mut, .. } => {
-                            let ty = self.ast_type_to_ir(ty);
+                            let ty = self.ast_type_to_ir(ty)?;
                             self.global_types.insert(name.name.clone(), ty.clone());
                             self.register_global(IRGlobal { name: name.name.clone(), ty, mutable: *is_mut, exported: true, initializer: None })?;
                         }
@@ -343,7 +357,7 @@ impl IRGenerator {
             Item::Static(definition) => {
                 let initializer = self.semantic_facts.as_ref().and_then(|facts| facts.globals.get(&definition.name.name)).cloned()
                     .ok_or_else(|| crate::utils::Error::CodeGen(format!("global '{}' has no validated initializer", definition.name.name)))?;
-                let ty = self.ast_type_to_ir(&definition.ty);
+                let ty = self.ast_type_to_ir(&definition.ty)?;
                 self.global_types.insert(definition.name.name.clone(), ty.clone());
                 self.register_global(IRGlobal { name: definition.name.name.clone(), ty, mutable: definition.is_mut,
                     exported: definition.is_pub || definition.annotations.iter().any(|annotation| annotation.name.name == "no_mangle"),
@@ -351,7 +365,7 @@ impl IRGenerator {
                 Ok(())
             }
             Item::Union(definition) => {
-                let fields = definition.fields.iter().map(|field| (field.name.name.clone(), self.ast_type_to_ir(&field.ty))).collect::<Vec<_>>();
+                let fields = definition.fields.iter().map(|field| Ok((field.name.name.clone(), self.ast_type_to_ir(&field.ty)?))).collect::<Result<Vec<_>>>()?;
                 self.struct_defs.insert(definition.name.name.clone(), fields.clone());
                 self.module.structs.push(crate::middle::ir::IRStruct { name: definition.name.name.clone(), fields, is_union: true,
                     repr: if definition.repr == Some(ast::Repr::Packed) { crate::middle::ir::StructRepr::Packed } else { crate::middle::ir::StructRepr::C } });
@@ -382,7 +396,7 @@ impl IRGenerator {
 
     /// Function IR retains language values. ABI coercion belongs to the backend.
     fn generate_function_with_name(&mut self, func: &ast::Function, name: &str) -> Result<()> {
-        if !func.type_params.is_empty() { return Err(crate::utils::Error::CodeGen("generic specialization is not implemented".into())); }
+        if !func.generic_params.is_empty() || !func.type_params.is_empty() { return Err(crate::utils::Error::CodeGen("generic function reached IR before specialization".into())); }
         self.next_register = 0;
         self.locals.clear();
         self.local_addresses.clear();
@@ -429,8 +443,9 @@ impl IRGenerator {
                 self.set_terminator_current(Terminator::Unreachable);
             }
         }
+        if let Some(error) = self.emission_error.take() { return Err(error); }
         let mut function = self.current_fn.take().unwrap();
-        function.register_types = self.reg_types.clone();
+        function.register_types = std::mem::take(&mut self.reg_types);
         self.module.functions.push(function);
         Ok(())
     }
@@ -458,10 +473,11 @@ impl IRGenerator {
     fn generate_stmt(&mut self, stmt: &ast::Stmt) -> Result<Option<Value>> {
         match stmt {
             Stmt::Let { name, value, ty: type_annotation, .. } => {
-                let declared = type_annotation.as_ref().map(|ty| self.ast_type_to_ir(ty));
+                let declared = type_annotation.as_ref().map(|ty| self.ast_type_to_ir(ty)).transpose()?;
                 let val = value.as_ref().map(|expr| self.generate_expr_expected(expr, declared.as_ref())).transpose()?;
                 if self.get_current_terminator().is_some() { return Ok(None); }
-                let var_type = declared.or_else(|| val.as_ref().and_then(|v| self.get_value_type(v))).unwrap_or(IRType::I64);
+                let var_type = declared.or_else(|| val.as_ref().and_then(|v| self.get_value_type(v)))
+                    .ok_or_else(|| crate::utils::Error::CodeGen(format!("missing type for local '{}'", name.name)))?;
                 if let Some(value)=&val {self.transfer_owned_value(value);}
                 let initialized=val.is_some();
                 let address = self.owner_local_storage(name.span,&var_type,val);
@@ -514,10 +530,10 @@ impl IRGenerator {
     fn generate_expr(&mut self, expr: &ast::Expr) -> Result<Value> {
         if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
         let value = self.generate_expr_inner(expr)?;
-        let owned_type=self.checked_expr_type(expr).cloned();
-        if let Some(ty @ ResolvedType::Owned(_))=&owned_type {
+        if let Some(ty @ ResolvedType::Owned(_))=self.checked_expr_type(expr) {
+            let ty = ty.clone();
             self.move_owned_binding(expr);
-            self.remember_owned_temporary(&value,ty)?;
+            self.remember_owned_temporary(&value,&ty)?;
         }
         let checked_type = self.checked_expr_type(expr);
         if checked_type == Some(&ResolvedType::NEVER) {
@@ -538,7 +554,7 @@ impl IRGenerator {
     fn generate_expr_inner(&mut self, expr: &ast::Expr) -> Result<Value> {
         match expr {
             Expr::Layout { query, ty, field, .. } => {
-                let ty = self.ast_type_to_ir(ty);
+                let ty = self.ast_type_to_ir(ty)?;
                 let field = match (&ty, field) {
                     (IRType::Struct(name), Some(field)) => Some(self.struct_defs.get(name).and_then(|fields| fields.iter().position(|(name, _)| name == &field.name))
                         .ok_or_else(|| crate::utils::Error::UnknownField { span: field.span, field: field.name.clone() })?),
@@ -610,8 +626,8 @@ impl IRGenerator {
                 let right_val = self.generate_expr(right)?;
 
                 // Check for pointer arithmetic: ptr + offset or ptr - offset
-                let left_ty = self.get_value_type(&left_val);
-                if let Some(IRType::Ptr(inner)) = &left_ty {
+                let left_ty = self.require_value_type(&left_val)?;
+                if let IRType::Ptr(inner) = &left_ty {
                     if *op == ast::BinOp::Add || *op == ast::BinOp::Sub {
                         // This is pointer arithmetic, use GEP instead of add
                         let dest = self.alloc_register();
@@ -644,14 +660,12 @@ impl IRGenerator {
                 let ir_op = self.ast_binop_to_ir(*op);
                 let dest = self.alloc_register();
                 
-                let unified_right = if let Some(ty) = &left_ty {
-                    self.coerce_value(right_val, ty)
-                } else { right_val };
+                let unified_right = self.coerce_value(right_val, &left_ty);
 
                 // Result of binary op is usually primitive or bool (I64/Bool)
                 let res_ty = match ir_op {
                     IRBinOp::Eq | IRBinOp::Ne | IRBinOp::Lt | IRBinOp::Le | IRBinOp::Gt | IRBinOp::Ge => IRType::Bool,
-                    _ => left_ty.unwrap_or(IRType::I64), // Use left type for arithmetic
+                    _ => left_ty,
                 };
 
                 self.emit_current_with_type(Instruction::BinOp {
@@ -673,7 +687,7 @@ impl IRGenerator {
                 };
                 
                 let dest = self.alloc_register();
-                let ty = self.get_value_type(&val).unwrap_or(IRType::I64);
+                let ty = self.require_value_type(&val)?;
                 if let IRType::Vector(element, _) = &ty {
                     use crate::intrinsics::VectorKind;
                     let zero = if matches!(element.as_ref(), IRType::F32 | IRType::F64) { Value::Constant(Constant::Float(-0.0)) } else { Value::Constant(Constant::Int(0)) };
@@ -705,8 +719,7 @@ impl IRGenerator {
                         .map(|signature| signature.emitted_name.clone())
                         .unwrap_or_else(|| segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("_"))
                 } else {
-                    let _val = self.generate_expr(func)?;
-                    "indirect".to_string()
+                    return Err(crate::utils::Error::CodeGen("missing resolved direct callee".into()));
                 };
 
                 if let Some(op) = crate::intrinsics::platform(&func_name) {
@@ -752,20 +765,10 @@ impl IRGenerator {
 
                 for value in &arg_vals {self.transfer_owned_value(value);}
                 // Resolve the semantic return type.
-                let ret_type = self.function_signatures.get(&func_name)
-                    .cloned()
-                    .or_else(|| {
-                        self.module.functions.iter()
-                            .find(|f| f.name == func_name)
-                            .map(|f| f.ret_type.clone())
-                    })
-                    .unwrap_or_else(|| {
-                        self.module.externs.iter()
-                            .find(|e| e.name == func_name)
-                            .map(|e| e.ret_type.clone())
-                            .unwrap_or(IRType::I64)
-                    });
-                
+                let ret_type = self.function_signatures.get(&func_name).cloned()
+                    .or_else(|| external.map(|function| function.ret_type))
+                    .ok_or_else(|| crate::utils::Error::CodeGen(format!("missing signature for call to '{func_name}'")))?;
+
                 if ret_type == IRType::Void {
                     // Regular void function
                     self.emit_current_with_type(Instruction::Call {
@@ -837,14 +840,8 @@ impl IRGenerator {
                     if let (Some(then_val), Some(else_val)) = (&then_result, &else_result) {
                         if matches!(then_val, Value::Unit) || matches!(else_val, Value::Unit) { return Ok(Value::Unit); }
                         let dest = self.alloc_register();
-                        let mut incoming = Vec::new();
-                        let mut phi_ty = IRType::Void;
-                        
-                        incoming.push((then_val.clone(), then_exit));
-                        if let Some(t) = self.get_value_type(then_val) { phi_ty = t; }
-                        
-                        incoming.push((else_val.clone(), else_exit));
-                        
+                        let phi_ty = self.require_value_type(then_val)?;
+                        let incoming = vec![(then_val.clone(), then_exit), (else_val.clone(), else_exit)];
                         self.emit_current_with_type(Instruction::Phi { dest, incoming }, phi_ty);
                         return Ok(Value::Register(dest));
                     }
@@ -958,7 +955,7 @@ impl IRGenerator {
                 let end_val = self.generate_expr(end)?;
                 self.cleanup_owned_temporaries(temporary_start,self.owned.depth,None)?;
                 if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
-                let ty = self.get_value_type(&start_val).unwrap_or(IRType::I64);
+                let ty = self.require_value_type(&start_val)?;
                 let end_val = self.coerce_value(end_val, &ty);
                 let counter = self.allocate_local(&ty, Some(start_val));
                 let previous = self.locals.insert(var.name.clone(), (counter.clone(), ty.clone()));
@@ -1018,7 +1015,7 @@ impl IRGenerator {
             Expr::Unsafe { body, .. } => Ok(self.generate_block(body)?.unwrap_or(Value::Unit)),
             Expr::Cast { expr, ty, .. } => {
                 let val = self.generate_expr(expr)?;
-                let target_ty = self.ast_type_to_ir(ty);
+                let target_ty = self.ast_type_to_ir(ty)?;
                 self.transfer_owned_value(&val);
                 if self.get_value_type(&val).as_ref() == Some(&target_ty) { return Ok(val); }
                 let dest = self.alloc_register();
@@ -1332,8 +1329,12 @@ impl IRGenerator {
                 order: MemoryOrder::SeqCst, failure_order: MemoryOrder::SeqCst,
             },
             Instruction::Store { ptr, value } => {
-                let ty = match self.get_value_type(&ptr) { Some(IRType::Ptr(inner)) => *inner, _ => self.get_value_type(&value).unwrap_or(IRType::Unit) };
-                if function_volatile || matches!(ty, IRType::Volatile(_)) { Instruction::Memory {
+                let Some(IRType::Ptr(ty)) = self.get_value_type(&ptr) else {
+                    self.emission_error.get_or_insert_with(|| crate::utils::Error::CodeGen(
+                        format!("missing pointer type for store destination {ptr:?}")));
+                    return;
+                };
+                if function_volatile || matches!(*ty, IRType::Volatile(_)) { Instruction::Memory {
                     dest: None, kind: MemoryKind::VolatileWrite, ty: ty.unqualified().clone(), args: vec![ptr, value],
                     order: MemoryOrder::SeqCst, failure_order: MemoryOrder::SeqCst,
                 } } else { Instruction::Store { ptr, value } }
@@ -1374,6 +1375,11 @@ impl IRGenerator {
                      IRType::U8 | IRType::U16 | IRType::U32 | IRType::U64)
     }
     
+    fn require_value_type(&self, val: &Value) -> Result<IRType> {
+        self.get_value_type(val)
+            .ok_or_else(|| crate::utils::Error::CodeGen(format!("missing type for IR value {val:?}")))
+    }
+
     fn get_value_type(&self, val: &Value) -> Option<IRType> {
         match val {
             Value::Register(reg) => self.reg_types.get(reg).cloned(),
@@ -1443,40 +1449,6 @@ impl IRGenerator {
         }
     }
 
-    /// Try to evaluate a const expression to an integer value at compile time
-    fn try_eval_const_expr(&self, expr: &ast::Expr) -> Option<i64> {
-        match expr {
-            ast::Expr::Literal(lit) => {
-                match lit {
-                    ast::Literal::Int(n, _) => i64::try_from(*n).ok(),
-                    ast::Literal::Bool(b, _) => Some(if *b { 1 } else { 0 }),
-                    _ => None,
-                }
-            }
-            ast::Expr::Binary { op, left, right, .. } => {
-                let l = self.try_eval_const_expr(left)?;
-                let r = self.try_eval_const_expr(right)?;
-                match op {
-                    ast::BinOp::Add => l.checked_add(r),
-                    ast::BinOp::Sub => l.checked_sub(r),
-                    ast::BinOp::Mul => l.checked_mul(r),
-                    ast::BinOp::Div => l.checked_div(r),
-                    ast::BinOp::Mod => l.checked_rem(r),
-                    _ => None,
-                }
-            }
-            ast::Expr::Unary { op, expr, .. } => {
-                let v = self.try_eval_const_expr(expr)?;
-                Some(match op {
-                    ast::UnOp::Neg => v.checked_neg()?,
-                    ast::UnOp::Not => if v == 0 { 1 } else { 0 },
-                    _ => return None,
-                })
-            }
-            _ => None, // Can't evaluate non-literal expressions
-        }
-    }
-
     fn lower_initializer(&self, initializer: &TypedInitializer) -> Result<IRInitializer> {
         Ok(match &initializer.value {
             InitializerValue::Zero => IRInitializer::Zero,
@@ -1492,17 +1464,6 @@ impl IRGenerator {
                 ty: Self::resolved_type_to_ir(ty)?, field: *field,
             },
         })
-    }
-
-    fn array_element_type(&self, ty: &AstType) -> Option<IRType> {
-        match ty {
-            AstType::Array { elem, .. } => Some(self.ast_type_to_ir(elem)),
-            AstType::Named(name, _) => match self.semantic_facts.as_ref()?.aliases.get(name)? {
-                ResolvedType::Array { elem, .. } => Self::resolved_type_to_ir(elem).ok(),
-                _ => None,
-            },
-            _ => None,
-        }
     }
 
     fn pointer_width(&self) -> crate::types::PointerWidth {
@@ -1539,94 +1500,30 @@ impl IRGenerator {
         })
     }
 
-    fn ast_type_to_ir(&self, ty: &AstType) -> IRType {
-        match ty {
+    fn ast_type_to_ir(&self, ty: &AstType) -> Result<IRType> {
+        Ok(match ty {
             AstType::Named(name, _) => {
-                if let Some(ty) = self.resolved_aliases.get(name) { return ty.clone(); }
-                match name.as_str() {
-                    "i8" => IRType::I8,
-                    "i16" => IRType::I16,
-                    "i32" => IRType::I32,
-                    "i64" | "int" => IRType::I64,
-                    "isize" => Self::pointer_integer(self.pointer_width(), true),
-                    "u8" | "byte" => IRType::U8,
-                    "u16" => IRType::U16,
-                    "u32" | "char" => IRType::U32,
-                    "u64" => IRType::U64,
-                    "usize" => Self::pointer_integer(self.pointer_width(), false),
-                    "f32" => IRType::F32,
-                    "f64" | "float" => IRType::F64,
-                    "bool" => IRType::Bool,
-                    // SIMD vector types
-                    "f32x4" => IRType::Vector(Box::new(IRType::F32), 4),
-                    "f32x8" => IRType::Vector(Box::new(IRType::F32), 8),
-                    "f64x2" => IRType::Vector(Box::new(IRType::F64), 2),
-                    "f64x4" => IRType::Vector(Box::new(IRType::F64), 4),
-                    "i32x4" => IRType::Vector(Box::new(IRType::I32), 4),
-                    "i32x8" => IRType::Vector(Box::new(IRType::I32), 8),
-                    "i64x2" => IRType::Vector(Box::new(IRType::I64), 2),
-                    "i64x4" => IRType::Vector(Box::new(IRType::I64), 4),
-                    "void" | "()" => IRType::Unit,
-                    s => IRType::Struct(s.to_string()),
+                if let Some(ty) = self.resolved_aliases.get(name) { return Ok(ty.clone()); }
+                if let Some(ty) = ResolvedType::core_builtin(name, self.pointer_width()) {
+                    return Self::resolved_type_to_ir(&ty);
                 }
-
-            }
-            AstType::Generic(name, args, _) => {
-                // Phase 11: Basic monomorphization stub
-                // Map Box<T> to Box for now (incorrect but compiles)
-                // Real impl need to mangle names: Box_i64
-                let mut mangled = name.clone();
-                for arg in args {
-                     if let AstType::Named(n, _) = arg {
-                         mangled.push_str("_");
-                         mangled.push_str(n);
-                     }
+                if !self.nominal_types.contains(name) {
+                    return Err(crate::utils::Error::CodeGen(format!("missing resolved declaration for type '{name}'")));
                 }
-                IRType::Struct(mangled)
+                IRType::Struct(name.clone())
             }
-            AstType::GenericWithArgs { name, args, .. } => {
-                // Const generics monomorphization
-                // Mangle name with both type and const args: Matrix_f32_3_3
-                let mut mangled = name.clone();
-                for arg in args {
-                    mangled.push_str("_");
-                    match arg {
-                        crate::frontend::ast::GenericArg::Type(ty) => {
-                            // Recursively get type name
-                            match ty {
-                                AstType::Named(n, _) => mangled.push_str(n),
-                                AstType::Pointer(_, _) => mangled.push_str("ptr"),
-                                _ => mangled.push_str("T"),
-                            }
-                        }
-                        crate::frontend::ast::GenericArg::Const(expr) => {
-                            // Evaluate const expression to integer
-                            if let Some(val) = self.try_eval_const_expr(expr) {
-                                mangled.push_str(&val.to_string());
-                            } else {
-                                mangled.push_str("N");
-                            }
-                        }
-                    }
-                }
-                IRType::Struct(mangled)
-            }
-            AstType::Pointer(inner, _) => IRType::Ptr(Box::new(self.ast_type_to_ir(inner))),
-            AstType::Volatile(inner, _) => IRType::Ptr(Box::new(IRType::Volatile(Box::new(self.ast_type_to_ir(inner))))),
-            AstType::Array { elem, size, .. } => IRType::Array(Box::new(self.ast_type_to_ir(elem)), *size),
-            AstType::Ref { inner, .. } => IRType::Ptr(Box::new(self.ast_type_to_ir(inner))),
-            AstType::Tuple(elements, _) => {
-                if elements.is_empty() {
-                    IRType::Unit // Unit tuple ()
-                } else {
-                    self.record_tuple_layout(elements.iter().map(|ty| self.ast_type_to_ir(ty)).collect())
-                }
-            }
+            AstType::Pointer(inner, _) | AstType::Ref { inner, .. } => IRType::Ptr(Box::new(self.ast_type_to_ir(inner)?)),
+            AstType::Volatile(inner, _) => IRType::Ptr(Box::new(IRType::Volatile(Box::new(self.ast_type_to_ir(inner)?)))),
+            AstType::Array { elem, size, .. } => IRType::Array(Box::new(self.ast_type_to_ir(elem)?), *size),
+            AstType::Tuple(elements, _) if elements.is_empty() => IRType::Unit,
+            AstType::Tuple(elements, _) => self.record_tuple_layout(elements.iter().map(|elem| self.ast_type_to_ir(elem)).collect::<Result<_>>()?),
             AstType::Unit(_) => IRType::Unit,
-            AstType::Owned { inner, .. } => self.ast_type_to_ir(inner),
-            _ => IRType::Void,
-        }
+            AstType::Never(_) => IRType::Void,
+            AstType::Owned { inner, .. } => return self.ast_type_to_ir(inner),
+            other => return Err(crate::utils::Error::CodeGen(format!("type has no concrete representation after checking at {:?}", other.span()))),
+        })
     }
+
 }
 
 #[cfg(test)]
@@ -1639,7 +1536,7 @@ mod tests {
         let lexer = Lexer::new(source, 0);
         let mut parser = Parser::new(lexer);
         let program = parser.parse_program()?;
-        let mut gen = IRGenerator::new("test");
+        let gen = IRGenerator::new("test");
         gen.generate(&program)
     }
 
@@ -1761,6 +1658,13 @@ mod tests {
     fn generic_functions_are_not_erased_to_i64() {
         let error = generate("fn identity<T>(value: T) -> T { return value; }").unwrap_err();
         assert!(error.to_string().contains("specialization"));
+    }
+
+    #[test]
+    fn missing_declarations_and_types_are_ir_errors() {
+        for source in ["fn f(x: Missing) {}", "fn f(){ absent(); }", "fn f(x:[i32]){}"] {
+            assert!(generate(source).is_err(), "{source}");
+        }
     }
 
     #[test]

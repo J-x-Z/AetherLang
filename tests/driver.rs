@@ -419,3 +419,33 @@ fn module_namespace_preserves_normal_spelling_and_editor_source_names() {
     assert_eq!(replies.iter().find(|reply| reply["id"] == 3).unwrap()["result"]["contents"]["value"], "__aeth_m0_answer: i32");
     assert_eq!(replies.iter().find(|reply| reply["id"] == 4).unwrap()["result"]["range"]["start"], json!({"line":0,"character":6}));
 }
+
+#[test]
+fn unsized_types_and_untyped_uninitialized_locals_fail_before_codegen() {
+    let p = Project::new();
+    for (source, code) in [
+        ("fn width(x:[i32])->usize{size_of([i32])} fn main()->i32{0}", "E2406"),
+        ("fn width(x:&[u8])->usize{1} fn main()->i32{0}", "E2406"),
+        ("fn main()->i32{let mut x; x=1; x}", "E1000"),
+    ] {
+        p.source("bad.aeth", source);
+        let mut diagnostics = Vec::new();
+        for backend in backends() {
+            for command in ["check", "build"] {
+                let output = p.compiler(&[command, "bad.aeth", "--backend", backend, "--error-format", "json", "-o", "bad"]);
+                assert_eq!(output.status.code(), Some(1), "{source}: {output:?}");
+                let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+                assert_eq!(diagnostic["code"], code);
+                assert!(diagnostic["location"]["column"].is_number());
+                diagnostics.push(diagnostic);
+            }
+        }
+        assert!(diagnostics.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(!p.0.join("bad").exists());
+    }
+    p.source("good.aeth", "fn main()->i32{let mut x:i16; x=3; let a:[i16;2]=[x,x]; a[1] as i32}");
+    for backend in backends() {
+        success(&p.compiler(&["build", "good.aeth", "--backend", backend, "-o", "good"]));
+        run(&p.0.join("good"), 3);
+    }
+}

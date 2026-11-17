@@ -1209,7 +1209,7 @@ mod tests {
         let lexer = Lexer::new(source, 0);
         let mut parser = Parser::new(lexer);
         let program = parser.parse_program().unwrap();
-        let mut gen = IRGenerator::new("test");
+        let gen = IRGenerator::new("test");
         gen.generate(&program).unwrap()
     }
 
