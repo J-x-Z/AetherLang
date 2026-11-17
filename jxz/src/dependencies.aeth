@@ -2,6 +2,8 @@
 // owns copied canonical compiler arguments after this temporary graph is freed.
 use config::{Config,Dependency,config_load_at,config_free,config_path_valid,module_name_valid,config_error};
 use path::path_join;
+use registry::{Registry,registry_new,registry_directory,registry_finish,registry_free};
+use registry_format::registry_relative;
 use vec::{Vec,vec_new,vec_push,vec_free};
 use posix::ENOENT;
 use output::{remove_owned,marker_valid,presence};
@@ -20,7 +22,7 @@ extern "C" {
     fn symlink(target:*u8,path:*u8)->i32;
 }
 struct Package { directory:*u8, entry:*u8, cfg:Config, state:i32 }
-struct Graph { packages:Vec<Package>, root:*u8, root_name:*u8, bytes:u64 }
+struct Graph { packages:Vec<Package>, root:*u8, root_name:*u8, bytes:u64, registry:Registry }
 fn copy(text:*u8)->*u8 {
     let size:u64=strlen(text)+1;
     let out:*u8=malloc(size) as *u8;
@@ -50,10 +52,12 @@ fn graph_free(graph:*Graph) {
     }
     vec_free(&mut graph.packages as *Vec<Package>);
     free(graph.root as *void);
+    registry_free(&mut graph.registry as *Registry);
 }
 fn visit(graph:*Graph,parent:*u8,dependency:Dependency,depth:u64)->bool {
     if depth>64 { config_error("jxz: dependency graph exceeds 64 levels or 1024 packages"); return false; }
-    let directory:*u8=canonical(parent,dependency.path);
+    let online:bool=dependency.version!=(0 as *u8);
+    let directory:*u8=if online { registry_directory(&mut graph.registry as *Registry,dependency.name,dependency.version) } else { canonical(parent,dependency.path) };
     if directory==(0 as *u8) { config_error("jxz: cannot resolve dependency directory"); return false; }
     if strcmp(directory,graph.root)==0 { config_error("jxz: dependency cycle reaches the root project"); free(directory as *void); return false; }
     let mut i:u64=0;
@@ -77,6 +81,14 @@ fn visit(graph:*Graph,parent:*u8,dependency:Dependency,depth:u64)->bool {
     if !cfg.valid { config_free(&mut cfg as *Config); free(directory as *void); return false; }
     if !module_name_valid(cfg.name) || strcmp(cfg.name,dependency.name)!=0 {
         config_error("jxz: dependency key must equal identifier package.name"); config_free(&mut cfg as *Config); free(directory as *void); return false;
+    }
+    if online {
+        let mut safe:bool=strcmp(cfg.version,dependency.version)==0 && registry_relative(cfg.src_dir);
+        let mut item:u64=0;
+        while item<cfg.module_path_count { if !registry_relative(cfg.module_paths[item]) { safe=false; } item+=1; }
+        item=0; while item<cfg.link_object_count { if !registry_relative(cfg.link_objects[item]) { safe=false; } item+=1; }
+        item=0; while item<cfg.dependencies.len { if cfg.dependencies.data[item].version==(0 as *u8) { safe=false; } item+=1; }
+        if !safe { config_error("jxz: registry package identity or paths invalid; registry dependencies must use exact online versions"); config_free(&mut cfg as *Config); free(directory as *void); return false; }
     }
     graph.bytes=graph.bytes+cfg.storage.len;
     if graph.bytes>16777216 { config_error("jxz: dependency manifests exceed 16 MiB total"); config_free(&mut cfg as *Config); free(directory as *void); return false; }
@@ -162,13 +174,14 @@ fn export_graph(graph:*Graph,cfg:*Config,native_inputs:bool)->bool {
     }
     return true;
 }
-pub fn dependencies_resolve(cfg:*Config)->bool { return resolve_graph(cfg,true); }
+pub fn dependencies_resolve(cfg:*Config)->bool { return resolve_graph(cfg,true,false,false); }
+pub fn dependencies_fetch(cfg:*Config,update:bool)->bool { return resolve_graph(cfg,false,false,update); }
 // Editor analysis shares graph validation and module mapping, but native object
 // files need not have been built. Their manifest syntax is still checked.
-pub fn dependencies_resolve_modules(cfg:*Config)->bool { return resolve_graph(cfg,false); }
-fn resolve_graph(cfg:*Config,native_inputs:bool)->bool {
+pub fn dependencies_resolve_modules(cfg:*Config)->bool { return resolve_graph(cfg,false,true,false); }
+fn resolve_graph(cfg:*Config,native_inputs:bool,readonly:bool,update:bool)->bool {
     if cfg.dependencies.len==0 { return true; }
-    let mut graph:Graph=Graph{packages:vec_new(),root:realpath(".",0 as *u8),root_name:cfg.name,bytes:cfg.storage.len};
+    let mut graph:Graph=Graph{packages:vec_new(),root:realpath(".",0 as *u8),root_name:cfg.name,bytes:cfg.storage.len,registry:registry_new(readonly,update)};
     if graph.root==(0 as *u8) { return false; }
     let mut ok:bool=true; let mut i:u64=0;
     while i<cfg.dependencies.len {
@@ -176,6 +189,7 @@ fn resolve_graph(cfg:*Config,native_inputs:bool)->bool {
         i=i+1;
     }
     if ok { ok=export_graph(&mut graph as *Graph,cfg,native_inputs); }
+    ok=registry_finish(&mut graph.registry as *Registry,ok);
     graph_free(&mut graph as *Graph);
     return ok;
 }

@@ -16,7 +16,7 @@ extern "C" {
 // Shared project diagnostics never write to stdout, which may carry LSP frames.
 pub fn config_error(message: *u8) { dprintf(2, "%s\n", message); }
 
-pub struct Dependency { pub name: *u8, pub path: *u8 }
+pub struct Dependency { pub name: *u8, pub path: *u8, pub version: *u8 }
 
 pub struct Config {
     pub name: *u8,
@@ -242,11 +242,13 @@ pub fn module_name_valid(name:*u8)->bool {
     }
     return i<=255;
 }
-fn config_dependency_path(text:*u8,tail:**u8)->*u8 {
+fn config_dependency_value(text:*u8,tail:**u8,online:*bool)->*u8 {
+    if text[0]==34 || text[0]==39 { *online=true; return config_string(text,tail); }
     if text[0]!=123 { return 0 as *u8; }
     let mut cursor:*u8=config_space(text+1);
-    if strncmp(cursor,"path",4)!=0 { return 0 as *u8; }
-    cursor=config_space(cursor+4);
+    if strncmp(cursor,"path",4)==0 { cursor=config_space(cursor+4); }
+    else if strncmp(cursor,"version",7)==0 { *online=true; cursor=config_space(cursor+7); }
+    else { return 0 as *u8; }
     if cursor[0]!=61 { return 0 as *u8; }
     cursor=config_space(cursor+1);
     let path:*u8=config_string(cursor,tail);
@@ -292,9 +294,10 @@ fn config_parse(cfg: *Config) -> bool {
             end[0] = 0;
             if section == 3 {
                 let mut tail:*u8=0 as *u8;
-                let path:*u8=config_dependency_path(raw,&tail as **u8);
-                if !module_name_valid(start) || path==(0 as *u8) {
-                    config_error("jxz: dependencies require an identifier and { path = quoted-local-directory }; online versions are unsupported");
+                let mut online:bool=false;
+                let value:*u8=config_dependency_value(raw,&tail as **u8,&mut online as *bool);
+                if !module_name_valid(start) || !config_path_valid(value) {
+                    config_error("jxz: dependencies require an identifier with { path = quoted-directory }, { version = quoted-x.y.z } or quoted-x.y.z");
                     return false;
                 }
                 let mut i:u64=0;
@@ -302,7 +305,7 @@ fn config_parse(cfg: *Config) -> bool {
                     if strcmp(cfg.dependencies.data[i].name,start)==0 { config_error("jxz: duplicate dependency name"); return false; }
                     i=i+1;
                 }
-                if !vec_push(&mut cfg.dependencies as *Vec<Dependency>,Dependency{name:start,path:path}) { return false; }
+                if !vec_push(&mut cfg.dependencies as *Vec<Dependency>,Dependency{name:start,path:if online { 0 as *u8 } else { value },version:if online { value } else { 0 as *u8 }}) { return false; }
                 line=config_line_tail(tail);
                 if line==(0 as *u8) { config_error("jxz: trailing dependency garbage"); return false; }
                 continue;

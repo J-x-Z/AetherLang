@@ -1,0 +1,207 @@
+// Exact-version HTTP(S) registry resolution. Normal builds keep existing pins;
+// jxz update explicitly reselects hashes for the manifest's exact versions.
+// Read-only editor resolution requires an existing lock and verified cache.
+use registry_format::{RegistryRow,RegistryTable,registry_table_empty,registry_table_read,registry_table_parse,registry_table_free,registry_version,registry_hash,registry_url,registry_copy,registry_index_valid,registry_append};
+use registry_io::{registry_capture,registry_download,registry_url_path,registry_symlink,registry_regular,registry_transport_ready};
+use registry_cache::registry_cached;
+use config::{config_error,config_path_valid,module_name_valid};
+use path::{path_join,make_directories};
+use process::environment_get;
+use vec::{Vec,vec_new,vec_push,vec_free};
+use result::Result;
+use binary_io::read_path_bytes;
+use bytes::{bytes_from_vec,bytes_copy,bytes_equal};
+use output::{presence,output_lock,output_unlock,marker_valid};
+extern "C" {
+    fn free(ptr:*void); fn strcmp(a:*u8,b:*u8)->i32; fn strlen(text:*u8)->u64;
+    fn realpath(path:*u8,out:*u8)->*u8; fn mkstemp(template:*u8)->i32; fn close(fd:i32)->i32;
+    fn fdopen(fd:i32,mode:*u8)->*void; fn fopen(path:*u8,mode:*u8)->*void; fn fclose(file:*void)->i32;
+    fn fwrite(data:*void,size:u64,count:u64,file:*void)->u64;
+    fn rename(old:*u8,new:*u8)->i32; fn link(old:*u8,new:*u8)->i32; fn symlink(target:*u8,path:*u8)->i32; fn remove(path:*u8)->i32;
+}
+pub struct Registry {
+    pub pins:RegistryTable, pub lock_snapshot:Vec<u8>, pub lock_existed:bool, pub selected:Vec<RegistryRow>, pub origin:*u8, pub cache:*u8,
+    pub project_lock:*void, pub cache_lock:*void, pub initialized:bool, pub valid:bool,
+    pub readonly:bool, pub offline:bool, pub update:bool,
+}
+pub fn registry_new(readonly:bool,update:bool)->Registry {
+    Registry{pins:registry_table_empty(),lock_snapshot:vec_new(),lock_existed:false,selected:vec_new(),origin:0 as *u8,cache:0 as *u8,project_lock:0 as *void,cache_lock:0 as *void,initialized:false,valid:false,readonly:readonly,offline:readonly,update:update}
+}
+pub fn registry_free(registry:*Registry) {
+    let mut i:u64=0; while i<registry.selected.len {
+        let row:RegistryRow=registry.selected.data[i]; free(row.a as *void); free(row.b as *void); free(row.c as *void); free(row.d as *void); i+=1;
+    }
+    vec_free(&mut registry.selected as *Vec<RegistryRow>); registry_table_free(&mut registry.pins as *RegistryTable); vec_free(&mut registry.lock_snapshot as *Vec<u8>);
+    free(registry.origin as *void); free(registry.cache as *void);
+    if registry.cache_lock!=(0 as *void) { output_unlock(registry.cache_lock); registry.cache_lock=0 as *void; }
+    if registry.project_lock!=(0 as *void) { output_unlock(registry.project_lock); registry.project_lock=0 as *void; }
+}
+fn lock_valid(table:*RegistryTable)->bool {
+    let mut i:u64=0;
+    while i<table.rows.len {
+        let row:RegistryRow=table.rows.data[i];
+        if !module_name_valid(row.a) || !registry_version(row.b) || !registry_hash(row.c) || !registry_url(row.d) { return false; }
+        let mut j:u64=0; while j<i { if strcmp(table.rows.data[j].a,row.a)==0 { return false; } j+=1; }
+        i+=1;
+    }
+    true
+}
+fn marker_matches(path:*u8,lock:*void)->bool {
+    if registry_symlink(path) { return marker_valid(path,"JXZ-CACHE-1"); }
+    if !registry_regular(path,lock) { return false; }
+    let mut bytes:Vec<u8>=match read_path_bytes(path,32) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
+    let mut ok:bool=vec_push(&mut bytes as *Vec<u8>,0 as u8);
+    if ok { ok=strcmp(bytes.data,"JXZ-CACHE-1\n")==0; }
+    vec_free(&mut bytes as *Vec<u8>); ok
+}
+fn initialize(registry:*Registry)->bool {
+    if registry.initialized { return registry.valid; }
+    registry.initialized=true;
+    let offline:*u8=environment_get("JXZ_OFFLINE");
+    if offline!=(0 as *u8) {
+        if strcmp(offline,"1")==0 { registry.offline=true; }
+        else if strcmp(offline,"0")!=0 { config_error("jxz: JXZ_OFFLINE must be 0 or 1"); return false; }
+    }
+    if registry.update && registry.offline { config_error("jxz: registry update requires online access"); return false; }
+    let origin:*u8=environment_get("JXZ_REGISTRY");
+    if origin!=(0 as *u8) {
+        if !registry_url(origin) { config_error("jxz: JXZ_REGISTRY must be an HTTP(S) base URL without a trailing slash, credentials, query or fragment"); return false; }
+        registry.origin=registry_copy(origin); if registry.origin==(0 as *u8) { return false; }
+    }
+    if !registry.readonly { registry.project_lock=output_lock("."); if registry.project_lock==(0 as *void) { return false; } }
+    let lock_state:i32=presence("Jxz.lock");
+    if lock_state<0 || registry_symlink("Jxz.lock") { config_error("jxz: refusing symbolic or unreadable Jxz.lock"); return false; }
+    registry.lock_existed=lock_state==1;
+    if lock_state==1 {
+        if !registry_regular("Jxz.lock",registry.project_lock) { config_error("jxz: Jxz.lock must be a regular file"); return false; }
+        registry.lock_snapshot=match read_path_bytes("Jxz.lock",1048576) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
+        let copied:Vec<u8>=match bytes_copy(bytes_from_vec(&mut registry.lock_snapshot as *Vec<u8>)) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
+        match registry_table_parse(copied,"JXZ-REGISTRY-LOCK-1",4) {
+            Result::Ok(value)=>{ registry.pins=value; },
+            Result::Err(_)=>{ config_error("jxz: unrecognized Jxz.lock; preserving it"); return false; },
+        }
+        if !lock_valid(&mut registry.pins as *RegistryTable) { config_error("jxz: invalid Jxz.lock; preserving it"); return false; }
+    }
+    let chosen:*u8=environment_get("JXZ_CACHE"); let mut requested:*u8=0 as *u8;
+    if chosen!=(0 as *u8) { if config_path_valid(chosen) { requested=registry_copy(chosen); } }
+    else { let home:*u8=environment_get("HOME"); if home!=(0 as *u8) { requested=path_join(home,".cache/jxz"); } }
+    if requested==(0 as *u8) { config_error("jxz: set JXZ_CACHE to a writable cache directory"); return false; }
+    if !registry.readonly && !make_directories(requested) { free(requested as *void); return false; }
+    registry.cache=realpath(requested,0 as *u8); free(requested as *void);
+    if registry.cache==(0 as *u8) { config_error("jxz: registry cache is unavailable; run jxz fetch first"); return false; }
+    if !registry.readonly { registry.cache_lock=output_lock(registry.cache); if registry.cache_lock==(0 as *void) { return false; } }
+    let marker:*u8=path_join(registry.cache,".jxz-cache"); if marker==(0 as *u8) { return false; }
+    let state:i32=presence(marker); let mut ok:bool=state==1 && marker_matches(marker,registry.cache_lock);
+    if state==0 && !registry.readonly {
+        let argv:[*u8;9]=["find","-P",registry.cache,"-mindepth","1","-maxdepth","1","-print0",0 as *u8];
+        let mut found:Vec<u8>=match registry_capture(&argv[0] as **u8,4194304,registry.cache_lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ free(marker as *void); return false; }, };
+        if found.len==0 { ok=symlink("JXZ-CACHE-1",marker)==0; }
+        vec_free(&mut found as *Vec<u8>);
+    }
+    free(marker as *void);
+    if !ok { config_error("jxz: unrecognized registry cache directory; preserving its contents"); return false; }
+    if !registry.offline && !registry_transport_ready(registry.cache_lock) { config_error("jxz: online registry requires curl 8.4 or newer for bounded downloads"); return false; }
+    registry.valid=true; true
+}
+fn index_hash(registry:*Registry,name:*u8,version:*u8,origin:*u8)->*u8 {
+    if registry.offline { config_error("jxz: offline resolution needs a matching Jxz.lock entry"); return 0 as *u8; }
+    let temporary:*u8=path_join(registry.cache,".jxz-index-XXXXXX"); let url:*u8=registry_url_path(origin,"index.jxz");
+    if temporary==(0 as *u8) || url==(0 as *u8) { free(temporary as *void); free(url as *void); return 0 as *u8; }
+    let fd:i32=mkstemp(temporary); let mut ok:bool=fd>=0;
+    if ok { ok=close(fd)==0 && registry_download(url,temporary,"1048576",registry.cache_lock); }
+    free(url as *void); let mut hash:*u8=0 as *u8;
+    if ok {
+        match registry_table_read(temporary,"JXZ-REGISTRY-1",3) {
+            Result::Err(_)=>{ config_error("jxz: invalid registry index"); },
+            Result::Ok(value)=>{
+                let mut table:RegistryTable=value;
+                if registry_index_valid(&mut table as *RegistryTable) {
+                    let mut i:u64=0;
+                    while i<table.rows.len { let row:RegistryRow=table.rows.data[i]; if strcmp(row.a,name)==0 && strcmp(row.b,version)==0 { hash=registry_copy(row.c); break; } i+=1; }
+                }
+                registry_table_free(&mut table as *RegistryTable);
+            },
+        }
+    }
+    remove(temporary); free(temporary as *void);
+    if hash==(0 as *u8) { config_error("jxz: exact registry version unavailable or index invalid"); config_error(name); config_error(version); }
+    hash
+}
+pub fn registry_directory(registry:*Registry,name:*u8,version:*u8)->*u8 {
+    if !module_name_valid(name) || !registry_version(version) { config_error("jxz: registry versions must be exact x.y.z (no ranges or prereleases)"); return 0 as *u8; }
+    if !initialize(registry) { return 0 as *u8; }
+    let mut i:u64=0;
+    while i<registry.selected.len {
+        let row:RegistryRow=registry.selected.data[i];
+        if strcmp(row.a,name)==0 {
+            if strcmp(row.b,version)!=0 { config_error("jxz: conflicting exact versions for registry package"); config_error(name); return 0 as *u8; }
+            return registry_cached(registry.cache,row.d,name,version,row.c,registry.offline,registry.cache_lock);
+        }
+        i+=1;
+    }
+    let mut hash:*u8=0 as *u8; let mut source:*u8=registry.origin;
+    i=0;
+    while i<registry.pins.rows.len {
+        let row:RegistryRow=registry.pins.rows.data[i];
+        if strcmp(row.a,name)==0 {
+            if !registry.update {
+                if strcmp(row.b,version)!=0 { config_error("jxz: manifest version differs from Jxz.lock; run jxz update explicitly"); return 0 as *u8; }
+                if source!=(0 as *u8) && strcmp(source,row.d)!=0 { config_error("jxz: registry origin differs from Jxz.lock; run jxz update explicitly"); return 0 as *u8; }
+                hash=registry_copy(row.c); source=row.d;
+            } else if source==(0 as *u8) { source=row.d; }
+            break;
+        }
+        i+=1;
+    }
+    if hash==(0 as *u8) {
+        if source==(0 as *u8) { config_error("jxz: set JXZ_REGISTRY for the first fetch or an explicit update"); return 0 as *u8; }
+        hash=index_hash(registry,name,version,source); if hash==(0 as *u8) { return hash; }
+    }
+    let directory:*u8=registry_cached(registry.cache,source,name,version,hash,registry.offline,registry.cache_lock);
+    if directory==(0 as *u8) { free(hash as *void); return directory; }
+    let row:RegistryRow=RegistryRow{a:registry_copy(name),b:registry_copy(version),c:hash,d:registry_copy(source)};
+    if row.a==(0 as *u8) || row.b==(0 as *u8) || row.d==(0 as *u8) || !vec_push(&mut registry.selected as *Vec<RegistryRow>,row) {
+        free(row.a as *void); free(row.b as *void); free(row.c as *void); free(row.d as *void); free(directory as *void); return 0 as *u8;
+    }
+    directory
+}
+fn lock_unchanged(registry:*Registry)->bool {
+    if registry_symlink("Jxz.lock") { return false; }
+    let present:i32=presence("Jxz.lock");
+    if !registry.lock_existed { return present==0; }
+    if present!=1 || !registry_regular("Jxz.lock",registry.project_lock) { return false; }
+    let mut current:Vec<u8>=match read_path_bytes("Jxz.lock",1048576) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
+    let same:bool=bytes_equal(bytes_from_vec(&mut current as *Vec<u8>),bytes_from_vec(&mut registry.lock_snapshot as *Vec<u8>));
+    vec_free(&mut current as *Vec<u8>); same
+}
+pub fn registry_finish(registry:*Registry,success:bool)->bool {
+    if !success || !registry.initialized { return success; }
+    if !registry.valid { return false; }
+    if registry.readonly { return true; }
+    let mut i:u64=1;
+    while i<registry.selected.len {
+        let row:RegistryRow=registry.selected.data[i]; let mut j:u64=i;
+        while j>0 && strcmp(registry.selected.data[j-1].a,row.a)>0 { registry.selected.data[j]=registry.selected.data[j-1]; j-=1; }
+        registry.selected.data[j]=row; i+=1;
+    }
+    let mut bytes:Vec<u8>=vec_new(); let mut ok:bool=registry_append(&mut bytes as *Vec<u8>,"JXZ-REGISTRY-LOCK-1",10); i=0;
+    while ok && i<registry.selected.len {
+        let row:RegistryRow=registry.selected.data[i];
+        ok=registry_append(&mut bytes as *Vec<u8>,row.a,9) && registry_append(&mut bytes as *Vec<u8>,row.b,9) && registry_append(&mut bytes as *Vec<u8>,row.c,9) && registry_append(&mut bytes as *Vec<u8>,row.d,10); i+=1;
+    }
+    let temporary:*u8=registry_copy(".jxz-lock-XXXXXX"); if temporary==(0 as *u8) { ok=false; }
+    if ok {
+        let fd:i32=mkstemp(temporary); if fd<0 { ok=false; }
+        else {
+            let file:*void=fdopen(fd,"wb");
+            if file==(0 as *void) { close(fd); ok=false; }
+            else { ok=fwrite(bytes.data as *void,1,bytes.len,file)==bytes.len; if fclose(file)!=0 { ok=false; } }
+        }
+    }
+    if ok && !lock_unchanged(registry) { config_error("jxz: Jxz.lock changed during resolution; preserving the new contents"); ok=false; }
+    if ok { if registry.lock_existed { ok=rename(temporary,"Jxz.lock")==0; } else { ok=link(temporary,"Jxz.lock")==0; } }
+    if temporary!=(0 as *u8) { remove(temporary); free(temporary as *void); }
+    vec_free(&mut bytes as *Vec<u8>);
+    if !ok { config_error("jxz: cannot atomically write Jxz.lock"); }
+    ok
+}

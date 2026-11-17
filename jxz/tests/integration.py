@@ -615,9 +615,9 @@ fn main(argc: i32, argv: **u8) -> i32 {
             ("alias={path='deps/a'}", 'must equal'),
             ("a={path='deps/a'}\na={path='deps/a'}", 'duplicate dependency'),
             ("bad-name={path='deps/a'}", 'identifier'),
-            ("a={path='deps/a',version='1'}", 'online versions'),
-            ("a='1.0'", 'online versions'),
-            ("a={git='https://example.invalid/repo'}", 'online versions'),
+            ("a={path='deps/a',version='1'}", 'dependencies require'),
+            ("a='1.0'", 'exact x.y.z'),
+            ("a={git='https://example.invalid/repo'}", 'dependencies require'),
             ("a={path='deps/a'}", 'dependency cycle'),
             ("a={path='deps/a'}\nb={path='deps/b'}", 'different packages'),
             ("a={path='deps/a'}", 'dependency cycle'),
@@ -1091,7 +1091,7 @@ fn main() -> i32 {
         self.assertFalse((self.root / 'Jxz.toml').exists())
 
     def test_unimplemented_dependency_commands_fail(self):
-        for command in ('add', 'remove', 'update', 'install'):
+        for command in ('add', 'remove', 'install'):
             self.run_jxz(command, 'anything', expected=2)
         self.assertEqual(list(self.root.iterdir()), [])
 

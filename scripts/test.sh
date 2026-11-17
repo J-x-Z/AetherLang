@@ -36,6 +36,7 @@ for backend in $backends; do
     jxz="$CARGO_TARGET_DIR/jxz-$backend"
     AETHC="$compiler" AETHER_BACKEND="$backend" jxz/build.sh "$jxz"
     AETHER_BACKEND="$backend" python3 jxz/tests/integration.py --jxz "$jxz" --aethc "$compiler" --work-dir "$CARGO_TARGET_DIR/jxz-tests-$backend"
+    python3 jxz/tests/registry.py --jxz "$jxz" --aethc "$compiler" --backend "$backend" --work-dir "$CARGO_TARGET_DIR/jxz-registry-$backend"
 done
 
 python3 tests/bootstrap_core.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-core" --backend "$bootstrap_backend"

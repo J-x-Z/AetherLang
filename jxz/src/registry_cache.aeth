@@ -1,0 +1,144 @@
+// Content-addressed packages. A final directory is usable only after every
+// listed file and the complete file set have been verified. Unknown/corrupt
+// cache content is preserved in quarantine; it is never recursively deleted.
+use registry_format::{RegistryTable,RegistryRow,registry_table_read,registry_table_free,registry_manifest_valid,registry_copy};
+use registry_io::{registry_capture,registry_sha,registry_download,registry_url_path,registry_symlink};
+use path::{path_join,make_directories,directory_exists};
+use vec::{Vec,vec_new,vec_free};
+use result::Result;
+use output::presence;
+use config::config_error;
+extern "C" {
+    fn free(ptr:*void); fn strcmp(a:*u8,b:*u8)->i32; fn strncmp(a:*u8,b:*u8,n:u64)->i32; fn strlen(text:*u8)->u64;
+    fn mkdtemp(template:*u8)->*u8; fn rename(old:*u8,new:*u8)->i32; fn rmdir(path:*u8)->i32; fn remove(path:*u8)->i32;
+    fn fopen(path:*u8,mode:*u8)->*void; fn fclose(file:*void)->i32; fn fseek(file:*void,offset:i64,origin:i32)->i32; fn ftell(file:*void)->i64;
+}
+fn files_regular(directory:*u8,lock:*void)->bool {
+    let argv:[*u8;11]=["find","-P",directory,"!","-type","f","!","-type","d","-print0",0 as *u8];
+    let mut unexpected:Vec<u8>=match registry_capture(&argv[0] as **u8,4194304,lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ return false; }, };
+    let ok:bool=unexpected.len==0; vec_free(&mut unexpected as *Vec<u8>); ok
+}
+fn exact_file_set(directory:*u8,table:*RegistryTable,lock:*void)->bool {
+    let argv:[*u8;7]=["find","-P",directory,"-type","f","-print0",0 as *u8];
+    let mut files:Vec<u8>=match registry_capture(&argv[0] as **u8,4194304,lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ return false; }, };
+    let mut ok:bool=files.len>0;
+    if ok { ok=files.data[files.len-1]==0; }
+    let prefix:u64=strlen(directory); let mut count:u64=0; let mut i:u64=0;
+    while ok && i<files.len {
+        let full:*u8=files.data+i; let n:u64=strlen(full);
+        if n<=prefix || strncmp(full,directory,prefix)!=0 || full[prefix]!=47 { ok=false; break; }
+        let relative:*u8=full+prefix+1;
+        let mut found:bool=strcmp(relative,".jxz-files")==0; let mut j:u64=0;
+        while !found && j<table.rows.len { if strcmp(relative,table.rows.data[j].b)==0 { found=true; } j+=1; }
+        if !found { ok=false; break; }
+        count+=1; i+=n+1;
+    }
+    ok=ok && count==table.rows.len+1;
+    vec_free(&mut files as *Vec<u8>); ok
+}
+fn file_size(path:*u8)->i64 {
+    let file:*void=fopen(path,"rb"); if file==(0 as *void) { return -1; }
+    let mut size:i64=-1; if fseek(file,0,2)==0 { size=ftell(file); }
+    if fclose(file)!=0 { size=-1; } size
+}
+pub fn registry_cache_verify(directory:*u8,hash:*u8,lock:*void)->bool {
+    if registry_symlink(directory) || !directory_exists(directory) || !files_regular(directory,lock) { return false; }
+    let manifest:*u8=path_join(directory,".jxz-files"); if manifest==(0 as *u8) { return false; }
+    let manifest_size:i64=file_size(manifest);
+    let hash_ok:bool=manifest_size>=0 && manifest_size<=1048576 && registry_sha(manifest,hash,lock);
+    if !hash_ok { free(manifest as *void); return false; }
+    let mut table:RegistryTable=match registry_table_read(manifest,"JXZ-PACKAGE-1",2) {
+        Result::Ok(value)=>value,Result::Err(_)=>{ free(manifest as *void); return false; },
+    };
+    free(manifest as *void);
+    let mut ok:bool=registry_manifest_valid(&mut table as *RegistryTable) && exact_file_set(directory,&mut table as *RegistryTable,lock);
+    let mut i:u64=0; let mut total:u64=0;
+    while ok && i<table.rows.len {
+        let path:*u8=path_join(directory,table.rows.data[i].b);
+        if path==(0 as *u8) { ok=false; break; }
+        let size:i64=file_size(path);
+        if size<0 || size>16777216 { ok=false; }
+        else { total+=size as u64; if total>67108864 { ok=false; } }
+        if ok { ok=registry_sha(path,table.rows.data[i].a,lock); }
+        free(path as *void); i+=1;
+    }
+    registry_table_free(&mut table as *RegistryTable); ok
+}
+fn parent_directories(path:*u8)->bool {
+    let temporary:*u8=registry_copy(path); if temporary==(0 as *u8) { return false; }
+    let mut i:u64=strlen(temporary); while i>0 && temporary[i-1]!=47 { i-=1; }
+    let mut ok:bool=i>0;
+    if ok { temporary[i-1]=0; ok=make_directories(temporary); }
+    free(temporary as *void); ok
+}
+fn fresh_directory(cache:*u8,prefix:*u8)->*u8 {
+    let path:*u8=path_join(cache,prefix); if path==(0 as *u8) { return path; }
+    if mkdtemp(path)==(0 as *u8) { free(path as *void); return 0 as *u8; }
+    path
+}
+// Delete only paths described by the validated manifest in this fresh staging
+// directory. Extra/unrecognized entries survive and make rmdir fail safely.
+fn discard_stage(stage:*u8,table:*RegistryTable) {
+    let mut i:u64=0;
+    while i<table.rows.len {
+        let path:*u8=path_join(stage,table.rows.data[i].b);
+        if path!=(0 as *u8) { remove(path); free(path as *void); }
+        i+=1;
+    }
+    let meta:*u8=path_join(stage,".jxz-files"); if meta!=(0 as *u8) { remove(meta); free(meta as *void); }
+    i=0;
+    while i<table.rows.len {
+        let path:*u8=path_join(stage,table.rows.data[i].b);
+        if path!=(0 as *u8) {
+            let limit:u64=strlen(stage); let mut n:u64=strlen(path);
+            while n>limit { if path[n]==47 { path[n]=0; rmdir(path); } n-=1; }
+            free(path as *void);
+        }
+        i+=1;
+    }
+    rmdir(stage);
+}
+fn fetch(directory:*u8,cache:*u8,origin:*u8,name:*u8,version:*u8,hash:*u8,lock:*void)->bool {
+    let stage:*u8=fresh_directory(cache,".jxz-fetch-XXXXXX"); if stage==(0 as *u8) { return false; }
+    let package:*u8=registry_url_path(origin,name); let mut release:*u8=0 as *u8;
+    if package!=(0 as *u8) { release=registry_url_path(package,version); }
+    free(package as *void);
+    let manifest:*u8=path_join(stage,".jxz-files"); let mut url:*u8=0 as *u8;
+    if release!=(0 as *u8) { url=registry_url_path(release,"files.jxz"); }
+    let mut ok:bool=manifest!=(0 as *u8) && url!=(0 as *u8);
+    if ok { ok=registry_download(url,manifest,"1048576",lock) && registry_sha(manifest,hash,lock); }
+    free(url as *void);
+    let mut table:RegistryTable=RegistryTable{bytes:vec_new(),rows:vec_new()};
+    if ok { match registry_table_read(manifest,"JXZ-PACKAGE-1",2) { Result::Ok(value)=>{ table=value; },Result::Err(_)=>{ ok=false; }, } }
+    if ok { ok=registry_manifest_valid(&mut table as *RegistryTable); }
+    let mut i:u64=0; let mut total:u64=0;
+    while ok && i<table.rows.len {
+        let row:RegistryRow=table.rows.data[i]; let path:*u8=path_join(stage,row.b); let remote:*u8=registry_url_path(release,row.b);
+        if path==(0 as *u8) || remote==(0 as *u8) { ok=false; }
+        if ok { ok=parent_directories(path) && registry_download(remote,path,"16777216",lock) && registry_sha(path,row.a,lock); }
+        if ok { let size:i64=file_size(path); if size<0 { ok=false; } else { total+=size as u64; ok=total<=67108864; } }
+        free(path as *void); free(remote as *void); i+=1;
+    }
+    if ok { ok=registry_cache_verify(stage,hash,lock); }
+    if ok { ok=rename(stage,directory)==0; }
+    if !ok { if !registry_manifest_valid(&mut table as *RegistryTable) { registry_table_free(&mut table as *RegistryTable); table=RegistryTable{bytes:vec_new(),rows:vec_new()}; } discard_stage(stage,&mut table as *RegistryTable); config_error("jxz: registry download, package path or SHA-256 verification failed"); }
+    registry_table_free(&mut table as *RegistryTable); free(manifest as *void); free(release as *void); free(stage as *void); ok
+}
+pub fn registry_cached(cache:*u8,origin:*u8,name:*u8,version:*u8,hash:*u8,offline:bool,lock:*void)->*u8 {
+    let directory:*u8=path_join(cache,hash); if directory==(0 as *u8) { return directory; }
+    let present:i32=presence(directory);
+    if present==1 && registry_cache_verify(directory,hash,lock) { return directory; }
+    if offline {
+        config_error("jxz: offline registry cache is missing or corrupt; run jxz fetch online"); free(directory as *void); return 0 as *u8;
+    }
+    if present<0 { free(directory as *void); return 0 as *u8; }
+    if present==1 {
+        let quarantine:*u8=fresh_directory(cache,".jxz-corrupt-XXXXXX");
+        if quarantine==(0 as *u8) { free(directory as *void); return 0 as *u8; }
+        let moved:bool=rmdir(quarantine)==0 && rename(directory,quarantine)==0;
+        free(quarantine as *void); if !moved { free(directory as *void); return 0 as *u8; }
+        config_error("jxz: corrupt registry cache preserved in quarantine; fetching a verified copy");
+    }
+    if !fetch(directory,cache,origin,name,version,hash,lock) { free(directory as *void); return 0 as *u8; }
+    directory
+}

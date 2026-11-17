@@ -2,6 +2,8 @@
 use build::{build_project, run_project, clean_project, language_server};
 use init::{init_project};
 use test::{run_tests};
+use config::{Config,config_load,config_free};
+use dependencies::dependencies_fetch;
 
 extern "C" {
     fn puts(s: *u8) -> i32;
@@ -11,7 +13,7 @@ extern "C" {
 
 fn print_help() {
     puts("JXZ - AetherLang project driver\0" as *u8);
-    puts("Usage: jxz <init [name]|build [--release]|run [-- args...]|test|clean|lsp>\0" as *u8);
+    puts("Usage: jxz <init [name]|build [--release]|run [-- args...]|test|clean|lsp|fetch|update>\0" as *u8);
     puts("AETHC selects the compiler; AETHER_BACKEND overrides its backend (llvm or c).\0" as *u8);
     puts("Local project commands currently require a 64-bit POSIX host.\0" as *u8);
 }
@@ -57,8 +59,14 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
         if argc != 2 { print_help(); return 2; }
         return clean_project();
     }
-    if strcmp(command, "install\0" as *u8) == 0 || strcmp(command, "add\0" as *u8) == 0 || strcmp(command, "remove\0" as *u8) == 0 || strcmp(command, "update\0" as *u8) == 0 {
-        puts("jxz: registry/dependency management is not implemented; no files changed\0" as *u8);
+    if strcmp(command,"fetch")==0 || strcmp(command,"update")==0 {
+        if argc!=2 { print_help(); return 2; }
+        let mut cfg:Config=config_load();
+        let ok:bool=cfg.valid && dependencies_fetch(&mut cfg as *Config,strcmp(command,"update")==0);
+        config_free(&mut cfg as *Config); return if ok { 0 } else { 1 };
+    }
+    if strcmp(command, "install\0" as *u8) == 0 || strcmp(command, "add\0" as *u8) == 0 || strcmp(command, "remove\0" as *u8) == 0 {
+        puts("jxz: this dependency-edit/install command is not implemented; no files changed\0" as *u8);
         return 2;
     }
     puts("jxz: unknown command (see jxz help)\0" as *u8);

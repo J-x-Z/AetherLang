@@ -1,0 +1,84 @@
+// Bounded system-tool adapters. Policy, metadata and ownership stay in Aether.
+use vec::{Vec,vec_new,vec_free,vec_push};
+use result::Result;
+use fd::{Descriptor,Pipe,fd_pipe,fd_close};
+use binary_io::fd_read_bytes;
+use process::{Command,Child,command_new,process_spawn,child_wait,child_signal,process_status_code};
+use posix::SIGKILL;
+use output::output_compiler_inherits;
+use registry_format::{registry_hash,registry_copy};
+extern "C" { fn free(ptr:*void); fn strlen(text:*u8)->u64; fn malloc(n:u64)->*void; fn strcmp(a:*u8,b:*u8)->i32; fn readlink(path:*u8,out:*u8,size:u64)->i64; }
+pub fn registry_capture(argv:**u8,limit:u64,lock:*void)->Result<Vec<u8>,i32> {
+    let mut pipe:Pipe=fd_pipe()?;
+    let mut command:Command=command_new(argv); command.stdout_fd=pipe.writer.value;
+    if lock!=(0 as *void) && !output_compiler_inherits(lock,true) { fd_close(&mut pipe.reader as *Descriptor); fd_close(&mut pipe.writer as *Descriptor); return Result::Err(1); }
+    let mut child:Child=match process_spawn(&mut command as *Command) {
+        Result::Ok(value)=>value,
+        Result::Err(_)=>{ if lock!=(0 as *void) { output_compiler_inherits(lock,false); } fd_close(&mut pipe.reader as *Descriptor); fd_close(&mut pipe.writer as *Descriptor); return Result::Err(1); },
+    };
+    let mut failed:bool=false;
+    match fd_close(&mut pipe.writer as *Descriptor) { Result::Ok(_)=>{},Result::Err(_)=>{ failed=true; }, }
+    let mut bytes:Vec<u8>=vec_new();
+    if !failed { match fd_read_bytes(pipe.reader.value,limit) { Result::Ok(value)=>{ bytes=value; },Result::Err(_)=>{ failed=true; }, } }
+    match fd_close(&mut pipe.reader as *Descriptor) { Result::Ok(_)=>{},Result::Err(_)=>{ failed=true; }, }
+    if failed { child_signal(&mut child as *Child,SIGKILL); }
+    match child_wait(&mut child as *Child) { Result::Ok(status)=>{ if process_status_code(status)!=0 { failed=true; } },Result::Err(_)=>{ failed=true; }, }
+    if lock!=(0 as *void) && !output_compiler_inherits(lock,false) { failed=true; }
+    if failed { vec_free(&mut bytes as *Vec<u8>); return Result::Err(1); }
+    Result::Ok(bytes)
+}
+pub fn registry_symlink(path:*u8)->bool { let mut byte:u8=0; readlink(path,&mut byte as *u8,1)>=0 }
+pub fn registry_sha(path:*u8,expected:*u8,lock:*void)->bool {
+    let argv:[*u8;6]=["shasum","-a","256","--",path,0 as *u8];
+    let mut bytes:Vec<u8>=match registry_capture(&argv[0] as **u8,8192,lock) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
+    let mut ok:bool=bytes.len>=66;
+    if ok { bytes.data[64]=0; ok=registry_hash(bytes.data) && strcmp(bytes.data,expected)==0; }
+    vec_free(&mut bytes as *Vec<u8>); ok
+}
+pub fn registry_download(url:*u8,path:*u8,limit:*u8,lock:*void)->bool {
+    // No config file, redirects, credentials, shell expansion, or non-HTTP
+    // protocol fallback. curl verifies HTTPS certificates by default.
+    let argv:[*u8;18]=["curl","-q","--fail","--silent","--show-error","--proto","=http,https","--connect-timeout","5","--max-time","30","--max-filesize",limit,"--output",path,"--url",url,0 as *u8];
+    let mut output:Vec<u8>=match registry_capture(&argv[0] as **u8,1024,lock) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
+    let ok:bool=output.len==0; vec_free(&mut output as *Vec<u8>); ok
+}
+// Percent-encode each path byte except URL unreserved characters and '/'.
+pub fn registry_url_path(base:*u8,path:*u8)->*u8 {
+    let a:u64=strlen(base); let b:u64=strlen(path);
+    if a>4096 || b>4096 { return 0 as *u8; }
+    let out:*u8=malloc(a+3*b+2) as *u8; if out==(0 as *u8) { return out; }
+    let mut n:u64=0; while n<a { out[n]=base[n]; n+=1; } out[n]=47; n+=1;
+    let hex:*u8="0123456789ABCDEF"; let mut i:u64=0;
+    while i<b {
+        let c:u8=path[i];
+        if (c>=65 && c<=90)||(c>=97 && c<=122)||(c>=48 && c<=57)||c==45||c==46||c==95||c==126||c==47 { out[n]=c; n+=1; }
+        else { out[n]=37; out[n+1]=hex[(c>>4) as u64]; out[n+2]=hex[(c&15) as u64]; n+=3; }
+        i+=1;
+    }
+    out[n]=0; out
+}
+
+// Reject FIFO/device/directory metadata before opening it: a bounded read alone
+// does not bound the time spent opening a FIFO with no writer.
+pub fn registry_regular(path:*u8,lock:*void)->bool {
+    let argv:[*u8;9]=["find","-P",path,"-maxdepth","0","-type","f","-print0",0 as *u8];
+    let mut bytes:Vec<u8>=match registry_capture(&argv[0] as **u8,8192,lock) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
+    let ok:bool=bytes.len>0; vec_free(&mut bytes as *Vec<u8>); ok
+}
+
+// Before 8.4 curl only enforced --max-filesize when Content-Length was known.
+// Refuse that transport for online operations rather than silently losing bounds.
+pub fn registry_transport_ready(lock:*void)->bool {
+    let argv:[*u8;4]=["curl","-q","--version",0 as *u8];
+    let mut bytes:Vec<u8>=match registry_capture(&argv[0] as **u8,8192,lock) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
+    let mut ok:bool=bytes.len>=10; let prefix:*u8="curl "; let mut i:u64=0;
+    while ok && i<5 { if bytes.data[i]!=prefix[i] { ok=false; } i+=1; }
+    let mut major:u64=0; let mut minor:u64=0; let first:u64=i;
+    while ok && i<bytes.len && bytes.data[i]>=48 && bytes.data[i]<=57 { major=major*10+(bytes.data[i]-48) as u64; if major>1000 { ok=false; } i+=1; }
+    if ok { ok=i>first && i<bytes.len && bytes.data[i]==46; }
+    i+=1; let start:u64=i;
+    while ok && i<bytes.len && bytes.data[i]>=48 && bytes.data[i]<=57 { minor=minor*10+(bytes.data[i]-48) as u64; if minor>1000 { ok=false; } i+=1; }
+    if ok { ok=i>start && i+1<bytes.len && bytes.data[i]==46 && bytes.data[i+1]>=48 && bytes.data[i+1]<=57; }
+    ok=ok && (major>8 || (major==8 && minor>=4));
+    vec_free(&mut bytes as *Vec<u8>); ok
+}

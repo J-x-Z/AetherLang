@@ -1,6 +1,6 @@
 # JXZ local project driver
 
-Local development version: `0.3.0-dev.3` (project-aware LSP entry point).
+Local development version: `0.3.0-dev.3` (project-aware LSP and exact-version registry).
 
 JXZ's active implementation is `src/main.aeth` and its imported Aether modules.
 Build it with the upgraded Rust compiler (historical checked-in `.c` files are
@@ -94,8 +94,8 @@ The dependency key must match the library's `[package] name`. Its entry is
 `<build.src>/lib.aeth` (default `src/lib.aeth`). Paths are relative to the
 declaring package. Each canonical package is loaded once, including a library
 reached through both sides of a diamond. Cycles, different packages with the
-same name, and conflicting local module names are errors. Registry versions,
-dependency aliases and target-specific dependency tables are unsupported.
+same name, and conflicting local module names are errors. Dependency aliases
+and target-specific dependency tables are unsupported.
 
 Build, run, test and LSP pass exact library entries to the compiler. Dependencies
 can provide module search directories and native link inputs relative to their
@@ -105,6 +105,84 @@ graph. Compilation reads the actual sources on every build. Clean removes the
 project's owned outputs. Package names are single filenames of at most 255
 bytes. JXZ reserves the `.jxz-` prefix for its records.
 
+### Exact-version HTTP(S) packages
+
+```toml
+[dependencies]
+geometry = "1.2.3"
+vectors = { version = '2.0.0' }
+# Local path dependencies can coexist with registry dependencies.
+local_helpers = { path = '../local_helpers' }
+```
+
+Set `JXZ_REGISTRY=https://example.org/aether` (no trailing slash) for first
+resolution. Set `JXZ_CACHE=/external/build/jxz-cache` to choose cache storage;
+the default is `$HOME/.cache/jxz`. `jxz fetch` resolves and verifies the complete
+graph without compiling. Build, run and test fetch missing packages through the
+same graph. Versions are exactly three unsigned decimal components `x.y.z`,
+without leading zeros. Ranges, prereleases and build metadata are rejected.
+One package name has one version across the complete graph; conflicts are errors.
+
+The first successful resolution writes sorted `Jxz.lock` pins containing each
+name, version, package-manifest SHA-256 and registry origin. Check this file into
+the project. Normal commands retain existing pins even if the registry publishes
+new bytes for that version. A changed version/origin requires `jxz update`, which
+explicitly reselects pins for the versions currently requested by `Jxz.toml`.
+It reuses pinned origins unless `JXZ_REGISTRY` explicitly selects a new origin.
+Update does not edit the manifest or publish anything. A failed graph leaves the
+old lock intact; unrecognized, symbolic or concurrently changed lock files are
+preserved. New dependencies may add pins; successful resolution drops unused pins.
+
+`JXZ_OFFLINE=1` forbids downloads and requires matching pins plus intact cache
+contents. Every cache hit verifies the manifest, every file hash and the complete
+file set. Corrupt files, additional files and symlinks are rejected. Online repair
+preserves corrupt entries in `.jxz-corrupt-*` directories before downloading a
+verified replacement. Downloads use isolated `.jxz-fetch-*` directories; only
+complete verified packages are atomically published. Process interruption cannot
+publish partial packages or locks. Retrying fetch recovers; interrupted staging
+directories and quarantines are retained for inspection, with no automatic cache
+collector. `clean` preserves the cache and `Jxz.lock`.
+
+LSP resolution only reads existing pins and verified cache entries. It neither
+fetches nor updates the lock; run `jxz fetch` before opening an uncached project.
+Registry packages require matching `[package] name/version`, relative source,
+module and native-object paths without dot/up-level components, and exact-version
+registry dependencies. A downloaded package cannot introduce local path
+dependencies outside its verified file set.
+
+A registry is an ordinary static HTTP(S) directory. It needs no executable server
+API. All files below are UTF-8, tab-separated, LF-terminated, without blank rows:
+
+```text
+# index.jxz (the explanatory comment is not part of the file):
+JXZ-REGISTRY-1
+geometry<TAB>1.2.3<TAB><sha256 of geometry/1.2.3/files.jxz>
+
+# geometry/1.2.3/files.jxz:
+JXZ-PACKAGE-1
+<sha256><TAB>Jxz.toml
+<sha256><TAB>src/lib.aeth
+```
+
+Each listed file is served at `<name>/<version>/<relative-path>`; JXZ percent-
+encodes spaces and Unicode in URL paths. Files may be binary. The package list
+must include `Jxz.toml`. Absolute paths, empty/dot/up-level components, backslashes,
+control bytes, duplicate paths and root `.jxz-*` metadata names are rejected.
+There is no archive extraction. Index and file-list limits are 1 MiB/4096 rows;
+files are at most 16 MiB each and packages at most 64 MiB in total. JXZ requires `curl` 8.4 or newer (older versions did not bound downloads
+without Content-Length), with only HTTP(S), no redirect following, bounded time/size and default HTTPS
+certificate verification; `shasum -a 256` computes hashes and `find` enumerates
+files. Selection, validation, locks, cache policy and graph handling are Aether.
+Initial resolution trusts the configured registry; lock hashes pin later reads.
+
+Real loopback HTTP validation (including interruption and offline rebuild):
+
+```sh
+python3 jxz/tests/registry.py --jxz /external/build/jxz \
+  --aethc /absolute/path/to/aethc --backend llvm \
+  --work-dir /external/build/jxz-registry-tests
+```
+
 Tests are `tests/**/test_*.aeth` programs; zero means pass, compile/link/runtime
 failure means fail. Paths are discovered as NUL-delimited records, so spaces and
 newlines are preserved. Test binaries are rebuilt before execution. `clean`
@@ -113,8 +191,9 @@ it never recursively deletes the target directory or removes source `.c` files.
 
 This implementation currently requires a 64-bit POSIX host with `find` and the
 linker required by `aethc`. macOS is exercised by the integration suite; Windows is not supported
-by this POSIX process layer. Online registry and dependency-edit commands return an explicit
-error; the older experimental source files remain for later development.
+by this POSIX process layer. Registry commands additionally require `curl` and
+`shasum`. The dependency-edit/install commands `add`, `remove` and `install`
+remain unsupported and return an explicit error; remote publication is not implemented.
 
 Migration: `build` now defaults to debug (`-O0`); pass `--release` for `-O2`.
 `run` forwards arguments, `test` reports failures, and `clean` preserves unrelated
