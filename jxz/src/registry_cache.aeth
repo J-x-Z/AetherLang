@@ -45,7 +45,7 @@ pub fn registry_cache_verify(directory:*u8,hash:*u8,lock:*void)->bool {
     if registry_symlink(directory) || !directory_exists(directory) || !files_regular(directory,lock) { return false; }
     let manifest:*u8=path_join(directory,".jxz-files"); if manifest==(0 as *u8) { return false; }
     let manifest_size:i64=file_size(manifest);
-    let hash_ok:bool=manifest_size>=0 && manifest_size<=1048576 && registry_sha(manifest,hash,lock);
+    let hash_ok:bool=manifest_size>=0 && manifest_size<=1048576 && registry_sha(manifest,hash,1048576);
     if !hash_ok { free(manifest as *void); return false; }
     let mut table:RegistryTable=match registry_table_read(manifest,"JXZ-PACKAGE-1",2) {
         Result::Ok(value)=>value,Result::Err(_)=>{ free(manifest as *void); return false; },
@@ -59,7 +59,7 @@ pub fn registry_cache_verify(directory:*u8,hash:*u8,lock:*void)->bool {
         let size:i64=file_size(path);
         if size<0 || size>16777216 { ok=false; }
         else { total+=size as u64; if total>67108864 { ok=false; } }
-        if ok { ok=registry_sha(path,table.rows.data[i].a,lock); }
+        if ok { ok=registry_sha(path,table.rows.data[i].a,16777216); }
         free(path as *void); i+=1;
     }
     registry_table_free(&mut table as *RegistryTable); ok
@@ -106,7 +106,7 @@ fn fetch(directory:*u8,cache:*u8,origin:*u8,name:*u8,version:*u8,hash:*u8,lock:*
     let manifest:*u8=path_join(stage,".jxz-files"); let mut url:*u8=0 as *u8;
     if release!=(0 as *u8) { url=registry_url_path(release,"files.jxz"); }
     let mut ok:bool=manifest!=(0 as *u8) && url!=(0 as *u8);
-    if ok { ok=registry_download(url,manifest,"1048576",lock) && registry_sha(manifest,hash,lock); }
+    if ok { ok=registry_download(url,manifest,"1048576",lock) && registry_sha(manifest,hash,1048576); }
     free(url as *void);
     let mut table:RegistryTable=RegistryTable{bytes:vec_new(),rows:vec_new()};
     if ok { match registry_table_read(manifest,"JXZ-PACKAGE-1",2) { Result::Ok(value)=>{ table=value; },Result::Err(_)=>{ ok=false; }, } }
@@ -115,7 +115,7 @@ fn fetch(directory:*u8,cache:*u8,origin:*u8,name:*u8,version:*u8,hash:*u8,lock:*
     while ok && i<table.rows.len {
         let row:RegistryRow=table.rows.data[i]; let path:*u8=path_join(stage,row.b); let remote:*u8=registry_url_path(release,row.b);
         if path==(0 as *u8) || remote==(0 as *u8) { ok=false; }
-        if ok { ok=parent_directories(path) && registry_download(remote,path,"16777216",lock) && registry_sha(path,row.a,lock); }
+        if ok { ok=parent_directories(path) && registry_download(remote,path,"16777216",lock) && registry_sha(path,row.a,16777216); }
         if ok { let size:i64=file_size(path); if size<0 { ok=false; } else { total+=size as u64; ok=total<=67108864; } }
         free(path as *void); free(remote as *void); i+=1;
     }

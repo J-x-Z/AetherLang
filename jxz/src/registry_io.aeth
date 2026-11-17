@@ -1,12 +1,12 @@
 // Bounded system-tool adapters. Policy, metadata and ownership stay in Aether.
 use vec::{Vec,vec_new,vec_free,vec_push};
 use result::Result;
-use fd::{Descriptor,Pipe,fd_pipe,fd_close};
+use fd::{Descriptor,Pipe,fd_pipe,fd_close,fd_open_read,fd_read};
 use binary_io::fd_read_bytes;
 use process::{Command,Child,command_new,process_spawn,child_wait,child_signal,process_status_code};
 use posix::SIGKILL;
 use output::output_compiler_inherits;
-use registry_format::{registry_hash,registry_copy};
+use sha256::{Sha256,sha256_new,sha256_update,sha256_digest};
 extern "C" { fn free(ptr:*void); fn strlen(text:*u8)->u64; fn malloc(n:u64)->*void; fn strcmp(a:*u8,b:*u8)->i32; fn readlink(path:*u8,out:*u8,size:u64)->i64; }
 pub fn registry_capture(argv:**u8,limit:u64,lock:*void)->Result<Vec<u8>,i32> {
     let mut pipe:Pipe=fd_pipe()?;
@@ -28,12 +28,23 @@ pub fn registry_capture(argv:**u8,limit:u64,lock:*void)->Result<Vec<u8>,i32> {
     Result::Ok(bytes)
 }
 pub fn registry_symlink(path:*u8)->bool { let mut byte:u8=0; readlink(path,&mut byte as *u8,1)>=0 }
-pub fn registry_sha(path:*u8,expected:*u8,lock:*void)->bool {
-    let argv:[*u8;6]=["shasum","-a","256","--",path,0 as *u8];
-    let mut bytes:Vec<u8>=match registry_capture(&argv[0] as **u8,8192,lock) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
-    let mut ok:bool=bytes.len>=66;
-    if ok { bytes.data[64]=0; ok=registry_hash(bytes.data) && strcmp(bytes.data,expected)==0; }
-    vec_free(&mut bytes as *Vec<u8>); ok
+pub fn registry_sha(path:*u8,expected:*u8,limit:u64)->bool {
+    let mut file:Descriptor=match fd_open_read(path) {Result::Ok(fd)=>fd,Result::Err(_)=>{return false;}};
+    let mut hash:Sha256=sha256_new();let mut block:[u8;4096]=[0;4096];
+    let mut total:u64=0;let mut ok:bool=true;
+    loop {
+        let count:u64=match fd_read(file.value,&mut block[0] as *u8,4096) {Result::Ok(n)=>n,Result::Err(_)=>{ok=false;break;}};
+        if count==0 {break;}
+        if count>limit-total || !sha256_update(&mut hash as *Sha256,&block[0] as *u8,count) {ok=false;break;}
+        total+=count;
+    }
+    match fd_close(&mut file as *Descriptor) {Result::Err(_)=>{ok=false;},Result::Ok(_)=>{}}
+    if !ok || strlen(expected)!=64 {return false;}
+    let actual:[u8;32]=sha256_digest(hash);let hex:*u8="0123456789abcdef";
+    for i in 0..32 {
+        if hex[actual[i]>>4]!=expected[2*i] || hex[actual[i]&15]!=expected[2*i+1] {return false;}
+    }
+    true
 }
 pub fn registry_download(url:*u8,path:*u8,limit:*u8,lock:*void)->bool {
     // No config file, redirects, credentials, shell expansion, or non-HTTP

@@ -1,0 +1,19 @@
+use sha256::{Sha256,sha256_new,sha256_update,sha256_digest};
+use fd::fd_read;
+use result::Result;
+extern "C" {fn putchar(c:i32)->i32;}
+fn main()->i32 {
+    let mut s:Sha256=sha256_new();let mut input:[u8;257]=[0;257];
+    if sha256_update(&mut s as *Sha256,0 as *u8,1) {return 1;}
+    if !sha256_update(&mut s as *Sha256,0 as *u8,0) {return 2;}
+    loop {
+        let n:u64=match fd_read(0,&mut input[0] as *u8,257){Result::Ok(n)=>n,Result::Err(_)=>{return 3;}};
+        if n==0 {break;}
+        if !sha256_update(&mut s as *Sha256,&input[0] as *u8,n) {return 4;}
+        let snapshot:[u8;32]=sha256_digest(s);
+        if snapshot[0]!=sha256_digest(s)[0] {return 5;}
+    }
+    let out:[u8;32]=sha256_digest(s);let hex:*u8="0123456789abcdef";
+    for i in 0..32 {putchar(hex[out[i]>>4] as i32);putchar(hex[out[i]&15] as i32);}
+    putchar(10);0
+}

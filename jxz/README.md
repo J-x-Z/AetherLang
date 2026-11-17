@@ -171,7 +171,7 @@ control bytes, duplicate paths and root `.jxz-*` metadata names are rejected.
 There is no archive extraction. Index and file-list limits are 1 MiB/4096 rows;
 files are at most 16 MiB each and packages at most 64 MiB in total. JXZ requires `curl` 8.4 or newer (older versions did not bound downloads
 without Content-Length), with only HTTP(S), no redirect following, bounded time/size and default HTTPS
-certificate verification; `shasum -a 256` computes hashes and `find` enumerates
+certificate verification; Aether streams SHA-256 over bounded file reads and `find` enumerates
 files. Selection, validation, locks, cache policy and graph handling are Aether.
 Initial resolution trusts the configured registry; lock hashes pin later reads.
 
@@ -191,8 +191,7 @@ it never recursively deletes the target directory or removes source `.c` files.
 
 This implementation currently requires a 64-bit POSIX host with `find` and the
 linker required by `aethc`. macOS is exercised by the integration suite; Windows is not supported
-by this POSIX process layer. Registry commands additionally require `curl` and
-`shasum`. The dependency-edit/install commands `add`, `remove` and `install`
+by this POSIX process layer. Registry commands additionally require `curl` only. The dependency-edit/install commands `add`, `remove` and `install`
 remain unsupported and return an explicit error; remote publication is not implemented.
 
 Migration: `build` now defaults to debug (`-O0`); pass `--release` for `-O2`.
