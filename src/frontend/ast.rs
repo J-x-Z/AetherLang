@@ -46,6 +46,8 @@ pub struct Program {
     /// Lexical module identity survives flattening and generic specialization.
     /// Parsed, unresolved programs leave this map empty (one module).
     pub module_owners: std::collections::HashMap<Span, usize>,
+    /// Original C declaration selected by each resolved use, including reexports.
+    pub foreign_uses: std::collections::HashMap<Span, Span>,
 }
 
 /// Top-level items

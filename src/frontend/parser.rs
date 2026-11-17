@@ -214,7 +214,7 @@ impl Parser {
             items.push(self.parse_item()?);
         }
 
-        Ok(Program { items, inner_attrs, module_owners: Default::default() })
+        Ok(Program { items, inner_attrs, module_owners: Default::default(), foreign_uses: Default::default() })
     }
     
     /// Parse inner attribute: #![name]

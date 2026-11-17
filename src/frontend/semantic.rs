@@ -184,6 +184,8 @@ pub struct SemanticAnalyzer {
     constant_defs: HashMap<String, ConstDef>,
     facts: SemanticFacts,
     foreign_signatures: HashMap<String, String>,
+    foreign_uses: HashMap<Span, Span>,
+    foreign_types: HashMap<Span, ResolvedType>,
     /// C ABI symbols whose single definition is supplied by this program.
     /// Declarations may share the identity, never replace its semantics.
     c_abi_definitions: HashSet<String>,
@@ -217,6 +219,8 @@ impl SemanticAnalyzer {
             constant_defs: HashMap::new(),
             facts: SemanticFacts { pointer_width, ..SemanticFacts::default() },
             foreign_signatures: HashMap::new(),
+            foreign_uses: HashMap::new(),
+            foreign_types: HashMap::new(),
             c_abi_definitions: HashSet::new(),
             check_entrypoint: true,
             system_target: "native".into(),
@@ -273,6 +277,7 @@ impl SemanticAnalyzer {
     /// Analyze a program
     pub fn analyze(&mut self, program: &Program) -> Result<()> {
         self.module_owners = program.module_owners.clone();
+        self.foreign_uses.clone_from(&program.foreign_uses);
         self.check_entrypoint = !program.inner_attrs.iter().any(|attribute| attribute.name.name == "no_main");
         // Nominal names are known before resolving any signatures. This supports
         // forward and pointer-recursive structs without accepting invented types.
@@ -346,25 +351,31 @@ impl SemanticAnalyzer {
     }
 
     fn c_function_signature(params: &[ResolvedType], ret: &ResolvedType, variadic: bool) -> String {
-        format!("C:fn({})->{}:{}", params.iter().map(Self::type_identity).collect::<Vec<_>>().join(","),
-            Self::type_identity(ret), variadic)
+        format!("C:fn({})->{}:{}", params.iter().map(|ty| Self::type_key(ty, true)).collect::<Vec<_>>().join(","),
+            Self::type_key(ret, true), variadic)
     }
 
     fn type_identity(ty: &ResolvedType) -> String {
+        Self::type_key(ty, false)
+    }
+
+    fn type_key(ty: &ResolvedType, c_abi: bool) -> String {
+        let nested = |ty: &ResolvedType| Self::type_key(ty, c_abi);
+        let ty = if c_abi { Self::c_integer_type(ty) } else { ty };
         match ty {
             ResolvedType::Struct { name, .. } => format!("struct {}", name),
             ResolvedType::Enum { name } => format!("enum {}", name),
-            ResolvedType::Pointer(inner) => format!("*{}", Self::type_identity(inner)),
-            ResolvedType::Volatile(inner) => format!("volatile {}", Self::type_identity(inner)),
-            ResolvedType::Reference { mutable, inner } => format!("&{}{}", mutable, Self::type_identity(inner)),
-            ResolvedType::Array { elem, size } => format!("[{};{}]", Self::type_identity(elem), size),
-            ResolvedType::Slice(inner) => format!("[{}]", Self::type_identity(inner)),
-            ResolvedType::Tuple(types) => format!("({})", types.iter().map(Self::type_identity).collect::<Vec<_>>().join(",")),
-            ResolvedType::Function { params, ret } => format!("fn({})->{}", params.iter().map(Self::type_identity).collect::<Vec<_>>().join(","), Self::type_identity(ret)),
-            ResolvedType::Vector(inner, lanes) => format!("vector<{};{}>", Self::type_identity(inner), lanes),
-            ResolvedType::Generic(name, args) => format!("generic {}<{}>", name, args.iter().map(Self::type_identity).collect::<Vec<_>>().join(",")),
-            ResolvedType::GenericWithConsts { name, type_args, const_args } => format!("generic {}<{};{:?}>", name, type_args.iter().map(Self::type_identity).collect::<Vec<_>>().join(","), const_args),
-            ResolvedType::ConstParam { name, ty } => format!("const {}:{}", name, Self::type_identity(ty)),
+            ResolvedType::Pointer(inner) => format!("*{}", nested(inner)),
+            ResolvedType::Volatile(inner) => format!("volatile {}", nested(inner)),
+            ResolvedType::Reference { mutable, inner } => format!("&{}{}", mutable, nested(inner)),
+            ResolvedType::Array { elem, size } => format!("[{};{}]", nested(elem), size),
+            ResolvedType::Slice(inner) => format!("[{}]", nested(inner)),
+            ResolvedType::Tuple(types) => format!("({})", types.iter().map(nested).collect::<Vec<_>>().join(",")),
+            ResolvedType::Function { params, ret } => format!("fn({})->{}", params.iter().map(nested).collect::<Vec<_>>().join(","), nested(ret)),
+            ResolvedType::Vector(inner, lanes) => format!("vector<{};{}>", nested(inner), lanes),
+            ResolvedType::Generic(name, args) => format!("generic {}<{}>", name, args.iter().map(nested).collect::<Vec<_>>().join(",")),
+            ResolvedType::GenericWithConsts { name, type_args, const_args } => format!("generic {}<{};{:?}>", name, type_args.iter().map(nested).collect::<Vec<_>>().join(","), const_args),
+            ResolvedType::ConstParam { name, ty } => format!("const {}:{}", name, nested(ty)),
             _ => format!("{:?}", ty),
         }
     }
@@ -507,6 +518,7 @@ impl SemanticAnalyzer {
                     span: func.span,
                     mutable: false,
                 };
+                if is_c_abi { self.foreign_types.insert(func.name.span, symbol.ty.clone()); }
                 if replaces_declaration {
                     // The linkage registry has checked the exact resolved signature
                     // and the unique body. Do not relax duplicate checking for locals
@@ -604,7 +616,8 @@ impl SemanticAnalyzer {
                     if !self.c_abi_definitions.insert(definition.name.name.clone()) {
                         return Err(Error::DuplicateDefinition { name: definition.name.name.clone(), span: definition.span });
                     }
-                    let signature = format!("static:{}:{}", Self::type_identity(&ty), definition.is_mut);
+                    self.foreign_types.insert(definition.name.span, ty.clone());
+                    let signature = format!("static:{}:{}", Self::type_key(&ty, true), definition.is_mut);
                     !self.register_foreign(&definition.name.name, signature, definition.name.span)?
                 } else { false };
                 self.facts.global_types.insert(definition.name.name.clone(), ty.clone());
@@ -706,6 +719,7 @@ impl SemanticAnalyzer {
                             if crate::intrinsics::platform(&name.name).is_some() {return Err(Error::Expected("platform intrinsic is compiler-defined, not an extern symbol".into(),name.span));}
                             if crate::intrinsics::vector(&name.name).is_some() {return Err(Error::Expected("SIMD intrinsic is compiler-defined, not an extern symbol".into(),name.span));}
                             let effects = self.foreign_effects(&name.name, annotations);
+                            self.foreign_types.insert(name.span, ResolvedType::Function { params: param_types.clone(), ret: Box::new(ret.clone()) });
                             let signature = Self::c_function_signature(&param_types, &ret, *variadic);
                             if !self.register_foreign(&name.name, signature, name.span)? {
                                 if !self.c_abi_definitions.contains(&name.name) {
@@ -727,7 +741,8 @@ impl SemanticAnalyzer {
                         ForeignItem::Static { name, ty, is_mut, .. } => {
                             let resolved = self.resolve_type(ty)?;
                             self.facts.global_types.insert(name.name.clone(), resolved.clone());
-                            let signature = format!("static:{}:{}", Self::type_identity(&resolved), is_mut);
+                            self.foreign_types.insert(name.span, resolved.clone());
+                            let signature = format!("static:{}:{}", Self::type_key(&resolved, true), is_mut);
                             if !self.register_foreign(&name.name, signature, name.span)? { continue; }
                             self.symbols.define(Symbol { name: name.name.clone(), kind: SymbolKind::Variable,
                                 ty: resolved, span: name.span, mutable: *is_mut })?;
@@ -970,6 +985,11 @@ impl SemanticAnalyzer {
             }
             
             Expr::Ident(ident) => {
+                // Equal machine signatures can retain different source types (for
+                // example size_t and u64). Use the declaration selected by imports.
+                if let Some(ty) = self.foreign_uses.get(&ident.span).and_then(|span| self.foreign_types.get(span)) {
+                    return Ok(ty.clone());
+                }
                 if let Some(symbol) = self.symbols.lookup(&ident.name) {
                     if matches!(symbol.kind, SymbolKind::Struct {..}|SymbolKind::Enum {..}|SymbolKind::TypeAlias {..}|SymbolKind::TypeParam) {
                         return Err(Error::semantic_expected("E2104",format!("value expression; '{}' names a type",ident.name),ident.span));

@@ -2,6 +2,16 @@
 use super::*;
 
 impl SemanticAnalyzer {
+    pub(super) fn c_integer_type(ty: &ResolvedType) -> &ResolvedType {
+        match ty {
+            ResolvedType::Primitive(PrimitiveType::Usize(PointerWidth::W32)) => &ResolvedType::U32,
+            ResolvedType::Primitive(PrimitiveType::Usize(PointerWidth::W64)) => &ResolvedType::U64,
+            ResolvedType::Primitive(PrimitiveType::Isize(PointerWidth::W32)) => &ResolvedType::I32,
+            ResolvedType::Primitive(PrimitiveType::Isize(PointerWidth::W64)) => &ResolvedType::I64,
+            _ => ty,
+        }
+    }
+
     pub(super) fn check_hosted_abi(&self, program: &Program) -> Result<()> {
         if program
             .inner_attrs
@@ -10,27 +20,10 @@ impl SemanticAnalyzer {
         {
             return Ok(());
         }
-        fn canonical(ty: &ResolvedType) -> ResolvedType {
-            match ty {
-                ResolvedType::Primitive(PrimitiveType::Usize(PointerWidth::W32)) => {
-                    ResolvedType::U32
-                }
-                ResolvedType::Primitive(PrimitiveType::Usize(PointerWidth::W64)) => {
-                    ResolvedType::U64
-                }
-                ResolvedType::Primitive(PrimitiveType::Isize(PointerWidth::W32)) => {
-                    ResolvedType::I32
-                }
-                ResolvedType::Primitive(PrimitiveType::Isize(PointerWidth::W64)) => {
-                    ResolvedType::I64
-                }
-                ResolvedType::Primitive(PrimitiveType::Never) => ResolvedType::UNIT,
-                _ => ty.clone(),
-            }
-        }
         fn same(a: &ResolvedType, b: &ResolvedType) -> bool {
             matches!((a, b), (ResolvedType::Pointer(_), ResolvedType::Pointer(_)))
-                || canonical(a) == canonical(b)
+                || (a == &ResolvedType::NEVER && b == &ResolvedType::UNIT)
+                || SemanticAnalyzer::c_integer_type(a) == SemanticAnalyzer::c_integer_type(b)
         }
         let check = |name: &Ident,
                      params: &[Param],

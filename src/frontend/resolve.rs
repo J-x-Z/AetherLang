@@ -14,9 +14,15 @@ pub struct SourceFile {
     pub text: String,
 }
 
+#[derive(Clone)]
+struct ResolvedName {
+    emitted: String,
+    foreign_declaration: Option<Span>,
+}
+
 #[derive(Clone, Default)]
 struct Exports {
-    symbols: HashMap<String, String>,
+    symbols: HashMap<String, ResolvedName>,
     modules: HashMap<String, Exports>,
 }
 
@@ -64,6 +70,7 @@ pub struct Resolver {
     items: Vec<Item>,
     next_module: usize,
     module_owners: HashMap<Span, usize>,
+    foreign_uses: HashMap<Span, Span>,
     entrypoint_enabled: bool,
     overlays: HashMap<PathBuf, String>,
     namespace: String,
@@ -72,7 +79,7 @@ pub struct Resolver {
 
 impl Resolver {
     pub fn new(search: ModuleSearch) -> Self {
-        Self { sources: vec![], search, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, module_owners: HashMap::new(), entrypoint_enabled: true, overlays: HashMap::new(), namespace: "__aeth_m".into(), source_identifiers: HashSet::new() }
+        Self { sources: vec![], search, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, module_owners: HashMap::new(), foreign_uses: HashMap::new(), entrypoint_enabled: true, overlays: HashMap::new(), namespace: "__aeth_m".into(), source_identifiers: HashSet::new() }
     }
 
     pub fn with_overlays(mut self, overlays: HashMap<PathBuf, String>) -> Self {
@@ -99,6 +106,7 @@ impl Resolver {
             self.items.clear();
             self.next_module = 0;
             self.module_owners.clear();
+            self.foreign_uses.clear();
             let result = self.resolve_once(&path, source.clone());
             if !self.source_identifiers.iter().any(|name| name.starts_with(&self.namespace)) {
                 return result;
@@ -144,7 +152,7 @@ impl Resolver {
         });
         // Foreign declarations are compared after semantic alias resolution.
         // Comparing source spellings here rejects equivalent aliases.
-        Ok(Program { items: std::mem::take(&mut self.items), inner_attrs: attrs, module_owners: std::mem::take(&mut self.module_owners) })
+        Ok(Program { items: std::mem::take(&mut self.items), inner_attrs: attrs, module_owners: std::mem::take(&mut self.module_owners), foreign_uses: std::mem::take(&mut self.foreign_uses) })
     }
 
     fn parse(&mut self, path: &Path, text: String) -> Result<Program> {
@@ -215,6 +223,12 @@ impl Resolver {
                     _ => false,
                 };
                 let resolved = if (root && name == "main") || preserve_abi { name.to_owned() } else { format!("{}{id}_{name}", self.namespace) };
+                let foreign_declaration = match item {
+                    Item::Function(f) if preserve_abi => Some(f.name.span),
+                    Item::Static(s) if preserve_abi => Some(s.name.span),
+                    _ => None,
+                };
+                let resolved = ResolvedName { emitted: resolved, foreign_declaration };
                 if names.insert(name.to_owned(), resolved.clone()).is_some() {
                     return Err(Error::ModuleError(format!("duplicate definition '{name}' in {}", path.display())));
                 }
@@ -228,11 +242,12 @@ impl Resolver {
             if let Item::Extern(block) = item {
                 for foreign in &block.items {
                     let (ForeignItem::Fn {name,..} | ForeignItem::Static {name,..}) = foreign;
-                    if names.get(&name.name).is_some_and(|previous| previous != &name.name) {
+                    if names.get(&name.name).is_some_and(|previous| previous.emitted != name.name) {
                         return Err(Error::ModuleError(format!("foreign declaration '{}' conflicts with a local definition in {}",name.name,path.display())));
                     }
-                    names.insert(name.name.clone(),name.name.clone());
-                    exports.symbols.insert(name.name.clone(),name.name.clone());
+                    let binding = ResolvedName { emitted: name.name.clone(), foreign_declaration: Some(name.span) };
+                    names.insert(name.name.clone(), binding.clone());
+                    exports.symbols.insert(name.name.clone(), binding);
                 }
             }
         }
@@ -270,7 +285,7 @@ impl Resolver {
         }
         for mut item in items {
             if matches!(item, Item::Use(_) | Item::Module(_)) { continue; }
-            Rewriter { names: &names, modules: modules.keys().cloned().collect(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: root && self.entrypoint_enabled, zero_status_returns: false }.item(&mut item)?;
+            Rewriter { names: &names, foreign_uses: &mut self.foreign_uses, modules: modules.keys().cloned().collect(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: root && self.entrypoint_enabled, zero_status_returns: false }.item(&mut item)?;
             match &item {
                 Item::Function(function) => { self.module_owners.insert(function.span, id); }
                 Item::Impl(block) => { for method in &block.methods { self.module_owners.insert(method.span, id); } }
@@ -282,12 +297,12 @@ impl Resolver {
     }
 }
 
-fn qualified_names(prefix: &str, exports: &Exports, names: &mut HashMap<String, String>) {
+fn qualified_names(prefix: &str, exports: &Exports, names: &mut HashMap<String, ResolvedName>) {
     for (name, resolved) in &exports.symbols { names.insert(format!("{prefix}::{name}"), resolved.clone()); }
     for (name, child) in &exports.modules { qualified_names(&format!("{prefix}::{name}"), child, names); }
 }
 
-fn import(decl: &UseDecl, prefix: &[String], modules: &HashMap<String, Exports>, names: &mut HashMap<String, String>, exported: &mut Exports) -> Result<()> {
+fn import(decl: &UseDecl, prefix: &[String], modules: &HashMap<String, Exports>, names: &mut HashMap<String, ResolvedName>, exported: &mut Exports) -> Result<()> {
     let mut path = prefix.to_vec();
     path.extend(decl.path.iter().map(|p| p.name.clone()));
     if let UseKind::Group(children) = &decl.kind {
@@ -316,11 +331,11 @@ fn import(decl: &UseDecl, prefix: &[String], modules: &HashMap<String, Exports>,
     Ok(())
 }
 
-fn bind(names: &mut HashMap<String, String>, name: &str, value: &str) -> Result<()> {
+fn bind(names: &mut HashMap<String, ResolvedName>, name: &str, value: &ResolvedName) -> Result<()> {
     if let Some(old) = names.get(name) {
-        if old != value { return Err(Error::ModuleError(format!("ambiguous import '{name}'; use an alias"))); }
+        if old.emitted != value.emitted { return Err(Error::ModuleError(format!("ambiguous import '{name}'; use an alias"))); }
     }
-    names.insert(name.into(), value.into());
+    names.insert(name.into(), value.clone());
     Ok(())
 }
 
@@ -339,9 +354,9 @@ fn definition(item: &Item) -> Option<(&str, bool)> {
     }
 }
 
-struct Rewriter<'a> { names: &'a HashMap<String, String>, modules: HashSet<String>, locals: HashSet<String>, type_locals: HashSet<String>, normalize_main: bool, zero_status_returns: bool }
+struct Rewriter<'a> { names: &'a HashMap<String, ResolvedName>, foreign_uses: &'a mut HashMap<Span, Span>, modules: HashSet<String>, locals: HashSet<String>, type_locals: HashSet<String>, normalize_main: bool, zero_status_returns: bool }
 impl Rewriter<'_> {
-    fn name(&self, name: &mut String) { if let Some(new) = self.names.get(name) { *name = new.clone(); } }
+    fn name(&self, name: &mut String) { if let Some(new) = self.names.get(name) { *name = new.emitted.clone(); } }
     fn ident(&self, id: &mut Ident) { self.name(&mut id.name); }
     fn ty(&mut self, ty: &mut Type) -> Result<()> {
         match ty {
@@ -454,16 +469,28 @@ impl Rewriter<'_> {
     }
     fn expr(&mut self, e: &mut Expr) -> Result<()> {
         match e {
-            Expr::Ident(id) => if !self.locals.contains(&id.name) { self.ident(id); },
+            Expr::Ident(id) => if !self.locals.contains(&id.name) {
+                if let Some(binding) = self.names.get(&id.name) {
+                    if let Some(declaration) = binding.foreign_declaration {
+                        self.foreign_uses.insert(id.span, declaration);
+                    }
+                    id.name.clone_from(&binding.emitted);
+                }
+            },
             Expr::Path { segments, span } => {
                 let path = segments.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join("::");
-                if let Some(new) = self.names.get(&path) { *e = Expr::Ident(Ident { name: new.clone(), span: *span }); }
+                if let Some(binding) = self.names.get(&path) {
+                    if let Some(declaration) = binding.foreign_declaration {
+                        self.foreign_uses.insert(*span, declaration);
+                    }
+                    *e = Expr::Ident(Ident { name: binding.emitted.clone(), span: *span });
+                }
                 else {
                     let mut found = false;
                     for count in (1..segments.len()).rev() {
                         let prefix = segments[..count].iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join("::");
                         if let Some(new) = self.names.get(&prefix) {
-                            let first = Ident { name: new.clone(), span: segments[0].span };
+                            let first = Ident { name: new.emitted.clone(), span: segments[0].span };
                             segments.splice(..count, [first]);
                             found = true;
                             break;
@@ -528,9 +555,10 @@ mod tests {
 
     #[test]
     fn module_mangling_preserves_generic_type_and_const_bindings() {
-        let names = HashMap::from([("T".into(), "__module_T".into()), ("N".into(), "__module_N".into()), ("identity".into(), "__module_identity".into()), ("Container".into(), "__module_Container".into())]);
+        let names = [("T", "__module_T"), ("N", "__module_N"), ("identity", "__module_identity"), ("Container", "__module_Container")]
+            .into_iter().map(|(key, emitted)| (key.into(), ResolvedName { emitted: emitted.into(), foreign_declaration: None })).collect();
         let mut program = Parser::new(Lexer::new("fn identity<T>(value: T) -> T { value } struct Container<T, const N: usize> { value: T }", 0)).parse_program().unwrap();
-        let mut rewriter = Rewriter { names: &names, modules: HashSet::new(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: false, zero_status_returns: false };
+        let mut rewriter = Rewriter { names: &names, foreign_uses: &mut HashMap::new(), modules: HashSet::new(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: false, zero_status_returns: false };
         for item in &mut program.items { rewriter.item(item).unwrap(); }
         let Item::Function(function) = &program.items[0] else { panic!("expected fn") };
         assert_eq!(function.name.name, "__module_identity");
@@ -543,7 +571,7 @@ mod tests {
     fn default_entry_normalization_does_not_change_closure_returns() {
         let mut program = Parser::new(Lexer::new("fn main() { let callback: i64 = | | { return; }; return; }", 0)).parse_program().unwrap();
         let names = HashMap::new();
-        let mut rewriter = Rewriter { names: &names, modules: HashSet::new(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: true, zero_status_returns: false };
+        let mut rewriter = Rewriter { names: &names, foreign_uses: &mut HashMap::new(), modules: HashSet::new(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: true, zero_status_returns: false };
         rewriter.item(&mut program.items[0]).unwrap();
         let Item::Function(function) = &program.items[0] else { panic!("expected fn") };
         let Stmt::Let { value: Some(Expr::Closure { body, .. }), .. } = &function.body.stmts[0] else { panic!("expected closure") };

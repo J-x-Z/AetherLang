@@ -261,6 +261,7 @@ impl Specializer {
             items: self.output,
             inner_attrs: program.inner_attrs,
             module_owners: program.module_owners,
+            foreign_uses: program.foreign_uses,
         })
     }
 

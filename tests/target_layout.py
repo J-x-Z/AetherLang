@@ -27,9 +27,40 @@ def run(command, expected=0):
     assert result.returncode == expected, f'{cmd}: {result.stderr} {result.stdout}'
     return result
 
+
+# Independent bindings for a shared C symbol must preserve the Aether spelling
+# at each use, including reexports and qualified static accesses.
+def abi_views(bits):
+    fixed, signed = f'u{bits}', f'i{bits}'
+    (work/'sized.aeth').write_text('extern "C" { fn bridge(p:*isize, n:usize)->usize; static mut counter:usize; }')
+    (work/'fixed.aeth').write_text(f'extern "C" {{ fn bridge(p:*{signed}, n:{fixed})->{fixed}; static mut counter:{fixed}; }}')
+    (work/'alias.aeth').write_text('pub use sized::bridge as count;')
+    module = work/'abi_views.aeth'
+    module.write_text(f'''#![no_std] #![no_main]
+use alias::count; use fixed::bridge as fixed_count; mod sized; mod fixed;
+#[no_mangle] static mut counter:usize=12;
+#[no_mangle] fn bridge(p:*isize,n:usize)->usize {{ unsafe {{ n + (*p as usize) }} }}
+#[no_mangle] fn verify()->i32 {{
+    let a:isize=2; let b:{signed}=3;
+    let first:usize=count(&a as *isize, sized::counter);
+    let second:{fixed}=fixed_count(&b as *{signed}, fixed::counter);
+    if first==14 && second==15 {{0}} else {{1}}
+}}''')
+    return module
+
 targets = {'i686-unknown-none-elf': 32, 'x86_64-unknown-linux-gnux32': 32,
            'x86_64-unknown-linux-gnu': 64, 'wasm32-unknown-unknown': 32}
 for triple, bits in targets.items():
+    abi = abi_views(bits)
+    run([compiler, 'check', abi, '--target', triple])
+    for invalid in (f'i{bits}', f'u{96-bits}', 'f32', 'char'):
+        negative = work/'abi_conflict.aeth'
+        negative.write_text(f'extern "C" {{fn clash(p:*usize);}} extern "C" {{fn clash(p:*{invalid});}} fn main(){{}}')
+        result = run([compiler, 'check', negative, '--target', triple], 1)
+        assert 'E2202' in result.stderr, result.stderr
+    strict = work/'ordinary.aeth'
+    strict.write_text(f'fn ordinary(a:usize)->u{bits}{{a}} fn main(){{}}')
+    assert 'E2100' in run([compiler,'check',strict,'--target',triple],1).stderr
     for ty, literal in [('usize', '4294967296'), ('isize', '-2147483649')]:
         program = work / f'{ty}.aeth'
         program.write_text(f'#![no_main]\nfn value()->{ty} {{ {literal} }}')
@@ -53,6 +84,13 @@ for triple, bits in targets.items():
 # on hosts without them. No 32-bit native process is needed on macOS arm64.
 if shutil.which('node') and shutil.which('wasm-ld') and shutil.which('clang'):
     for backend in args.backends:
+        views = abi_views(32)
+        abi_obj = work / f'abi-views-{backend}.o'
+        abi_wasm = abi_obj.with_suffix('.wasm')
+        run([compiler, views, '--target', 'wasm32-unknown-unknown', '--backend', backend,
+             '--cc','clang','--emit-obj','-O2','-o',abi_obj])
+        run(['wasm-ld','--no-entry','--export=verify',abi_obj,'-o',abi_wasm])
+        run(['node','-e',"const fs=require('fs'); const m=new WebAssembly.Module(fs.readFileSync(process.argv[1])); process.exit(new WebAssembly.Instance(m).exports.verify());",abi_wasm])
         obj = work / f'layout-{backend}.o'
         wasm = obj.with_suffix('.wasm')
         run([compiler, source, '--target', 'wasm32-unknown-unknown', '--backend', backend,
