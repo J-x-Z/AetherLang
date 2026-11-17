@@ -1249,6 +1249,7 @@ impl SemanticAnalyzer {
                 Ok(ResolvedType::unit())
             }
 
+            Expr::ArrayRepeat {value,count,span} => self.check_array_repeat(value,count,*span,None),
             Expr::Array { elements, .. } => {
                 if elements.is_empty() {
                     return Ok(ResolvedType::Array {
@@ -1611,6 +1612,13 @@ impl SemanticAnalyzer {
             (Expr::Match { expr: value, arms, span }, _) => {
                 self.check_owned_match(value)?;
                 return self.check_match(value, arms, *span, Some(expected));
+            }
+            (Expr::ArrayRepeat {value,count,span},ResolvedType::Array {elem,size}) => {
+                let result=self.check_array_repeat(value,count,*span,Some(elem))?;
+                if result==ResolvedType::NEVER{return Ok(result);}
+                let ResolvedType::Array {size:actual,..}=&result else{unreachable!()};
+                if actual!=size{return Err(Error::TypeMismatch{expected:format!("array of length {size}"),got:format!("array of length {actual}"),span:*span});}
+                return Ok(result);
             }
             (Expr::Array { elements, span }, ResolvedType::Array { elem, size }) => {
                 if elements.len() != *size {
@@ -2429,3 +2437,6 @@ mod tests {
     }
 
 }
+
+#[path = "semantic_arrays.rs"]
+mod arrays;

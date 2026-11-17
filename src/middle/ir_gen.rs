@@ -16,6 +16,8 @@ use crate::utils::Result;
 use crate::frontend::semantic::{SemanticFacts, ScalarConstant, TypedInitializer, InitializerValue, ResolvedMethodCall, ReceiverAdjustment};
 use crate::types::type_system::{ResolvedType, PrimitiveType};
 
+#[path = "ir_arrays.rs"]
+mod arrays;
 #[path = "ir_enum.rs"]
 mod enums;
 #[path = "ir_memory.rs"]
@@ -1001,6 +1003,7 @@ impl IRGenerator {
             }
             Expr::Match { expr, arms, .. } => self.generate_match_value(expr, arms),
 
+            Expr::ArrayRepeat {value,count,..} => self.generate_array_repeat(expr,value,count,None),
             Expr::Array { elements, .. } => self.generate_array(elements, None),
             Expr::Tuple { elements, .. } => {
                 let expected = self.checked_expr_type(expr).map(Self::resolved_type_to_ir).transpose()?;
@@ -1087,6 +1090,9 @@ impl IRGenerator {
     fn generate_expr_expected(&mut self, expr: &Expr, expected: Option<&IRType>) -> Result<Value> {
         if let Expr::Tuple { elements, .. } = expr {
             if expected.is_some() { return self.generate_tuple(elements, expected); }
+        }
+        if let (Expr::ArrayRepeat {value,count,..},Some(IRType::Array(element,_)))=(expr,expected){
+            return self.generate_array_repeat(expr,value,count,Some((**element).clone()));
         }
         if let (Expr::Array { elements, .. }, Some(IRType::Array(element, size))) = (expr, expected) {
             if elements.len() != *size { return Err(crate::utils::Error::CodeGen("array length mismatch".into())); }
@@ -1457,6 +1463,7 @@ impl IRGenerator {
                 ScalarConstant::Bool(value) => Constant::Bool(*value), ScalarConstant::Char(value) => Constant::Int(*value as i64),
                 ScalarConstant::String(value) => Constant::String(value.clone()),
             }),
+            InitializerValue::Repeat(value,count)=>IRInitializer::Repeat(Box::new(self.lower_initializer(value)?),*count),
             InitializerValue::Aggregate(values) => IRInitializer::Aggregate(values.iter().map(|(index, value)| Ok((*index, self.lower_initializer(value)?))).collect::<Result<_>>()?),
             InitializerValue::Address { global, path } => IRInitializer::Address { global: global.clone(), path: path.clone() },
             InitializerValue::Layout { query, ty, field } => IRInitializer::Layout {

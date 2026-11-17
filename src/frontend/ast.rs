@@ -577,6 +577,8 @@ pub enum Expr {
         elements: Vec<Expr>,
         span: Span,
     },
+    /// Fixed array repeat; value is evaluated exactly once, even at count zero.
+    ArrayRepeat { value: Box<Expr>, count: Box<Expr>, span: Span },
     /// Tuple literal
     Tuple {
         elements: Vec<Expr>,

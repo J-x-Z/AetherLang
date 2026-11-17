@@ -872,6 +872,13 @@ impl Specializer {
                 }
                 Ok(Some(named(&name.name, span)))
             }
+            Expr::ArrayRepeat {value,count,..} => {
+                let size=self.array_size(count,&self.bindings.clone())?;
+                *count=Box::new(Expr::Literal(Literal::Int(size as i128,count.span())));
+                let element=match expected {Some(Type::Array{elem,..})=>Some(elem.as_ref()),_=>None};
+                let element=self.expr(value,element)?;
+                Ok(element.map(|elem|Type::Array{elem:Box::new(elem),size,span}))
+            }
             Expr::Array { elements, .. } => {
                 let element = match expected {
                     Some(Type::Array { elem, .. }) | Some(Type::Slice(elem, _)) => {

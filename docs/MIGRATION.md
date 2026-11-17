@@ -256,3 +256,19 @@ empty literals without an element type and dynamic-list operations remain
 unsupported. Script `int` is `i64`, including an `int` const parameter; use
 `usize` explicitly when target-width arithmetic is desired. Captured closures,
 dynamic trait dispatch and async are separate T25 tasks, not part of this change.
+
+### Array repeat evaluation
+
+`[value; count]` now evaluates `value` exactly once, including when `count` is
+zero. The old parser duplicated the expression `count` times; code relying on
+those repeated side effects must use an explicit loop. The count accepts the
+same checked constants and const parameters as array lengths. Generic array
+factories can return `[value; N]` with `N` inferred from the annotated result.
+
+Runtime repeats produce a compact fill loop in both backends. Static repeats
+retain a compact checked initializer; zero initialization uses zero-filled
+storage. Nonzero static data still requires output proportional to its size.
+Repeating shared references preserves lifetime checking. More than one copy of
+an exclusive reference, including a reference inside a record or enum, is
+rejected; affine owners remain excluded from array storage. Script exposes this
+operation as `repeat(value, count)`, with the same evaluation and copy semantics.

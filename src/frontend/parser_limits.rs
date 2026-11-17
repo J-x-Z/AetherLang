@@ -112,6 +112,7 @@ impl ParseLimits {
                 .map(|(_, expr)| self.depth(expr))
                 .max()
                 .unwrap_or(0),
+            Expr::ArrayRepeat {value,count,..} => self.depth(value).max(self.depth(count)),
             Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => elements
                 .iter()
                 .map(|expr| self.depth(expr))

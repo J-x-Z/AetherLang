@@ -287,6 +287,7 @@ impl EffectWalker<'_> {
                 }
             }
             Expr::StructLit { fields, .. } => { for (_, expr) in fields { self.expr(expr, Access::Read, visitor); } }
+            Expr::ArrayRepeat {value,..} => self.expr(value,Access::Read,visitor),
             Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => { for expr in elements { self.expr(expr, Access::Read, visitor); } }
             Expr::Range { start, end, .. } => { for expr in [start, end].into_iter().flatten() { self.expr(expr, Access::Read, visitor); } }
             Expr::Asm { operands, .. } => {

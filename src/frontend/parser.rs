@@ -1353,22 +1353,9 @@ impl Parser {
 
                 // Check for repeat syntax: [expr; N]
                 if self.consume(&TokenKind::Semicolon) {
-                    let count = match self.current_kind() {
-                        TokenKind::IntLit(n) => {
-                            let n = usize::try_from(*n).map_err(|_| Error::Expected("array repeat count representable on this host".into(), self.current().span))?;
-                            self.advance();
-                            n
-                        }
-                        _ => return Err(Error::Expected(
-                            "integer literal for array repeat count".into(),
-                            self.current().span
-                        )),
-                    };
+                    let count = self.parse_expr()?;
                     self.expect(TokenKind::RBracket)?;
-                    // Repeat the expression N times
-                    for _ in 0..count {
-                        elements.push(first.clone());
-                    }
+                    return self.parse_postfix(Expr::ArrayRepeat {value:Box::new(first),count:Box::new(count),span:token.span.merge(&self.tokens[self.pos.saturating_sub(1)].span)});
                 } else {
                     // Normal array literal: [a, b, c]
                     elements.push(first);
@@ -2297,7 +2284,7 @@ impl Expr {
             Expr::While { span, .. } => *span,
             Expr::For { span, .. } => *span,
             Expr::StructLit { span, .. } => *span,
-            Expr::Array { span, .. } => *span,
+            Expr::Array { span, .. } | Expr::ArrayRepeat {span,..} => *span,
             Expr::Tuple { span, .. } => *span,
             Expr::Ref { span, .. } => *span,
             Expr::Deref { span, .. } => *span,

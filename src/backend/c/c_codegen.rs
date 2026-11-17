@@ -237,6 +237,12 @@ impl CCodeGen {
                 }
                 format!("({})((unsigned char*)&{} + ({}))", self.ir_type_to_c(ty), global, if offsets.is_empty() { "0".into() } else { offsets.join(" + ") })
             }
+            IRInitializer::Repeat(value,count)=>{
+                let IRType::Array(element,size)=ty else{return Err(Error::CodeGen("repeat initializer requires array type".into()));};
+                if count!=size{return Err(Error::CodeGen("repeat initializer length mismatch".into()));}
+                let value=self.initializer_to_c(value,element)?;
+                format!("{{ .data = {{ {} }} }}",vec![value;*count].join(", "))
+            }
             IRInitializer::Aggregate(values) => {
                 let mut fields = Vec::new();
                 match ty {
@@ -1008,6 +1014,7 @@ impl CCodeGen {
         fn initializer_layouts(codegen: &mut CCodeGen, value: &IRInitializer, module: &IRModule, emitted: &mut HashSet<String>) -> Result<()> {
             match value {
                 IRInitializer::Layout { ty, .. } => codegen.emit_layout(ty, module, emitted)?,
+                IRInitializer::Repeat(value,_)=>initializer_layouts(codegen,value,module,emitted)?,
                 IRInitializer::Aggregate(fields) => for (_, value) in fields { initializer_layouts(codegen, value, module, emitted)?; },
                 _ => {}
             }

@@ -1,0 +1,19 @@
+def seed() -> int:
+    print("once")
+    return 7
+
+def filled[const N: int](shape: Array[int,N], value: int) -> Array[int,N]:
+    return repeat(value,N)
+
+def main():
+    values = repeat(seed(),3)
+    empty = repeat(seed(),0)
+    if values[2] != 7:
+        return 1
+    other = filled(values,9)
+    if other[2] != 9:
+        return 2
+    nested = repeat(repeat(11,2),3)
+    if nested[2][1] != 11:
+        return 3
+    return 0

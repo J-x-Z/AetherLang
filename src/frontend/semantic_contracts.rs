@@ -25,6 +25,7 @@ fn contract_expression(expr: &Expr) -> Result<()> {
                 pending.push(expr);
                 for arm in arms { pending.push(&arm.body); if let Some(guard) = &arm.guard { pending.push(guard); } }
             }
+            Expr::ArrayRepeat {value,count,..} => {pending.push(value);pending.push(count);},
             Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => pending.extend(elements),
             Expr::StructLit { fields, .. } => pending.extend(fields.iter().map(|(_, value)| value)),
             Expr::Range { start, end, .. } => {

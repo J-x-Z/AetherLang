@@ -49,6 +49,7 @@ pub enum InitializerValue {
     Zero,
     Scalar(ScalarConstant),
     Aggregate(Vec<(usize, TypedInitializer)>),
+    Repeat(Box<TypedInitializer>,usize),
     Address { global: String, path: Vec<usize> },
     Layout { query: LayoutQuery, ty: ResolvedType, field: Option<usize> },
 }
@@ -398,6 +399,14 @@ impl SemanticAnalyzer {
                 InitializerValue::Aggregate(elements.iter().zip(types).enumerate()
                     .map(|(i, (value, ty))| self.evaluate_initializer(value, ty).map(|value| (i, value)))
                     .collect::<Result<_>>()?)
+            }
+            Expr::ArrayRepeat {value,count,span} => {
+                let ResolvedType::Array{elem,size}=expected else{return Err(Self::constant_error("array repeat initializer type",*span));};
+                let count=self.array_repeat_count(count)?;
+                if count!=*size{return Err(Self::constant_error("array repeat initializer length",*span));}
+                let value=self.evaluate_initializer(value,elem)?;
+                fn zero(value:&TypedInitializer)->bool{match &value.value{InitializerValue::Zero=>true,InitializerValue::Scalar(ScalarConstant::Int(0)|ScalarConstant::Bool(false))=>true,InitializerValue::Aggregate(fields)=>fields.iter().all(|(_,v)|zero(v)),InitializerValue::Repeat(value,_)=>zero(value),_=>false}}
+                if count==0 || zero(&value){InitializerValue::Zero}else{InitializerValue::Repeat(Box::new(value),count)}
             }
             Expr::Array { elements, span } => {
                 let ResolvedType::Array { elem, size } = expected else { return Err(Self::constant_error("array initializer type", *span)); };

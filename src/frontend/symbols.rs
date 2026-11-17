@@ -198,6 +198,7 @@ impl Builder<'_> {
                 if let Some(guard)=&arm.guard{self.expr(guard);}self.expr(&arm.body);self.scopes.pop();
             }}
             Expr::StructLit {name,fields,..} => {self.reference(&name.name,name.span);for (field,value) in fields {self.reference(&format!("{}::{}", name.name, field.name),field.span);self.expr(value);}}
+            Expr::ArrayRepeat {value,count,..} => {self.expr(value);self.expr(count);},
             Expr::Array {elements,..}|Expr::Tuple {elements,..} => for e in elements{self.expr(e);},
             Expr::Range {start,end,..} => {if let Some(e)=start{self.expr(e);}if let Some(e)=end{self.expr(e);}}
             Expr::Closure {body,..} => self.expr(body), _=>{},

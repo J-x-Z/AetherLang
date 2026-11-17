@@ -578,6 +578,7 @@ impl<'a> Flow<'a> {
                 }
             }
             ResolvedType::Array { elem, size } => {
+                if !self.contains_reference(elem) {return;}
                 for i in 0..*size {
                     at.push(Projection::Index(Some(i as i64)));
                     self.parameter_references(elem, at, index, result);
@@ -1740,6 +1741,15 @@ impl<'a> Flow<'a> {
                 }
                 return self.loop_expr(None, body, Some(var), live);
             }
+            Expr::ArrayRepeat {value,..} => {
+                let Some(value)=self.expr(value,true,live)? else{return Ok(None)};
+                let ty=self.projection_type(expression).cloned().unwrap_or(ResolvedType::Unknown);
+                let ResolvedType::Array{size,..}=&ty else{return Err(Error::semantic_expected("E2501","checked array repeat type",expression.span()))};
+                let size=*size;
+                let mut result=Value::empty(ty);
+                if size>0{Self::replace_references(&mut result,&[Projection::Index(if size==1{Some(0)}else{None})],&value,false);}
+                result
+            }
             Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => {
                 let temporaries = self.temporary_loans.len();
                 let mut values = vec![];
@@ -2419,6 +2429,7 @@ fn expression_names(expression: &Expr, names: &mut HashSet<String>) {
                 expression_names(expr, names);
             }
         }
+        Expr::ArrayRepeat {value,..} => expression_names(value,names),
         Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => {
             for expr in elements {
                 expression_names(expr, names);

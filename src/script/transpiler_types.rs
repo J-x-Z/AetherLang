@@ -145,6 +145,26 @@ impl Transpiler {
         }
         Ok(())
     }
+    pub(super) fn repeat_type(&self, args: &[Expr]) -> Result<ScriptType> {
+        if args.len() != 2 {
+            return Err("repeat(value, count) requires two arguments".into());
+        }
+        let dimension = match &args[1] {
+            Expr::Integer { value, .. } if *value >= 0 => Dimension::Value(*value as u64),
+            Expr::Identifier { name, .. } if self.const_parameters.contains_key(name) => {
+                Dimension::Parameter(name.clone())
+            }
+            _ => {
+                return Err(
+                    "repeat count must be a nonnegative integer literal or const parameter".into(),
+                )
+            }
+        };
+        Ok(ScriptType::Array(
+            Box::new(self.infer_type(&args[0])?),
+            dimension,
+        ))
+    }
     pub(super) fn call_result_type(&self, name: &str, args: &[Expr]) -> Result<ScriptType> {
         let function = self
             .definitions

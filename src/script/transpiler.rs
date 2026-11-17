@@ -308,6 +308,7 @@ impl Transpiler {
             Expr::Call { func, args, .. } => {
                 let Expr::Identifier { name, .. } = func.as_ref() else { return Err("Script calls require a named function".into()); };
                 if name == "print" { "i32".into() }
+                else if name == "repeat" && !self.functions.contains_key(name) { self.repeat_type(args)? }
                 else { self.call_result_type(name,args)? }
             }
             Expr::List {elements,..} => {
@@ -346,6 +347,10 @@ impl Transpiler {
             Expr::Call { func, args, .. } => {
                 let Expr::Identifier { name, .. } = func.as_ref() else { return Err("Script calls require a named function".into()); };
                 let values = args.iter().map(|arg| self.expression(arg)).collect::<Result<Vec<_>>>()?;
+                if name == "repeat" && !self.functions.contains_key(name) {
+                    self.repeat_type(args)?;
+                    return Ok(format!("[{}; {}]",values[0],values[1]));
+                }
                 if name == "print" {
                     if args.len() != 1 { return Err("Script print takes exactly one argument".into()); }
                     let ty = self.infer_type(&args[0])?;

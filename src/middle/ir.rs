@@ -83,6 +83,7 @@ pub enum IRInitializer {
     Zero,
     Scalar(Constant),
     Aggregate(Vec<(usize, IRInitializer)>),
+    Repeat(Box<IRInitializer>,usize),
     Address { global: String, path: Vec<usize> },
     Layout { query: IRLayoutQuery, ty: IRType, field: Option<usize> },
 }

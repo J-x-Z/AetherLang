@@ -22,6 +22,12 @@ impl LLVMCodeGen {
         leaves: &mut Vec<(u64, IRType, IRInitializer)>) -> Result<()> {
         match value {
             IRInitializer::Zero => {}
+            IRInitializer::Repeat(value,count)=>{
+                let IRType::Array(element,size)=ty else{return Err(Error::CodeGen("repeat initializer requires array type".into()));};
+                if count!=size{return Err(Error::CodeGen("repeat initializer length mismatch".into()));}
+                let stride=LLVMABISizeOfType(self.target_data,self.ir_type_to_llvm(element));
+                for index in 0..*count{self.initializer_leaves(value,element,base+index as u64*stride,leaves)?;}
+            }
             IRInitializer::Aggregate(values) => match ty {
                 IRType::Array(element, count) => {
                     let stride = LLVMABISizeOfType(self.target_data, self.ir_type_to_llvm(element));

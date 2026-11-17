@@ -83,6 +83,7 @@ fn expressions(block: &Block) -> Vec<&Expr> {
                     }
                 }
             }
+            Expr::ArrayRepeat {value,count,..} => {pending.push(value);pending.push(count);},
             Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => pending.extend(elements),
             Expr::StructLit { fields, .. } => pending.extend(fields.iter().map(|(_, value)| value)),
             Expr::Range { start, end, .. } => {

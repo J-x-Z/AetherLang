@@ -523,6 +523,7 @@ impl Rewriter<'_> {
             Expr::For { var, iter, body, .. } => { self.expr(iter)?; let saved = self.locals.clone(); self.locals.insert(var.name.clone()); self.block(body)?; self.locals = saved; }
             Expr::Match { expr, arms, .. } => { self.expr(expr)?; for a in arms { let saved = self.locals.clone(); self.pattern(&mut a.pattern); if let Some(g) = &mut a.guard { self.expr(g)?; } self.expr(&mut a.body)?; self.locals = saved; } }
             Expr::StructLit { name, fields, .. } => { self.ident(name); for (_, e) in fields { self.expr(e)?; } }
+            Expr::ArrayRepeat {value,count,..} => {self.expr(value)?;self.expr(count)?;},
             Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => for e in elements { self.expr(e)?; },
             Expr::Cast { expr, ty, .. } => { self.expr(expr)?; self.ty(ty)?; }
             Expr::Range { start, end, .. } => { if let Some(e) = start { self.expr(e)?; } if let Some(e) = end { self.expr(e)?; } }

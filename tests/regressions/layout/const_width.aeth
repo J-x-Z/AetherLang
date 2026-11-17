@@ -11,5 +11,7 @@ fn total<const N:usize>(data:[i32;N])->i32{
 fn verify_const_layout()->i32{
     let block:ConstBlock<3>=ConstBlock{data:[2,4,6]};
     if size_of(ConstBlock<3>)!=12{return 1;}
+    let repeated:[i32;5]=[3;5];
+    if total(repeated)!=15{return 2;}
     total(block.data)-12
 }

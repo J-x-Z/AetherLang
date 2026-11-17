@@ -1,0 +1,39 @@
+static mut calls:i64=0;
+static repeated:[i32;4]=[9;4];
+static zeroed:[u8;4096]=[0;4096];
+struct Pair{left:i64,right:i64}
+fn next()->i64{calls=calls+1;calls}
+fn filled<T,const N:usize>(value:T)->[T;N]{[value;N]}
+fn early()->i32{let values:[i64;3]=[{return 7;};3];99}
+fn empty_early()->i32{let values:[i64;0]=[{return 8;};0];99}
+fn main()->i32{
+    let values:[i64;3]=[next();3];
+    if calls!=1 || values[0]!=1 || values[2]!=1{return 1;}
+    let empty:[i64;0]=[next();0];
+    if calls!=2{return 2;}
+    let generic:[i64;5]=filled(next());
+    if calls!=3 || generic[4]!=3{return 3;}
+    let pairs:[Pair;3]=[Pair{left:7,right:9};3];
+    if pairs[2].right!=9{return 4;}
+    let x:i64=17;
+    let refs:[&i64;4]=[&x;4];
+    if *refs[3]!=17{return 5;}
+    let nested:[[i64;2];3]=[filled(11);3];
+    if nested[2][1]!=11{return 6;}
+    let mut one:i64=3;
+    let exclusive:[&mut i64;1]=[&mut one;1];
+    *exclusive[0]=4;
+    if *exclusive[0]!=4{return 7;}
+    let unused:[&mut i64;0]=[&mut one;0];
+    one=5;
+    if one!=5{return 8;}
+    if early()!=7 || empty_early()!=8{return 9;}
+    if repeated[3]!=9 || zeroed[4095]!=0{return 10;}
+    let units:[();13]=[();13];
+    if size_of([();13])!=0{return 12;}
+    let floats:[f32;3]=[1.25;3];
+    if floats[2]!=1.25{return 13;}
+    let large:[u8;65536]=[7;65536];
+    if large[65535]!=7{return 11;}
+    0
+}
