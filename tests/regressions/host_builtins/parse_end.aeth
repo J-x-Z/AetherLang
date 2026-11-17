@@ -1,0 +1,18 @@
+// C parse functions must return both the value and the first unconsumed byte.
+extern "C" {
+    fn strtod(text:*u8,end:**u8)->f64;
+    fn strtof(text:*u8,end:**u8)->f32;
+    fn strtoll(text:*u8,end:**u8,base:i32)->i64;
+    fn strtoull(text:*u8,end:**u8,base:i32)->u64;
+}
+fn main()->i32 {
+    let mut tail:*u8=0 as *u8;
+    let text:*u8=" -1.25e1!";
+    if strtod(text,&mut tail as **u8)!=-12.5 || tail!=&text[8] as *u8 { return 1; }
+    if strtof("0.25",0 as **u8)!=0.25 { return 2; }
+    let bad:*u8="x";
+    if strtod(bad,&mut tail as **u8)!=0.0 || tail!=bad { return 3; }
+    if strtoll("-2f.",&mut tail as **u8,16)!=-47 || tail[0]!=46 { return 4; }
+    if strtoull("177",0 as **u8,8)!=127 { return 5; }
+    0
+}

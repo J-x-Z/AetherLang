@@ -4,6 +4,7 @@ use super::*;
 #[derive(Debug, Clone, Default)]
 pub struct SemanticFacts {
     pub pointer_width: PointerWidth,
+    pub c_long_bits: Option<u8>,
     pub drop_functions: HashMap<String, String>,
     pub owned_bindings: HashMap<(String, Span), ResolvedType>,
     pub owned_moves: HashMap<(String, Span), Span>,

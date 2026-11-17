@@ -43,6 +43,7 @@ pub struct CCodeGen {
     current_func_name: String,
     current_func_param_count: usize,
     no_std: bool,
+    extern_conversions: HashMap<String, String>,
 }
 
 impl CCodeGen {
@@ -65,9 +66,35 @@ impl CCodeGen {
             current_func_name: String::new(),
             current_func_param_count: 0,
             no_std: false,
+            extern_conversions: HashMap::new(),
         }
 
 
+    }
+
+    /// The C library writes a char* through its second parameter. Aether
+    /// represents byte addresses as uint8_t*, and the slot may be unaligned.
+    /// A native temporary and a byte copy preserve both types and alignment.
+    fn emit_host_conversions(&mut self, module: &IRModule) {
+        let mut occupied: HashSet<_> = module.externs.iter().map(|f| f.name.clone())
+            .chain(module.functions.iter().map(|f| f.name.clone()))
+            .chain(module.globals.iter().map(|g| g.name.clone())).collect();
+        self.extern_conversions.clear();
+        for ext in &module.externs {
+            let Some(conversion) = crate::intrinsics::NumberConversion::lookup(&ext.name) else { continue };
+            let mut wrapper = format!("__aeth_parse_{}", ext.name);
+            while !occupied.insert(wrapper.clone()) { wrapper.push('_'); }
+            let base_param = if conversion.has_base() { ", int base" } else { "" };
+            let base_arg = if conversion.has_base() { ", base" } else { "" };
+            let ty = conversion.c_result();
+            self.writeln(&format!("static inline {ty} {wrapper}(const void *input, void *slot{base_param}) {{"));
+            self.writeln("    char *end;");
+            self.writeln(&format!("    {ty} value = {}((const char*)input, slot ? &end : NULL{base_arg});", ext.name));
+            self.writeln("    if (slot) __builtin_memcpy(slot, &end, sizeof(end));");
+            self.writeln("    return value;");
+            self.writeln("}");
+            self.extern_conversions.insert(ext.name.clone(), wrapper);
+        }
     }
 
     /// Generate a unique variable name
@@ -634,7 +661,7 @@ impl CCodeGen {
 
             Instruction::Call { dest, func, args } => {
                 let args_str: Vec<_> = args.iter().map(|a| self.value_to_c(a)).collect();
-                
+
                 // Check if user-defined function returns void
                 let ret_ty = self.func_ret_types.get(func).cloned();
                 let is_undefined_call = ret_ty.is_none();
@@ -646,7 +673,8 @@ impl CCodeGen {
                 
                 let is_void = matches!(ret_ty, Some(IRType::Void)) || matches!(ret_ty, None);
                 
-                let call = format!("{}({})", func, args_str.join(", "));
+                let callee = self.extern_conversions.get(func).unwrap_or(func);
+                let call = format!("{}({})", callee, args_str.join(", "));
                 
                 // For void functions, don't assign to a variable
                 if is_void || dest.is_none() {
@@ -926,6 +954,7 @@ impl CCodeGen {
         crate::backend::system_attributes::validate(module, &self.target_triple)?;
         self.output.clear();
         self.no_std = module.no_std;
+
         self.union_names = module.structs.iter().filter(|definition| definition.is_union).map(|definition| definition.name.clone()).collect();
         self.struct_layouts = module.structs.iter().map(|definition| (definition.name.clone(), definition.fields.clone())).collect();
         self.global_types = module.globals.iter().map(|global| (global.name.clone(), global.ty.clone())).collect();
@@ -944,6 +973,7 @@ impl CCodeGen {
             self.writeln("#include <stdlib.h>");
             self.writeln("#include <string.h>");
             self.writeln("#include <math.h>");
+            self.emit_host_conversions(module);
         }
         self.writeln(&format!("_Static_assert(sizeof(void*) == {}, \"Aether target pointer width mismatch\");", module.pointer_width.bytes()));
         self.writeln("struct __aeth_unit { }; /* zero-sized language unit */");

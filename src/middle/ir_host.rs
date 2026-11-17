@@ -16,6 +16,7 @@ impl IRGenerator {
                         | (IRType::Unit, IRType::Void)
                 )
         }
+        let long_bits = self.semantic_facts.as_ref().and_then(|facts| facts.c_long_bits);
         for (name, params, ret, variadic) in self
             .module
             .externs
@@ -29,7 +30,7 @@ impl IRGenerator {
             )
         {
             let Some((expected, result, variable)) =
-                crate::intrinsics::host_c_signature(name, self.pointer_width())
+                crate::intrinsics::host_c_signature(name, self.pointer_width(), long_bits)
             else {
                 continue;
             };
@@ -52,7 +53,7 @@ impl IRGenerator {
             }
         }
         for global in &self.module.globals {
-            if crate::intrinsics::host_c_signature(&global.name, self.pointer_width()).is_some() {
+            if crate::intrinsics::host_c_signature(&global.name, self.pointer_width(), long_bits).is_some() {
                 return Err(crate::utils::Error::CodeGen(format!(
                     "hosted symbol '{}' is a C function, not global storage",
                     global.name

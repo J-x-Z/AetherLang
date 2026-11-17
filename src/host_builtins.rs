@@ -102,12 +102,30 @@ impl HostBuiltin {
 
 /// Fixed platform C names are ABI contracts in hosted programs. Language
 /// aliases such as `print` and `alloc` deliberately do not appear here.
-pub fn host_c_signature(name: &str, width: PointerWidth) -> Option<(Vec<T>, T, bool)> {
+pub fn host_c_signature(name: &str, width: PointerWidth, long_bits: Option<u8>) -> Option<(Vec<T>, T, bool)> {
     let bytes = T::Pointer(Box::new(T::U8));
     let size = T::Primitive(match width {
         PointerWidth::W32 => P::U32,
         PointerWidth::W64 => P::U64,
     });
+    if let Some(conversion) = NumberConversion::lookup(name) {
+        let mut params = vec![bytes.clone(), T::Pointer(Box::new(bytes))];
+        let result = match conversion {
+            NumberConversion::Float => T::F32,
+            NumberConversion::Double => T::F64,
+            NumberConversion::Long | NumberConversion::ULong => match (conversion, long_bits?) {
+                (NumberConversion::Long, 32) => T::I32,
+                (NumberConversion::Long, 64) => T::I64,
+                (NumberConversion::ULong, 32) => T::U32,
+                (NumberConversion::ULong, 64) => T::U64,
+                _ => return None,
+            },
+            NumberConversion::LongLong => T::I64,
+            NumberConversion::ULongLong => T::U64,
+        };
+        if conversion.has_base() { params.push(T::I32); }
+        return Some((params, result, false));
+    }
     Some(match name {
         "printf" => (vec![bytes], T::I32, true),
         "puts" => (vec![bytes], T::I32, false),
@@ -121,4 +139,30 @@ pub fn host_c_signature(name: &str, width: PointerWidth) -> Option<(Vec<T>, T, b
         "atof" => (vec![bytes], T::F64, false),
         _ => return None,
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberConversion { Float, Double, Long, ULong, LongLong, ULongLong }
+
+impl NumberConversion {
+    pub fn lookup(name: &str) -> Option<Self> {
+        Some(match name {
+            "strtof" => Self::Float, "strtod" => Self::Double,
+            "strtol" => Self::Long, "strtoul" => Self::ULong,
+            "strtoll" => Self::LongLong, "strtoull" => Self::ULongLong,
+            _ => return None,
+        })
+    }
+
+    pub fn c_result(self) -> &'static str {
+        match self {
+            Self::Float => "float", Self::Double => "double",
+            Self::Long => "long", Self::ULong => "unsigned long",
+            Self::LongLong => "long long", Self::ULongLong => "unsigned long long",
+        }
+    }
+
+    pub fn has_base(self) -> bool {
+        !matches!(self, Self::Float | Self::Double)
+    }
 }

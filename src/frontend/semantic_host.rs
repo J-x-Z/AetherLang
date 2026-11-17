@@ -31,7 +31,7 @@ impl SemanticAnalyzer {
                      variadic: bool|
          -> Result<()> {
             let Some((expected, result, variable)) =
-                crate::intrinsics::host_c_signature(&name.name, self.facts.pointer_width)
+                crate::intrinsics::host_c_signature(&name.name, self.facts.pointer_width, self.facts.c_long_bits)
             else {
                 return Ok(());
             };
@@ -57,7 +57,7 @@ impl SemanticAnalyzer {
             Ok(())
         };
         let storage = |name: &Ident| -> Result<()> {
-            if crate::intrinsics::host_c_signature(&name.name, self.facts.pointer_width).is_some() {
+            if crate::intrinsics::host_c_signature(&name.name, self.facts.pointer_width, self.facts.c_long_bits).is_some() {
                 return Err(Error::Semantic {
                     code: "E2202",
                     span: name.span,

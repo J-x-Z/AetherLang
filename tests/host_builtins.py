@@ -38,6 +38,25 @@ for backend in args.backends:
             execution = run([output], status)
             assert execution.stdout == stdout and not execution.stderr, execution
 
+# Clang 23 diagnoses uint8_t** passed to libc char** as an error.
+for backend in args.backends:
+    for level in (0, 2, 3):
+        source = sources/'parse_end.aeth'
+        binary = work/f'parse-end-{backend}-{level}'
+        if backend == 'c':
+            emitted = binary.with_suffix('.c')
+            run([compiler, source, '--emit-c', '-o', emitted])
+            run(['clang', '-std=c11', '-Werror=incompatible-pointer-types', f'-O{level}', emitted, '-o', binary])
+        else:
+            run([compiler, source, '--backend', backend, f'-O{level}', '-o', binary])
+        run([binary])
+for target,bits in [('x86_64-pc-windows-msvc',32),('x86_64-unknown-linux-gnu',64)]:
+    for width in (32,64):
+        declaration = work/f'long-{width}.aeth'
+        declaration.write_text(f'extern "C"{{fn strtoul(p:*u8,end:**u8,base:i32)->u{width};}}fn main(){{}}')
+        result = run([compiler,'check',declaration,'--target',target], 0 if bits==width else 1)
+        if bits!=width: assert 'E2202' in result.stderr
+
 # Explicit declarations remain available in freestanding modules; implicit host
 # dependencies fail in the same semantic session before either backend.
 explicit = work/'no_std_explicit.aeth'; explicit.write_text('#![no_std]\n'+(sources/'explicit_names.aeth').read_text())
@@ -62,6 +81,7 @@ for index, declaration in enumerate([
     'extern "C"{fn malloc(size:i32)->i32;}',
     'extern "C"{fn printf(format:*u8)->i32;}',
     'extern "C"{static strlen:i32;}',
+    'extern "C"{fn strtod(s:*u8,end:i32)->f64;}',
 ]):
     source=work/f'fixed-libc-{index}.aeth'; source.write_text(declaration+'fn main(){}')
     for mode in ['check','build']:

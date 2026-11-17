@@ -219,7 +219,7 @@ impl SemanticAnalyzer {
             declared_types: HashMap::new(),
             type_aliases: HashMap::new(),
             constant_defs: HashMap::new(),
-            facts: SemanticFacts { pointer_width, ..SemanticFacts::default() },
+            facts: SemanticFacts { pointer_width, c_long_bits: Some(if cfg!(windows) { 32 } else { (pointer_width.bytes() * 8) as u8 }), ..SemanticFacts::default() },
             foreign_signatures: HashMap::new(),
             foreign_uses: HashMap::new(),
             foreign_types: HashMap::new(),
@@ -234,6 +234,10 @@ impl SemanticAnalyzer {
     
     pub fn for_target(target: &str) -> std::result::Result<Self, String> {
         let mut analyzer = Self::for_pointer_width(PointerWidth::for_target(target)?);
+        if target != "native" {
+            let triple: target_lexicon::Triple = target.parse().map_err(|e| format!("invalid target: {e}"))?;
+            analyzer.facts.c_long_bits = triple.data_model().ok().map(|model| model.long_size().bits());
+        }
         analyzer.system_target = target.into();
         Ok(analyzer)
     }
