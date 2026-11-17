@@ -1,0 +1,15 @@
+use blas::{blas_matmul, blas_ddot, blas_axpy, blas_iamax, CBLAS_ROW_MAJOR};
+fn main() -> i32 {
+    if CBLAS_ROW_MAJOR != 101 {return 1;}
+    let a:[f32;6] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let b:[f32;6] = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+    let mut c:[f32;4] = [0.0;4];
+    blas_matmul(2,2,3,&a[0] as *f32,&b[0] as *f32,&mut c[0] as *f32);
+    if c[0]!=58.0 || c[1]!=64.0 || c[2]!=139.0 || c[3]!=154.0 {return 2;}
+    blas_axpy(4,-1.0,&a[0] as *f32,&mut c[0] as *f32);
+    if c[0]!=57.0 || c[3]!=150.0 || blas_iamax(4,&c[0] as *f32)!=3 {return 3;}
+    let x:[f64;2]=[16777217.0,-16777216.0];
+    let y:[f64;2]=[1.0,1.0];
+    if blas_ddot(2,&x[0] as *f64,&y[0] as *f64)!=1.0 {return 4;}
+    return 0;
+}

@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,6 +15,8 @@ p.add_argument('--work-dir', required=True, type=Path)
 p.add_argument('--backends', nargs='+', choices=['c', 'llvm'], default=['c', 'llvm'])
 p.add_argument('--llvm-config', type=Path)
 p.add_argument('--java-home', type=Path)
+p.add_argument('--openblas', type=Path, default=os.environ.get('OPENBLAS_LIBRARY'))
+p.add_argument('--metal', action='store_true', default=os.environ.get('AETHER_TEST_METAL') == '1')
 args = p.parse_args()
 root = Path(__file__).resolve().parents[1]
 work = args.work_dir.resolve()
@@ -32,7 +35,7 @@ def run(cmd, env=None):
 def fixture(name):
     return root / 'tests/regressions/ffi_modules' / (name + '.aeth')
 
-def execute(name, library, objects=()):
+def execute(name, library, objects=(), output=None):
     env = os.environ.copy()
     key = 'DYLD_LIBRARY_PATH' if sys.platform == 'darwin' else 'LD_LIBRARY_PATH'
     env[key] = os.pathsep.join(filter(None, [str(library.parent), env.get(key)]))
@@ -43,9 +46,11 @@ def execute(name, library, objects=()):
             for obj in [*objects, library]:
                 cmd.extend(['--link-object', obj])
             run(cmd)
-            run([out], env)
+            stdout = run([out], env)
+            if output:
+                assert re.fullmatch(output, stdout), stdout
 
-for name in ['llvm_targets', 'jni_consumer']:
+for name in ['llvm_targets', 'jni_consumer', 'openblas', 'metal_compute']:
     run([compiler, 'check', fixture(name)])
 
 prefix = os.environ.get('LLVM_SYS_211_PREFIX')
@@ -74,4 +79,19 @@ if java:
     execute('jni_consumer', library)
 else:
     print('JVM execution skipped: set JAVA_HOME or --java-home')
+if args.openblas:
+    execute('openblas', args.openblas.resolve())
+else:
+    print('OpenBLAS execution skipped: set OPENBLAS_LIBRARY or --openblas to an LP64 shared library')
+
+if args.metal:
+    if sys.platform != 'darwin':
+        p.error('--metal needs a macOS host with a Metal device')
+    bridge = work / 'libaether_metal.dylib'
+    run(['clang', '-O2', '-fobjc-arc', '-dynamiclib', root / 'runtime/metal/bridge.m',
+         '-framework', 'Metal', '-framework', 'Foundation',
+         '-install_name', '@rpath/libaether_metal.dylib', '-o', bridge])
+    execute('metal_compute', bridge, output=r'metal registry=[1-9][0-9]* values=257 first=-255 last=257')
+else:
+    print('Metal device execution skipped: enable --metal or AETHER_TEST_METAL=1')
 print(f'{len(records)} module import, SDK and native program checks passed')

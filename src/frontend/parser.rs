@@ -257,6 +257,10 @@ impl Parser {
                 // pub can precede fn, struct, enum, impl, interface, etc.
                 if let Some(next) = self.peek() {
                     match &next.kind {
+                        TokenKind::Const => {
+                            self.advance();
+                            Ok(Item::Const(self.parse_const()?))
+                        },
                         TokenKind::Fn => {
                             let mut function = self.parse_function()?;
                             function.annotations = attributes;

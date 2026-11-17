@@ -1,0 +1,47 @@
+use metal::{MetalContext, metal_init, metal_close, metal_create_buffer, metal_sync,
+            aether_mtl_create_library, aether_mtl_get_function, aether_mtl_create_pipeline,
+            aether_mtl_create_command_buffer, aether_mtl_create_compute_encoder, aether_mtl_set_pipeline,
+            aether_mtl_set_buffer, aether_mtl_dispatch_1d, aether_mtl_end_encoding,
+            aether_mtl_buffer_contents, aether_mtl_release, aether_mtl_registry_id};
+extern "C" {fn printf(fmt:*u8,...) -> i32;}
+
+fn compute(ctx:*MetalContext, handles:**void) -> i32 {
+    let count:u32 = 257;
+    handles[0] = metal_create_buffer(ctx,(count as u64)*4);
+    if handles[0] == 0 as *void || metal_create_buffer(ctx,0) != 0 as *void {return 2;}
+    let data:*f32 = aether_mtl_buffer_contents(handles[0]) as *f32;
+    if data == 0 as *f32 {return 3;}
+    for i in 0..257 {data[i] = (i as f32)-128.0;}
+    handles[1] = aether_mtl_create_library(ctx.device,
+        "#include <metal_stdlib>\nusing namespace metal;\nkernel void affine(device float *x [[buffer(0)]], uint i [[thread_position_in_grid]]) { x[i] = 2.0f * x[i] + 1.0f; }");
+    if handles[1] == 0 as *void || aether_mtl_get_function(handles[1],"missing") != 0 as *void {return 4;}
+    handles[2] = aether_mtl_get_function(handles[1],"affine");
+    if handles[2] == 0 as *void {return 5;}
+    handles[3] = aether_mtl_create_pipeline(ctx.device,handles[2]);
+    if handles[3] == 0 as *void {return 6;}
+    handles[4] = aether_mtl_create_command_buffer(ctx.queue);
+    if handles[4] == 0 as *void {return 7;}
+    handles[5] = aether_mtl_create_compute_encoder(handles[4]);
+    if handles[5] == 0 as *void {return 8;}
+    aether_mtl_set_pipeline(handles[5],handles[3]);
+    aether_mtl_set_buffer(handles[5],handles[0],0);
+    let dispatched:bool = aether_mtl_dispatch_1d(handles[5],handles[3],count);
+    aether_mtl_end_encoding(handles[5]);
+    if !dispatched || !metal_sync(handles[4]) {return 9;}
+    for i in 0..257 {
+        let expected:f32 = 2.0*((i as f32)-128.0)+1.0;
+        if data[i] != expected {return 10;}
+    }
+    printf("metal registry=%llu values=%u first=%.0f last=%.0f\n",aether_mtl_registry_id(ctx.device),count,data[0],data[256]);
+    return 0;
+}
+fn main() -> i32 {
+    let mut ctx:MetalContext = metal_init();
+    if ctx.device == 0 as *void {return 1;}
+    let mut handles:[*void;6] = [0 as *void;6];
+    let status:i32 = compute(&mut ctx as *MetalContext, &mut handles[0] as **void);
+    for i in 0..6 {aether_mtl_release(handles[5-i]);}
+    metal_close(&mut ctx as *MetalContext);
+    metal_close(&mut ctx as *MetalContext);
+    return status;
+}
