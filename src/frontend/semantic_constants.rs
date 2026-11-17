@@ -10,6 +10,7 @@ pub struct SemanticFacts {
     pub owned_moves: HashMap<(String, Span), Span>,
     pub drop_calls: HashMap<String, HashSet<String>>,
     pub places: HashMap<(String, Span), ResolvedPlace>,
+    pub signatures: HashMap<String, (Vec<ResolvedType>, ResolvedType)>,
     pub method_signatures: HashMap<String, ResolvedMethodSignature>,
     pub method_calls: HashMap<(String, Span), ResolvedMethodCall>,
     pub host_calls: HashMap<(String, Span), crate::intrinsics::HostBuiltin>,
@@ -55,7 +56,14 @@ pub enum InitializerValue {
 }
 
 impl SemanticAnalyzer {
-    pub fn into_facts(self) -> SemanticFacts { self.facts }
+    pub fn into_facts(mut self) -> SemanticFacts {
+        for (name, symbol) in self.symbols.scopes[0].symbols.drain() {
+            if let SymbolKind::Function {params, ret, ..} = symbol.kind {
+                self.facts.signatures.insert(name, (params, ret));
+            }
+        }
+        self.facts
+    }
 
     pub fn facts(&self) -> &SemanticFacts { &self.facts }
 

@@ -5,6 +5,16 @@ fn next(counter: *i64) -> i64 {
     return value;
 }
 fn set(pointer: *i64, value: i64) { *pointer = value; }
+#[no_mangle] static mut exported_place: i32 = 7;
+fn read_exported_place() -> i32 { exported_place }
+fn check_shadow() -> bool {
+    let mut exported_place: i32 = 11;
+    exported_place += 5;
+    if exported_place != 16 || read_exported_place() != 7 { return false; }
+    let p: &mut i32 = &mut exported_place;
+    *p = 31;
+    exported_place == 31 && read_exported_place() == 7
+}
 fn main() -> i32 {
     let mut count: i64 = 0;
     let counter: *i64 = &mut count as *i64;
@@ -24,5 +34,6 @@ fn main() -> i32 {
     let mut pair: Pair = Pair { left: 5, right: 6 };
     pair.right += 10;
     if pair.left != 5 || pair.right != 16 { return 6; }
+    if !check_shadow() { return 7; }
     return 0;
 }

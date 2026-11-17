@@ -180,9 +180,22 @@ impl IRGenerator {
 
     /// Unit remains a language value, but a C ABI function has no result slot
     /// for it. Omitted and explicit unit returns must produce the same signature.
-    fn function_return_type(&self, ty: Option<&AstType>, c_abi: bool) -> Result<IRType> {
-        let ty = ty.map(|ty| self.ast_type_to_ir(ty)).transpose()?.unwrap_or(IRType::Void);
-        Ok(if c_abi && ty == IRType::Unit { IRType::Void } else { ty })
+    fn lower_signature(&self, symbol: &str, params: &[ast::Param], ret: Option<&AstType>,
+                       c_abi: bool) -> Result<(Vec<IRType>, IRType)> {
+        let (parameters, result) = if let Some(facts) = &self.semantic_facts {
+            let (parameters, result) = facts.signatures.get(symbol).ok_or_else(||
+                crate::utils::Error::CodeGen(format!("missing checked signature for '{symbol}'")))?;
+            if parameters.len() != params.len() {
+                return Err(crate::utils::Error::CodeGen(format!("arity changed after checking '{symbol}'")));
+            }
+            (parameters.iter().map(Self::resolved_type_to_ir).collect::<Result<_>>()?, Self::resolved_type_to_ir(result)?)
+        } else {
+            // Standalone IR builder tests can also supply a concrete, resolved AST.
+            (params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect::<Result<_>>()?,
+             ret.map(|t| self.ast_type_to_ir(t)).transpose()?.unwrap_or(IRType::Void))
+        };
+        let result = if ret.is_none() || (c_abi && result == IRType::Unit) { IRType::Void } else { result };
+        Ok((parameters, result))
     }
 
     /// Semantic analysis permits compatible declarations plus one C ABI body.
@@ -249,9 +262,9 @@ impl IRGenerator {
                     return Err(crate::utils::Error::CodeGen("generic function reached IR before specialization".into()));
                 }
                 let func_name = func.name.name.clone();
-                let ret_type = self.function_return_type(func.ret_type.as_ref(), Self::function_has_c_abi(func, &func_name))?;
-                
-                self.function_parameters.insert(func_name.clone(), func.params.iter().map(|p| self.ast_type_to_ir(&p.ty)).collect::<Result<_>>()?);
+                let (parameters, ret_type) = self.lower_signature(&func_name, &func.params, func.ret_type.as_ref(),
+                    Self::function_has_c_abi(func, &func_name))?;
+                self.function_parameters.insert(func_name.clone(), parameters);
                 self.function_signatures.insert(func_name, ret_type);
             }
             Item::Impl(impl_block) => {
@@ -335,11 +348,9 @@ impl IRGenerator {
                 for foreign_item in &ext.items {
                     match foreign_item {
                         ast::ForeignItem::Fn { name, params, ret_type, variadic, .. } => {
-                            let ir_params: Vec<(String, IRType)> = params.iter()
-                                .map(|p| Ok((p.name.name.clone(), self.ast_type_to_ir(&p.ty)?)))
-                    .collect::<Result<_>>()?;
-                            let ir_ret = self.function_return_type(ret_type.as_ref(), true)?;
-                            
+                            let (types, ir_ret) = self.lower_signature(&name.name, params, ret_type.as_ref(), true)?;
+                            let ir_params = params.iter().map(|p| p.name.name.clone()).zip(types).collect();
+
                             if let Some(existing) = self.module.externs.iter_mut().find(|ext| ext.name == name.name) {
                                 // Explicit validated ABI declarations override implicit libc defaults.
                                 *existing = IRExtern { name: name.name.clone(), variadic: *variadic, params: ir_params, ret_type: ir_ret };
@@ -359,7 +370,7 @@ impl IRGenerator {
             Item::Static(definition) => {
                 let initializer = self.semantic_facts.as_ref().and_then(|facts| facts.globals.get(&definition.name.name)).cloned()
                     .ok_or_else(|| crate::utils::Error::CodeGen(format!("global '{}' has no validated initializer", definition.name.name)))?;
-                let ty = self.ast_type_to_ir(&definition.ty)?;
+                let ty = Self::resolved_type_to_ir(&initializer.ty)?;
                 self.global_types.insert(definition.name.name.clone(), ty.clone());
                 self.register_global(IRGlobal { name: definition.name.name.clone(), ty, mutable: definition.is_mut,
                     exported: definition.is_pub || definition.annotations.iter().any(|annotation| annotation.name.name == "no_mangle"),
@@ -719,7 +730,7 @@ impl IRGenerator {
                     let symbol = segments.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join("::");
                     self.semantic_facts.as_ref().and_then(|facts| facts.method_signatures.get(&symbol))
                         .map(|signature| signature.emitted_name.clone())
-                        .unwrap_or_else(|| segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("_"))
+                        .ok_or_else(|| crate::utils::Error::CodeGen(format!("missing checked callee for path '{symbol}'")))?
                 } else {
                     return Err(crate::utils::Error::CodeGen("missing resolved direct callee".into()));
                 };
@@ -742,7 +753,7 @@ impl IRGenerator {
                 let external = self.module.externs.iter().find(|e| e.name == func_name).cloned();
                 let param_types = self.function_parameters.get(&func_name).cloned()
                     .or_else(|| external.as_ref().map(|e| e.params.iter().map(|(_, ty)| ty.clone()).collect()))
-                    .unwrap_or_default();
+                    .ok_or_else(|| crate::utils::Error::CodeGen(format!("missing signature for call to '{func_name}'")))?;
                 let variadic = external.as_ref().map(|e| e.variadic).unwrap_or(false);
                 for (i, arg) in args.iter().enumerate() {
                     let mut val = self.generate_expr_expected(arg, param_types.get(i))?;
@@ -1151,11 +1162,22 @@ impl IRGenerator {
     fn generate_place(&mut self, expr: &Expr) -> Result<(Value, IRType)> {
         match expr {
             Expr::Ident(name) => {
-                if let Some(ty) = self.global_types.get(&name.name) { return Ok((Value::Global(name.name.clone()), ty.clone())); }
-                let address = self.local_addresses.get(&name.name).cloned()
-                    .ok_or_else(|| crate::utils::Error::CodeGen(format!("'{}' has no addressable storage", name.name)))?;
-                let ty = self.locals.get(&name.name).unwrap().1.clone();
-                Ok((address, ty))
+                let global = if let Some(facts) = &self.semantic_facts {
+                    let function = &self.current_fn.as_ref().unwrap().name;
+                    let place = facts.places.get(&(function.clone(), name.span)).ok_or_else(||
+                        crate::utils::Error::CodeGen(format!("missing checked storage for '{}'", name.name)))?;
+                    matches!(place.origin, crate::frontend::semantic::PlaceOrigin::Global)
+                } else {
+                    !self.local_addresses.contains_key(&name.name)
+                };
+                if global {
+                    let ty = self.global_types.get(&name.name).ok_or_else(||
+                        crate::utils::Error::CodeGen(format!("missing global storage for '{}'", name.name)))?;
+                    return Ok((Value::Global(name.name.clone()), ty.clone()));
+                }
+                self.local_addresses.get(&name.name).zip(self.locals.get(&name.name))
+                    .map(|(address, (_, ty))| (address.clone(), ty.clone()))
+                    .ok_or_else(|| crate::utils::Error::CodeGen(format!("missing local storage for '{}'", name.name)))
             }
             Expr::Deref { expr, .. } => {
                 let ptr = self.generate_expr(expr)?;
@@ -1548,6 +1570,18 @@ mod tests {
     }
 
     #[test]
+    fn checked_signatures_are_required_at_ir_boundaries() {
+        let source = "fn id(x:i32)->i32{x} fn main()->i32{id(7)}";
+        let ast = Parser::new(Lexer::new(source, 0)).parse_program().unwrap();
+        let mut analyzer = crate::frontend::semantic::SemanticAnalyzer::new();
+        analyzer.analyze(&ast).unwrap();
+        let mut facts = analyzer.into_facts();
+        assert!(facts.signatures.remove("id").is_some());
+        let error = IRGenerator::new("missing").with_semantic_facts(facts).generate(&ast).unwrap_err();
+        assert!(error.to_string().contains("missing checked signature for 'id'"));
+    }
+
+    #[test]
     fn static_linkage_and_compatible_foreign_declarations_survive_lowering() {
         let declaration = "type Count=i64; extern \"C\" { static mut ABI:Count; }";
         let definition = "#[no_mangle] static mut ABI:i64=7;";
@@ -1556,7 +1590,7 @@ mod tests {
             let program = Parser::new(Lexer::new(&source, 0)).parse_program().unwrap();
             let mut analyzer = crate::frontend::semantic::SemanticAnalyzer::new();
             analyzer.analyze(&program).unwrap();
-            let module = IRGenerator::new("test").with_semantic_facts(analyzer.facts().clone()).generate(&program).unwrap();
+            let module = IRGenerator::new("test").with_semantic_facts(analyzer.into_facts()).generate(&program).unwrap();
             assert_eq!(module.globals.len(), 3);
             let abi = module.globals.iter().find(|global| global.name == "ABI").unwrap();
             assert!(abi.exported && abi.mutable && abi.initializer.is_some());

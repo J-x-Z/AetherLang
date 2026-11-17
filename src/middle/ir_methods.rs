@@ -79,7 +79,7 @@ mod tests {
         let program = Parser::new(Lexer::new(source, 0)).parse_program().unwrap();
         let mut analyzer = SemanticAnalyzer::new();
         analyzer.analyze(&program).unwrap();
-        let module = IRGenerator::new("methods").with_semantic_facts(analyzer.facts().clone()).generate(&program).unwrap();
+        let module = IRGenerator::new("methods").with_semantic_facts(analyzer.into_facts()).generate(&program).unwrap();
         let expected = IRType::Ptr(Box::new(IRType::Struct("S".into())));
         let method = module.functions.iter().find(|function| function.name == "S_view").unwrap();
         assert_eq!(method.params[0].1, expected);

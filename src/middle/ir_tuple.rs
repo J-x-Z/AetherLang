@@ -82,6 +82,10 @@ impl IRGenerator {
             {
                 self.register_resolved_tuple_type(ty)?;
             }
+            for (params, ret) in facts.signatures.values() {
+                for ty in params { self.register_resolved_tuple_type(ty)?; }
+                self.register_resolved_tuple_type(ret)?;
+            }
             for signature in facts.method_signatures.values() {
                 for ty in &signature.params {
                     self.register_resolved_tuple_type(ty)?;
