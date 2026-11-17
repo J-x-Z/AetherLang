@@ -62,4 +62,16 @@ for name in ['values', 'packed', 'saturating_casts', 'abi']:
     extra = [root / 'abi.c'] if name == 'abi' else []
     run(f'{name}/sanitizer/build', [cc, '-std=c11', '-O0', '-g', '-fno-inline', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', source, *extra, '-o', binary])
     run(f'{name}/sanitizer/run', [binary], {**env, 'ASAN_OPTIONS': 'detect_stack_use_after_return=1', 'UBSAN_OPTIONS': 'halt_on_error=1'})
+
+# A separately optimized C object may consume the entire argument/return
+# register. Signed and unsigned sub-word values must agree in both directions.
+narrow = root.parent / 'narrow_abi'
+native = work / 'narrow-helper.o'
+run('narrow C companion', [cc, '-std=c11', '-O2', '-c', narrow / 'native.c', '-o', native])
+for backend in args.backends:
+    for opt in [0, 2, 3]:
+        binary = work / f'narrow-{backend}-O{opt}'
+        run(f'narrow/{backend}/O{opt}/build', [compiler, 'build', narrow / 'main.aeth',
+            '--backend', backend, f'-O{opt}', '--link-object', native, '-o', binary])
+        run(f'narrow/{backend}/O{opt}/run', [binary])
 print(f'{len(records)} checks passed; evidence: {work / "results.json"}')

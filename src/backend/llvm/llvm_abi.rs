@@ -70,7 +70,14 @@ impl LLVMCodeGen {
 
     fn declare_abi(&mut self, name: &str, params: &[(String, IRType)], ret: &IRType, variadic: bool, c_abi: bool) -> Result<()> {
         unsafe {
+            let arch = self.target_triple.split('-').next().unwrap_or("");
+            let extend_narrow_integers = c_abi && match arch {
+                "aarch64" | "arm64" => self.target_triple.contains("-apple-"),
+                "x86_64" => self.target_triple.contains("-apple-") || self.target_triple.contains("-linux-"),
+                _ => false,
+            };
             let abi = FunctionAbi {
+                extend_narrow_integers,
                 params: params.iter().map(|(_, ty)| Ok((ty.clone(), self.classify_abi(ty, false, c_abi)?))).collect::<Result<_>>()?,
                 result: (ret.clone(), self.classify_abi(ret, true, c_abi)?),
                 variadic,
@@ -95,11 +102,32 @@ impl LLVMCodeGen {
     }
 
     unsafe fn add_abi_attributes(&self, function: LLVMValueRef, abi: &FunctionAbi, call: bool) {
+        let attach = |index, attr| {
+            if call { LLVMAddCallSiteAttribute(function, index, attr); }
+            else { LLVMAddAttributeAtIndex(function, index, attr); }
+        };
+        let mut index = 1;
         if matches!(abi.result.1, AbiValue::Indirect) {
             let kind = LLVMGetEnumAttributeKindForName(c"sret".as_ptr(), 4);
-            let attr = LLVMCreateTypeAttribute(self.context, kind, self.ir_type_to_llvm(&abi.result.0));
-            if call { LLVMAddCallSiteAttribute(function, 1, attr); }
-            else { LLVMAddAttributeAtIndex(function, 1, attr); }
+            attach(index, LLVMCreateTypeAttribute(self.context, kind, self.ir_type_to_llvm(&abi.result.0)));
+            index += 1;
+        }
+        if abi.extend_narrow_integers {
+            let extend = |index, ty: &IRType| {
+                let attribute = match ty.unqualified() {
+                    IRType::I8 | IRType::I16 => c"signext",
+                    IRType::U8 | IRType::U16 | IRType::Bool => c"zeroext",
+                    _ => return,
+                };
+                let kind = LLVMGetEnumAttributeKindForName(attribute.as_ptr(), attribute.to_bytes().len());
+                attach(index, LLVMCreateEnumAttribute(self.context, kind, 0));
+            };
+            extend(0, &abi.result.0);
+            for (ty, lowering) in &abi.params {
+                if matches!(lowering, AbiValue::Ignore) { continue; }
+                extend(index, ty);
+                index += 1;
+            }
         }
     }
 

@@ -1,0 +1,15 @@
+extern "C" {
+    fn c_signed(x: i8, y: i16) -> i32;
+    fn c_unsigned(x: u8, y: u16, b: bool) -> u32;
+    fn check_exports() -> i32;
+}
+#[no_mangle] fn exported_i8() -> i8 { -128 }
+#[no_mangle] fn exported_i16() -> i16 { -32768 }
+#[no_mangle] fn exported_u8() -> u8 { 255 }
+#[no_mangle] fn exported_u16() -> u16 { 65535 }
+#[no_mangle] fn exported_bool() -> bool { true }
+fn main() -> i32 {
+    if c_signed(-128, -32768) != -32896 { return 1; }
+    if c_unsigned(255, 65535, true) != 65791 { return 2; }
+    return check_exports();
+}

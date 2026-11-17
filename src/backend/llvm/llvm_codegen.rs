@@ -22,6 +22,7 @@ use crate::utils::{Error, Result};
 enum AbiValue { Direct(LLVMTypeRef), Coerce(LLVMTypeRef), Indirect, Ignore }
 #[derive(Clone)]
 struct FunctionAbi {
+    extend_narrow_integers: bool,
     params: Vec<(IRType, AbiValue)>,
     result: (IRType, AbiValue),
     variadic: bool,
