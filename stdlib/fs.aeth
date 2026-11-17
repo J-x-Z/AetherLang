@@ -3,6 +3,9 @@
 // File owns one FILE*: do not copy an open File; pass *File and close explicitly.
 // The path field is borrowed. Closing invalidates the handle even on I/O failure.
 
+use result::Result;
+use posix::{ENOENT, EINVAL};
+
 extern "C" {
     // POSIX file operations
     fn fopen(path: *u8, mode: *u8) -> *void;
@@ -225,10 +228,22 @@ pub fn file_eof(f: *File) -> bool {
     return feof(f.handle) != 0;
 }
 
-pub fn dir_exists(path: *u8) -> bool {
+// Ok(false) means an absent path, including a dangling final symlink. A
+// non-directory, a permission denial or a close failure retains its errno.
+pub fn dir_probe(path: *u8) -> Result<bool, i32> {
+    if path == 0 as *u8 { return Result::Err(EINVAL); }
     let directory: *void = opendir(path);
-    if directory == (0 as *void) { return false; }
-    return closedir(directory) == 0;
+    if directory == 0 as *void {
+        let code: i32 = __errno_get();
+        if code == ENOENT { return Result::Ok(false); }
+        return Result::Err(code);
+    }
+    if closedir(directory) != 0 { return Result::Err(__errno_get()); }
+    Result::Ok(true)
+}
+
+pub fn dir_exists(path: *u8) -> bool {
+    match dir_probe(path) { Result::Ok(found) => found, Result::Err(_) => false }
 }
 
 // Borrow the underlying FILE* for explicit native APIs; File retains ownership.

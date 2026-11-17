@@ -3,7 +3,8 @@
 use config::{Config, config_load, config_free};
 use process::{process_run};
 use path::{path_join, make_directories};
-use posix::ENOENT;
+use fs::dir_probe;
+use result::Result;
 use dependencies::{dependencies_resolve,dependencies_record};
 use build::{compile_source};
 use output::{output_lock, output_unlock, output_recover, output_compiler_inherits};
@@ -17,9 +18,8 @@ extern "C" {
     fn free(ptr: *void);
     fn remove(path: *u8) -> i32;
     fn puts(s: *u8) -> i32;
-    fn opendir(path: *u8) -> *void;
-    fn closedir(directory: *void) -> i32;
-    fn perror(path: *u8);
+    fn strerror(code: i32) -> *u8;
+    fn dprintf(fd: i32, format: *u8, ...) -> i32;
 }
 
 fn test_discover(list: *u8, lock: *void) -> i32 {
@@ -80,19 +80,20 @@ pub fn run_tests() -> i32 {
     let mut status: i32 = 1;
     if cfg.valid {
         if !dependencies_resolve(&mut cfg as *Config) { config_free(&mut cfg as *Config); return 1; }
-        let directory: *void = opendir("tests\0" as *u8);
-        if directory == (0 as *void) {
-            let missing: bool = __errno_get() == ENOENT;
-            if missing { puts("jxz: no tests directory\0" as *u8); }
-            else { perror("jxz: cannot open tests directory\0" as *u8); }
-            config_free(&cfg as *Config);
-            return if missing { 0 } else { 1 };
-        }
-        if closedir(directory) != 0 {
-            perror("jxz: cannot close tests directory\0" as *u8);
-            config_free(&cfg as *Config);
-            return 1;
-        }
+        match dir_probe("tests") {
+            Result::Ok(found) => {
+                if !found {
+                    puts("jxz: no tests directory");
+                    config_free(&cfg as *Config);
+                    return 0;
+                }
+            },
+            Result::Err(code) => {
+                dprintf(2, "jxz: cannot open tests directory: %s\n", strerror(code));
+                config_free(&cfg as *Config);
+                return 1;
+            },
+        };
         if make_directories(cfg.target_dir) {
             let lock: *void = output_lock(cfg.target_dir);
             if lock == (0 as *void) { config_free(&cfg as *Config); return 1; }

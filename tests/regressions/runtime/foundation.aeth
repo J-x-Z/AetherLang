@@ -1,3 +1,6 @@
+use fs::dir_probe;
+use posix::{EINVAL, ENOTDIR};
+use result::Result;
 use string::{len, equals, dup, dealloc, copy_into, append_into};
 use fs::{File, file_open_read, file_open_write, file_close, file_read_all, file_write, file_write_line, file_flush, file_error, file_eof, read_file, write_file, file_rename, file_delete, file_exists, dir_remove};
 use io::{File as IoFile, open_write, close, is_valid, println, flush};
@@ -34,9 +37,13 @@ fn main(argc: i32, argv: **u8) -> i32 {
     if directory == (0 as *u8) || !make_directories(directory) || !directory_exists(directory) { return 12; }
     if make_directories("\0" as *u8) { return 13; }
     let path: *u8 = path_join(directory, "binary data\0" as *u8);
+    match dir_probe(directory) { Result::Ok(true) => (), _ => {return 61;}, };
+    match dir_probe(path) { Result::Ok(false) => (), _ => {return 62;}, };
+    match dir_probe(0 as *u8) { Result::Err(code) => { if code != EINVAL { return 63; } }, _ => { return 64; }, };
     let renamed: *u8 = path_join(directory, "renamed data\0" as *u8);
     let mut bytes: [u8; 5] = [65, 0, 66, 10, 67];
     if !write_file(path, &bytes[0] as *u8, 5) { return 14; }
+    match dir_probe(path) { Result::Err(code) => { if code != ENOTDIR { return 65; } }, _ => { return 66; }, };
     let mut file: File = file_open_read(path);
     let mut buffer: [u8; 8] = [0; 8];
     if file_read_all(&file as *File, &buffer[0] as *u8, 8) != 5 { return 15; }
