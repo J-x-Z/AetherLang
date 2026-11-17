@@ -1,0 +1,10 @@
+fn main()->i32 {
+    print("hello "); println("world");
+    print_i64(-9223372036854775808); println_i64(9223372036854775807);
+    let n:u64=16; let p:*u8=alloc(n); let q:*u8=malloc(16);
+    if p==(0 as *u8) || q==(0 as *u8) { return 2; }
+    unsafe { p[0]=17; q[0]=29; assert(p[0]+q[0]==46); }
+    free(p);free(q);
+    assert(strcmp("same","same")==0);assert(atof("1.25")==1.25);
+    return 0;
+}

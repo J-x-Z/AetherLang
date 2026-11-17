@@ -631,31 +631,18 @@ impl CCodeGen {
             Instruction::Call { dest, func, args } => {
                 let args_str: Vec<_> = args.iter().map(|a| self.value_to_c(a)).collect();
                 
-                // Map built-in function names to C runtime functions
-                let (c_func, is_builtin_void) = match func.as_str() {
-                    "print" => ("aether_print", true),
-                    "println" => ("aether_println", true),
-                    "print_i64" => ("aether_print_i64", true),
-                    "println_i64" => ("aether_println_i64", true),
-                    "assert" => ("aether_assert", true),
-                    "alloc" => ("malloc", false),
-                    "free" => ("free", true),
-                    "exit" => ("exit", true),
-                    _ => (func.as_str(), false),
-                };
-                
                 // Check if user-defined function returns void
                 let ret_ty = self.func_ret_types.get(func).cloned();
-                let is_undefined_call = ret_ty.is_none() && !is_builtin_void;
+                let is_undefined_call = ret_ty.is_none();
                 
                 // Track undefined calls - might be enum variant constructors
                 if is_undefined_call && !func.starts_with("_") {
                     self.undefined_calls.insert((func.clone(), args.len()));
                 }
                 
-                let is_void = is_builtin_void || matches!(ret_ty, Some(IRType::Void)) || matches!(ret_ty, None);
+                let is_void = matches!(ret_ty, Some(IRType::Void)) || matches!(ret_ty, None);
                 
-                let call = format!("{}({})", c_func, args_str.join(", "));
+                let call = format!("{}({})", func, args_str.join(", "));
                 
                 // For void functions, don't assign to a variable
                 if is_void || dest.is_none() {
@@ -965,20 +952,6 @@ impl CCodeGen {
         }
         self.writeln("");
 
-        
-        // Runtime support functions (skip for no_std)
-        if !module.no_std {
-            self.writeln("/* AetherLang Runtime */");
-            self.writeln("static void aether_print(const char* s) { printf(\"%s\", s); }");
-            self.writeln("static void aether_println(const char* s) { printf(\"%s\\n\", s); }");
-            self.writeln("static void aether_print_i64(int64_t n) { printf(\"%lld\", (long long)n); }");
-            self.writeln("static void aether_println_i64(int64_t n) { printf(\"%lld\\n\", (long long)n); }");
-            self.writeln("static void aether_assert(bool c) { if(!c) { fprintf(stderr, \"Assertion failed\\n\"); exit(1); } }");
-            self.writeln("");
-        } else {
-            self.writeln("/* no_std mode - runtime disabled */");
-            self.writeln("");
-        }
         
         // Struct definitions
         self.writeln("/* Struct Definitions */");

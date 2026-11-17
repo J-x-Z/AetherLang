@@ -1,0 +1,17 @@
+#![no_std]
+#![no_main]
+extern "C" {
+    fn malloc(size:usize)->*u8;
+    fn realloc(pointer:*u8,size:usize)->*u8;
+    fn memcpy(dest:*u8,source:*u8,size:usize)->*u8;
+    fn strlen(source:*u8)->usize;
+    fn free(pointer:*u8);
+}
+#[no_mangle] fn abi32()->usize {
+    let pointer:*u8=malloc(16);
+    let grown:*u8=realloc(pointer,32);
+    memcpy(grown,"abc",4);
+    let length:usize=strlen(grown);
+    free(grown);
+    length
+}

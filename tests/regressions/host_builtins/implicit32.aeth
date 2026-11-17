@@ -1,0 +1,4 @@
+#![no_main]
+#[no_mangle] fn alias32(size:u32)->*u8 {alloc(size)}
+#[no_mangle] fn direct32(size:u32)->*u8 {malloc(size)}
+#[no_mangle] fn release32(pointer:*u8) {free(pointer);}

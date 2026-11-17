@@ -1,0 +1,11 @@
+extern "C" {
+    fn print(value:i32)->i32;
+    fn print_i64(value:i64)->i64;
+    fn alloc(value:i32)->i32;
+    fn assert(value:bool)->i32;
+}
+#[no_mangle] fn print(value:i32)->i32 {value+1}
+#[no_mangle] fn print_i64(value:i64)->i64 {value+2}
+#[no_mangle] fn alloc(value:i32)->i32 {value+3}
+#[no_mangle] fn assert(value:bool)->i32 {if value {4}else{5}}
+fn main()->i32 {if print(10)!=11 || print_i64(20)!=22 || alloc(30)!=33 || assert(false)!=5 {return 1;}return 0;}

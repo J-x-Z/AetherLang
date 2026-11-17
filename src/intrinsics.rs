@@ -1,5 +1,8 @@
 //! One inventory of low-level memory operations shared by checking and lowering.
 use crate::types::{PrimitiveType as P, ResolvedType as T};
+#[path = "host_builtins.rs"]
+mod host;
+pub use host::{host_builtin, host_builtin_names, host_c_signature, HostBuiltin};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryKind {

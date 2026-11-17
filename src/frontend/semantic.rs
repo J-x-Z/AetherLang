@@ -31,6 +31,8 @@ mod interfaces;
 mod contracts;
 #[path = "semantic_tuples.rs"]
 mod tuples;
+#[path = "semantic_host.rs"]
+mod host;
 #[path = "semantic_enums.rs"]
 mod enums;
 #[path = "semantic_memory.rs"]
@@ -317,6 +319,7 @@ impl SemanticAnalyzer {
 
         // Call identities and receiver adjustments are now known; effects use
         // those same facts instead of guessing from a method suffix.
+        self.check_hosted_abi(program)?;
         self.check_tuple_abi_boundaries(program)?;
         self.check_system_attributes(program)?;
         self.infer_effects(program)?;

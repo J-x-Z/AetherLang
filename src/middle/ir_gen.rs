@@ -28,6 +28,8 @@ mod methods;
 mod contracts;
 #[path = "ir_tuple.rs"]
 mod tuples;
+#[path = "ir_host.rs"]
+mod host;
 
 /// IR Generator
 pub struct IRGenerator {
@@ -121,12 +123,6 @@ impl IRGenerator {
             }
         }
         
-        // Phase 0: Register C library extern functions for self-hosting
-        // Skip if no_std is set
-        if !self.module.no_std {
-            self.register_c_library_externs();
-        }
-        
         // Phase 1: Collect all function signatures (for forward reference)
         for item in &program.items {
             self.collect_signatures(item)?;
@@ -139,6 +135,7 @@ impl IRGenerator {
         for item in &program.items {
             if !matches!(item, Item::Struct(_) | Item::Union(_) | Item::Static(_) | Item::Enum(_) | Item::Extern(_)) { self.generate_item(item)?; }
         }
+        self.validate_hosted_abi()?;
         self.coalesce_defined_externs()?;
         self.finish_tuple_layouts()?;
         self.order_struct_layouts()?;
@@ -212,53 +209,6 @@ impl IRGenerator {
         Ok(())
     }
 
-    /// Register C library extern functions for self-hosting
-    fn register_c_library_externs(&mut self) {
-        // `puts` is a typed semantic builtin. Its ABI must go through the
-        // same declaration registry as explicit externs on every backend.
-        self.module.externs.push(IRExtern {
-            name: "puts".to_string(),
-            variadic: false,
-            params: vec![("s".to_string(), IRType::Ptr(Box::new(IRType::U8)))],
-            ret_type: IRType::I32,
-        });
-
-        // atof - string to float conversion
-        self.module.externs.push(IRExtern {
-            name: "atof".to_string(),
-            variadic: false,
-            params: vec![("s".to_string(), IRType::Ptr(Box::new(IRType::I8)))],
-            ret_type: IRType::F64,
-        });
-        
-        // strcmp - string comparison
-        self.module.externs.push(IRExtern {
-            name: "strcmp".to_string(),
-            variadic: false,
-            params: vec![
-                ("s1".to_string(), IRType::Ptr(Box::new(IRType::I8))),
-                ("s2".to_string(), IRType::Ptr(Box::new(IRType::I8))),
-            ],
-            ret_type: IRType::I32,
-        });
-        
-        // malloc - memory allocation
-        self.module.externs.push(IRExtern {
-            name: "malloc".to_string(),
-            variadic: false,
-            params: vec![("size".to_string(), IRType::I64)],
-            ret_type: IRType::Ptr(Box::new(IRType::I8)),
-        });
-        
-        // free - memory deallocation
-        self.module.externs.push(IRExtern {
-            name: "free".to_string(),
-            variadic: false,
-            params: vec![("ptr".to_string(), IRType::Ptr(Box::new(IRType::I8)))],
-            ret_type: IRType::Void,
-        });
-    }
-    
     /// Collect function signatures for forward reference
     fn collect_signatures(&mut self, item: &Item) -> Result<()> {
         match item {
@@ -701,6 +651,9 @@ impl IRGenerator {
             }
 
             Expr::Call { func, args, span } => {
+                if let Some(builtin) = self.checked_host_call(*span) {
+                    return self.generate_host_call(builtin, args);
+                }
                 if let Expr::Path {segments,..}=func.as_ref() {
                     if let Some((definition,variant))=self.enum_variant_path(segments) {
                         return self.construct_enum(&definition,variant,args);

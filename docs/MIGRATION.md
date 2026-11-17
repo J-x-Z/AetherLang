@@ -122,3 +122,28 @@ fn add(a: i64, b: i64) -> i64 pure { a + b }
 3. **Add contracts**: Document preconditions/postconditions
 4. **Mark effects**: Annotate pure vs impure functions
 5. **Migrate logic**: Rewrite hot paths in AetherLang
+
+## Hosted builtin consistency
+
+`print`, `println`, `print_i64`, `println_i64`, `alloc`, `malloc`, `free`,
+`puts`, `atof`, `strcmp`, `exit`, and `assert` now use checked common IR on
+both native backends. An explicit function or `extern "C"` declaration with
+one of these names keeps its declared identity and ABI; it is not rewritten
+as a language builtin. Only actually used host dependencies are declared.
+Fixed libc names such as `malloc`, `strlen`, and `printf` must nevertheless
+match the target C ABI in a hosted module, including exported definitions.
+Freestanding `#![no_std]` modules may explicitly provide their own symbols.
+
+Implicit `alloc` and `malloc` take the target-width unsigned integer: `u64`
+on 64-bit targets (preserving existing host callers), `u32` on 32-bit
+targets. Oversized integer arguments are rejected, not truncated. Explicit
+libc declarations should use `usize` for C `size_t` parameters and results.
+Implicit hosted calls remain unavailable in `#![no_std]`; provide an explicit
+external declaration for a runtime the application supplies.
+
+`assert(false)` now traps on both backends, matching failed language
+contracts. The old C-only `Assertion failed` stderr message and `exit(1)`
+behavior are no longer emitted. Use an explicit diagnostic and `exit(code)`
+when an application requires a particular message or process status.
+`atof` and `strcmp` carry the `read` effect because they inspect pointed-to
+memory; wrappers must include it when declaring an explicit effect bound.
