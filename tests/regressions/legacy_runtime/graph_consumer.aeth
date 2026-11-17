@@ -1,0 +1,38 @@
+use graph::*;
+use result::Result;
+fn require(ok: bool, code: i32) -> Result<(), i32> { if ok { Result::Ok(()) } else { Result::Err(code) } }
+fn run(graph: *Graph) -> Result<(), i32> {
+    let unused: u64 = var_node(graph)?;
+    let one: u64 = const_node(graph, 1.0)?;
+    require(eval(graph, one)? == 1.0, 11)?;
+    match eval(graph, unused) { Result::Err(code) => require(code == GRAPH_UNSET, 12)?, Result::Ok(_) => { return Result::Err(13); }, }
+    let x: u64 = var_node(graph)?; set_var(graph, x, 3.0)?;
+    let square: u64 = mul_op(graph, x, x)?;
+    let sum: u64 = add_op(graph, square, one)?;
+    require(eval(graph, sum)? == 10.0, 14)?;
+    set_var(graph, x, 5.0)?; require(eval(graph, sum)? == 26.0, 15)?;
+    let mut chain: u64 = sum; let mut i: i32 = 0;
+    while i < 4000 { chain = add_op(graph, chain, one)?; i += 1; }
+    require(eval(graph, chain)? == 4026.0, 16)?;
+    set_var(graph, x, 2.0)?; require(eval(graph, chain)? == 4005.0, 17)?;
+    match add_op(graph, 99999, one) { Result::Err(code) => require(code == GRAPH_NODE, 18)?, Result::Ok(_) => { return Result::Err(19); }, }
+    match set_var(graph, one, 7.0) { Result::Err(code) => require(code == GRAPH_VARIABLE, 20)?, Result::Ok(_) => { return Result::Err(21); }, }
+    let zero: u64 = const_node(graph, 0.0)?;
+    let division: u64 = div_op(graph, one, zero)?;
+    match eval(graph, division) { Result::Err(code) => require(code == GRAPH_DOMAIN, 22)?, Result::Ok(_) => { return Result::Err(23); }, }
+    let logarithm: u64 = log_op(graph, zero)?;
+    match eval(graph, logarithm) { Result::Err(code) => require(code == GRAPH_DOMAIN, 24)?, Result::Ok(_) => { return Result::Err(25); }, }
+    let negative: u64 = const_node(graph, -100.0)?;
+    let sigmoid: u64 = sigmoid_op(graph, negative)?;
+    let probability: f32 = eval(graph, sigmoid)?; require(probability >= 0.0 && probability < 0.001, 26)?;
+    let relu: u64 = relu_op(graph, negative)?; require(eval(graph, relu)? == 0.0, 27)?;
+    let exponential: u64 = exp_op(graph, one)?; let log_exp: u64 = log_op(graph, exponential)?;
+    let result: f32 = eval(graph, log_exp)?; require(result > 0.9999 && result < 1.0001, 28)?;
+    graph_reset(graph); require(eval(graph, sum)? == 5.0, 29)?;
+    Result::Ok(())
+}
+fn main() -> i32 {
+    let mut graph: Graph = graph_new(); let status: Result<(), i32> = run(&graph as *Graph);
+    graph_free(&graph as *Graph); graph_free(&graph as *Graph);
+    match status { Result::Ok(_) => 0, Result::Err(error) => error, }
+}

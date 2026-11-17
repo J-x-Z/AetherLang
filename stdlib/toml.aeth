@@ -1,262 +1,236 @@
-// AetherLang TOML Parser (Simplified)
-// Simple TOML parsing for jxz package manager (Jxz.toml)
-
+// Owned TOML subset: bare keys/tables, basic and literal single-line strings,
+// decimal i64 integers and booleans. Unsupported arrays, inline tables, dates,
+// floats, dotted/quoted keys and multiline strings are errors, never ignored.
+// Strings retain UTF-8 bytes and str_len (including escaped NUL). Getter pointers
+// are borrowed until the next successful parse/free. Failed parsing preserves
+// the old document. Use toml_parse_bytes for bounded/binary input diagnostics.
+use vec::{Vec, vec_new, vec_push, vec_free};
+use result::Result;
+use option::Option;
 extern "C" {
-    fn malloc(size: u64) -> *void;
-    fn free(ptr: *void);
-    fn strlen(s: *u8) -> u64;
-    fn strcmp(s1: *u8, s2: *u8) -> i32;
-    fn strcpy(dest: *u8, src: *u8) -> *u8;
+    fn malloc(size: u64) -> *void; fn free(pointer: *void);
+    fn strlen(text: *u8) -> u64; fn strcmp(a: *u8, b: *u8) -> i32;
+    fn memcpy(destination: *void, source: *void, size: u64) -> *void;
 }
-
-// ==================== TOML Value Types ====================
-
-const TOML_STRING: i32 = 1
-const TOML_INT: i32 = 2
-const TOML_BOOL: i32 = 3
-
-pub struct TomlEntry {
-    key: *u8,
-    kind: i32,
-    str_val: *u8,
-    int_val: i64,
-    bool_val: bool,
-}
-
-const MAX_ENTRIES: i32 = 128
-
-pub struct TomlDoc {
-    entries: *TomlEntry,
-    count: i32,
-}
-
-// ==================== Document Creation ====================
-
-pub fn toml_new() -> TomlDoc {
-    let entries: *TomlEntry = malloc(MAX_ENTRIES as u64 * 48) as *TomlEntry
-    return TomlDoc {
-        entries: entries,
-        count: 0,
-    }
-}
-
+const TOML_STRING: i32 = 1;
+const TOML_INT: i32 = 2;
+const TOML_BOOL: i32 = 3;
+const TOML_SYNTAX: i32 = 1;
+const TOML_MEMORY: i32 = 2;
+const TOML_RANGE: i32 = 3;
+const TOML_DUPLICATE: i32 = 4;
+pub struct TomlError { offset: u64, code: i32 }
+pub struct TomlEntry { key: *u8, kind: i32, str_val: *u8, str_len: u64, int_val: i64, bool_val: bool }
+pub struct TomlDoc { entries: Vec<TomlEntry> }
+struct Parser { input: *u8, length: u64, pos: u64, section: *u8, tables: Vec<*u8>, doc: TomlDoc }
+pub fn toml_new() -> TomlDoc { let entries: Vec<TomlEntry> = vec_new(); TomlDoc { entries: entries } }
+fn entry_free(entry: *TomlEntry) { free(entry.key as *void); free(entry.str_val as *void); }
 pub fn toml_free(doc: *TomlDoc) {
-    if doc.entries != (0 as *TomlEntry) {
-        free(doc.entries as *void)
-    }
+    let mut i: u64 = 0;
+    while i < doc.entries.len { entry_free(&doc.entries.data[i] as *TomlEntry); i += 1; }
+    vec_free(&doc.entries as *Vec<TomlEntry>);
 }
-
-// ==================== Helpers ====================
-
-fn is_whitespace(c: u8) -> bool {
-    return c == 32 || c == 9
+pub fn toml_get_entry(doc: *TomlDoc, key: *u8) -> *TomlEntry {
+    if key == (0 as *u8) { return 0 as *TomlEntry; }
+    let mut i: u64 = 0;
+    while i < doc.entries.len { if strcmp(doc.entries.data[i].key, key) == 0 { return &doc.entries.data[i] as *TomlEntry; } i += 1; }
+    0 as *TomlEntry
 }
-
-fn is_newline(c: u8) -> bool {
-    return c == 10 || c == 13
-}
-
-fn is_alpha(c: u8) -> bool {
-    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
-}
-
-fn is_alnum(c: u8) -> bool {
-    return is_alpha(c) || (c >= 48 && c <= 57) || c == 95 || c == 45
-}
-
-// ==================== Parser ====================
-
-pub fn toml_parse(doc: *TomlDoc, content: *u8) -> bool {
-    let pos: i32 = 0
-    let section: *u8 = 0 as *u8
-    let len = strlen(content) as i32
-    
-    while pos < len {
-        // Skip whitespace
-        while pos < len && is_whitespace(content[pos]) {
-            pos = pos + 1
-        }
-        
-        // Skip newlines
-        if pos < len && is_newline(content[pos]) {
-            pos = pos + 1
-            continue
-        }
-        
-        // Skip comments
-        if pos < len && content[pos] == 35 {  // '#'
-            while pos < len && !is_newline(content[pos]) {
-                pos = pos + 1
-            }
-            continue
-        }
-        
-        // Section header [section]
-        if pos < len && content[pos] == 91 {  // '['
-            pos = pos + 1
-            let sec_start = pos
-            while pos < len && content[pos] != 93 {  // ']'
-                pos = pos + 1
-            }
-            let sec_len = pos - sec_start
-            section = malloc(sec_len as u64 + 1) as *u8
-            let i: i32 = 0
-            while i < sec_len {
-                section[i] = content[sec_start + i]
-                i = i + 1
-            }
-            section[sec_len] = 0
-            pos = pos + 1
-            continue
-        }
-        
-        // Key = value
-        if pos < len && is_alpha(content[pos]) {
-            // Parse key
-            let key_start = pos
-            while pos < len && is_alnum(content[pos]) {
-                pos = pos + 1
-            }
-            let key_len = pos - key_start
-            
-            // Skip whitespace and =
-            while pos < len && is_whitespace(content[pos]) {
-                pos = pos + 1
-            }
-            if pos < len && content[pos] == 61 {  // '='
-                pos = pos + 1
-            }
-            while pos < len && is_whitespace(content[pos]) {
-                pos = pos + 1
-            }
-            
-            // Create entry
-            let entry_idx = doc.count
-            let entry = &doc.entries[entry_idx]
-            
-            // Build key (with section prefix if any)
-            if section != (0 as *u8) {
-                let sec_len2 = strlen(section) as i32
-                let full_key: *u8 = malloc(sec_len2 as u64 + key_len as u64 + 2) as *u8
-                let j: i32 = 0
-                while j < sec_len2 {
-                    full_key[j] = section[j]
-                    j = j + 1
-                }
-                full_key[sec_len2] = 46  // '.'
-                j = 0
-                while j < key_len {
-                    full_key[sec_len2 + 1 + j] = content[key_start + j]
-                    j = j + 1
-                }
-                full_key[sec_len2 + 1 + key_len] = 0
-                entry.key = full_key
-            } else {
-                let simple_key: *u8 = malloc(key_len as u64 + 1) as *u8
-                let j: i32 = 0
-                while j < key_len {
-                    simple_key[j] = content[key_start + j]
-                    j = j + 1
-                }
-                simple_key[key_len] = 0
-                entry.key = simple_key
-            }
-            
-            // Parse value
-            if pos < len && content[pos] == 34 {  // '"' string
-                pos = pos + 1
-                let val_start = pos
-                while pos < len && content[pos] != 34 {
-                    pos = pos + 1
-                }
-                let val_len = pos - val_start
-                let val: *u8 = malloc(val_len as u64 + 1) as *u8
-                let k: i32 = 0
-                while k < val_len {
-                    val[k] = content[val_start + k]
-                    k = k + 1
-                }
-                val[val_len] = 0
-                pos = pos + 1
-                entry.kind = TOML_STRING
-                entry.str_val = val
-            } else if pos < len && (content[pos] >= 48 && content[pos] <= 57 || content[pos] == 45) {
-                // Integer
-                let neg = content[pos] == 45
-                if neg {
-                    pos = pos + 1
-                }
-                let num: i64 = 0
-                while pos < len && content[pos] >= 48 && content[pos] <= 57 {
-                    num = num * 10 + (content[pos] - 48) as i64
-                    pos = pos + 1
-                }
-                entry.kind = TOML_INT
-                entry.int_val = if neg { -num } else { num }
-            } else if pos < len && content[pos] == 116 {  // 't' true
-                entry.kind = TOML_BOOL
-                entry.bool_val = true
-                pos = pos + 4
-            } else if pos < len && content[pos] == 102 {  // 'f' false
-                entry.kind = TOML_BOOL
-                entry.bool_val = false
-                pos = pos + 5
-            }
-            
-            doc.count = doc.count + 1
-        }
-        
-        // Skip to end of line
-        while pos < len && !is_newline(content[pos]) {
-            pos = pos + 1
-        }
-    }
-    
-    return true
-}
-
-// ==================== Value Access ====================
-
+pub fn toml_has_key(doc: *TomlDoc, key: *u8) -> bool { toml_get_entry(doc, key) != (0 as *TomlEntry) }
 pub fn toml_get_string(doc: *TomlDoc, key: *u8) -> *u8 {
-    let i: i32 = 0
-    while i < doc.count {
-        if strcmp(doc.entries[i].key, key) == 0 && doc.entries[i].kind == TOML_STRING {
-            return doc.entries[i].str_val
-        }
-        i = i + 1
-    }
-    return 0 as *u8
+    let entry: *TomlEntry = toml_get_entry(doc, key);
+    if entry != (0 as *TomlEntry) && entry.kind == TOML_STRING { return entry.str_val; }
+    0 as *u8
 }
-
-pub fn toml_get_int(doc: *TomlDoc, key: *u8) -> i64 {
-    let i: i32 = 0
-    while i < doc.count {
-        if strcmp(doc.entries[i].key, key) == 0 && doc.entries[i].kind == TOML_INT {
-            return doc.entries[i].int_val
-        }
-        i = i + 1
-    }
-    return 0
+pub fn toml_get_int_checked(doc: *TomlDoc, key: *u8) -> Option<i64> {
+    let entry: *TomlEntry = toml_get_entry(doc, key);
+    if entry != (0 as *TomlEntry) && entry.kind == TOML_INT { return Option::Some(entry.int_val); }
+    Option::None
 }
-
-pub fn toml_get_bool(doc: *TomlDoc, key: *u8, default: bool) -> bool {
-    let i: i32 = 0
-    while i < doc.count {
-        if strcmp(doc.entries[i].key, key) == 0 && doc.entries[i].kind == TOML_BOOL {
-            return doc.entries[i].bool_val
-        }
-        i = i + 1
-    }
-    return default
+pub fn toml_get_int(doc: *TomlDoc, key: *u8) -> i64 { match toml_get_int_checked(doc, key) { Option::Some(value) => value, Option::None => 0, } }
+pub fn toml_get_bool(doc: *TomlDoc, key: *u8, fallback: bool) -> bool {
+    let entry: *TomlEntry = toml_get_entry(doc, key);
+    if entry != (0 as *TomlEntry) && entry.kind == TOML_BOOL { return entry.bool_val; }
+    fallback
 }
-
-pub fn toml_has_key(doc: *TomlDoc, key: *u8) -> bool {
-    let i: i32 = 0
-    while i < doc.count {
-        if strcmp(doc.entries[i].key, key) == 0 {
-            return true
+fn failure(parser: *Parser, code: i32) -> TomlError { TomlError { offset: parser.pos, code: code } }
+fn peek(parser: *Parser) -> u8 { if parser.pos < parser.length { parser.input[parser.pos] } else { 0 } }
+fn spaces(parser: *Parser) { while peek(parser) == 32 || peek(parser) == 9 { parser.pos += 1; } }
+fn key_byte(byte: u8) -> bool { (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 45 || byte == 95 }
+fn line_tail(parser: *Parser) -> bool {
+    spaces(parser);
+    if peek(parser) == 35 { while parser.pos < parser.length && peek(parser) != 10 && peek(parser) != 13 { parser.pos += 1; } }
+    if parser.pos == parser.length { return true; }
+    if peek(parser) == 13 { parser.pos += 1; if peek(parser) != 10 { return false; } }
+    if peek(parser) != 10 { return false; }
+    parser.pos += 1; true
+}
+fn copy(text: *u8, length: u64) -> *u8 {
+    let result: *u8 = malloc(length + 1) as *u8;
+    if result != (0 as *u8) { memcpy(result as *void, text as *void, length); result[length] = 0; }
+    result
+}
+fn utf8_valid(input: *u8, length: u64) -> bool {
+    let mut i: u64 = 0;
+    while i < length {
+        let a: u8 = input[i];
+        if a < 128 { if a == 0 || (a < 32 && a != 9 && a != 10 && a != 13) || a == 127 { return false; } i += 1; }
+        else {
+            let count: u64 = if a >= 194 && a <= 223 { 2 } else if a >= 224 && a <= 239 { 3 } else if a >= 240 && a <= 244 { 4 } else { 0 };
+            if count == 0 || count > length - i { return false; }
+            let b: u8 = input[i + 1];
+            if (a == 224 && b < 160) || (a == 237 && b >= 160) || (a == 240 && b < 144) || (a == 244 && b > 143) { return false; }
+            let mut j: u64 = 1;
+            while j < count { if input[i + j] < 128 || input[i + j] > 191 { return false; } j += 1; }
+            i += count;
         }
-        i = i + 1
     }
-    return false
+    true
+}
+fn hex(byte: u8) -> i32 {
+    if byte >= 48 && byte <= 57 { return (byte - 48) as i32; }
+    if byte >= 65 && byte <= 70 { return (byte - 65) as i32 + 10; }
+    if byte >= 97 && byte <= 102 { return (byte - 97) as i32 + 10; }
+    -1
+}
+fn append_scalar(output: *u8, used: u64, scalar: u32) -> u64 {
+    if scalar < 128 { output[used] = scalar as u8; return used + 1; }
+    if scalar < 2048 { output[used] = (192 | (scalar >> 6)) as u8; output[used + 1] = (128 | (scalar & 63)) as u8; return used + 2; }
+    if scalar < 65536 { output[used] = (224 | (scalar >> 12)) as u8; output[used + 1] = (128 | ((scalar >> 6) & 63)) as u8; output[used + 2] = (128 | (scalar & 63)) as u8; return used + 3; }
+    output[used] = (240 | (scalar >> 18)) as u8; output[used + 1] = (128 | ((scalar >> 12) & 63)) as u8; output[used + 2] = (128 | ((scalar >> 6) & 63)) as u8; output[used + 3] = (128 | (scalar & 63)) as u8; used + 4
+}
+fn string_value(parser: *Parser, entry: *TomlEntry) -> Result<(), TomlError> {
+    let quote: u8 = peek(parser); parser.pos += 1;
+    let output: *u8 = malloc(parser.length - parser.pos + 1) as *u8;
+    if output == (0 as *u8) { return Result::Err(failure(parser, TOML_MEMORY)); }
+    let mut used: u64 = 0; let mut valid: bool = true; let mut closed: bool = false;
+    while parser.pos < parser.length && valid && !closed {
+        let mut byte: u8 = peek(parser); parser.pos += 1;
+        if byte == quote { closed = true; }
+        else if byte == 10 || byte == 13 { valid = false; }
+        else if byte == 92 && quote == 34 {
+            byte = peek(parser);
+            if parser.pos == parser.length { valid = false; }
+            else {
+                parser.pos += 1;
+                if byte == 117 || byte == 85 {
+                    let digits: u64 = if byte == 117 { 4 } else { 8 };
+                    let mut scalar: u32 = 0; let mut count: u64 = 0;
+                    while count < digits && valid {
+                        let digit: i32 = hex(peek(parser));
+                        if digit < 0 { valid = false; } else { scalar = scalar * 16 + digit as u32; parser.pos += 1; }
+                        count += 1;
+                    }
+                    if scalar > 1114111 || (scalar >= 55296 && scalar <= 57343) { valid = false; }
+                    if valid { used = append_scalar(output, used, scalar); }
+                } else {
+                    if byte == 98 { byte = 8; } else if byte == 116 { byte = 9; } else if byte == 110 { byte = 10; }
+                    else if byte == 102 { byte = 12; } else if byte == 114 { byte = 13; }
+                    else if byte != 34 && byte != 92 { valid = false; }
+                    if valid { output[used] = byte; used += 1; }
+                }
+            }
+        } else { output[used] = byte; used += 1; }
+    }
+    if !valid || !closed { free(output as *void); return Result::Err(failure(parser, TOML_SYNTAX)); }
+    output[used] = 0; entry.kind = TOML_STRING; entry.str_val = output; entry.str_len = used;
+    Result::Ok(())
+}
+fn integer_value(parser: *Parser, entry: *TomlEntry) -> Result<(), TomlError> {
+    let negative: bool = peek(parser) == 45;
+    if negative || peek(parser) == 43 { parser.pos += 1; }
+    let first: u8 = peek(parser);
+    if first < 48 || first > 57 { return Result::Err(failure(parser, TOML_SYNTAX)); }
+    let maximum: u64 = if negative { 9223372036854775808 } else { 9223372036854775807 };
+    let mut value: u64 = 0; let mut count: u64 = 0;
+    while peek(parser) >= 48 && peek(parser) <= 57 {
+        let digit: u64 = (peek(parser) - 48) as u64;
+        if value > (maximum - digit) / 10 { return Result::Err(failure(parser, TOML_RANGE)); }
+        value = value * 10 + digit; count += 1; parser.pos += 1;
+        if peek(parser) == 95 { parser.pos += 1; if peek(parser) < 48 || peek(parser) > 57 { return Result::Err(failure(parser, TOML_SYNTAX)); } }
+    }
+    if first == 48 && count != 1 { return Result::Err(failure(parser, TOML_SYNTAX)); }
+    entry.kind = TOML_INT;
+    entry.int_val = if negative { if value == 9223372036854775808 { -9223372036854775807 - 1 } else { -(value as i64) } } else { value as i64 };
+    Result::Ok(())
+}
+fn word(parser: *Parser, text: *u8) -> bool {
+    let length: u64 = strlen(text);
+    if length > parser.length - parser.pos { return false; }
+    let mut i: u64 = 0;
+    while i < length { if parser.input[parser.pos + i] != text[i] { return false; } i += 1; }
+    parser.pos += length; true
+}
+fn read_value(parser: *Parser) -> Result<TomlEntry, TomlError> {
+    let mut entry: TomlEntry = TomlEntry { key: 0 as *u8, kind: 0, str_val: 0 as *u8, str_len: 0, int_val: 0, bool_val: false };
+    let first: u8 = peek(parser);
+    if first == 34 || first == 39 { string_value(parser, &entry as *TomlEntry)?; }
+    else if (first >= 48 && first <= 57) || first == 43 || first == 45 { integer_value(parser, &entry as *TomlEntry)?; }
+    else if word(parser, "true" as *u8) { entry.kind = TOML_BOOL; entry.bool_val = true; }
+    else if word(parser, "false" as *u8) { entry.kind = TOML_BOOL; }
+    else { return Result::Err(failure(parser, TOML_SYNTAX)); }
+    Result::Ok(entry)
+}
+fn table_present(parser: *Parser, name: *u8) -> bool {
+    let mut i: u64 = 0;
+    while i < parser.tables.len { if strcmp(parser.tables.data[i], name) == 0 { return true; } i += 1; }
+    false
+}
+fn read_table(parser: *Parser) -> Result<(), TomlError> {
+    parser.pos += 1; spaces(parser); let start: u64 = parser.pos;
+    while key_byte(peek(parser)) { parser.pos += 1; }
+    let length: u64 = parser.pos - start; spaces(parser);
+    if length == 0 || peek(parser) != 93 { return Result::Err(failure(parser, TOML_SYNTAX)); }
+    parser.pos += 1;
+    if !line_tail(parser) { return Result::Err(failure(parser, TOML_SYNTAX)); }
+    let name: *u8 = copy(parser.input + start, length);
+    if name == (0 as *u8) { return Result::Err(failure(parser, TOML_MEMORY)); }
+    if table_present(parser, name) || toml_has_key(&parser.doc as *TomlDoc, name) { free(name as *void); return Result::Err(failure(parser, TOML_DUPLICATE)); }
+    if !vec_push(&parser.tables as *Vec<*u8>, name) { free(name as *void); return Result::Err(failure(parser, TOML_MEMORY)); }
+    parser.section = name;
+    Result::Ok(())
+}
+fn read_entry(parser: *Parser) -> Result<(), TomlError> {
+    let start: u64 = parser.pos;
+    while key_byte(peek(parser)) { parser.pos += 1; }
+    let length: u64 = parser.pos - start; spaces(parser);
+    if length == 0 || peek(parser) != 61 { return Result::Err(failure(parser, TOML_SYNTAX)); }
+    parser.pos += 1; spaces(parser);
+    let mut entry: TomlEntry = read_value(parser)?;
+    if !line_tail(parser) { entry_free(&entry as *TomlEntry); return Result::Err(failure(parser, TOML_SYNTAX)); }
+    let prefix: u64 = if parser.section == (0 as *u8) { 0 } else { strlen(parser.section) + 1 };
+    entry.key = malloc(prefix + length + 1) as *u8;
+    if entry.key == (0 as *u8) { entry_free(&entry as *TomlEntry); return Result::Err(failure(parser, TOML_MEMORY)); }
+    if prefix > 0 { memcpy(entry.key as *void, parser.section as *void, prefix - 1); entry.key[prefix - 1] = 46; }
+    memcpy((entry.key + prefix) as *void, (parser.input + start) as *void, length); entry.key[prefix + length] = 0;
+    if toml_has_key(&parser.doc as *TomlDoc, entry.key) || table_present(parser, entry.key) { entry_free(&entry as *TomlEntry); return Result::Err(failure(parser, TOML_DUPLICATE)); }
+    if !vec_push(&parser.doc.entries as *Vec<TomlEntry>, entry) { entry_free(&entry as *TomlEntry); return Result::Err(failure(parser, TOML_MEMORY)); }
+    Result::Ok(())
+}
+fn read_document(parser: *Parser) -> Result<(), TomlError> {
+    while parser.pos < parser.length {
+        spaces(parser);
+        let first: u8 = peek(parser);
+        if first == 0 || first == 10 || first == 13 || first == 35 { if !line_tail(parser) { return Result::Err(failure(parser, TOML_SYNTAX)); } }
+        else if first == 91 { read_table(parser)?; }
+        else { read_entry(parser)?; }
+    }
+    Result::Ok(())
+}
+pub fn toml_parse_bytes(doc: *TomlDoc, input: *u8, length: u64) -> Result<(), TomlError> {
+    if input == (0 as *u8) || length > 1048576 || !utf8_valid(input, length) { return Result::Err(TomlError { offset: 0, code: TOML_SYNTAX }); }
+    let tables: Vec<*u8> = vec_new(); let next: TomlDoc = toml_new();
+    let mut parser: Parser = Parser { input: input, length: length, pos: 0, section: 0 as *u8, tables: tables, doc: next };
+    let status: Result<(), TomlError> = read_document(&parser as *Parser);
+    let mut i: u64 = 0;
+    while i < parser.tables.len { free(parser.tables.data[i] as *void); i += 1; }
+    vec_free(&parser.tables as *Vec<*u8>);
+    match status {
+        Result::Ok(_) => { toml_free(doc); *doc = parser.doc; Result::Ok(()) },
+        Result::Err(error) => { toml_free(&parser.doc as *TomlDoc); Result::Err(error) },
+    }
+}
+pub fn toml_parse(doc: *TomlDoc, input: *u8) -> bool {
+    if input == (0 as *u8) { return false; }
+    match toml_parse_bytes(doc, input, strlen(input)) { Result::Ok(_) => true, Result::Err(_) => false, }
 }

@@ -1,0 +1,57 @@
+use alloc::*;
+use graph::*;
+use toml::*;
+use result::Result;
+extern "C" { fn legacy_begin(); fn legacy_fail_after(count: u64); fn legacy_allow(); fn legacy_finish() -> i32; fn legacy_observe(pointer: *void); fn strlen(text: *u8) -> u64; }
+fn require(ok: bool, code: i32) -> Result<(), i32> { if ok { Result::Ok(()) } else { Result::Err(code) } }
+fn run() -> Result<(), i32> {
+    legacy_begin(); legacy_fail_after(0);
+    match alloc_allocate(8, 32) { Result::Err(code) => require(code == ALLOC_MEMORY, 11)?, Result::Ok(_) => { return Result::Err(12); }, }
+    let pointer: *u8 = alloc_allocate(8, 64)?; pointer[0] = 42;
+    legacy_fail_after(0);
+    match alloc_reallocate(pointer, 8, 32, 64) { Result::Err(code) => require(code == ALLOC_MEMORY, 13)?, Result::Ok(_) => { return Result::Err(14); }, }
+    require(pointer[0] == 42 && (pointer as u64) % 64 == 0, 15)?; alloc_deallocate(pointer);
+    legacy_fail_after(0);
+    // Make the hypothetical successful allocation observable to foreign code;
+    // C optimizers can otherwise remove an unused allocation/null test.
+    match arena_new(256) {
+        Result::Err(code) => require(code == ALLOC_MEMORY, 16)?,
+        Result::Ok(value) => { legacy_observe(value.base as *void); let mut owner: ArenaAllocator = value; arena_free(&owner as *ArenaAllocator); return Result::Err(17); },
+    }
+    let mut bytes: [u8; 256] = [0; 256];
+    let mut stack: StackAllocator = stack_from_raw(&bytes[0] as *u8, 256)?;
+    legacy_fail_after(0);
+    match stack_allocate(&stack as *StackAllocator, 17, 32) { Result::Err(code) => require(code == ALLOC_MEMORY, 18)?, Result::Ok(_) => { return Result::Err(19); }, }
+    require(stack_used(&stack as *StackAllocator) == 0, 20)?;
+    let item: *u8 = stack_allocate(&stack as *StackAllocator, 17, 32)?; item[0] = 5;
+    stack_deallocate(&stack as *StackAllocator, item, 17, 32)?; stack_free(&stack as *StackAllocator);
+    require(legacy_finish() == 0, 21)?;
+    legacy_begin();
+    let mut graph: Graph = graph_new(); legacy_fail_after(0);
+    match const_node(&graph as *Graph, 7.0) { Result::Err(code) => require(code == GRAPH_MEMORY, 22)?, Result::Ok(_) => { return Result::Err(23); }, }
+    let first: u64 = const_node(&graph as *Graph, 7.0)?; require(first == 0, 24)?;
+    let mut i: i32 = 0; while i < 3 { const_node(&graph as *Graph, i as f32)?; i += 1; }
+    legacy_fail_after(0);
+    match add_op(&graph as *Graph, 0, 0) { Result::Err(code) => require(code == GRAPH_MEMORY, 25)?, Result::Ok(_) => { return Result::Err(26); }, }
+    require(eval(&graph as *Graph, 0)? == 7.0, 27)?;
+    let added: u64 = add_op(&graph as *Graph, 0, 0)?; require(added == 4 && eval(&graph as *Graph, added)? == 14.0, 28)?;
+    graph_free(&graph as *Graph); require(legacy_finish() == 0, 29)?;
+    let mut fail_after: u64 = 0; let mut completed: bool = false;
+    while fail_after < 24 && !completed {
+        legacy_begin();
+        let mut doc: TomlDoc = toml_new(); require(toml_parse(&doc as *TomlDoc, "keep=9" as *u8), 30)?;
+        let input: *u8 = "title=\"hello\"\n[table]\ntext=\"new\\u4e2d\"\nanswer=42\nflag=true\n" as *u8;
+        legacy_fail_after(fail_after);
+        let success: bool = match toml_parse_bytes(&doc as *TomlDoc, input, strlen(input)) {
+            Result::Ok(_) => true,
+            Result::Err(error) => { require(error.code == TOML_MEMORY, 35)?; false },
+        };
+        if success { completed = true; require(toml_get_int(&doc as *TomlDoc, "table.answer" as *u8) == 42 && !toml_has_key(&doc as *TomlDoc, "keep" as *u8), 31)?; }
+        else { require(toml_get_int(&doc as *TomlDoc, "keep" as *u8) == 9 && !toml_has_key(&doc as *TomlDoc, "title" as *u8), 32)?; }
+        legacy_allow(); toml_free(&doc as *TomlDoc);
+        require(legacy_finish() == 0, 33)?; fail_after += 1;
+    }
+    require(completed && fail_after > 6, 34)?;
+    Result::Ok(())
+}
+fn main() -> i32 { match run() { Result::Ok(_) => 0, Result::Err(error) => error, } }

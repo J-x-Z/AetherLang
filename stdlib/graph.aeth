@@ -1,188 +1,97 @@
-// AetherLang Computation Graph Library (Simplified)
-// Lazy evaluation DAG for building and executing computation graphs
-
-// ==================== Node Types ====================
-
-// Operation types for computation graph
-const OP_CONST: i32 = 0
-const OP_VAR: i32 = 1
-const OP_ADD: i32 = 2
-const OP_SUB: i32 = 3
-const OP_MUL: i32 = 4
-const OP_DIV: i32 = 5
-const OP_NEG: i32 = 6
-const OP_EXP: i32 = 7
-const OP_LOG: i32 = 8
-const OP_RELU: i32 = 9
-const OP_SIGMOID: i32 = 10
-
-extern "C" {
-    fn malloc(size: u64) -> *void;
-    fn realloc(ptr: *void, size: u64) -> *void;
-    fn expf(x: f32) -> f32;
-    fn logf(x: f32) -> f32;
+// Scalar f32 DAGs. Migration: node creation/evaluation return Result; IDs are
+// u64 indices. graph_free is explicit. Do not copy live Graph owners.
+// Inputs must refer to existing nodes, so cycles cannot be constructed through
+// this API. Evaluation is iterative and visits only the requested dependencies.
+// exp/log use the system math library; link with --link-library m on POSIX.
+use vec::{Vec, vec_new, vec_push, vec_free};
+use result::Result;
+extern "C" { fn expf(value: f32) -> f32; fn logf(value: f32) -> f32; }
+const GRAPH_MEMORY: i32 = 1;
+const GRAPH_NODE: i32 = 2;
+const GRAPH_VARIABLE: i32 = 3;
+const GRAPH_UNSET: i32 = 4;
+const GRAPH_DOMAIN: i32 = 5;
+struct Node { op: i32, value: f32, left: u64, right: u64, ready: bool, needed: bool }
+pub struct Graph { nodes: Vec<Node> }
+pub fn graph_new() -> Graph { let nodes: Vec<Node> = vec_new(); Graph { nodes: nodes } }
+pub fn graph_free(graph: *Graph) { vec_free(&graph.nodes as *Vec<Node>); }
+fn record(graph: *Graph, op: i32, value: f32, left: u64, right: u64) -> Result<u64, i32> {
+    let id: u64 = graph.nodes.len;
+    let node: Node = Node { op: op, value: value, left: left, right: right, ready: op == 0, needed: false };
+    if !vec_push(&graph.nodes as *Vec<Node>, node) { return Result::Err(GRAPH_MEMORY); }
+    Result::Ok(id)
 }
-
-// Node data stored in parallel arrays for simpler access
-pub struct Graph {
-    ops: *i32,           // Operation type per node
-    values: *f32,        // Value per node
-    input1s: *i32,       // Input 1 per node
-    input2s: *i32,       // Input 2 per node
-    evaluated: *bool,    // Evaluated flag per node
-    count: i32,
-    capacity: i32,
+fn finite(value: f32) -> bool { value - value == 0.0 }
+pub fn const_node(graph: *Graph, value: f32) -> Result<u64, i32> {
+    if !finite(value) { return Result::Err(GRAPH_DOMAIN); }
+    record(graph, 0, value, 0, 0)
 }
-
-// ==================== Graph Creation ====================
-
-pub fn graph_new() -> Graph {
-    let cap = 64
-    let ops: *i32 = malloc(cap * 4) as *i32
-    let values: *f32 = malloc(cap * 4) as *f32
-    let input1s: *i32 = malloc(cap * 4) as *i32
-    let input2s: *i32 = malloc(cap * 4) as *i32
-    let evaluated: *bool = malloc(cap) as *bool
-    return Graph {
-        ops: ops,
-        values: values,
-        input1s: input1s,
-        input2s: input2s,
-        evaluated: evaluated,
-        count: 0,
-        capacity: cap,
-    }
+pub fn var_node(graph: *Graph) -> Result<u64, i32> { record(graph, 1, 0.0, 0, 0) }
+pub fn graph_reset(graph: *Graph) {
+    let mut index: u64 = 0;
+    while index < graph.nodes.len { if graph.nodes.data[index].op >= 2 { graph.nodes.data[index].ready = false; } index += 1; }
 }
-
-fn add_node(g: *Graph, op: i32, value: f32, in1: i32, in2: i32) -> i32 {
-    let id = g.count
-    g.ops[id] = op
-    g.values[id] = value
-    g.input1s[id] = in1
-    g.input2s[id] = in2
-    g.evaluated[id] = false
-    g.count = g.count + 1
-    return id
+pub fn set_var(graph: *Graph, id: u64, value: f32) -> Result<(), i32> {
+    if id >= graph.nodes.len { return Result::Err(GRAPH_NODE); }
+    if graph.nodes.data[id].op != 1 { return Result::Err(GRAPH_VARIABLE); }
+    if !finite(value) { return Result::Err(GRAPH_DOMAIN); }
+    graph.nodes.data[id].value = value; graph.nodes.data[id].ready = true;
+    graph_reset(graph);
+    Result::Ok(())
 }
-
-// ==================== Node Creation ====================
-
-pub fn const_node(g: *Graph, value: f32) -> i32 {
-    let id = add_node(g, OP_CONST, value, -1, -1)
-    g.evaluated[id] = true
-    return id
+fn binary(graph: *Graph, left: u64, right: u64, op: i32) -> Result<u64, i32> {
+    if left >= graph.nodes.len || right >= graph.nodes.len { return Result::Err(GRAPH_NODE); }
+    record(graph, op, 0.0, left, right)
 }
-
-pub fn var_node(g: *Graph) -> i32 {
-    return add_node(g, OP_VAR, 0.0, -1, -1)
+fn unary(graph: *Graph, input: u64, op: i32) -> Result<u64, i32> {
+    if input >= graph.nodes.len { return Result::Err(GRAPH_NODE); }
+    record(graph, op, 0.0, input, input)
 }
-
-pub fn set_var(g: *Graph, id: i32, value: f32) {
-    g.values[id] = value
-    g.evaluated[id] = true
-}
-
-// ==================== Binary Operations ====================
-
-pub fn add_op(g: *Graph, a: i32, b: i32) -> i32 {
-    return add_node(g, OP_ADD, 0.0, a, b)
-}
-
-pub fn sub_op(g: *Graph, a: i32, b: i32) -> i32 {
-    return add_node(g, OP_SUB, 0.0, a, b)
-}
-
-pub fn mul_op(g: *Graph, a: i32, b: i32) -> i32 {
-    return add_node(g, OP_MUL, 0.0, a, b)
-}
-
-pub fn div_op(g: *Graph, a: i32, b: i32) -> i32 {
-    return add_node(g, OP_DIV, 0.0, a, b)
-}
-
-// ==================== Unary Operations ====================
-
-pub fn neg_op(g: *Graph, a: i32) -> i32 {
-    return add_node(g, OP_NEG, 0.0, a, -1)
-}
-
-pub fn exp_op(g: *Graph, a: i32) -> i32 {
-    return add_node(g, OP_EXP, 0.0, a, -1)
-}
-
-pub fn relu_op(g: *Graph, a: i32) -> i32 {
-    return add_node(g, OP_RELU, 0.0, a, -1)
-}
-
-pub fn sigmoid_op(g: *Graph, a: i32) -> i32 {
-    return add_node(g, OP_SIGMOID, 0.0, a, -1)
-}
-
-// ==================== Evaluation ====================
-
-fn eval_node(g: *Graph, id: i32) -> f32 {
-    // Already evaluated?
-    if g.evaluated[id] {
-        return g.values[id]
-    }
-    
-    // Get input values
-    let v1: f32 = 0.0
-    let v2: f32 = 0.0
-    let in1 = g.input1s[id]
-    let in2 = g.input2s[id]
-    if in1 >= 0 {
-        v1 = eval_node(g, in1)
-    }
-    if in2 >= 0 {
-        v2 = eval_node(g, in2)
-    }
-    
-    // Compute based on operation
-    let op = g.ops[id]
-    let result: f32 = 0.0
-    if op == OP_ADD {
-        result = v1 + v2
-    } else if op == OP_SUB {
-        result = v1 - v2
-    } else if op == OP_MUL {
-        result = v1 * v2
-    } else if op == OP_DIV {
-        result = v1 / v2
-    } else if op == OP_NEG {
-        result = -v1
-    } else if op == OP_EXP {
-        result = expf(v1)
-    } else if op == OP_LOG {
-        result = logf(v1)
-    } else if op == OP_RELU {
-        if v1 > 0.0 {
-            result = v1
-        } else {
-            result = 0.0
+pub fn add_op(graph: *Graph, a: u64, b: u64) -> Result<u64, i32> { binary(graph, a, b, 2) }
+pub fn sub_op(graph: *Graph, a: u64, b: u64) -> Result<u64, i32> { binary(graph, a, b, 3) }
+pub fn mul_op(graph: *Graph, a: u64, b: u64) -> Result<u64, i32> { binary(graph, a, b, 4) }
+pub fn div_op(graph: *Graph, a: u64, b: u64) -> Result<u64, i32> { binary(graph, a, b, 5) }
+pub fn neg_op(graph: *Graph, a: u64) -> Result<u64, i32> { unary(graph, a, 6) }
+pub fn exp_op(graph: *Graph, a: u64) -> Result<u64, i32> { unary(graph, a, 7) }
+pub fn log_op(graph: *Graph, a: u64) -> Result<u64, i32> { unary(graph, a, 8) }
+pub fn relu_op(graph: *Graph, a: u64) -> Result<u64, i32> { unary(graph, a, 9) }
+pub fn sigmoid_op(graph: *Graph, a: u64) -> Result<u64, i32> { unary(graph, a, 10) }
+pub fn eval(graph: *Graph, output: u64) -> Result<f32, i32> {
+    if output >= graph.nodes.len { return Result::Err(GRAPH_NODE); }
+    let mut index: u64 = 0;
+    while index <= output { graph.nodes.data[index].needed = false; index += 1; }
+    graph.nodes.data[output].needed = true;
+    index = output + 1;
+    while index > 0 {
+        index -= 1;
+        let node: Node = graph.nodes.data[index];
+        if node.needed && !node.ready && node.op >= 2 {
+            graph.nodes.data[node.left].needed = true;
+            if node.op <= 5 { graph.nodes.data[node.right].needed = true; }
         }
-    } else if op == OP_SIGMOID {
-        result = 1.0 / (1.0 + expf(-v1))
     }
-    
-    // Cache result
-    g.values[id] = result
-    g.evaluated[id] = true
-    
-    return result
-}
-
-pub fn eval(g: *Graph, output_id: i32) -> f32 {
-    return eval_node(g, output_id)
-}
-
-pub fn graph_reset(g: *Graph) {
-    let i: i32 = 0
-    while i < g.count {
-        let op = g.ops[i]
-        if op != OP_CONST && op != OP_VAR {
-            g.evaluated[i] = false
+    index = 0;
+    while index <= output {
+        let node: Node = graph.nodes.data[index];
+        if node.needed && !node.ready {
+            if node.op == 1 { return Result::Err(GRAPH_UNSET); }
+            let left: f32 = graph.nodes.data[node.left].value;
+            let right: f32 = graph.nodes.data[node.right].value;
+            let mut value: f32 = 0.0;
+            if node.op == 2 { value = left + right; }
+            else if node.op == 3 { value = left - right; }
+            else if node.op == 4 { value = left * right; }
+            else if node.op == 5 { if right == 0.0 { return Result::Err(GRAPH_DOMAIN); } value = left / right; }
+            else if node.op == 6 { value = -left; }
+            else if node.op == 7 { value = expf(left); }
+            else if node.op == 8 { if left <= 0.0 { return Result::Err(GRAPH_DOMAIN); } value = logf(left); }
+            else if node.op == 9 { value = if left > 0.0 { left } else { 0.0 }; }
+            else if node.op == 10 { if left >= 0.0 { value = 1.0 / (1.0 + expf(-left)); } else { let e: f32 = expf(left); value = e / (1.0 + e); } }
+            else { return Result::Err(GRAPH_NODE); }
+            if !finite(value) { return Result::Err(GRAPH_DOMAIN); }
+            graph.nodes.data[index].value = value; graph.nodes.data[index].ready = true;
         }
-        i = i + 1
+        index += 1;
     }
+    Result::Ok(graph.nodes.data[output].value)
 }

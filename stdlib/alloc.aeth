@@ -1,249 +1,129 @@
-//! Allocator trait and implementations for AetherLang
-//!
-//! AetherLang uses explicit allocators to make memory allocation visible.
-//! This reduces hidden allocations and makes code more predictable for AI analysis.
+// Explicit allocation and ownership. Migration: arena_*/stack_* functions
+// replace the old Allocator/Drop impls; there is no implicit destruction.
+// Do not copy live owners. arena_from_raw/stack_from_raw borrow their storage;
+// freeing these handles never frees the borrowed bytes. Individual allocations
+// are invalidated by reset/free. Checked allocation sizes must be nonzero.
+use result::Result;
+use vec::{Vec, vec_new, vec_push, vec_free};
+extern "C" {
+    fn malloc(size: u64) -> *void; fn free(pointer: *void);
+    fn memcpy(destination: *void, source: *void, size: u64) -> *void;
+}
+const ALLOC_ARGUMENT: i32 = 1;
+const ALLOC_MEMORY: i32 = 2;
+const ALLOC_CAPACITY: i32 = 3;
+const ALLOC_ORDER: i32 = 4;
+const MAX_BYTES: u64 = 9223372036854775807;
+fn valid_alignment(alignment: u64) -> bool {
+    alignment != 0 && alignment <= MAX_BYTES && (alignment & (alignment - 1)) == 0
+}
+// Raw compatibility functions retain libc's malloc/free contract.
+pub fn global_alloc(size: u64) -> *u8 { malloc(size) as *u8 }
+pub fn global_dealloc(pointer: *u8) { free(pointer as *void); }
 
-use core::{malloc, free, realloc}
-
-// =============================================================================
-// Allocator Trait
-// =============================================================================
-
-/// The core allocator trait. All memory-allocating containers accept an allocator.
-pub trait Allocator {
-    /// Allocate memory of given size and alignment
-    /// Returns null pointer on failure
-    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[read, write, alloc];
-
-    /// Deallocate previously allocated memory
-    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[read, write, alloc];
-
-    /// Reallocate memory to a new size
-    /// Returns null pointer on failure (original memory unchanged)
-    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[read, write, alloc];
+// Aligned allocations store the original malloc pointer in a preceding header.
+// Only alloc_deallocate can release these pointers; do not pass them to free.
+pub fn alloc_allocate(size: u64, alignment: u64) -> Result<*u8, i32> {
+    if size == 0 || !valid_alignment(alignment) { return Result::Err(ALLOC_ARGUMENT); }
+    let align: u64 = if alignment < align_of(*void) as u64 { align_of(*void) as u64 } else { alignment };
+    let header: u64 = size_of(*void) as u64;
+    if align > MAX_BYTES - header || size > MAX_BYTES - header - (align - 1) { return Result::Err(ALLOC_CAPACITY); }
+    let allocation: *void = malloc(size + header + align - 1);
+    if allocation == (0 as *void) { return Result::Err(ALLOC_MEMORY); }
+    let start: u64 = (allocation as u64) + header;
+    let address: u64 = start + (align - start % align) % align;
+    *((address - header) as **void) = allocation;
+    Result::Ok(address as *u8)
+}
+pub fn alloc_deallocate(pointer: *u8) {
+    if pointer != (0 as *u8) { free(*(((pointer as u64) - size_of(*void) as u64) as **void)); }
+}
+// Failure preserves the old allocation. old_size must be its actual size.
+pub fn alloc_reallocate(pointer: *u8, old_size: u64, new_size: u64, alignment: u64) -> Result<*u8, i32> {
+    if pointer == (0 as *u8) || old_size == 0 { return Result::Err(ALLOC_ARGUMENT); }
+    let next: *u8 = alloc_allocate(new_size, alignment)?;
+    let count: u64 = if old_size < new_size { old_size } else { new_size };
+    memcpy(next as *void, pointer as *void, count);
+    alloc_deallocate(pointer);
+    Result::Ok(next)
 }
 
-// =============================================================================
-// Global Allocator - Uses system malloc/free
-// =============================================================================
-
-/// The global heap allocator using libc malloc/free
-/// This is a zero-sized type - all instances are equivalent
-pub struct GlobalAllocator { }
-
-impl Allocator for GlobalAllocator {
-    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[alloc] {
-        // Note: malloc doesn't guarantee alignment beyond 16 bytes
-        // For larger alignments, use aligned_alloc (TODO)
-        malloc(size)
-    }
-
-    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[alloc] {
-        free(ptr);
-    }
-
-    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[alloc] {
-        realloc(ptr, new_size)
-    }
+pub struct ArenaAllocator { base: *u8, pos: u64, capacity: u64, owned: bool }
+pub fn arena_new(capacity: u64) -> Result<ArenaAllocator, i32> {
+    if capacity == 0 || capacity > MAX_BYTES { return Result::Err(ALLOC_ARGUMENT); }
+    let base: *u8 = malloc(capacity) as *u8;
+    if base == (0 as *u8) { return Result::Err(ALLOC_MEMORY); }
+    Result::Ok(ArenaAllocator { base: base, pos: 0, capacity: capacity, owned: true })
+}
+pub fn arena_from_raw(base: *u8, capacity: u64) -> Result<ArenaAllocator, i32> {
+    if base == (0 as *u8) || capacity == 0 || capacity > MAX_BYTES || (base as u64) > 18446744073709551615 - capacity { return Result::Err(ALLOC_ARGUMENT); }
+    Result::Ok(ArenaAllocator { base: base, pos: 0, capacity: capacity, owned: false })
+}
+pub fn arena_free(arena: *ArenaAllocator) {
+    if arena.owned { free(arena.base as *void); }
+    arena.base = 0 as *u8; arena.pos = 0; arena.capacity = 0; arena.owned = false;
+}
+pub fn arena_reset(arena: *ArenaAllocator) { arena.pos = 0; }
+pub fn arena_used(arena: *ArenaAllocator) -> u64 { arena.pos }
+pub fn arena_remaining(arena: *ArenaAllocator) -> u64 { arena.capacity - arena.pos }
+pub fn arena_allocate(arena: *ArenaAllocator, size: u64, alignment: u64) -> Result<*u8, i32> {
+    if size == 0 || !valid_alignment(alignment) || arena.base == (0 as *u8) { return Result::Err(ALLOC_ARGUMENT); }
+    let address: u64 = (arena.base as u64) + arena.pos;
+    let padding: u64 = (alignment - address % alignment) % alignment;
+    let remaining: u64 = arena.capacity - arena.pos;
+    if padding > remaining || size > remaining - padding { return Result::Err(ALLOC_CAPACITY); }
+    let result: *u8 = arena.base + arena.pos + padding;
+    arena.pos = arena.pos + padding + size;
+    Result::Ok(result)
+}
+pub fn arena_reallocate(arena: *ArenaAllocator, pointer: *u8, old_size: u64, new_size: u64, alignment: u64) -> Result<*u8, i32> {
+    let address: u64 = pointer as u64; let base: u64 = arena.base as u64;
+    if address < base || address - base > arena.pos || old_size > arena.pos - (address - base) { return Result::Err(ALLOC_ARGUMENT); }
+    let next: *u8 = arena_allocate(arena, new_size, alignment)?;
+    let count: u64 = if old_size < new_size { old_size } else { new_size };
+    memcpy(next as *void, pointer as *void, count);
+    Result::Ok(next)
 }
 
-impl GlobalAllocator {
-    /// Create a new global allocator instance
-    pub fn new() -> GlobalAllocator {
-        GlobalAllocator { }
-    }
+struct StackAllocation { pointer: *u8, size: u64, previous: u64, alignment: u64 }
+pub struct StackAllocator { arena: ArenaAllocator, allocations: Vec<StackAllocation> }
+pub fn stack_new(capacity: u64) -> Result<StackAllocator, i32> {
+    let arena: ArenaAllocator = arena_new(capacity)?;
+    let allocations: Vec<StackAllocation> = vec_new();
+    Result::Ok(StackAllocator { arena: arena, allocations: allocations })
 }
-
-/// The default global allocator instance
-/// Use this when you don't need a custom allocator
-pub static mut GLOBAL: GlobalAllocator = GlobalAllocator { }
-
-// =============================================================================
-// Arena Allocator - Bump allocator for fast, bulk deallocation
-// =============================================================================
-
-/// An arena (bump) allocator that allocates from a contiguous block
-/// All memory is freed at once when the arena is dropped
-pub struct ArenaAllocator {
-    /// Base pointer of the arena
-    base: *u8,
-    /// Current allocation position
-    pos: u64,
-    /// Total capacity
-    capacity: u64,
+pub fn stack_from_raw(base: *u8, capacity: u64) -> Result<StackAllocator, i32> {
+    let arena: ArenaAllocator = arena_from_raw(base, capacity)?;
+    let allocations: Vec<StackAllocation> = vec_new();
+    Result::Ok(StackAllocator { arena: arena, allocations: allocations })
 }
-
-impl ArenaAllocator {
-    /// Create a new arena with given capacity (allocated from global allocator)
-    pub fn new(capacity: u64) -> ArenaAllocator effect[alloc] {
-        let base: *u8 = malloc(capacity);
-        ArenaAllocator {
-            base: base,
-            pos: 0,
-            capacity: capacity,
-        }
-    }
-
-    /// Create an arena from existing memory (does not own the memory)
-    pub fn from_raw(ptr: *u8, capacity: u64) -> ArenaAllocator {
-        ArenaAllocator {
-            base: ptr,
-            pos: 0,
-            capacity: capacity,
-        }
-    }
-
-    /// Reset the arena, making all memory available again
-    /// Does NOT call destructors - use with caution
-    pub fn reset(self: &mut ArenaAllocator) {
-        self.pos = 0;
-    }
-
-    /// Get remaining capacity
-    pub fn remaining(self: &ArenaAllocator) -> u64 {
-        self.capacity - self.pos
-    }
-
-    /// Get total bytes allocated
-    pub fn used(self: &ArenaAllocator) -> u64 {
-        self.pos
-    }
+pub fn stack_free(stack: *StackAllocator) { arena_free(&stack.arena as *ArenaAllocator); vec_free(&stack.allocations as *Vec<StackAllocation>); }
+pub fn stack_reset(stack: *StackAllocator) { arena_reset(&stack.arena as *ArenaAllocator); stack.allocations.len = 0; }
+pub fn stack_used(stack: *StackAllocator) -> u64 { stack.arena.pos }
+pub fn stack_allocate(stack: *StackAllocator, size: u64, alignment: u64) -> Result<*u8, i32> {
+    let previous: u64 = stack.arena.pos;
+    let pointer: *u8 = arena_allocate(&stack.arena as *ArenaAllocator, size, alignment)?;
+    let allocation: StackAllocation = StackAllocation { pointer: pointer, size: size, previous: previous, alignment: alignment };
+    if !vec_push(&stack.allocations as *Vec<StackAllocation>, allocation) { stack.arena.pos = previous; return Result::Err(ALLOC_MEMORY); }
+    Result::Ok(pointer)
 }
-
-impl Allocator for ArenaAllocator {
-    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[read, write, alloc] {
-        // Align the current position
-        let aligned_pos: u64 = (self.pos + align - 1) & !(align - 1);
-
-        // Check if we have enough space
-        if aligned_pos + size > self.capacity {
-            return 0 as *u8;  // Out of memory
-        }
-
-        let result: *u8 = self.base + aligned_pos;
-        self.pos = aligned_pos + size;
-        result
-    }
-
-    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[alloc] {
-        // Arena doesn't deallocate individual allocations
-        // Memory is reclaimed when arena is reset or dropped
-    }
-
-    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[read, write, alloc] {
-        // Arena can't reallocate - allocate new and copy
-        let new_ptr: *u8 = self.allocate(new_size, align);
-        if new_ptr as u64 != 0 {
-            // Copy old data (simplified - should use memcpy)
-            let copy_size: u64 = if old_size < new_size { old_size } else { new_size };
-            let mut i: u64 = 0;
-            while i < copy_size {
-                *(new_ptr + i) = *(ptr + i);
-                i = i + 1;
-            }
-        }
-        new_ptr
-    }
+pub fn stack_deallocate(stack: *StackAllocator, pointer: *u8, size: u64, alignment: u64) -> Result<(), i32> {
+    if stack.allocations.len == 0 { return Result::Err(ALLOC_ORDER); }
+    let last: StackAllocation = stack.allocations.data[stack.allocations.len - 1];
+    if pointer != last.pointer || size != last.size || alignment != last.alignment { return Result::Err(ALLOC_ORDER); }
+    stack.arena.pos = last.previous; stack.allocations.len -= 1;
+    Result::Ok(())
 }
-
-impl Drop for ArenaAllocator {
-    fn drop(self: &mut ArenaAllocator) effect[read, alloc] {
-        if self.base as u64 != 0 {
-            free(self.base);
-        }
-    }
-}
-
-// =============================================================================
-// Stack Allocator - LIFO allocation pattern
-// =============================================================================
-
-/// A stack allocator that requires deallocations in reverse order
-pub struct StackAllocator {
-    base: *u8,
-    pos: u64,
-    capacity: u64,
-    /// Marker for checking deallocation order
-    last_alloc_size: u64,
-}
-
-impl StackAllocator {
-    pub fn new(capacity: u64) -> StackAllocator effect[alloc] {
-        let base: *u8 = malloc(capacity);
-        StackAllocator {
-            base: base,
-            pos: 0,
-            capacity: capacity,
-            last_alloc_size: 0,
-        }
-    }
-}
-
-impl Allocator for StackAllocator {
-    fn allocate(self: &mut Self, size: u64, align: u64) -> *u8 effect[read, write, alloc] {
-        let aligned_pos: u64 = (self.pos + align - 1) & !(align - 1);
-
-        if aligned_pos + size > self.capacity {
-            return 0 as *u8;
-        }
-
-        let result: *u8 = self.base + aligned_pos;
-        self.pos = aligned_pos + size;
-        self.last_alloc_size = size;
-        result
-    }
-
-    fn deallocate(self: &mut Self, ptr: *u8, size: u64, align: u64) effect[read, write, alloc] {
-        // Only deallocate if this was the last allocation
-        // (simplified check - production code should verify ptr)
-        if size == self.last_alloc_size {
-            self.pos = self.pos - size;
-        }
-        // Otherwise: memory leak (caller error)
-    }
-
-    fn reallocate(self: &mut Self, ptr: *u8, old_size: u64, new_size: u64, align: u64) -> *u8 effect[read, write, alloc] {
-        // Can only grow the last allocation in place
-        if old_size == self.last_alloc_size {
-            let additional: u64 = new_size - old_size;
-            if self.pos + additional <= self.capacity {
-                self.pos = self.pos + additional;
-                self.last_alloc_size = new_size;
-                return ptr;
-            }
-        }
-        // Otherwise allocate new
-        let new_ptr: *u8 = self.allocate(new_size, align);
-        if new_ptr as u64 != 0 {
-            let copy_size: u64 = if old_size < new_size { old_size } else { new_size };
-            let mut i: u64 = 0;
-            while i < copy_size {
-                *(new_ptr + i) = *(ptr + i);
-                i = i + 1;
-            }
-        }
-        new_ptr
-    }
-}
-
-impl Drop for StackAllocator {
-    fn drop(self: &mut StackAllocator) effect[read, alloc] {
-        if self.base as u64 != 0 {
-            free(self.base);
-        }
-    }
-}
-
-// =============================================================================
-// Utility Functions
-// =============================================================================
-
-/// Allocate using the global allocator
-pub fn global_alloc(size: u64) -> *u8 effect[alloc] {
-    malloc(size)
-}
-
-/// Deallocate using the global allocator
-pub fn global_dealloc(ptr: *u8) effect[alloc] {
-    free(ptr);
+// Reallocation is allowed only for the exact top allocation, with unchanged
+// alignment. Both growth and shrink update the saved extent without underflow.
+pub fn stack_reallocate(stack: *StackAllocator, pointer: *u8, old_size: u64, new_size: u64, alignment: u64) -> Result<*u8, i32> {
+    if new_size == 0 { return Result::Err(ALLOC_ARGUMENT); }
+    if stack.allocations.len == 0 { return Result::Err(ALLOC_ORDER); }
+    let index: u64 = stack.allocations.len - 1;
+    let last: StackAllocation = stack.allocations.data[index];
+    if pointer != last.pointer || old_size != last.size || alignment != last.alignment { return Result::Err(ALLOC_ORDER); }
+    let offset: u64 = (pointer as u64) - (stack.arena.base as u64);
+    if new_size > stack.arena.capacity - offset { return Result::Err(ALLOC_CAPACITY); }
+    stack.arena.pos = offset + new_size; stack.allocations.data[index].size = new_size;
+    Result::Ok(pointer)
 }

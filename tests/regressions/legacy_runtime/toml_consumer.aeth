@@ -1,0 +1,37 @@
+use toml::*;
+use option::Option;
+use result::Result;
+extern "C" { fn strcmp(a: *u8, b: *u8) -> i32; fn snprintf(output: *u8, capacity: u64, format: *u8, ...) -> i32; }
+fn require(ok: bool, code: i32) -> Result<(), i32> { if ok { Result::Ok(()) } else { Result::Err(code) } }
+fn run(doc: *TomlDoc) -> Result<(), i32> {
+    let valid: *u8 = "zero = 0\nmin = -9223372036854775808\nmax = +9223372036854775807\nlarge = 1_234\n[package] # comment\r\nname = \"语言 \\u4e2d\\U0001F980\"\nenabled = true\nraw = 'literal \\n'\nbinary = \"a\\u0000z\"\n" as *u8;
+    require(toml_parse(doc, valid), 11)?;
+    require(toml_get_int(doc, "min" as *u8) == -9223372036854775807 - 1 && toml_get_int(doc, "max" as *u8) == 9223372036854775807, 12)?;
+    require(toml_get_int(doc, "large" as *u8) == 1234 && toml_get_bool(doc, "package.enabled" as *u8, false), 13)?;
+    require(strcmp(toml_get_string(doc, "package.name" as *u8), "语言 中🦀" as *u8) == 0, 14)?;
+    require(strcmp(toml_get_string(doc, "package.raw" as *u8), "literal \\n" as *u8) == 0, 15)?;
+    let binary: *TomlEntry = toml_get_entry(doc, "package.binary" as *u8);
+    require(binary != (0 as *TomlEntry) && binary.str_len == 3 && binary.str_val[0] == 97 && binary.str_val[1] == 0 && binary.str_val[2] == 122, 16)?;
+    match toml_get_int_checked(doc, "zero" as *u8) { Option::Some(value) => require(value == 0, 17)?, Option::None => { return Result::Err(18); }, }
+    match toml_get_int_checked(doc, "missing" as *u8) { Option::None => {}, Option::Some(_) => { return Result::Err(19); }, }
+    let invalid: [*u8; 22] = ["a 1", "a=truth", "a=falsejunk", "a=1 junk", "a=1\na=2", "a=1\n[a]", "[a]\n[a]", "[a", "a='unterminated", "a=\"bad\\q\"", "a=\"\\uD800\"", "a=\"\\U00110000\"", "a=9223372036854775808", "a=-9223372036854775809", "a=00", "a=1_", "a=+", "a=[1]", "a=1.0", "a=1\r", "a=\"first\nsecond\"", "a.b=1"];
+    let mut i: u64 = 0;
+    while i < 22 { require(!toml_parse(doc, invalid[i]), 30 + i as i32)?; require(toml_get_int(doc, "large" as *u8) == 1234, 60)?; i += 1; }
+    let bad_utf8: [u8; 4] = [97, 61, 255, 10];
+    match toml_parse_bytes(doc, &bad_utf8[0] as *u8, 4) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(61); }, }
+    let nul: [u8; 5] = [97, 61, 49, 0, 10];
+    match toml_parse_bytes(doc, &nul[0] as *u8, 5) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(62); }, }
+    let mut buffer: [u8; 8192] = [0; 8192]; let mut used: u64 = 0; i = 0;
+    while i < 300 {
+        let written: i32 = snprintf((&buffer[0] as *u8) + used, 8192 - used, "key%llu=%llu\n" as *u8, i, i);
+        require(written > 0 && (written as u64) < 8192 - used, 63)?; used += written as u64; i += 1;
+    }
+    require(toml_parse(doc, &buffer[0] as *u8), 64)?;
+    require(doc.entries.len == 300 && toml_get_int(doc, "key299" as *u8) == 299 && !toml_has_key(doc, "large" as *u8), 65)?;
+    Result::Ok(())
+}
+fn main() -> i32 {
+    let mut doc: TomlDoc = toml_new(); let status: Result<(), i32> = run(&doc as *TomlDoc);
+    toml_free(&doc as *TomlDoc); toml_free(&doc as *TomlDoc);
+    match status { Result::Ok(_) => 0, Result::Err(error) => error, }
+}

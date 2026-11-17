@@ -1,0 +1,45 @@
+use alloc::*;
+use result::Result;
+fn require(ok: bool, code: i32) -> Result<(), i32> { if ok { Result::Ok(()) } else { Result::Err(code) } }
+fn run() -> Result<(), i32> {
+    let first: *u8 = alloc_allocate(33, 64)?;
+    require((first as u64) % 64 == 0, 11)?;
+    let mut i: u64 = 0;
+    while i < 33 { first[i] = (i + 7) as u8; i += 1; }
+    let next: *u8 = alloc_reallocate(first, 33, 80, 128)?;
+    require((next as u64) % 128 == 0, 12)?;
+    i = 0; while i < 33 { require(next[i] == (i + 7) as u8, 13)?; i += 1; }
+    alloc_deallocate(next);
+    match alloc_allocate(8, 3) { Result::Err(error) => require(error == ALLOC_ARGUMENT, 14)?, Result::Ok(_) => { return Result::Err(15); }, }
+    match alloc_allocate(0, 8) { Result::Err(error) => require(error == ALLOC_ARGUMENT, 16)?, Result::Ok(_) => { return Result::Err(17); }, }
+    match alloc_allocate(9223372036854775807, 64) { Result::Err(error) => require(error == ALLOC_CAPACITY, 18)?, Result::Ok(_) => { return Result::Err(19); }, }
+    let mut bytes: [u8; 1025] = [0; 1025];
+    let mut arena: ArenaAllocator = arena_from_raw(&bytes[1] as *u8, 1024)?;
+    let a: *u8 = arena_allocate(&arena as *ArenaAllocator, 17, 64)?;
+    require((a as u64) % 64 == 0, 20)?; a[0] = 42; a[16] = 99;
+    let b: *u8 = arena_reallocate(&arena as *ArenaAllocator, a, 17, 64, 128)?;
+    require((b as u64) % 128 == 0 && b[0] == 42 && b[16] == 99, 21)?;
+    let used: u64 = arena_used(&arena as *ArenaAllocator);
+    match arena_allocate(&arena as *ArenaAllocator, 1024, 1) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(22); }, }
+    require(arena_used(&arena as *ArenaAllocator) == used && a[0] == 42, 23)?;
+    arena_reset(&arena as *ArenaAllocator); require(arena_remaining(&arena as *ArenaAllocator) == 1024, 24)?;
+    arena_free(&arena as *ArenaAllocator); arena_free(&arena as *ArenaAllocator); bytes[1] = 31;
+    let mut owned: ArenaAllocator = arena_new(128)?; arena_allocate(&owned as *ArenaAllocator, 16, 16)?; arena_free(&owned as *ArenaAllocator);
+    let mut stack: StackAllocator = stack_from_raw(&bytes[1] as *u8, 1024)?;
+    let bottom: *u8 = stack_allocate(&stack as *StackAllocator, 3, 1)?;
+    let top: *u8 = stack_allocate(&stack as *StackAllocator, 9, 64)?;
+    let top_used: u64 = stack_used(&stack as *StackAllocator); top[0] = 88;
+    match stack_deallocate(&stack as *StackAllocator, bottom, 9, 64) { Result::Err(code) => require(code == ALLOC_ORDER, 25)?, Result::Ok(_) => { return Result::Err(26); }, }
+    require(stack_used(&stack as *StackAllocator) == top_used, 27)?;
+    let smaller: *u8 = stack_reallocate(&stack as *StackAllocator, top, 9, 4, 64)?;
+    require(smaller == top && smaller[0] == 88 && stack_used(&stack as *StackAllocator) == top_used - 5, 28)?;
+    stack_deallocate(&stack as *StackAllocator, top, 4, 64)?;
+    require(stack_used(&stack as *StackAllocator) == 3, 29)?;
+    stack_deallocate(&stack as *StackAllocator, bottom, 3, 1)?;
+    require(stack_used(&stack as *StackAllocator) == 0, 30)?;
+    stack_allocate(&stack as *StackAllocator, 7, 2)?; stack_reset(&stack as *StackAllocator);
+    stack_free(&stack as *StackAllocator); stack_free(&stack as *StackAllocator); bytes[1] = 77;
+    let mut heap: StackAllocator = stack_new(128)?; stack_allocate(&heap as *StackAllocator, 20, 8)?; stack_free(&heap as *StackAllocator);
+    Result::Ok(())
+}
+fn main() -> i32 { match run() { Result::Ok(_) => 0, Result::Err(error) => error, } }
