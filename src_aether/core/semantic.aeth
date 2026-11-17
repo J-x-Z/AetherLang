@@ -160,7 +160,14 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
  if kind==BN_CAST {
   let target:*BootType=node.ty;
   if !boot_type_valid(ctx,target,node.token,false) { return 0 as *BootType; }
-  let source:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);
+  // A positive magnitude can use the full unsigned range in an explicit
+  // u64 or raw-pointer cast. Keep signed arithmetic and narrow casts typed
+  // independently of their destination (e.g. (-3/2) as u64).
+  let mut context:*BootType=0 as *BootType;
+  if node.left.kind==BN_INT && (target.kind==BY_U64 || target.kind==BY_PTR) {
+   context=boot_type(ctx,BY_U64);
+  }
+  let source:*BootType=boot_check_expr(ctx,node.left,context);
   if ctx.failed { return 0 as *BootType; }
   let numeric_source:bool=boot_numeric(source) || source.kind==BY_BOOL;
   let numeric_target:bool=boot_numeric(target) || target.kind==BY_BOOL;

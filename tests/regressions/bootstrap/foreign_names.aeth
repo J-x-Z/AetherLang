@@ -1,0 +1,14 @@
+extern "C" {
+ fn aeth_ftos(x:f64,bits:u32)->i64;
+ fn a0_ftos()->i32;
+ fn a1_udiv()->i32;
+ fn t14()->i32;
+}
+fn main()->i32 {
+ if aeth_ftos(1.0,32)!=99 || a0_ftos()!=42 || a1_udiv()!=17 || t14()!=3 {return 1;}
+ let high:u64=18446744073709551615 as u64;
+ let address:*u8=0xffffffffffffffff as *u8;
+ if high!=18446744073709551615 || (address as u64)!=high {return 2;}
+ if ((-3/2) as u64)!=high || (3.5 as i64)!=3 || high/3!=6148914691236517205 {return 3;}
+ return 0;
+}

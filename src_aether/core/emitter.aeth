@@ -2,10 +2,42 @@
 // assignment evaluates its place first, calls evaluate arguments left-to-right.
 fn boot_c_text(ctx:*BootContext,text:*u8) {fputs(text,ctx.output);}
 fn boot_c_number(ctx:*BootContext,value:i32) {fprintf(ctx.output,"%d",value);}
+// Foreign functions keep their ABI spelling. Put every generated identifier
+// in a prefix absent from those names, including locals that could hide calls.
+fn boot_choose_namespace(ctx:*BootContext)->bool {
+ let mut count:i32=0;
+ let mut item:*BootNode=ctx.program.body;
+ while item!=0 as *BootNode {
+  if item.kind==BN_FN && (item.flags&2)!=0 { count=count+1; }
+  item=item.next;
+ }
+ let used:*u8=boot_alloc(ctx,(count as u64)+1) as *u8;
+ if used==0 as *u8 {return false;}
+ item=ctx.program.body;
+ while item!=0 as *BootNode {
+  if item.kind==BN_FN && (item.flags&2)!=0 {
+   let name:*u8=item.name;
+   if name[0]==97 && name[1]>=48 && name[1]<=57 {
+    let mut number:i32=0;let mut pos:i32=1;
+    while name[pos]>=48 && name[pos]<=57 && number<=count {
+     number=number*10+(name[pos] as i32)-48;pos=pos+1;
+    }
+    if number<=count && name[pos]==95 {used[number]=1;}
+   }
+  }
+  item=item.next;
+ }
+ let mut choice:i32=0;
+ while used[choice]!=0 {choice=choice+1;}
+ ctx.c_namespace=choice;return true;
+}
+fn boot_c_private(ctx:*BootContext,suffix:*u8) {
+ fprintf(ctx.output,"a%d_%s",ctx.c_namespace,suffix);
+}
 fn boot_c_type(ctx:*BootContext,ty:*BootType) {
  if ty==0 as *BootType {boot_error(ctx,ctx.cursor,"emitter received an untyped node");return;}
  if ty.kind==BY_PTR {boot_c_type(ctx,ty.inner);boot_c_text(ctx,"*");return;}
- if ty.kind==BY_STRUCT {boot_c_text(ctx,"s");boot_c_number(ctx,ty.id);return;}
+ if ty.kind==BY_STRUCT {boot_c_private(ctx,"s");boot_c_number(ctx,ty.id);return;}
  if ty.kind==BY_VOID {boot_c_text(ctx,"void");return;}
  if ty.kind==BY_BOOL {boot_c_text(ctx,"bool");return;}
  if ty.kind==BY_I8 {boot_c_text(ctx,"int8_t");return;}
@@ -22,15 +54,15 @@ fn boot_c_type(ctx:*BootContext,ty:*BootType) {
 }
 fn boot_c_function(ctx:*BootContext,node:*BootNode) {
  if (node.flags&2)!=0 {boot_c_text(ctx,node.name);return;}
- boot_c_text(ctx,"f");boot_c_number(ctx,node.id);
+ boot_c_private(ctx,"f");boot_c_number(ctx,node.id);
 }
 fn boot_c_binding(ctx:*BootContext,node:*BootNode) {
- if node.kind==BN_CONST {boot_c_text(ctx,"c");}else{boot_c_text(ctx,"v");}
+ if node.kind==BN_CONST {boot_c_private(ctx,"c");}else{boot_c_private(ctx,"v");}
  boot_c_number(ctx,node.id);
 }
-fn boot_c_temp(ctx:*BootContext,node:*BootNode) {boot_c_text(ctx,"t");boot_c_number(ctx,node.id);}
-fn boot_c_place(ctx:*BootContext,node:*BootNode) {boot_c_text(ctx,"p");boot_c_number(ctx,node.id);}
-fn boot_c_field(ctx:*BootContext,node:*BootNode) {boot_c_text(ctx,"m");boot_c_number(ctx,node.id);}
+fn boot_c_temp(ctx:*BootContext,node:*BootNode) {boot_c_private(ctx,"t");boot_c_number(ctx,node.id);}
+fn boot_c_place(ctx:*BootContext,node:*BootNode) {boot_c_private(ctx,"p");boot_c_number(ctx,node.id);}
+fn boot_c_field(ctx:*BootContext,node:*BootNode) {boot_c_private(ctx,"m");boot_c_number(ctx,node.id);}
 fn boot_c_string(ctx:*BootContext,token:*BootToken) {
  boot_c_text(ctx,"(uint8_t*)\"");let mut i:u64=0;
  while i<token.length {
@@ -103,7 +135,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
  if node.kind==BN_CAST {
   boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")");
   if (node.left.ty.kind==BY_F32||node.left.ty.kind==BY_F64)&&boot_c_integer(node.ty) {
-   if (node.ty.kind&1)==0{boot_c_text(ctx,"aeth_ftos(");}else{boot_c_text(ctx,"aeth_ftou(");}
+   if (node.ty.kind&1)==0{boot_c_private(ctx,"ftos(");}else{boot_c_private(ctx,"ftou(");}
    boot_c_temp(ctx,node.left);boot_c_text(ctx,",");boot_c_number(ctx,boot_c_bits(node.ty));boot_c_text(ctx,");\n");return;
   }
   if node.left.ty.kind==BY_PTR&&node.ty.kind!=BY_PTR {boot_c_text(ctx,"(uintptr_t)");}
@@ -137,7 +169,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
    // Helpers define division overflow and trap zero consistently at every -O.
    let signed:bool=(node.left.ty.kind&1)==0;
    boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")");
-   if signed{boot_c_text(ctx,"aeth_sdiv(");}else{boot_c_text(ctx,"aeth_udiv(");}
+   if signed{boot_c_private(ctx,"sdiv(");}else{boot_c_private(ctx,"udiv(");}
    boot_c_temp(ctx,node.left);boot_c_text(ctx,",");boot_c_temp(ctx,node.right);boot_c_text(ctx,",");boot_c_number(ctx,boot_c_bits(node.ty));boot_c_text(ctx,",");
    if node.op==37{boot_c_text(ctx,"1)");}else{boot_c_text(ctx,"0)");}
   }else if integer&&node.op==BT_SHR {
@@ -179,7 +211,7 @@ fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
  boot_error(ctx,node.token,"unsupported statement in C emitter");
 }
 fn boot_emit_signature(ctx:*BootContext,node:*BootNode) {
- if (node.flags&2)!=0{boot_c_text(ctx,"extern ");}
+ if (node.flags&2)!=0{boot_c_text(ctx,"extern ");}else{boot_c_text(ctx,"static ");}
  boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_function(ctx,node);boot_c_text(ctx,"(");
  let mut param:*BootNode=node.params;
  if param==0 as *BootNode{boot_c_text(ctx,"void");}
@@ -194,7 +226,7 @@ fn boot_emit_struct(ctx:*BootContext,ty:*BootType) {
  if ty.emitted==1 {boot_error(ctx,ctx.cursor,"recursive struct value layout");return;}
  ty.emitted=1;let mut field:*BootNode=ty.fields;
  while field!=0 as *BootNode {if field.ty.kind==BY_STRUCT{boot_emit_struct(ctx,field.ty);}field=field.next;}
- boot_c_text(ctx,"struct s");boot_c_number(ctx,ty.id);boot_c_text(ctx," {\n");field=ty.fields;
+ boot_c_text(ctx,"struct ");boot_c_private(ctx,"s");boot_c_number(ctx,ty.id);boot_c_text(ctx," {\n");field=ty.fields;
  while field!=0 as *BootNode {
   boot_c_type(ctx,field.ty);boot_c_text(ctx," ");boot_c_field(ctx,field);boot_c_text(ctx,";\n");field=field.next;
  }
@@ -213,14 +245,15 @@ fn boot_emit_constant(ctx:*BootContext,node:*BootNode) {
 }
 fn boot_emit(ctx:*BootContext)->bool {
  if ctx.failed||ctx.program==0 as *BootNode||ctx.output==0 as *void{return false;}
+ if !boot_choose_namespace(ctx){return false;}
  boot_c_text(ctx,"/* Aether Core compiler output. */\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n");
- boot_c_text(ctx,"static int64_t aeth_sdiv(int64_t a,int64_t b,unsigned bits,int rem){if(!b)__builtin_trap();int64_t m=bits==64?INT64_MIN:-(INT64_C(1)<<(bits-1));if(a==m&&b==-1)__builtin_trap();return rem?a%b:a/b;}\n");
- boot_c_text(ctx,"static uint64_t aeth_udiv(uint64_t a,uint64_t b,unsigned bits,int rem){(void)bits;if(!b)__builtin_trap();return rem?a%b:a/b;}\n");
- boot_c_text(ctx,"static uint64_t aeth_ftou(double x,unsigned bits){if(!(x>0.0))return 0;double lim=bits==64?18446744073709551616.0:(double)(UINT64_C(1)<<bits);if(x>=lim)return bits==64?UINT64_MAX:((UINT64_C(1)<<bits)-1);return (uint64_t)x;}\n");
- boot_c_text(ctx,"static int64_t aeth_ftos(double x,unsigned bits){if(x!=x)return 0;double lim=bits==64?9223372036854775808.0:(double)(UINT64_C(1)<<(bits-1));int64_t min=bits==64?INT64_MIN:-(INT64_C(1)<<(bits-1));if(x<=-lim)return min;if(x>=lim)return bits==64?INT64_MAX:-min-1;return (int64_t)x;}\n");
+ boot_c_text(ctx,"static int64_t ");boot_c_private(ctx,"sdiv(");boot_c_text(ctx,"int64_t a,int64_t b,unsigned bits,int rem){if(!b)__builtin_trap();int64_t m=bits==64?INT64_MIN:-(INT64_C(1)<<(bits-1));if(a==m&&b==-1)__builtin_trap();return rem?a%b:a/b;}\n");
+ boot_c_text(ctx,"static uint64_t ");boot_c_private(ctx,"udiv(");boot_c_text(ctx,"uint64_t a,uint64_t b,unsigned bits,int rem){(void)bits;if(!b)__builtin_trap();return rem?a%b:a/b;}\n");
+ boot_c_text(ctx,"static uint64_t ");boot_c_private(ctx,"ftou(");boot_c_text(ctx,"double x,unsigned bits){if(!(x>0.0))return 0;double lim=bits==64?18446744073709551616.0:(double)(UINT64_C(1)<<bits);if(x>=lim)return bits==64?UINT64_MAX:((UINT64_C(1)<<bits)-1);return (uint64_t)x;}\n");
+ boot_c_text(ctx,"static int64_t ");boot_c_private(ctx,"ftos(");boot_c_text(ctx,"double x,unsigned bits){if(x!=x)return 0;double lim=bits==64?9223372036854775808.0:(double)(UINT64_C(1)<<(bits-1));int64_t min=bits==64?INT64_MIN:-(INT64_C(1)<<(bits-1));if(x<=-lim)return min;if(x>=lim)return bits==64?INT64_MAX:-min-1;return (int64_t)x;}\n");
  let mut ty:*BootType=ctx.types;
  while ty!=0 as *BootType {
-  if ty.kind==BY_STRUCT {boot_c_text(ctx,"typedef struct s");boot_c_number(ctx,ty.id);boot_c_text(ctx," s");boot_c_number(ctx,ty.id);boot_c_text(ctx,";\n");}
+  if ty.kind==BY_STRUCT {boot_c_text(ctx,"typedef struct ");boot_c_private(ctx,"s");boot_c_number(ctx,ty.id);boot_c_text(ctx," ");boot_c_private(ctx,"s");boot_c_number(ctx,ty.id);boot_c_text(ctx,";\n");}
   ty=ty.next;
  }
  ty=ctx.types;while ty!=0 as *BootType{if ty.kind==BY_STRUCT{boot_emit_struct(ctx,ty);}ty=ty.next;}

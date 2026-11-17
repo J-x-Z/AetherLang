@@ -60,5 +60,5 @@ struct BootContext {
  arena:*BootArena,allocated:u64,source:*u8,length:u64,path:*u8,
  tokens:*BootToken,cursor:*BootToken,types:*BootType,program:*BootNode,
  failed:bool,next_id:i32,depth:i32,bindings:*BootBinding,
- function:*BootNode,loop_depth:i32,output:*void,temporary:i32,indent:i32
+ function:*BootNode,loop_depth:i32,output:*void,c_namespace:i32
 }

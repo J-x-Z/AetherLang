@@ -62,3 +62,13 @@ assignment order, numeric boundaries, malformed inputs, and ASan/UBSan builds
 of the compiler compiling itself. Results contain stage hashes, sizes, commands
 and single-run timings. The earlier placeholder `src_aether/*.aeth` pipelines
 and stale bootstrap binaries were removed; their history remains in Git.
+
+The Core emitter selects a C identifier prefix disjoint from the program's
+foreign function names. Generated helpers, types and bindings share this
+prefix. External calls retain the requested ABI names. The bootstrap suite
+links an independently compiled C companion and executes both the foreign
+functions and the generated arithmetic helpers at O0, O2 and with sanitizers.
+
+A positive integer literal explicitly cast to `u64` or a raw pointer accepts
+the full 64-bit unsigned range. Ordinary signed arithmetic before a cast keeps
+its signed division semantics.

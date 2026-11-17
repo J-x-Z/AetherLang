@@ -91,6 +91,8 @@ negative = {
     'bool_condition': ('fn main()->i32{if 1{return 1;}return 0;}', 'condition must be bool'),
     'bool_logical': ('fn main()->i32{let b:bool=1&&2;return 0;}', 'logical operands'),
     'integer_overflow': ('fn main()->i32{let x:u8=256;return 0;}', 'outside its type range'),
+    'overflow_explicit_u64': ('fn f()->u64{return 18446744073709551616 as u64;}', 'outside its type range'),
+    'overflow_explicit_i64': ('fn f()->i64{return 18446744073709551615 as i64;}', 'outside its type range'),
     'negative_overflow': ('fn main()->i32{let x:i8=-129;return 0;}', 'outside its type range'),
     'unsigned_negative': ('fn main()->i32{let x:u8=-1;return 0;}', 'signed integer'),
     'integer_mixed_width': ('fn main()->i32{let x:i64=1;let y:i32=2;return x+y;}', 'operand types differ'),
