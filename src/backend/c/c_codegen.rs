@@ -436,7 +436,8 @@ impl CCodeGen {
         }
         
         let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
-        self.writeln(&format!("{} {}({}) {{", ret_type, func.name, params_str));
+        let linkage = if func.c_abi { "" } else { "static " };
+        self.writeln(&format!("{linkage}{} {}({}) {{", ret_type, func.name, params_str));
 
         self.indent += 1;
         if func.naked {
@@ -1149,7 +1150,8 @@ impl CCodeGen {
             };
             let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
             let attribute = if func.interrupt { "__attribute__((interrupt, target(\"general-regs-only\"))) " } else if func.naked { "__attribute__((naked)) " } else { "" };
-            self.writeln(&format!("{}{} {}({});", attribute, ret_type, func.name, params_str));
+            let linkage = if func.c_abi { "" } else { "static " };
+            self.writeln(&format!("{linkage}{}{} {}({});", attribute, ret_type, func.name, params_str));
         }
 
         self.writeln("");

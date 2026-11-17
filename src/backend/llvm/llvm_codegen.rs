@@ -1146,7 +1146,10 @@ impl LLVMCodeGen {
             self.declare_abi(&function.name, &function.params, &function.ret_type, function.variadic, true)?;
         }
         for function in &module.functions {
-            self.declare_abi(&function.name, &function.params, &function.ret_type, false, function.c_abi)?;
+            let declared = self.declare_abi(&function.name, &function.params, &function.ret_type, false, function.c_abi)?;
+            if !function.c_abi {
+                unsafe { LLVMSetLinkage(declared, llvm_sys::LLVMLinkage::LLVMInternalLinkage); }
+            }
         }
         // Generate code for each function
         for func in &module.functions {

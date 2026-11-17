@@ -68,7 +68,7 @@ impl LLVMCodeGen {
         }
     }
 
-    fn declare_abi(&mut self, name: &str, params: &[(String, IRType)], ret: &IRType, variadic: bool, c_abi: bool) -> Result<()> {
+    fn declare_abi(&mut self, name: &str, params: &[(String, IRType)], ret: &IRType, variadic: bool, c_abi: bool) -> Result<LLVMValueRef> {
         unsafe {
             let arch = self.target_triple.split('-').next().unwrap_or("");
             let extend_narrow_integers = c_abi && match arch {
@@ -97,8 +97,8 @@ impl LLVMCodeGen {
             if function.is_null() { function = LLVMAddFunction(self.module, c_name.as_ptr(), function_type); }
             self.add_abi_attributes(function, &abi, false);
             self.abi.insert(name.into(), abi);
+            Ok(function)
         }
-        Ok(())
     }
 
     unsafe fn add_abi_attributes(&self, function: LLVMValueRef, abi: &FunctionAbi, call: bool) {
