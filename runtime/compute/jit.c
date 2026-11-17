@@ -41,20 +41,39 @@ void aether_jit_cache_unlock(void*value){if(value)closedir(value);}
 // Bound all immediate cache entries, including retained failed build stages.
 // Never follow a symlink or recursively delete any content.
 int32_t aether_jit_cache_room(void*value){
- DIR*directory=value;uint64_t total=0;unsigned entries=0;struct dirent*item;rewinddir(directory);
- while((item=readdir(directory))){
-  if(!strcmp(item->d_name,".")||!strcmp(item->d_name,"..")||!strcmp(item->d_name,"owner"))continue;
-  if(++entries>=32)return 0;
-  int fd=openat(dirfd(directory),item->d_name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return 0;
-  DIR*child=fdopendir(fd);if(!child){close(fd);return 0;}struct dirent*file;
-  while((file=readdir(child))){
-   if(!strcmp(file->d_name,".")||!strcmp(file->d_name,".."))continue;
-   struct stat s;if(fstatat(fd,file->d_name,&s,AT_SYMLINK_NOFOLLOW)||!S_ISREG(s.st_mode)||s.st_size<0){closedir(child);return 0;}
-   total+=(uint64_t)s.st_size;if(total>48*1024*1024){closedir(child);return 0;}
+ DIR *directory = value;
+ uint64_t total = 0;
+ unsigned entries = 0;
+ const uint64_t limit = 48 * 1024 * 1024;
+ rewinddir(directory);
+ for (;;) {
+  errno = 0;
+  struct dirent *item = readdir(directory);
+  if (!item) return errno == 0;
+  if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, "..") || !strcmp(item->d_name, "owner")) continue;
+  if (++entries > 32) return 0;
+  int fd = openat(dirfd(directory), item->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0) return 0;
+  DIR *child = fdopendir(fd);
+  if (!child) { close(fd); return 0; }
+  for (;;) {
+   errno = 0;
+   struct dirent *file = readdir(child);
+   if (!file) {
+    int read_error = errno;
+    if (closedir(child) || read_error) return 0;
+    break;
+   }
+   if (!strcmp(file->d_name, ".") || !strcmp(file->d_name, "..")) continue;
+   struct stat st;
+   if (fstatat(fd, file->d_name, &st, AT_SYMLINK_NOFOLLOW) ||
+       !S_ISREG(st.st_mode) || st.st_size < 0 || (uint64_t)st.st_size > limit - total) {
+    closedir(child);
+    return 0;
+   }
+   total += (uint64_t)st.st_size;
   }
-  closedir(child);
  }
- return 1;
 }
 // Native CPU/OS identity joins explicit target and compiler hashes in the key.
 int32_t aether_jit_host(char*output,uint64_t capacity){

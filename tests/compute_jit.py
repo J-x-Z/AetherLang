@@ -56,6 +56,28 @@ if a.alternate_compiler:
 failed=cases/'failed cache';false=Path(shutil.which('false')).resolve()
 execute('compiler/linker error propagates',outer[0],failed,backend,linker=false,ok=False)
 assert sorted(x.name for x in failed.iterdir())==['owner']
+# A linker can succeed and produce a native library with the wrong export.
+# The invalid image must fail before any entry is published under its key.
+adapter = cases / 'missing-export-linker'
+adapter.write_text('#!' + sys.executable + '\nimport pathlib,sys,os\n'
+                   'args=sys.argv[1:]\n'
+                   'if "-shared" in args or "-dynamiclib" in args:\n'
+                   '  out=pathlib.Path(args[args.index("-o")+1]); src=out.with_suffix(".c")\n'
+                   '  src.write_text("int wrong_entry(void) { return 0; }"); args=[a if not a.endswith(".o") else str(src) for a in args]\n'
+                   '  import subprocess; code=subprocess.run(['+repr(str(cc))+']+args).returncode; src.unlink(); sys.exit(code)\n'
+                   'os.execv('+repr(str(cc))+',['+repr(str(cc))+']+args)\n')
+adapter.chmod(0o755)
+execute('missing exported kernel is never published',outer[0],failed,backend,linker=adapter,ok=False)
+assert sorted(x.name for x in failed.iterdir()) == ['owner']
+# The existing contents fit alongside the staged source, but the final library
+# and manifest exceed the budget. A sparse test file avoids physical disk use.
+budget=cases/'nearly full'
+budget.mkdir(); (budget/'owner').symlink_to('AETHER-JIT-CACHE-1')
+entry=budget/'existing'; entry.mkdir()
+source_size=(cache/key/'source.aeth').stat().st_size
+with (entry/'payload').open('wb') as file: file.truncate(48*1024*1024-source_size-1)
+execute('published footprint fits cache budget',outer[0],budget,backend,ok=False)
+assert sorted(x.name for x in budget.iterdir()) == ['existing','owner']
 unknown=cases/'unowned';unknown.mkdir();sentinel=unknown/'keep';sentinel.write_bytes(b'user data')
 execute('unowned cache preserved',outer[0],unknown,backend,ok=False);assert sentinel.read_bytes()==b'user data'
 symlink=cases/'cache symlink';symlink.symlink_to(cache,target_is_directory=True)

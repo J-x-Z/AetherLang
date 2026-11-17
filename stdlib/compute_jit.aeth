@@ -21,7 +21,7 @@ const COMPUTE_COMPILE:i32=13;
 const COMPUTE_CACHE:i32=14;
 pub struct JitOptions{pub cache:*u8,pub compiler:*u8,pub cc:*u8,pub target:*u8,pub backend:*u8,pub optimization:u64}
 pub struct ComputeJit{graph:*ComputeGraph,library:*void,samples:u64,identity:[u8;65],cache_hit:bool}
-struct Build{paths:[*u8;13],lock:*void,staged:bool}
+struct Build{paths:[*u8;13],lock:*void,library:*void,staged:bool}
 fn error(code:i32)->ComputeError{compute_error(code,COMPUTE_CPU)}
 fn hash_file(path:*u8,limit:u64)->Result<[u8;32],ComputeError>{
  if aether_jit_kind(path)!=1{return Result::Err(error(COMPUTE_CACHE));}
@@ -38,6 +38,7 @@ fn hash_number(state:*Sha256,number:u64){let mut bytes:[u8;8]=[0;8];for i in 0..
 fn hash_text(state:*Sha256,text:*u8){let n:u64=if text==0 as *u8{0}else{strlen(text) as u64};hash_number(state,n);if n>0{sha256_update(state,text,n);}}
 fn run(argv:**u8)->bool{let mut command:Command=command_new(argv);let mut child:Child=match process_spawn(&mut command as *Command){Result::Ok(value)=>value,Result::Err(_)=>{return false;}};match child_wait(&mut child as *Child){Result::Ok(status)=>process_status_code(status)==0,Result::Err(_)=>false}}
 fn cleanup(build:*Build){
+ if build.library!=0 as *void{aether_jit_unload(build.library);}
  if build.staged{
   for i in 4..8{if build.paths[i]!=0 as *u8&&aether_jit_kind(build.paths[i])==1{remove(build.paths[i]);}}
   if build.paths[3]!=0 as *u8{rmdir(build.paths[3]);}
@@ -60,7 +61,7 @@ pub fn compute_jit_compile(graph:*ComputeGraph,samples:u64,options:JitOptions)->
   ||options.cache==0 as *u8||options.compiler==0 as *u8||options.cc==0 as *u8||options.target==0 as *u8||options.backend==0 as *u8||options.optimization>3{return Result::Err(error(COMPUTE_ARGUMENT));}
  if (strcmp(options.backend,"c")!=0&&strcmp(options.backend,"llvm")!=0)||strlen(options.target)==0||strlen(options.target)>256{return Result::Err(error(COMPUTE_ARGUMENT));}
  let mut snapshot:*ComputeGraph=compute_graph_clone(graph)?;
- let mut build:Build=Build{paths:[0 as *u8;13],lock:0 as *void,staged:false};
+ let mut build:Build=Build{paths:[0 as *u8;13],lock:0 as *void,library:0 as *void,staged:false};
  let result:Result<*ComputeJit,ComputeError>=compile_inner(snapshot,samples,options,&mut build as *Build);cleanup(&mut build as *Build);
  match result{Result::Ok(value)=>Result::Ok(value),Result::Err(e)=>{compute_graph_free(&mut snapshot as **ComputeGraph);Result::Err(e)}}
 }
@@ -88,10 +89,6 @@ fn compile_inner(graph:*ComputeGraph,samples:u64,options:JitOptions,build:*Build
  if !hit{
   if aether_jit_cache_room(build.lock)==0{return Result::Err(error(COMPUTE_BUDGET));}
   let present:i32=aether_jit_kind(build.paths[8]);if present<0||present==1||present==3{return Result::Err(error(COMPUTE_CACHE));}
-  if present==2{
-   build.paths[12]=path_join(build.paths[2],".invalid-XXXXXX");if build.paths[12]==0 as *u8{return Result::Err(error(COMPUTE_ALLOCATION));}
-   if mkdtemp(build.paths[12])==0 as *u8||rmdir(build.paths[12])!=0||rename(build.paths[8],build.paths[12])!=0{return Result::Err(error(COMPUTE_CACHE));}
-  }
   let opt:*u8=if options.optimization==0{"-O0"}else if options.optimization==1{"-O1"}else if options.optimization==2{"-O2"}else{"-O3"};
   let compiler:[*u8;14]=[build.paths[0],build.paths[4],"--emit-obj","--backend",options.backend,opt,"--target",options.target,"--cc",build.paths[1],"--quiet","-o",build.paths[5],0 as *u8];
   if !run(&compiler[0] as **u8){return Result::Err(error(COMPUTE_COMPILE));}
@@ -100,12 +97,25 @@ fn compile_inner(graph:*ComputeGraph,samples:u64,options:JitOptions,build:*Build
   let library_hash:[u8;65]=hex(hash_file(build.paths[6],8388608)?);
   let manifest:*void=fopen(build.paths[7],"wb");if manifest==0 as *void{return Result::Err(error(COMPUTE_CACHE));}
   let written:bool=fprintf(manifest,"%s\n%s\n%s\n",&key[0] as *u8,&source_hex[0] as *u8,&library_hash[0] as *u8)>=0;let closed:i32=fclose(manifest);
-  if !written||closed!=0||remove(build.paths[5])!=0||rename(build.paths[3],build.paths[8])!=0{return Result::Err(error(COMPUTE_CACHE));}build.staged=false;
+  if !written||closed!=0||remove(build.paths[5])!=0{return Result::Err(error(COMPUTE_CACHE));}
+  // Count this build's complete footprint and verify its dynamic entry point
+  // before replacing a damaged entry or making a new cache key visible.
+  if aether_jit_cache_room(build.lock)==0{return Result::Err(error(COMPUTE_BUDGET));}
+  build.library=aether_jit_load(build.paths[6]);if build.library==0 as *void{return Result::Err(error(COMPUTE_COMPILE));}
+  if present==2{
+   build.paths[12]=path_join(build.paths[2],".invalid-XXXXXX");if build.paths[12]==0 as *u8{return Result::Err(error(COMPUTE_ALLOCATION));}
+   if mkdtemp(build.paths[12])==0 as *u8||rmdir(build.paths[12])!=0||rename(build.paths[8],build.paths[12])!=0{return Result::Err(error(COMPUTE_CACHE));}
+  }
+  if rename(build.paths[3],build.paths[8])!=0{return Result::Err(error(COMPUTE_CACHE));}
+  build.staged=false;
+ }else{
+  build.library=aether_jit_load(build.paths[9]);if build.library==0 as *void{return Result::Err(error(COMPUTE_COMPILE));}
  }
- let library:*void=aether_jit_load(build.paths[9]);if library==0 as *void{return Result::Err(error(COMPUTE_COMPILE));}
  let program:*ComputeJit=malloc(size_of(ComputeJit)) as *ComputeJit;
- if program==0 as *ComputeJit{aether_jit_unload(library);return Result::Err(error(COMPUTE_ALLOCATION));}
- *program=ComputeJit{graph:graph,library:library,samples:samples,identity:key,cache_hit:hit};Result::Ok(program)
+ if program==0 as *ComputeJit{return Result::Err(error(COMPUTE_ALLOCATION));}
+ *program=ComputeJit{graph:graph,library:build.library,samples:samples,identity:key,cache_hit:hit};
+ build.library=0 as *void;
+ Result::Ok(program)
 }
 pub fn compute_jit_free(owner:**ComputeJit){if owner!=0 as **ComputeJit&&*owner!=0 as *ComputeJit{let program:*ComputeJit=*owner;*owner=0 as *ComputeJit;compute_graph_free(&mut program.graph as **ComputeGraph);aether_jit_unload(program.library);free(program as *void);}}
 pub fn compute_jit_cache_hit(program:*ComputeJit)->bool{program.cache_hit}
