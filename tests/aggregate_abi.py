@@ -47,7 +47,7 @@ for backend in args.backends:
             # LLVM's target ABI classifier is intentionally target-specific.
             binary = work / f'{name}-{backend}-O{opt}'
             extra = ['--link-object', obj] if name == 'abi' else []
-            unsupported = 'aggregate C ABI lowering is currently implemented for Apple arm64' if backend == 'llvm' and name == 'abi' and not (platform.system() == 'Darwin' and platform.machine() == 'arm64') else None
+            unsupported = 'aggregate C ABI lowering is currently implemented for Apple arm64' if backend == 'llvm' and name == 'abi' and not ((platform.system() == 'Darwin' and platform.machine() in ('arm64', 'aarch64')) or (platform.system() in ('Darwin', 'Linux') and platform.machine() in ('x86_64', 'AMD64'))) else None
             run(f'{name}/{backend}/O{opt}/build', [compiler, 'build', root / f'{name}.aeth', '--backend', backend, f'-O{opt}', '-o', binary, *extra], unsupported=unsupported)
             if unsupported:
                 continue

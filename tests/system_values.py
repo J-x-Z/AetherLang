@@ -34,7 +34,7 @@ run('native C globals', [cc, '-std=c11', '-O2', '-c', root / 'globals_unions.c',
 run('check globals', [compiler, 'check', source])
 for backend in args.backends:
     actual_source = source
-    if backend == 'llvm' and not (platform.system() == 'Darwin' and platform.machine() == 'arm64'):
+    if backend == 'llvm' and not ((platform.system() == 'Darwin' and platform.machine() in ('arm64', 'aarch64')) or (platform.system() in ('Darwin', 'Linux') and platform.machine() in ('x86_64', 'AMD64'))):
         unsupported = run('LLVM foreign aggregate ABI unsupported', [compiler, source, '--backend', 'llvm', '--emit-obj', '-o', work / 'unsupported.o'], expected=1)
         assert 'aggregate C ABI lowering is currently implemented for Apple arm64' in unsupported.stderr
         # Keep all static/union/layout checks on this target, with the value

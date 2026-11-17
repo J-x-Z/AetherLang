@@ -20,9 +20,9 @@ impl ForeignAbiTarget {
         }
     }
 
-    pub fn supports_aggregates(self) -> bool { matches!(self, Self::DarwinAarch64) }
+    pub fn supports_aggregates(self) -> bool { matches!(self, Self::DarwinAarch64 | Self::SysvX86_64) }
     pub fn supports_vector128(self) -> bool { matches!(self, Self::DarwinAarch64) }
 }
 
 pub const VECTOR_ABI_ERROR: &str = "foreign vector ABI requires a direct supported 128-bit vector on Apple arm64; use a scalar-pointer interface for nested or unsupported vectors";
-pub const AGGREGATE_ABI_ERROR: &str = "aggregate C ABI lowering is currently implemented for Apple arm64; use a pointer interface or the C backend on this target";
+pub const AGGREGATE_ABI_ERROR: &str = "aggregate C ABI lowering is currently implemented for Apple arm64 and x86_64 SysV; use a pointer interface or the C backend on this target";

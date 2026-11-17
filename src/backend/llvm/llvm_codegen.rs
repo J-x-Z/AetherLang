@@ -16,10 +16,20 @@ use std::ptr;
 use crate::backend::codegen::CodeGen;
 use crate::middle::ir::*;
 use crate::utils::{Error, Result};
+use crate::types::ffi_target::{ForeignAbiTarget, AGGREGATE_ABI_ERROR, VECTOR_ABI_ERROR};
 
 /// Source values and machine ABI values deliberately have separate types.
 #[derive(Clone)]
-enum AbiValue { Direct(LLVMTypeRef), Coerce(LLVMTypeRef), Indirect, Ignore }
+enum AbiValue {
+    Direct(LLVMTypeRef), Coerce(LLVMTypeRef),
+    /// SysV aggregate pieces are independent parameters, with semantic offsets.
+    Expand(Vec<AbiPart>),
+    /// SysV stack copy (not an ordinary pointer argument).
+    ByVal { alignment: u32 },
+    Indirect, Ignore,
+}
+#[derive(Clone)]
+struct AbiPart { ty: LLVMTypeRef, offset: u64 }
 #[derive(Clone)]
 struct FunctionAbi {
     extend_narrow_integers: bool,
@@ -195,6 +205,14 @@ impl LLVMCodeGen {
             for (semantic, lowering) in &abi.params {
                 let value = match lowering {
                     AbiValue::Ignore => LLVMConstNull(self.ir_type_to_llvm(semantic)),
+                    AbiValue::Expand(parts) => {
+                        let values: Vec<_> = parts.iter().map(|_| {
+                            let value = LLVMGetParam(llvm_func, index);
+                            index += 1;
+                            value
+                        }).collect();
+                        self.decode_abi_parts(&values, semantic, parts)
+                    }
                     _ => {
                         let machine = LLVMGetParam(llvm_func, index);
                         index += 1;
@@ -502,7 +520,9 @@ impl LLVMCodeGen {
                     for (index, argument) in args.iter().enumerate() {
                         let value = self.get_value(argument)?;
                         if let Some((semantic, lowering)) = abi.params.get(index) {
-                            if let Some(value) = self.encode_abi(value, semantic, lowering) { llvm_args.push(value); }
+                            if let AbiValue::Expand(parts) = lowering {
+                                llvm_args.extend(self.encode_abi_parts(value, semantic, parts));
+                            } else if let Some(value) = self.encode_abi(value, semantic, lowering) { llvm_args.push(value); }
                         } else {
                             if matches!(self.value_type(argument), Some(IRType::Array(_, _) | IRType::Struct(_))) {
                                 return Err(Error::CodeGen("aggregate arguments in C variadic positions are not implemented".into()));

@@ -1,0 +1,45 @@
+// C and Aether exchange actual values through both caller directions.
+@repr(C) struct Pair { a:i64, b:i64 }
+@repr(C) struct Mixed { a:f64, b:i64 }
+@repr(C) struct Large { a:i64, b:i64, c:i64 }
+@repr(C) struct Gap { a:u8, b:f64 }
+@repr(C) struct AlignedGap { a:f32, empty:[f64;0], b:f32 }
+@repr(C) union Merge { real:f64, bits:u64 }
+extern "C" {
+ fn c_mixed(value:Mixed)->Mixed;
+ fn c_gap(value:Gap)->Gap;
+ fn c_aligned_gap(value:AlignedGap)->AlignedGap;
+ fn c_merge(value:Merge)->Merge;
+ fn c_spill5(a:i64,b:i64,c:i64,d:i64,e:i64,value:Pair,last:i64)->Pair;
+ fn c_spill_sse(a:f64,b:f64,c:f64,d:f64,e:f64,f:f64,g:f64,h:f64,value:Mixed,last:i64)->Mixed;
+ fn c_spill_gp(a:i64,b:i64,c:i64,d:i64,e:i64,f:i64,value:Mixed,last:f64)->Mixed;
+ fn c_result_spill(a:i64,b:i64,c:i64,d:i64,e:i64,value:Pair,last:i64)->Large;
+ fn sysv_abi_check()->i32;
+}
+#[no_mangle]
+fn aeth_mixed(value:Mixed)->Mixed{return Mixed{a:value.a+1.5,b:value.b+7};}
+#[no_mangle]
+fn aeth_gap(value:Gap)->Gap{return Gap{a:value.a+(2 as u8),b:value.b+3.5};}
+#[no_mangle]
+fn aeth_aligned_gap(value:AlignedGap)->AlignedGap{return AlignedGap{a:value.a+(1.0 as f32),empty:[],b:value.b+(2.0 as f32)};}
+#[no_mangle]
+fn aeth_merge(value:Merge)->Merge{unsafe{return Merge{bits:value.bits^(0x123456789abcdef0 as u64)};}}
+#[no_mangle]
+fn aeth_spill5(a:i64,b:i64,c:i64,d:i64,e:i64,value:Pair,last:i64)->Pair{return Pair{a:value.a+a+2*b+3*c+4*d+5*e,b:value.b+last};}
+#[no_mangle]
+fn aeth_spill_sse(a:f64,b:f64,c:f64,d:f64,e:f64,f:f64,g:f64,h:f64,value:Mixed,last:i64)->Mixed{return Mixed{a:value.a+a+b+c+d+e+f+g+h,b:value.b+last};}
+#[no_mangle]
+fn aeth_spill_gp(a:i64,b:i64,c:i64,d:i64,e:i64,f:i64,value:Mixed,last:f64)->Mixed{return Mixed{a:value.a+last,b:value.b+a+b+c+d+e+f};}
+#[no_mangle]
+fn aeth_result_spill(a:i64,b:i64,c:i64,d:i64,e:i64,value:Pair,last:i64)->Large{return Large{a:value.a+a+b+c+d+e,b:value.b+last,c:77};}
+fn main()->i32 { unsafe {
+ let m:Mixed=c_mixed(Mixed{a:2.5,b:100}); if m.a!=4.0 || m.b!=107{return 1;}
+ let g:Gap=c_gap(Gap{a:3,b:6.5}); if g.a!=(5 as u8) || g.b!=10.0{return 2;}
+ let ag:AlignedGap=c_aligned_gap(AlignedGap{a:3.0,empty:[],b:4.0}); if ag.a!=(4.0 as f32) || ag.b!=(6.0 as f32){return 3;}
+ let u:Merge=c_merge(Merge{bits:0x123456789abcdef5}); if u.bits!=(5 as u64){return 4;}
+ let p:Pair=c_spill5(1,2,3,4,5,Pair{a:10,b:20},99); if p.a!=65 || p.b!=119{return 5;}
+ let s:Mixed=c_spill_sse(1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,Mixed{a:10.0,b:20},99); if s.a!=46.0 || s.b!=119{return 6;}
+ let q:Mixed=c_spill_gp(1,2,3,4,5,6,Mixed{a:10.0,b:20},99.5); if q.a!=109.5 || q.b!=41{return 7;}
+ let l:Large=c_result_spill(1,2,3,4,5,Pair{a:10,b:20},99); if l.a!=25 || l.b!=119 || l.c!=77{return 8;}
+ return sysv_abi_check();
+} }
