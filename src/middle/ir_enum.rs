@@ -462,7 +462,7 @@ impl IRGenerator {
         let (field, field_ty) = self.aggregate_field(payload, &payload_ty, 0)?;
         let value = self.load_address(field, field_ty);
         let value = self.construct_enum_values(&returned, returned_err, vec![value])?;
-        self.set_terminator_current(Terminator::Return { value: Some(value) });
+        self.emit_checked_return(Some(value))?;
         self.current_block = success;
         let (payload, payload_ty) = self.enum_payload_place(storage, &definition, ok)?;
         let (field, field_ty) = self.aggregate_field(payload, &payload_ty, 0)?;

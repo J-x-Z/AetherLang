@@ -418,12 +418,6 @@ impl CCodeGen {
                 .collect()
         };
         
-        // Generate effect annotations as comments (for documentation/static analysis)
-        if !func.contracts.effects.is_empty() {
-            let effects_str = func.contracts.effects.join(", ");
-            self.writeln(&format!("/* @effects: {} */", effects_str));
-        }
-        
         // @simd does not authorize ISA changes or relaxed floating semantics.
         // Generate naked function attribute (no prologue/epilogue)
         if func.naked {
@@ -454,15 +448,6 @@ impl CCodeGen {
             self.indent -= 1;
             self.writeln("}");
             return Ok(());
-        }
-
-        // Generate precondition assertions (requires clauses)
-        if !func.contracts.requires.is_empty() {
-            self.writeln("/* Precondition assertions */");
-            for (i, require) in func.contracts.requires.iter().enumerate() {
-                self.writeln(&format!("assert({});  /* requires #{} */", require, i + 1));
-            }
-            self.writeln("");
         }
 
         // Pass 1: Analyze types
@@ -901,6 +886,9 @@ impl CCodeGen {
                 self.writeln("}");
             }
 
+            Terminator::Trap => {
+                self.writeln("__builtin_trap();");
+            }
             Terminator::Unreachable => {
                 self.writeln("__builtin_unreachable();");
             }
@@ -932,6 +920,9 @@ impl CCodeGen {
                 self.writeln(&format!("if ({}) goto {}; else goto {};", c, then_label, else_label));
             }
             
+            Terminator::Trap => {
+                self.writeln("__builtin_trap();");
+            }
             Terminator::Unreachable => {
                 self.writeln("__builtin_unreachable();");
             }

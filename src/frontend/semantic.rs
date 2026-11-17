@@ -28,6 +28,8 @@ mod methods;
 mod places;
 #[path = "semantic_interfaces.rs"]
 mod interfaces;
+#[path = "semantic_contracts.rs"]
+mod contracts;
 #[path = "semantic_enums.rs"]
 mod enums;
 #[path = "semantic_memory.rs"]
@@ -566,6 +568,7 @@ impl SemanticAnalyzer {
         // those same facts instead of guessing from a method suffix.
         self.check_system_attributes(program)?;
         self.infer_effects(program)?;
+        self.check_contract_effects(program)?;
         self.check_interface_effect_bounds()?;
         self.analyze_flows(program)?;
         if self.errors.is_empty() {
@@ -1252,51 +1255,7 @@ impl SemanticAnalyzer {
             }
         }
 
-        // Check contract expressions (requires, ensures)
-        for contract in &func.contracts {
-            // For 'ensures' contracts, add 'result' variable to scope
-            // This allows postconditions to reference the return value
-            let is_ensures = matches!(contract.kind, crate::frontend::ast::ContractKind::Ensures);
-            
-            if is_ensures && return_type != ResolvedType::UNIT {
-                // Temporarily add 'result' variable for ensures checking
-                self.symbols.enter_scope();
-                self.symbols.define(Symbol {
-                    name: "result".to_string(),
-                    kind: SymbolKind::Variable,
-                    ty: return_type.clone(),
-                    span: func.span,
-                    mutable: false,
-                })?;
-            }
-            
-            let contract_ty = self.check_expr(&contract.condition)?;
-            
-            // Contract expressions must be boolean
-            if contract_ty != ResolvedType::BOOL && contract_ty != ResolvedType::Unknown {
-                if self.strict_mode {
-                    if is_ensures && return_type != ResolvedType::UNIT {
-                        self.symbols.exit_scope();
-                    }
-                    return Err(Error::TypeMismatch {
-                        expected: "bool".to_string(),
-                        got: format!("{:?}", contract_ty),
-                        span: contract.span,
-                    });
-                } else {
-                    // In lenient mode, just warn (add to errors but don't fail)
-                    self.errors.push(Error::TypeMismatch {
-                        expected: "bool".to_string(),
-                        got: format!("{:?}", contract_ty),
-                        span: contract.span,
-                    });
-                }
-            }
-            
-            if is_ensures && return_type != ResolvedType::UNIT {
-                self.symbols.exit_scope();
-            }
-        }
+        self.check_function_contracts(func, &return_type)?;
 
         // Return checks share the same contextual typing as arguments and assignments.
         self.current_return = Some(return_type.clone());

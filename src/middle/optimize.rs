@@ -207,7 +207,7 @@ impl DeadCodeElimination {
                             worklist.push(*then_target);
                             worklist.push(*else_target);
                         }
-                        Terminator::Return { .. } | Terminator::Unreachable => {}
+                        Terminator::Return { .. } | Terminator::Trap | Terminator::Unreachable => {}
                     }
                 }
             }

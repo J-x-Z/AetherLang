@@ -62,6 +62,67 @@ impl SemanticAnalyzer {
             effects,
         }
     }
+    fn collect_effect_node(&self, function_key: &str, expr: &Expr, access: Access,
+        effects: &mut Vec<Effect>, callees: &mut Vec<String>) {
+                if let Some(place) = self.facts.places.get(&(function_key.to_owned(), expr.span())) {
+                    if place.origin != PlaceOrigin::Local {
+                        if matches!(access, Access::Read | Access::ReadWrite) { extend(effects, &[Effect::Read]); }
+                        if matches!(access, Access::Write | Access::ReadWrite) { extend(effects, &[Effect::Write]); }
+                    }
+                    if place.address_reads { extend(effects, &[Effect::Read]); }
+                }
+                match expr {
+                Expr::Call { func, .. } => {
+                    let callee = match &**func {
+                        Expr::Ident(name) => Some(name.name.clone()),
+                        Expr::Path { segments, .. } => Some(
+                            segments
+                                .iter()
+                                .map(|s| s.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join("::"),
+                        ),
+                        _ => None,
+                    };
+                    if let Some(callee) = callee {
+                        callees.push(callee);
+                    } else {
+                        extend(effects, &ALL);
+                    }
+                }
+                Expr::MethodCall { span, .. } => {
+                    match self.facts.method_calls.get(&(function_key.to_owned(), *span)) {
+                        Some(ResolvedMethodCall::Function { symbol, .. }) => callees.push(symbol.clone()),
+                        Some(ResolvedMethodCall::PointerAdd { .. } | ResolvedMethodCall::DivergingReceiver) => {},
+                        None => extend(effects, &ALL),
+                    }
+                }
+                Expr::Asm { .. } => extend(effects, &ALL),
+                _ => {}
+                }
+    }
+
+    /// Uses the same place/callee interpretation as body effect inference.
+    pub(super) fn contract_expression_effects(&self, function: &str, expr: &Expr) -> Vec<Effect> {
+        let mut effects = vec![];
+        let mut callees = vec![];
+        let walker = EffectWalker { facts: &self.facts, function };
+        walker.expr(expr, Access::Read, &mut |node, access| {
+            self.collect_effect_node(function, node, access, &mut effects, &mut callees);
+            if matches!(access, Access::Read | Access::ReadWrite)
+                && self.facts.places.get(&(function.to_owned(), node.span()))
+                    .is_some_and(|place| matches!(place.ty, ResolvedType::Volatile(_))) {
+                extend(&mut effects, &[Effect::Read]);
+            }
+        });
+        for callee in callees {
+            if let Some(Symbol { kind: SymbolKind::Function { effects: required, .. }, .. }) = self.symbols.lookup(&callee) {
+                extend(&mut effects, &required.effects);
+            } else { extend(&mut effects, &ALL); }
+        }
+        effects
+    }
+
     pub(super) fn infer_effects(&mut self, program: &Program) -> Result<()> {
         let mut functions = vec![];
         for item in &program.items {
@@ -81,50 +142,17 @@ impl SemanticAnalyzer {
         let mut direct = HashMap::new();
         let mut calls = HashMap::new();
         for (name, function) in &functions {
-            let mut effects = vec![];
+            // @volatile turns the function's parameter/local storage accesses
+            // into observable memory operations, including compiler allocas.
+            let mut effects = if function.annotations.iter().any(|a| a.name.name == "volatile") {
+                vec![Effect::Read, Effect::Write]
+            } else { vec![] };
             let mut callees = vec![];
             let function_key = self.facts.method_signatures.get(name)
                 .map(|signature| &signature.emitted_name).unwrap_or(name);
             let walker = EffectWalker { facts: &self.facts, function: function_key };
             walker.block(&function.body, &mut |expr, access| {
-                if let Some(place) = self.facts.places.get(&(function_key.clone(), expr.span())) {
-                    if place.origin != PlaceOrigin::Local {
-                        if matches!(access, Access::Read | Access::ReadWrite) { extend(&mut effects, &[Effect::Read]); }
-                        if matches!(access, Access::Write | Access::ReadWrite) { extend(&mut effects, &[Effect::Write]); }
-                    }
-                    if place.address_reads { extend(&mut effects, &[Effect::Read]); }
-                }
-                match expr {
-                Expr::Call { func, .. } => {
-                    let callee = match &**func {
-                        Expr::Ident(name) => Some(name.name.clone()),
-                        Expr::Path { segments, .. } => Some(
-                            segments
-                                .iter()
-                                .map(|s| s.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join("::"),
-                        ),
-                        _ => None,
-                    };
-                    if let Some(callee) = callee {
-                        callees.push(callee);
-                    } else {
-                        extend(&mut effects, &ALL);
-                    }
-                }
-                Expr::MethodCall { span, .. } => {
-                    let function_key = self.facts.method_signatures.get(name)
-                        .map(|signature| &signature.emitted_name).unwrap_or(name);
-                    match self.facts.method_calls.get(&(function_key.clone(), *span)) {
-                        Some(ResolvedMethodCall::Function { symbol, .. }) => callees.push(symbol.clone()),
-                        Some(ResolvedMethodCall::PointerAdd { .. } | ResolvedMethodCall::DivergingReceiver) => {},
-                        None => extend(&mut effects, &ALL),
-                    }
-                }
-                Expr::Asm { .. } => extend(&mut effects, &ALL),
-                _ => {}
-                }
+                self.collect_effect_node(function_key, expr, access, &mut effects, &mut callees);
             });
             direct.insert(name.clone(), effects);
             calls.insert(name.clone(), callees);

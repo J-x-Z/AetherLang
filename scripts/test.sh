@@ -25,10 +25,11 @@ case "${1:-llvm}" in
     *) printf '%s\n' 'Usage: scripts/test.sh [llvm|c]' >&2; exit 2 ;;
 esac
 python3 "$root/scripts/test_build_paths.py"
+python3 tests/package_install.py --work-dir "$CARGO_TARGET_DIR/package-install"
 compiler="$CARGO_TARGET_DIR/debug/aethc"
 # $backends is an intentional list of fixed tokens selected above.
 python3 scripts/validate.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/validation" --backends $backends
-for suite in aggregate_abi system_values semantic_values runtime_foundation generic_runtime memory_runtime simd_values platform_intrinsics process_runtime math_values quantum_values cuda_bindings literal_escapes extern_definitions c_void_pointers install_output vec_alignment darwin_target freestanding target_layout interfaces_methods ffi_modules; do
+for suite in aggregate_abi system_values semantic_values runtime_foundation generic_runtime memory_runtime simd_values platform_intrinsics process_runtime math_values quantum_values cuda_bindings literal_escapes extern_definitions c_void_pointers install_output vec_alignment darwin_target freestanding target_layout interfaces_methods ffi_modules contracts; do
     python3 "tests/$suite.py" --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/$suite" --backends $backends
 done
 for backend in $backends; do

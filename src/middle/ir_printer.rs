@@ -217,6 +217,9 @@ impl IRPrinter {
                     else_target.0
                 ).unwrap();
             }
+            Terminator::Trap => {
+                write!(self.output, "trap").unwrap();
+            }
             Terminator::Unreachable => {
                 write!(self.output, "unreachable").unwrap();
             }

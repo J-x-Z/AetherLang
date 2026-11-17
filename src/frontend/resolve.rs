@@ -270,7 +270,12 @@ impl Rewriter<'_> {
         for parameter in &f.type_params { self.type_locals.insert(parameter.name.clone()); }
         for p in &mut f.params { self.ty(&mut p.ty)?; self.locals.insert(p.name.name.clone()); }
         if let Some(t) = &mut f.ret_type { self.ty(t)?; }
-        for c in &mut f.contracts { self.expr(&mut c.condition)?; }
+        for c in &mut f.contracts {
+            let binding = c.kind == ContractKind::Ensures && self.locals.insert("result".into());
+            let checked = self.expr(&mut c.condition);
+            if binding { self.locals.remove("result"); }
+            checked?;
+        }
         self.block(&mut f.body)?;
         self.locals = saved;
         self.type_locals = saved_types;

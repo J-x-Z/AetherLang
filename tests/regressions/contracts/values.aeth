@@ -1,0 +1,57 @@
+use result::Result;
+
+// The postcondition binding must shadow this global without reading it.
+static mut result:i32 = 900;
+struct Item { value:i32 }
+impl Item {
+    fn positive(self:Self)->bool pure { self.value > 0 }
+    fn value(self:Self)->i32 [requires self.positive(), ensures result==self.value] { self.value }
+}
+fn above_zero(n:i32)->bool pure { n>0 }
+fn increment(n:i32)->i32 [requires above_zero(n), ensures result==n+1] { n+1 }
+fn explicit(n:i32)->i32 [requires n>0, ensures result==n+2] { return n+2; }
+fn branching(n:i32)->i32 [ensures result>0] {
+    if n<0 { return 1; }
+    if n==0 { return 2; }
+    n
+}
+fn loop_return()->i32 [ensures result==3] { loop { return 3; } }
+fn shadow(n:i32)->i32 [ensures result==n+1] {
+    {
+        let n:i32=100;
+        let result:i32=200;
+        return 8;
+    }
+}
+fn result_parameter(result:i32)->i32 [requires result==3, ensures result==4] { result+1 }
+fn mutated(n:mut i32)->i32 [ensures result==n] { n+=1; n }
+fn bump(counter:*i32)->i32 { *counter+=1; 9 }
+fn once(counter:*i32)->i32 [ensures result==9] { return bump(counter); }
+fn is_unit(value:())->bool pure { true }
+fn unit_implicit() [ensures is_unit(result)] {}
+fn unit_explicit()->() [ensures is_unit(result)] { return; }
+fn equal<T>(a:T,b:T)->bool pure { a==b }
+fn identity<T>(value:T)->T [ensures equal(result,value)] { value }
+fn source(ok:bool)->Result<i32,i32> {
+    if ok { return Result::Ok(1); }
+    Result::Err(7)
+}
+fn propagated(ok:bool)->Result<i32,i32>
+    [ensures match result { Result::Ok(n)=>n==2, Result::Err(e)=>e==7 }] {
+    let n:i32=source(ok)?;
+    Result::Ok(n+1)
+}
+fn main()->i32 {
+    if increment(2)!=3 || explicit(3)!=5 { return 1; }
+    if branching(-1)!=1 || branching(0)!=2 || branching(7)!=7 || loop_return()!=3 { return 2; }
+    if shadow(7)!=8 || result_parameter(3)!=4 || mutated(4)!=5 { return 3; }
+    let mut counter:i32=0;
+    if once(&mut counter as *i32)!=9 || counter!=1 { return 4; }
+    unit_implicit(); unit_explicit();
+    if identity(11 as i32)!=11 || !identity(true) { return 5; }
+    let item:Item=Item{value:12};
+    if item.value()!=12 { return 6; }
+    match propagated(true) { Result::Ok(2)=>{}, _=>{return 7;} };
+    match propagated(false) { Result::Err(7)=>{}, _=>{return 8;} };
+    return 0;
+}

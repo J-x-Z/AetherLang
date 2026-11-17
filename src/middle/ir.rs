@@ -134,8 +134,6 @@ pub struct IRFunction {
     pub entry_block: BlockId,
     /// Canonical types assigned by lowering, shared by every backend.
     pub register_types: std::collections::HashMap<Register, IRType>,
-    /// Contract assertions for runtime checking
-    pub contracts: IRContracts,
     /// SIMD annotation - enable auto-vectorization hints
     pub simd: bool,
     /// Naked function - no prologue/epilogue (for asm)
@@ -144,17 +142,6 @@ pub struct IRFunction {
     pub interrupt: bool,
     /// Volatile function - all memory accesses are volatile (for MMIO)
     pub volatile: bool,
-}
-
-/// Contract expressions for runtime assertion generation
-#[derive(Debug, Clone, Default)]
-pub struct IRContracts {
-    /// Preconditions (checked at function entry)
-    pub requires: Vec<String>,
-    /// Postconditions (checked before return)
-    pub ensures: Vec<String>,
-    /// Effect annotations (for documentation/verification)
-    pub effects: Vec<String>,
 }
 
 impl IRFunction {
@@ -167,7 +154,6 @@ impl IRFunction {
             blocks: Vec::new(),
             entry_block: BlockId(0),
             register_types: std::collections::HashMap::new(),
-            contracts: IRContracts::default(),
             simd: false,
             naked: false,
             interrupt: false,
@@ -315,6 +301,9 @@ pub enum Terminator {
     /// br cond, then_target, else_target
     Branch { cond: Value, then_target: BlockId, else_target: BlockId },
     
+    /// Executable failure, preserved independently of debug assertions.
+    Trap,
+
     /// unreachable
     Unreachable,
 }

@@ -1,0 +1,28 @@
+use result::Result;
+fn entry()->i32 [requires false] { 7 }
+fn implicit()->i32 [ensures result==9] { 7 }
+fn explicit()->i32 [ensures result==9] { return 7; }
+fn branch(n:i32)->i32 [ensures result==9] { if n==0{return 7;} 9 }
+fn unit_implicit() [ensures false] {}
+fn unit_explicit()->() [ensures false] { return; }
+fn error()->Result<i32,i32> { Result::Err(3) }
+fn propagate()->Result<i32,i32>
+    [ensures match result { Result::Ok(_)=>true, Result::Err(_)=>false }] {
+    let n:i32=error()?;
+    Result::Ok(n)
+}
+fn loop_return()->i32 [ensures false] { loop { return 7; } }
+fn main(argc:i32,argv:**u8)->i32 {
+    if argc!=2 { return 60; }
+    let test:u8=argv[1][0];
+    if test==48 { entry(); }
+    else if test==49 { implicit(); }
+    else if test==50 { explicit(); }
+    else if test==51 { branch(0); }
+    else if test==52 { unit_implicit(); }
+    else if test==53 { unit_explicit(); }
+    else if test==54 { propagate(); }
+    else if test==55 { loop_return(); }
+    else { return 61; }
+    return 62;
+}

@@ -294,7 +294,14 @@ impl Specializer {
         self.return_type = Some(f.ret_type.clone().unwrap_or(Type::Unit(f.span)));
         let expected = self.return_type.clone();
         for c in &mut f.contracts {
-            self.expr(&mut c.condition, Some(&named("bool", c.span)))?;
+            let is_ensures = c.kind == ContractKind::Ensures;
+            let previous = if is_ensures { self.locals.insert("result".into(), expected.clone().unwrap()) } else { None };
+            let checked = self.expr(&mut c.condition, Some(&named("bool", c.span)));
+            if is_ensures {
+                if let Some(previous) = previous { self.locals.insert("result".into(), previous); }
+                else { self.locals.remove("result"); }
+            }
+            checked?;
         }
         self.block(&mut f.body, expected.as_ref())?;
         self.bindings.clear();

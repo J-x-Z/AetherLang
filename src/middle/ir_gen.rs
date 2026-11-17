@@ -24,6 +24,8 @@ mod memory;
 mod simd;
 #[path = "ir_methods.rs"]
 mod methods;
+#[path = "ir_contracts.rs"]
+mod contracts;
 
 /// IR Generator
 pub struct IRGenerator {
@@ -52,6 +54,7 @@ pub struct IRGenerator {
     function_signatures: HashMap<String, IRType>,
     function_parameters: HashMap<String, Vec<IRType>>,
     global_types: HashMap<String, IRType>,
+    return_contracts: contracts::ReturnContracts,
 }
 
 impl IRGenerator {
@@ -72,6 +75,7 @@ impl IRGenerator {
             function_signatures: HashMap::new(),
             function_parameters: HashMap::new(),
             global_types: HashMap::new(),
+            return_contracts: contracts::ReturnContracts::default(),
         }
     }
 
@@ -433,17 +437,20 @@ impl IRGenerator {
             self.locals.insert(name.clone(), (address.clone(), ty));
             self.local_addresses.insert(name, address);
         }
+        self.begin_contracts(func)?;
         let last_value = self.generate_block(&func.body)?;
         let last_value = self.prepare_implicit_return(last_value)?;
         if self.get_current_terminator().is_none() {
             let ty = self.current_fn.as_ref().unwrap().ret_type.clone();
-            self.set_terminator_current(if self.current_fn.as_ref().unwrap().naked {
-                Terminator::Unreachable
+            if self.current_fn.as_ref().unwrap().naked {
+                self.set_terminator_current(Terminator::Unreachable);
             } else if ty == IRType::Void {
-                Terminator::Return { value: None }
+                self.emit_checked_return(None)?;
             } else if let Some(value) = last_value {
-                Terminator::Return { value: Some(value) }
-            } else { Terminator::Unreachable });
+                self.emit_checked_return(Some(value))?;
+            } else {
+                self.set_terminator_current(Terminator::Unreachable);
+            }
         }
         let mut function = self.current_fn.take().unwrap();
         function.register_types = self.reg_types.clone();
@@ -493,7 +500,7 @@ impl IRGenerator {
                 let expected = self.current_fn.as_ref().unwrap().ret_type.clone();
                 let ret_val = value.as_ref().map(|expr| self.generate_expr_expected(expr, Some(&expected))).transpose()?;
                 let ret_val = if expected == IRType::Void { None } else if expected == IRType::Unit { Some(ret_val.unwrap_or(Value::Unit)) } else { ret_val };
-                self.set_terminator_current(Terminator::Return { value: ret_val });
+                self.emit_checked_return(ret_val)?;
                 Ok(None)
             }
 

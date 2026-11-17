@@ -793,6 +793,13 @@ impl LLVMCodeGen {
                     LLVMBuildCondBr(self.builder, cond_val, then_block, else_block);
                 }
                 
+                Terminator::Trap => {
+                    let ty = LLVMFunctionType(LLVMVoidTypeInContext(self.context), ptr::null_mut(), 0, 0);
+                    let mut trap = LLVMGetNamedFunction(self.module, c"llvm.trap".as_ptr());
+                    if trap.is_null() { trap = LLVMAddFunction(self.module, c"llvm.trap".as_ptr(), ty); }
+                    LLVMBuildCall2(self.builder, ty, trap, ptr::null_mut(), 0, c"".as_ptr());
+                    LLVMBuildUnreachable(self.builder);
+                }
                 Terminator::Unreachable => {
                     LLVMBuildUnreachable(self.builder);
                 }
