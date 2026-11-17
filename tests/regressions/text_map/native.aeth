@@ -1,0 +1,90 @@
+use bytes::*;
+use text::*;
+use map::*;
+use vec::{Vec, vec_free, vec_reserve};
+use result::Result;
+use option::Option;
+fn require(ok: bool, code: i32) -> Result<(), i32> { if ok { Result::Ok(()) } else { Result::Err(code) } }
+fn value(map: *ByteMap, key: Bytes, expected: i64) -> Result<(), i32> {
+    match map_get(map, key) { Option::Some(found) => require(found == expected, 80), Option::None => Result::Err(81), }
+}
+fn invalid(data: *u8, length: u64) -> Result<(), i32> {
+    require(!utf8_valid(data, length), 60)?;
+    match text_from_bytes(bytes_view(data, length)?) { Result::Err(code) => require(code == TEXT_UTF8, 61), Result::Ok(_) => Result::Err(62), }
+}
+fn run() -> Result<(), i32> {
+    let empty: Bytes = bytes_view(0 as *u8, 0)?;
+    require(utf8_valid(empty.data, empty.len), 10)?;
+    match bytes_view(0 as *u8, 1) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(11); }, }
+    match bytes_view(1 as *u8, 9223372036854775808) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(12); }, }
+    require(bytes_slice(empty, 0, 0)?.len == 0, 13)?;
+    let source: Bytes = bytes_view("a\07" as *u8, 3)?;
+    let mut owned: Vec<u8> = bytes_copy(source)?;
+    let view: Bytes = bytes_from_vec(&mut owned as *Vec<u8>);
+    bytes_append(&mut owned as *Vec<u8>, view)?;
+    require(owned.len == 6 && owned.data[1] == 0 && owned.data[2] == 55 && owned.data[4] == 0, 14)?;
+    let part: Bytes = bytes_slice(bytes_from_vec(&mut owned as *Vec<u8>), 1, 3)?;
+    bytes_append(&mut owned as *Vec<u8>, part)?;
+    require(owned.len == 9 && owned.data[6] == 0 && owned.data[7] == 55 && owned.data[8] == 97, 15)?;
+    require(vec_reserve(&mut owned as *Vec<u8>, 16), 16)?;
+    let unused: Bytes = bytes_view(owned.data + 10, 1)?;
+    match bytes_append(&mut owned as *Vec<u8>, unused) { Result::Err(code) => require(code == BYTES_BOUNDS && owned.len == 9, 17)?, Result::Ok(_) => { return Result::Err(18); }, }
+    match bytes_slice(source, 2, 2) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(19); }, }
+    vec_free(&mut owned as *Vec<u8>); vec_free(&mut owned as *Vec<u8>);
+    let unicode: Text = text_from_bytes(bytes_view("\0Aé中🦀\u{10ffff}" as *u8, 15)?)?;
+    require(text_count(unicode)? == 6, 20)?;
+    let expected: [u32; 6] = [0, 65, 233, 20013, 129408, 1114111];
+    let mut offset: u64 = 0; let mut n: u64 = 0;
+    while n < 6 { match text_next(unicode, offset)? { Option::Some(item) => { require(item.value == expected[n], 21)?; offset = item.next; }, Option::None => { return Result::Err(22); }, } n += 1; }
+    require(offset == 15 && text_count(text_slice(unicode, 2, 5)?)? == 2, 23)?;
+    match text_next(unicode, 15)? { Option::None => {}, Option::Some(_) => { return Result::Err(24); }, }
+    match text_next(unicode, 3) { Result::Err(code) => require(code == TEXT_UTF8, 25)?, Result::Ok(_) => { return Result::Err(26); }, }
+    match text_next(unicode, 16) { Result::Err(code) => require(code == BYTES_BOUNDS, 27)?, Result::Ok(_) => { return Result::Err(28); }, }
+    match text_slice(unicode, 3, 0) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(29); }, }
+    match text_slice(unicode, 2, 1) { Result::Err(_) => {}, Result::Ok(_) => { return Result::Err(30); }, }
+    let bad: [[u8; 4]; 13] = [[128,0,0,0],[192,128,0,0],[193,191,0,0],[194,0,0,0],[226,130,0,0],[224,159,191,0],[237,160,128,0],[240,143,191,191],[244,144,128,128],[245,128,128,128],[255,0,0,0],[226,40,161,0],[240,159,152,0]];
+    let lengths: [u64; 13] = [1,2,2,1,2,3,3,4,4,4,1,3,3]; n = 0;
+    while n < 13 { invalid(&bad[n][0] as *u8, lengths[n])?; n += 1; }
+    let controls: [u8; 5] = [0,1,9,31,127]; require(utf8_valid(&controls[0] as *u8, 5), 31)?;
+    let mut map: ByteMap = map_new();
+    let a: Bytes = bytes_view("a" as *u8, 1)?; let i: Bytes = bytes_view("i" as *u8, 1)?; let q: Bytes = bytes_view("q" as *u8, 1)?;
+    // FNV-1a puts these three keys in the same bucket modulo eight.
+    map_put(&mut map as *ByteMap, a, 11)?; map_put(&mut map as *ByteMap, i, 22)?; map_put(&mut map as *ByteMap, q, 33)?;
+    require(map.buckets.len == 8 && map.len == 3, 32)?;
+    match map_remove(&mut map as *ByteMap, a) { Option::Some(old) => require(old == 11, 33)?, Option::None => { return Result::Err(34); }, }
+    value(&mut map as *ByteMap, i, 22)?; value(&mut map as *ByteMap, q, 33)?;
+    match map_put(&mut map as *ByteMap, i, -22)? { Option::Some(old) => require(old == 22, 35)?, Option::None => { return Result::Err(36); }, }
+    match map_get(&mut map as *ByteMap, a) { Option::None => {}, Option::Some(_) => { return Result::Err(37); }, }
+    match map_remove(&mut map as *ByteMap, a) { Option::None => {}, Option::Some(_) => { return Result::Err(38); }, }
+    map_put(&mut map as *ByteMap, bytes_view("y" as *u8, 1)?, 44)?;
+    let mut key: [u8; 3] = [0,0,255]; n = 0;
+    while n < 256 { key[1] = n as u8; map_put(&mut map as *ByteMap, bytes_view(&key[0] as *u8, 3)?, n as i64)?; n += 1; }
+    key[0] = 9; key[1] = 9; key[2] = 9;
+    require(map.len == 259 && map.buckets.len >= 518, 39)?;
+    n = 0; key[0] = 0; key[2] = 255;
+    while n < 256 { key[1] = n as u8; value(&mut map as *ByteMap, bytes_view(&key[0] as *u8, 3)?, n as i64)?; n += 1; }
+    map_put(&mut map as *ByteMap, empty, 77)?; value(&mut map as *ByteMap, empty, 77)?;
+    map_put(&mut map as *ByteMap, bytes_view("a\0b" as *u8, 3)?, 88)?;
+    map_put(&mut map as *ByteMap, a, 99)?;
+    value(&mut map as *ByteMap, bytes_view("a\0b" as *u8, 3)?, 88)?; value(&mut map as *ByteMap, a, 99)?;
+    let mut items: u64 = 0; let mut sum: i64 = 0; offset = 0;
+    loop { match map_next(&mut map as *ByteMap, offset) { Option::None => { break; }, Option::Some(item) => { value(&mut map as *ByteMap, item.key, item.value)?; items += 1; sum += item.value; offset = item.next; }, } }
+    require(items == map.len && sum == 32640 - 22 + 33 + 44 + 77 + 88 + 99, 40)?;
+    map_free(&mut map as *ByteMap); map_free(&mut map as *ByteMap); require(map.len == 0 && map.buckets.len == 0, 41)?;
+    map_put(&mut map as *ByteMap, a, 1)?; value(&mut map as *ByteMap, a, 1)?; map_free(&mut map as *ByteMap);
+    // Eight different initial buckets become tombstones without growing.
+    // Missing lookup must terminate even when no never-used bucket remains.
+    let mut single: u8 = 0;
+    while single < 8 {
+        let key: Bytes = bytes_view(&single as *u8, 1)?;
+        map_put(&mut map as *ByteMap, key, 5)?;
+        match map_remove(&mut map as *ByteMap, key) { Option::Some(_) => {}, Option::None => { return Result::Err(42); }, }
+        single += 1;
+    }
+    require(map.buckets.len == 8 && map.len == 0, 43)?;
+    match map_get(&mut map as *ByteMap, a) { Option::None => {}, Option::Some(_) => { return Result::Err(44); }, }
+    map_put(&mut map as *ByteMap, a, 17)?; value(&mut map as *ByteMap, a, 17)?;
+    map_free(&mut map as *ByteMap);
+    Result::Ok(())
+}
+fn main() -> i32 { match run() { Result::Ok(_) => 0, Result::Err(code) => code, } }

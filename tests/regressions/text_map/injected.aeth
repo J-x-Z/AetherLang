@@ -1,0 +1,45 @@
+use bytes::*;
+use map::*;
+use vec::{Vec, vec_free};
+use result::Result;
+use option::Option;
+extern "C" { fn legacy_begin(); fn legacy_fail_after(count: u64); fn legacy_allow(); fn legacy_finish() -> i32; fn legacy_observe(pointer: *void); }
+fn require(ok: bool, code: i32) -> Result<(), i32> { if ok { Result::Ok(()) } else { Result::Err(code) } }
+fn run() -> Result<(), i32> {
+    legacy_begin();
+    let mut owner: Vec<u8> = bytes_copy(bytes_view("a\0b" as *u8, 3)?)?;
+    let pointer: *u8 = owner.data; let capacity: u64 = owner.capacity;
+    let source: Bytes = bytes_from_vec(&mut owner as *Vec<u8>); legacy_fail_after(0);
+    match bytes_append(&mut owner as *Vec<u8>, source) { Result::Err(code) => require(code == BYTES_MEMORY, 10)?, Result::Ok(_) => { return Result::Err(11); }, }
+    require(owner.data == pointer && owner.capacity == capacity && owner.len == 3 && owner.data[2] == 98, 12)?;
+    legacy_allow(); bytes_append(&mut owner as *Vec<u8>, source)?;
+    require(owner.len == 6 && owner.data[4] == 0 && owner.data[5] == 98, 13)?;
+    vec_free(&mut owner as *Vec<u8>); require(legacy_finish() == 0, 14)?;
+    let mut fail_after: u64 = 0; let mut completed: bool = false;
+    while fail_after < 4 && !completed {
+        legacy_begin(); let mut map: ByteMap = map_new(); let mut byte: u8 = 0;
+        while byte < 4 { map_put(&mut map as *ByteMap, bytes_view(&byte as *u8, 1)?, byte as i64)?; byte += 1; }
+        let capacity: u64 = map.buckets.len; let pointer: *MapEntry = map.buckets.data;
+        legacy_fail_after(fail_after);
+        let added: Bytes = bytes_view("new\0key" as *u8, 7)?;
+        match map_put(&mut map as *ByteMap, added, 45) {
+            Result::Err(code) => {
+                require(code == BYTES_MEMORY && map.len == 4 && map.buckets.len == capacity && map.buckets.data == pointer, 20)?;
+                match map_get(&mut map as *ByteMap, added) { Option::None => {}, Option::Some(_) => { return Result::Err(21); }, }
+            },
+            Result::Ok(_) => { completed = true; legacy_observe(map.buckets.data as *void); require(map.len == 5 && map.buckets.len == 16, 22)?; },
+        }
+        byte = 0;
+        while byte < 4 { match map_get(&mut map as *ByteMap, bytes_view(&byte as *u8, 1)?) { Option::Some(value) => require(value == byte as i64, 23)?, Option::None => { return Result::Err(24); }, } byte += 1; }
+        legacy_allow(); map_free(&mut map as *ByteMap); require(legacy_finish() == 0, 25)?; fail_after += 1;
+    }
+    require(completed && fail_after == 3, 26)?;
+    // Replacement/removal must not allocate even with allocation failure armed.
+    legacy_begin(); let mut map: ByteMap = map_new(); let key: Bytes = bytes_view("keep" as *u8, 4)?;
+    map_put(&mut map as *ByteMap, key, 4)?; legacy_fail_after(0);
+    match map_put(&mut map as *ByteMap, key, 8)? { Option::Some(old) => require(old == 4, 27)?, Option::None => { return Result::Err(28); }, }
+    match map_remove(&mut map as *ByteMap, key) { Option::Some(old) => require(old == 8, 29)?, Option::None => { return Result::Err(30); }, }
+    legacy_allow(); map_free(&mut map as *ByteMap); require(legacy_finish() == 0, 31)?;
+    Result::Ok(())
+}
+fn main() -> i32 { match run() { Result::Ok(_) => 0, Result::Err(code) => code, } }

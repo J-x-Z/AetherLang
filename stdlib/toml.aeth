@@ -7,6 +7,7 @@
 use vec::{Vec, vec_new, vec_push, vec_free};
 use result::Result;
 use option::Option;
+use text::utf8_valid;
 extern "C" {
     fn malloc(size: u64) -> *void; fn free(pointer: *void);
     fn strlen(text: *u8) -> u64; fn strcmp(a: *u8, b: *u8) -> i32;
@@ -70,20 +71,13 @@ fn copy(text: *u8, length: u64) -> *u8 {
     if result != (0 as *u8) { memcpy(result as *void, text as *void, length); result[length] = 0; }
     result
 }
-fn utf8_valid(input: *u8, length: u64) -> bool {
+fn toml_bytes_valid(input: *u8, length: u64) -> bool {
+    if !utf8_valid(input, length) { return false; }
     let mut i: u64 = 0;
     while i < length {
-        let a: u8 = input[i];
-        if a < 128 { if a == 0 || (a < 32 && a != 9 && a != 10 && a != 13) || a == 127 { return false; } i += 1; }
-        else {
-            let count: u64 = if a >= 194 && a <= 223 { 2 } else if a >= 224 && a <= 239 { 3 } else if a >= 240 && a <= 244 { 4 } else { 0 };
-            if count == 0 || count > length - i { return false; }
-            let b: u8 = input[i + 1];
-            if (a == 224 && b < 160) || (a == 237 && b >= 160) || (a == 240 && b < 144) || (a == 244 && b > 143) { return false; }
-            let mut j: u64 = 1;
-            while j < count { if input[i + j] < 128 || input[i + j] > 191 { return false; } j += 1; }
-            i += count;
-        }
+        let byte: u8 = input[i];
+        if byte == 0 || (byte < 32 && byte != 9 && byte != 10 && byte != 13) || byte == 127 { return false; }
+        i += 1;
     }
     true
 }
@@ -218,7 +212,7 @@ fn read_document(parser: *Parser) -> Result<(), TomlError> {
     Result::Ok(())
 }
 pub fn toml_parse_bytes(doc: *TomlDoc, input: *u8, length: u64) -> Result<(), TomlError> {
-    if input == (0 as *u8) || length > 1048576 || !utf8_valid(input, length) { return Result::Err(TomlError { offset: 0, code: TOML_SYNTAX }); }
+    if input == (0 as *u8) || length > 1048576 || !toml_bytes_valid(input, length) { return Result::Err(TomlError { offset: 0, code: TOML_SYNTAX }); }
     let tables: Vec<*u8> = vec_new(); let next: TomlDoc = toml_new();
     let mut parser: Parser = Parser { input: input, length: length, pos: 0, section: 0 as *u8, tables: tables, doc: next };
     let status: Result<(), TomlError> = read_document(&parser as *Parser);

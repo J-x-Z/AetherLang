@@ -1,0 +1,43 @@
+// Core counting and byte-key aggregation stay in Aether. Input is UTF-8; ASCII
+// space/tab/CR/LF separate words. NUL is content. Output is a bounded summary.
+use binary_io::read_path_bytes;
+use bytes::{Bytes, bytes_from_vec, bytes_slice};
+use text::{Text, text_from_bytes, text_next};
+use map::{ByteMap, map_new, map_get, map_put, map_free, map_next};
+use vec::{Vec, vec_free};
+use result::Result;
+use option::Option;
+extern "C" { fn printf(format: *u8, ...) -> i32; }
+fn count(map: *ByteMap, key: Bytes) -> Result<(), i32> {
+    let old: i64 = match map_get(map, key) { Option::Some(value) => value, Option::None => 0, };
+    map_put(map, key, old + 1)?; Result::Ok(())
+}
+fn process(data: Bytes, map: *ByteMap) -> Result<(), i32> {
+    let text: Text = text_from_bytes(data)?;
+    let mut offset: u64 = 0; let mut start: u64 = 0; let mut scalars: u64 = 0; let mut words: u64 = 0;
+    loop {
+        match text_next(text, offset)? {
+            Option::None => { break; },
+            Option::Some(item) => {
+                if item.value == 32 || item.value == 9 || item.value == 10 || item.value == 13 {
+                    if offset > start { count(map, bytes_slice(data, start, offset - start)?)?; words += 1; }
+                    start = item.next;
+                }
+                offset = item.next; scalars += 1;
+            },
+        }
+    }
+    if offset > start { count(map, bytes_slice(data, start, offset - start)?)?; words += 1; }
+    let mut squared: i64 = 0; let mut cursor: u64 = 0;
+    loop { match map_next(map, cursor) { Option::None => { break; }, Option::Some(item) => { squared += item.value * item.value; cursor = item.next; }, } }
+    if printf("bytes=%llu scalars=%llu words=%llu unique=%llu squared=%lld\n" as *u8, data.len, scalars, words, map.len, squared) < 0 { return Result::Err(90); }
+    Result::Ok(())
+}
+fn main(argc: i32, argv: **u8) -> i32 {
+    if argc != 2 { return 64; }
+    let mut owner: Vec<u8> = match read_path_bytes(argv[1], 1048576) { Result::Ok(value) => value, Result::Err(code) => { return code; }, };
+    let mut map: ByteMap = map_new();
+    let result: Result<(), i32> = process(bytes_from_vec(&mut owner as *Vec<u8>), &mut map as *ByteMap);
+    map_free(&mut map as *ByteMap); vec_free(&mut owner as *Vec<u8>);
+    match result { Result::Ok(_) => 0, Result::Err(code) => code, }
+}

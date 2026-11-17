@@ -1,0 +1,54 @@
+// Strict UTF-8 over bounded bytes. Text borrows its source, which must remain
+// alive and unmodified. NUL is a valid scalar; these are not C strings.
+// Byte offsets are explicit. Slices and iterator positions must be boundaries.
+use bytes::{Bytes, bytes_view, bytes_slice, BYTES_BOUNDS};
+use result::Result;
+use option::Option;
+pub const TEXT_UTF8: i32 = 4;
+pub struct Text { bytes: Bytes }
+pub struct Scalar { value: u32, next: u64 }
+
+fn decode(view: Bytes, offset: u64) -> Result<Scalar, i32> {
+    let first: u8 = view.data[offset];
+    if first < 128 { return Result::Ok(Scalar { value: first as u32, next: offset + 1 }); }
+    let count: u64 = if first >= 194 && first <= 223 { 2 } else if first >= 224 && first <= 239 { 3 } else if first >= 240 && first <= 244 { 4 } else { 0 };
+    if count == 0 || count > view.len - offset { return Result::Err(TEXT_UTF8); }
+    let second: u8 = view.data[offset + 1];
+    if (first == 224 && second < 160) || (first == 237 && second >= 160) || (first == 240 && second < 144) || (first == 244 && second > 143) { return Result::Err(TEXT_UTF8); }
+    let mut value: u32 = if count == 2 { (first & 31) as u32 } else if count == 3 { (first & 15) as u32 } else { (first & 7) as u32 };
+    let mut i: u64 = 1;
+    while i < count {
+        let byte: u8 = view.data[offset + i];
+        if byte < 128 || byte > 191 { return Result::Err(TEXT_UTF8); }
+        value = (value << 6) | (byte & 63) as u32;
+        i += 1;
+    }
+    Result::Ok(Scalar { value: value, next: offset + count })
+}
+pub fn text_from_bytes(view: Bytes) -> Result<Text, i32> {
+    bytes_view(view.data, view.len)?;
+    let mut offset: u64 = 0;
+    while offset < view.len { offset = decode(view, offset)?.next; }
+    Result::Ok(Text { bytes: view })
+}
+pub fn utf8_valid(data: *u8, length: u64) -> bool {
+    let view: Bytes = match bytes_view(data, length) { Result::Ok(value) => value, Result::Err(_) => { return false; }, };
+    match text_from_bytes(view) { Result::Ok(_) => true, Result::Err(_) => false, }
+}
+pub fn text_next(text: Text, offset: u64) -> Result<Option<Scalar>, i32> {
+    if offset > text.bytes.len { return Result::Err(BYTES_BOUNDS); }
+    if offset == text.bytes.len { return Result::Ok(Option::None); }
+    Result::Ok(Option::Some(decode(text.bytes, offset)?))
+}
+pub fn text_count(text: Text) -> Result<u64, i32> {
+    let mut offset: u64 = 0; let mut count: u64 = 0;
+    while offset < text.bytes.len { offset = decode(text.bytes, offset)?.next; count += 1; }
+    Result::Ok(count)
+}
+pub fn text_slice(text: Text, start: u64, length: u64) -> Result<Text, i32> {
+    let view: Bytes = bytes_slice(text.bytes, start, length)?;
+    let end: u64 = start + length;
+    if start < text.bytes.len && text.bytes.data[start] >= 128 && text.bytes.data[start] <= 191 { return Result::Err(TEXT_UTF8); }
+    if end < text.bytes.len && text.bytes.data[end] >= 128 && text.bytes.data[end] <= 191 { return Result::Err(TEXT_UTF8); }
+    Result::Ok(Text { bytes: view })
+}

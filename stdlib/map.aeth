@@ -1,0 +1,119 @@
+// Owned byte-key -> i64 map. Keys compare by full length/content, including NUL.
+// Insertion copies the key; callers keep ownership of their source bytes. Do
+// not copy a live ByteMap. No key references escape; map_free releases all keys
+// and buckets, then resets the map. Fields are implementation state: do not edit.
+// Linear probing, power-of-two capacity, at most 50% live occupancy. FNV-1a is
+// deterministic, not attack-resistant; hostile keys can degrade lookup to O(n).
+use bytes::{Bytes, bytes_view, bytes_from_vec, bytes_equal, bytes_copy, BYTES_MEMORY, BYTES_INVALID};
+use vec::{Vec, vec_new, vec_reserve, vec_free};
+use option::Option;
+use result::Result;
+pub struct MapEntry { key: Vec<u8>, hash: u64, value: i64, state: u8 }
+pub struct ByteMap { buckets: Vec<MapEntry>, len: u64 }
+pub fn map_new() -> ByteMap { ByteMap { buckets: vec_new(), len: 0 } }
+fn hash_bytes(key: Bytes) -> u64 {
+    let mut hash: u64 = 14695981039346656037;
+    let mut i: u64 = 0;
+    while i < key.len { hash = (hash ^ key.data[i] as u64) * 1099511628211; i += 1; }
+    hash
+}
+fn locate(map: *ByteMap, key: Bytes, hash: u64) -> u64 {
+    let capacity: u64 = map.buckets.len;
+    if capacity == 0 { return capacity; }
+    let mut index: u64 = hash % capacity; let mut probes: u64 = 0;
+    while probes < capacity {
+        let entry: *MapEntry = &mut map.buckets.data[index] as *MapEntry;
+        if entry.state == 0 { return capacity; }
+        if entry.state == 1 && entry.hash == hash && bytes_equal(bytes_from_vec(&mut entry.key as *Vec<u8>), key) { return index; }
+        index = (index + 1) % capacity; probes += 1;
+    }
+    capacity
+}
+fn vacancy(buckets: *Vec<MapEntry>, hash: u64) -> u64 {
+    let mut index: u64 = hash % buckets.len;
+    while buckets.data[index].state == 1 { index = (index + 1) % buckets.len; }
+    index
+}
+// Ensure room for this many entries. Failure leaves all state unchanged.
+pub fn map_reserve(map: *ByteMap, entries: u64) -> Result<(), i32> {
+    if entries <= map.buckets.len / 2 { return Result::Ok(()); }
+    if entries > 9223372036854775807 / 2 { return Result::Err(BYTES_INVALID); }
+    let needed: u64 = entries * 2;
+    let mut capacity: u64 = 8;
+    while capacity < needed {
+        if capacity > 9223372036854775807 / 2 { return Result::Err(BYTES_INVALID); }
+        capacity *= 2;
+    }
+    let mut buckets: Vec<MapEntry> = vec_new();
+    if !vec_reserve(&mut buckets as *Vec<MapEntry>, capacity) { return Result::Err(BYTES_MEMORY); }
+    let mut i: u64 = 0;
+    while i < capacity {
+        buckets.data[i] = MapEntry { key: vec_new(), hash: 0, value: 0, state: 0 }; i += 1;
+    }
+    buckets.len = capacity;
+    i = 0;
+    while i < map.buckets.len {
+        let entry: MapEntry = map.buckets.data[i];
+        if entry.state == 1 { let index: u64 = vacancy(&mut buckets as *Vec<MapEntry>, entry.hash); buckets.data[index] = entry; }
+        i += 1;
+    }
+    // Transfer key ownership; releasing the old bucket storage must not free keys.
+    vec_free(&mut map.buckets as *Vec<MapEntry>);
+    map.buckets = buckets;
+    Result::Ok(())
+}
+pub fn map_get(map: *ByteMap, key: Bytes) -> Option<i64> {
+    let index: u64 = locate(map, key, hash_bytes(key));
+    if index == map.buckets.len { Option::None } else { Option::Some(map.buckets.data[index].value) }
+}
+// Returns the previous value, if replaced. All allocation and validation errors
+// preserve the original contents, length and bucket capacity.
+pub fn map_put(map: *ByteMap, key: Bytes, value: i64) -> Result<Option<i64>, i32> {
+    bytes_view(key.data, key.len)?;
+    let hash: u64 = hash_bytes(key);
+    let previous: u64 = locate(map, key, hash);
+    if previous < map.buckets.len {
+        let old: i64 = map.buckets.data[previous].value;
+        map.buckets.data[previous].value = value;
+        return Result::Ok(Option::Some(old));
+    }
+    if map.len >= 9223372036854775807 { return Result::Err(BYTES_INVALID); }
+    let mut owned: Vec<u8> = bytes_copy(key)?;
+    match map_reserve(map, map.len + 1) {
+        Result::Err(code) => { vec_free(&mut owned as *Vec<u8>); return Result::Err(code); },
+        Result::Ok(_) => {},
+    }
+    let index: u64 = vacancy(&mut map.buckets as *Vec<MapEntry>, hash);
+    map.buckets.data[index] = MapEntry { key: owned, hash: hash, value: value, state: 1 };
+    map.len += 1;
+    Result::Ok(Option::None)
+}
+pub fn map_remove(map: *ByteMap, key: Bytes) -> Option<i64> {
+    let index: u64 = locate(map, key, hash_bytes(key));
+    if index == map.buckets.len { return Option::None; }
+    let entry: *MapEntry = &mut map.buckets.data[index] as *MapEntry;
+    let value: i64 = entry.value;
+    vec_free(&mut entry.key as *Vec<u8>); entry.state = 2; map.len -= 1;
+    Option::Some(value)
+}
+pub fn map_free(map: *ByteMap) {
+    let mut i: u64 = 0;
+    while i < map.buckets.len {
+        if map.buckets.data[i].state == 1 { vec_free(&mut map.buckets.data[i].key as *Vec<u8>); }
+        i += 1;
+    }
+    vec_free(&mut map.buckets as *Vec<MapEntry>); map.len = 0;
+}
+
+// Iteration borrows key storage until the next mutation/free; start at offset 0
+// and continue at item.next. Order is unspecified, not insertion order.
+pub struct MapItem { key: Bytes, value: i64, next: u64 }
+pub fn map_next(map: *ByteMap, offset: u64) -> Option<MapItem> {
+    let mut index: u64 = offset;
+    while index < map.buckets.len {
+        let entry: *MapEntry = &mut map.buckets.data[index] as *MapEntry;
+        if entry.state == 1 { return Option::Some(MapItem { key: bytes_from_vec(&mut entry.key as *Vec<u8>), value: entry.value, next: index + 1 }); }
+        index += 1;
+    }
+    Option::None
+}

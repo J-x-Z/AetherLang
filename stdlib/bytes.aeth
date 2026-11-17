@@ -1,0 +1,59 @@
+// A bounded borrowed byte view, including embedded NUL. No encoding is implied.
+// Raw pointers must refer to at least len readable bytes; views never own storage.
+// A view into a Vec is invalidated by successful reserve/append/free. Do not copy
+// live Vec owners. Owned copies are Vec<u8>, released with vec_free.
+use vec::{Vec, vec_new, vec_reserve};
+use result::Result;
+extern "C" { fn memmove(destination: *void, source: *void, size: u64) -> *void; }
+pub const BYTES_INVALID: i32 = 1;
+pub const BYTES_BOUNDS: i32 = 2;
+pub const BYTES_MEMORY: i32 = 3;
+pub struct Bytes { data: *u8, len: u64 }
+
+pub fn bytes_view(data: *u8, length: u64) -> Result<Bytes, i32> {
+    if length > 9223372036854775807 || (length > 0 && data == 0 as *u8) {
+        return Result::Err(BYTES_INVALID);
+    }
+    Result::Ok(Bytes { data: data, len: length })
+}
+pub fn bytes_from_vec(owner: *Vec<u8>) -> Bytes { Bytes { data: owner.data, len: owner.len } }
+pub fn bytes_slice(view: Bytes, start: u64, length: u64) -> Result<Bytes, i32> {
+    if start > view.len || length > view.len - start { return Result::Err(BYTES_BOUNDS); }
+    // Avoid even zero-offset arithmetic on a null empty view.
+    let pointer: *u8 = if start == 0 { view.data } else { view.data + start };
+    Result::Ok(Bytes { data: pointer, len: length })
+}
+pub fn bytes_equal(a: Bytes, b: Bytes) -> bool {
+    if a.len != b.len { return false; }
+    let mut i: u64 = 0;
+    while i < a.len { if a.data[i] != b.data[i] { return false; } i += 1; }
+    true
+}
+// Append is transactional on allocation/size failure. A source wholly within
+// the destination's live bytes is supported, including self-append and slices.
+pub fn bytes_append(owner: *Vec<u8>, source: Bytes) -> Result<(), i32> {
+    if source.len == 0 { return Result::Ok(()); }
+    if source.data == 0 as *u8 || source.len > 9223372036854775807 - owner.len {
+        return Result::Err(BYTES_INVALID);
+    }
+    let address: u64 = source.data as u64;
+    let base: u64 = owner.data as u64;
+    let inside: bool = owner.data != 0 as *u8 && address >= base && address - base < owner.capacity;
+    let offset: u64 = if inside { address - base } else { 0 };
+    if inside && (offset > owner.len || source.len > owner.len - offset) { return Result::Err(BYTES_BOUNDS); }
+    let needed: u64 = owner.len + source.len;
+    if needed > owner.capacity {
+        let mut capacity: u64 = needed;
+        if owner.capacity <= 9223372036854775807 / 2 && owner.capacity * 2 > capacity { capacity = owner.capacity * 2; }
+        if !vec_reserve(owner, capacity) { return Result::Err(BYTES_MEMORY); }
+    }
+    let pointer: *u8 = if inside { owner.data + offset } else { source.data };
+    memmove((owner.data + owner.len) as *void, pointer as *void, source.len);
+    owner.len = needed;
+    Result::Ok(())
+}
+pub fn bytes_copy(source: Bytes) -> Result<Vec<u8>, i32> {
+    let mut owner: Vec<u8> = vec_new();
+    bytes_append(&mut owner as *Vec<u8>, source)?;
+    Result::Ok(owner)
+}
