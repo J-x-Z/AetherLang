@@ -1,0 +1,73 @@
+// Cross-target native consumer for the loader, resource limits and GPU dispatch.
+// The second argument is an expected PCI vendor ID (hex). Zero accepts any GPU.
+extern "C" {
+    fn aether_gpu_open(backend:i32,path:*u8,code:*i32,native:*i64)->*void;
+    fn aether_gpu_close(context:*void);
+    fn aether_gpu_caps(context:*void,caps:*Caps);
+    fn aether_gpu_buffer_new(context:*void,bytes:u64,budget:u64,charge:*u64,code:*i32,native:*i64)->*void;
+    fn aether_gpu_buffer_contents(context:*void,buffer:*void)->*void;
+    fn aether_gpu_buffer_free(context:*void,buffer:*void);
+    fn aether_gpu_submit_gemm(context:*void,a:*void,b:*void,c:*void,p:*Gemm,budget:u64,charge:*u64,code:*i32,native:*i64)->*void;
+    fn aether_gpu_event_status(context:*void,event:*void,native:*i64)->i32;
+    fn aether_gpu_event_wait(context:*void,event:*void,native:*i64)->i32;
+    fn aether_gpu_event_free(context:*void,event:*void);
+    fn printf(fmt:*u8,...)->i32;
+    fn strtoul(s:*u8,end:**u8,base:i32)->u64;
+}
+@repr(C) struct Caps {
+    id:u64,heap:u64,max_buffer:u64,available:u64,vendor:u32,fp64:u32,unified:u32,family:u32,name:[u8;256]
+}
+@repr(C) struct Gemm {m:u64,n:u64,k:u64,ao:u64,ar:u64,ac:u64,bo:u64,br:u64,bc:u64,co:u64,cr:u64,cc:u64}
+
+fn main(argc:i32,argv:**u8)->i32 {
+    if argc!=3 {return 2;}
+    let mut code:i32=0; let mut native:i64=0;
+    let device:*void=aether_gpu_open(3,argv[1],&mut code as *i32,&mut native as *i64);
+    if device==0 as *void {printf("open error %d native %lld\n",code,native);return 3;}
+    let mut caps:Caps=Caps{id:0,heap:0,max_buffer:0,available:0,vendor:0,fp64:0,unified:0,family:0,name:[0;256]};
+    aether_gpu_caps(device,&mut caps as *Caps);
+    let expect:u64=strtoul(argv[2],0 as **u8,16);
+    printf("gpu=%s vendor=0x%x id=%llu heap=%llu max_buffer=%llu available=%llu fp64=%u unified=%u queue=%u\n",
+        &caps.name[0] as *u8,caps.vendor,caps.id,caps.heap,caps.max_buffer,caps.available,caps.fp64,caps.unified,caps.family);
+    if caps.id==0 || caps.heap==0 || caps.max_buffer<1024 || (expect!=0 && expect!=caps.vendor as u64) {return 4;}
+    let mut charge:u64=0; let mut peak:u64=0;
+    if aether_gpu_buffer_new(device,1024,1023,&mut charge as *u64,&mut code as *i32,&mut native as *i64)!=0 as *void || code!=6 {return 5;}
+    let mut handles:[*void;3]=[0 as *void;3];
+    let mut i:u64=0;
+    while i<3 {
+        handles[i]=aether_gpu_buffer_new(device,1024,1048576-peak,&mut charge as *u64,&mut code as *i32,&mut native as *i64);
+        if handles[i]==0 as *void || charge<1024 {return 6;}
+        peak+=charge; i+=1;
+    }
+    let a:*f32=aether_gpu_buffer_contents(device,handles[0]) as *f32;
+    let b:*f32=aether_gpu_buffer_contents(device,handles[1]) as *f32;
+    let c:*f32=aether_gpu_buffer_contents(device,handles[2]) as *f32;
+    i=0;while i<256 {a[i]=((i as i32%11)-5) as f32;b[i]=((i as i32%7)-3) as f32;c[i]=-999.0;i+=1;}
+    let mut p:Gemm=Gemm{m:11,n:9,k:13,ao:3,ar:15,ac:1,bo:5,br:1,bc:16,co:7,cr:11,cc:1};
+    let event:*void=aether_gpu_submit_gemm(device,handles[0],handles[1],handles[2],&p as *Gemm,1048576-peak,&mut charge as *u64,&mut code as *i32,&mut native as *i64);
+    if event==0 as *void {printf("submit error %d native %lld\n",code,native);return 7;}
+    peak+=charge;
+    let initial:i32=aether_gpu_event_status(device,event,&mut native as *i64);
+    if (initial!=1 && initial!=2) || aether_gpu_event_wait(device,event,&mut native as *i64)!=2 {return 8;}
+    let mut checked:u64=0;i=0;
+    while i<256 {
+        let mut expected:f32=-999.0;
+        if i>=p.co {
+            let row:u64=(i-p.co)/p.cr;let col:u64=(i-p.co)%p.cr;
+            if row<p.m && col<p.n {
+                expected=0.0;let mut k:u64=0;
+                while k<p.k {expected+=a[p.ao+row*p.ar+k]*b[p.bo+k+col*p.bc];k+=1;}
+                checked+=1;
+            }
+        }
+        if c[i]!=expected {return 9;}
+        i+=1;
+    }
+    aether_gpu_event_free(device,event);
+    p.co=255;
+    if aether_gpu_submit_gemm(device,handles[0],handles[1],handles[2],&p as *Gemm,1048576-peak,&mut charge as *u64,&mut code as *i32,&mut native as *i64)!=0 as *void || code!=5 {return 10;}
+    i=0;while i<3 {aether_gpu_buffer_free(device,handles[i]);i+=1;}
+    aether_gpu_close(device);
+    printf("gemm=11x13x9 checked=%llu peak_buffers=%llu\n",checked,peak);
+    if checked==99 {0} else {11}
+}

@@ -1,0 +1,17 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, std430) readonly buffer A { float a[]; };
+layout(set = 0, binding = 1, std430) readonly buffer B { float b[]; };
+layout(set = 0, binding = 2, std430) writeonly buffer C { float c[]; };
+layout(push_constant) uniform Layout {
+    uint m, n, k;
+    uint ao, ar, ac, bo, br, bc, co, cr, cc;
+} p;
+void main() {
+    uint col = gl_GlobalInvocationID.x, row = gl_GlobalInvocationID.y;
+    if (row >= p.m || col >= p.n) return;
+    precise float sum = 0.0;
+    for (uint i = 0; i < p.k; ++i)
+        sum += a[p.ao + row*p.ar + i*p.ac] * b[p.bo + i*p.br + col*p.bc];
+    c[p.co + row*p.cr + col*p.cc] = sum;
+}
