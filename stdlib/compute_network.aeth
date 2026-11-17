@@ -1,0 +1,71 @@
+// Pairwise contraction planner for ordered rank-2 tensor networks (matrix
+// chains). Dynamic programming minimizes scalar multiplications exactly for
+// 1..16 operands; execution uses the selected queue's GEMM. This is not a
+// general einsum optimizer: axes cannot be permuted or repeated implicitly.
+use compute::*;
+use compute_ops::compute_gemm_sync;
+use result::Result;
+extern "C"{fn malloc(size:usize)->*void;fn free(value:*void);}
+pub struct ComputeChainPlan{count:u64,dimensions:[u64;17],splits:[u64;256],cost:u64}
+fn multiply(a:u64,b:u64,c:u64)->Result<u64,ComputeError>{
+ if a==0||b==0||c==0{return Result::Ok(0);}
+ if a>18446744073709551615/b{return Result::Err(compute_error(COMPUTE_OVERFLOW,0));}
+ let ab:u64=a*b;if ab>18446744073709551615/c{return Result::Err(compute_error(COMPUTE_OVERFLOW,0));}Result::Ok(ab*c)
+}
+pub fn compute_chain_plan(queue:*ComputeQueue,inputs:**ComputeBuffer,count:u64)->Result<*ComputeChainPlan,ComputeError>{
+ if inputs==0 as **ComputeBuffer||count==0||count>16{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+ let plan:*ComputeChainPlan=malloc(size_of(ComputeChainPlan)) as *ComputeChainPlan;
+ if plan==0 as *ComputeChainPlan{return Result::Err(compute_error(COMPUTE_ALLOCATION,0));}
+ *plan=ComputeChainPlan{count:count,dimensions:[0;17],splits:[0;256],cost:0};
+ let answer:Result<(),ComputeError>=plan_inner(queue,inputs,plan);
+ match answer{Result::Ok(_)=>Result::Ok(plan),Result::Err(e)=>{free(plan as *void);Result::Err(e)}}
+}
+fn plan_inner(queue:*ComputeQueue,inputs:**ComputeBuffer,plan:*ComputeChainPlan)->Result<(),ComputeError>{
+ let n:u64=plan.count;let mut i:u64=0;
+ while i<n{
+  if inputs[i]==0 as *ComputeBuffer||compute_buffer_queue(inputs[i])!=queue{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+  let layout:ComputeLayout=compute_buffer_layout(inputs[i]);if layout.rank!=2{return Result::Err(compute_error(COMPUTE_SHAPE,0));}
+  if i>0&&plan.dimensions[i]!=layout.shape[0]{return Result::Err(compute_error(COMPUTE_SHAPE,0));}
+  plan.dimensions[i]=layout.shape[0];plan.dimensions[i+1]=layout.shape[1];i+=1;
+ }
+ let mut scratch:*ComputeScratch=compute_scratch_new(queue,n*n*9)?;
+ let costs:*u64=compute_scratch_data(scratch) as *u64;let valid:*u8=compute_scratch_data(scratch)+n*n*8;
+ i=0;while i<n*n{costs[i]=0;valid[i]=0;i+=1;}i=0;while i<n{valid[i*n+i]=1;i+=1;}
+ let mut width:u64=2;while width<=n{i=0;while i+width<=n{
+  let j:u64=i+width-1;let mut k:u64=i;
+  while k<j{
+   if valid[i*n+k]!=0&&valid[(k+1)*n+j]!=0{
+    match multiply(plan.dimensions[i],plan.dimensions[k+1],plan.dimensions[j+1]){
+     Result::Ok(product)=>{
+      let a:u64=costs[i*n+k];let b:u64=costs[(k+1)*n+j];
+      if a<=18446744073709551615-b&&product<=18446744073709551615-a-b{
+       let cost:u64=a+b+product;if valid[i*n+j]==0||cost<costs[i*n+j]{costs[i*n+j]=cost;valid[i*n+j]=1;plan.splits[i*n+j]=k;}
+      }
+     },Result::Err(_)=>{},
+    }
+   }k+=1;
+  }i+=1;
+ }width+=1;}
+ let possible:bool=valid[n-1]!=0;plan.cost=costs[n-1];compute_scratch_free(&mut scratch as **ComputeScratch);
+ if !possible{return Result::Err(compute_error(COMPUTE_OVERFLOW,0));}Result::Ok(())
+}
+pub fn compute_chain_free(owner:**ComputeChainPlan){if owner!=0 as **ComputeChainPlan&&*owner!=0 as *ComputeChainPlan{free(*owner as *void);*owner=0 as *ComputeChainPlan;}}
+pub fn compute_chain_cost(plan:*ComputeChainPlan)->u64{plan.cost}
+pub fn compute_chain_split(plan:*ComputeChainPlan,left:u64,right:u64)->Result<u64,ComputeError>{if left>=right||right>=plan.count{return Result::Err(compute_error(COMPUTE_BOUNDS,0));}Result::Ok(plan.splits[left*plan.count+right])}
+fn contract(plan:*ComputeChainPlan,queue:*ComputeQueue,inputs:**ComputeBuffer,left:u64,right:u64)->Result<*ComputeBuffer,ComputeError>{
+ if left==right{return compute_buffer_view(inputs[left],compute_buffer_layout(inputs[left]));}
+ let split:u64=plan.splits[left*plan.count+right];let mut a:*ComputeBuffer=contract(plan,queue,inputs,left,split)?;
+ let mut b:*ComputeBuffer=match contract(plan,queue,inputs,split+1,right){Result::Ok(v)=>v,Result::Err(e)=>{compute_buffer_free(&mut a as **ComputeBuffer);return Result::Err(e);}};
+ let shape:[u64;2]=[plan.dimensions[left],plan.dimensions[right+1]];
+ let mut output:*ComputeBuffer=match compute_buffer_new(queue,COMPUTE_F32,2,&shape[0] as *u64){Result::Ok(v)=>v,Result::Err(e)=>{compute_buffer_free(&mut a as **ComputeBuffer);compute_buffer_free(&mut b as **ComputeBuffer);return Result::Err(e);}};
+ let answer:Result<(),ComputeError>=compute_gemm_sync(queue,a,b,output);compute_buffer_free(&mut a as **ComputeBuffer);compute_buffer_free(&mut b as **ComputeBuffer);
+ match answer{Result::Ok(_)=>Result::Ok(output),Result::Err(e)=>{compute_buffer_free(&mut output as **ComputeBuffer);Result::Err(e)}}
+}
+pub fn compute_chain_run(plan:*ComputeChainPlan,queue:*ComputeQueue,inputs:**ComputeBuffer,count:u64)->Result<*ComputeBuffer,ComputeError>{
+ if plan==0 as *ComputeChainPlan||inputs==0 as **ComputeBuffer||count!=plan.count{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+ let mut i:u64=0;while i<count{
+  if inputs[i]==0 as *ComputeBuffer||compute_buffer_queue(inputs[i])!=queue{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+  let shape:ComputeLayout=compute_buffer_layout(inputs[i]);if shape.rank!=2||shape.shape[0]!=plan.dimensions[i]||shape.shape[1]!=plan.dimensions[i+1]{return Result::Err(compute_error(COMPUTE_SHAPE,0));}i+=1;
+ }
+ contract(plan,queue,inputs,0,count-1)
+}

@@ -1,0 +1,55 @@
+use compute::*;
+use compute_ops::*;
+use compute_graph::*;
+use compute_network::*;
+use compute_lowrank::*;
+use result::Result;
+extern "C"{fn printf(format:*u8,...)->i32;fn strcmp(a:*u8,b:*u8)->i32;}
+struct Resources{q:*ComputeQueue,b:[*ComputeBuffer;12],plan:*ComputeChainPlan,svd:*ComputeSvd}
+fn require(ok:bool,code:i32)->Result<(),ComputeError>{if ok{Result::Ok(())}else{Result::Err(compute_error(1000+code,0))}}
+fn matrix(r:*Resources,slot:u64,rows:u64,cols:u64,data:*f32)->Result<(),ComputeError>{let shape:[u64;2]=[rows,cols];r.b[slot]=compute_buffer_new(r.q,COMPUTE_F32,2,&shape[0] as *u64)?;if data!=0 as *f32{compute_upload(r.b[slot],data,rows*cols)?;}Result::Ok(())}
+fn clear(r:*Resources){for i in 0..12{compute_buffer_free(&mut r.b[i] as **ComputeBuffer);}compute_chain_free(&mut r.plan as **ComputeChainPlan);compute_svd_free(&mut r.svd as **ComputeSvd);}
+fn chain(r:*Resources)->Result<(),ComputeError>{
+ let dims:[u64;5]=[5,9,2,7,3];let mut data:[f32;63]=[0.0;63];
+ for operand in 0..4{let count:u64=dims[operand]*dims[operand+1];let mut i:u64=0;while i<count{data[i]=(((i*5+(operand as u64)*3)%17) as f32-8.0)*0.03125+(operand as f32)*0.015625;i+=1;}matrix(r,operand as u64,dims[operand],dims[operand+1],&data[0] as *f32)?;}
+ r.plan=compute_chain_plan(r.q,&r.b[0] as **ComputeBuffer,4)?;r.b[4]=compute_chain_run(r.plan,r.q,&r.b[0] as **ComputeBuffer,4)?;
+ let mut out:[f32;15]=[0.0;15];compute_download(&mut out[0] as *f32,r.b[4],15)?;
+ printf("chain cost=%llu split=%llu values",compute_chain_cost(r.plan),compute_chain_split(r.plan,0,3)?);for i in 0..15{printf(" %.9f",out[i] as f64);}printf("\n");
+ // Plan dimensions are immutable and a mismatch fails before any dispatch.
+ let before:u64=compute_queue_stats(r.q).submitted;let wrong:[*ComputeBuffer;4]=[r.b[1],r.b[0],r.b[2],r.b[3]];
+ match compute_chain_run(r.plan,r.q,&wrong[0] as **ComputeBuffer,4){Result::Ok(_)=>{return require(false,1);},Result::Err(e)=>{require(e.code==COMPUTE_SHAPE,1)?;}}
+ require(compute_queue_stats(r.q).submitted==before,2)?;clear(r);Result::Ok(())
+}
+fn singular(r:*Resources)->Result<(),ComputeError>{
+ let data:[f32;12]=[0.4,2.2,0.25,2.0,1.0,-0.25,-2.0,-1.0,-0.25,-0.4,-2.2,0.25];
+ matrix(r,0,4,3,&data[0] as *f32)?;r.svd=compute_svd(r.q,r.b[0],2)?;
+ let s0:f64=compute_svd_singular(r.svd,0)?;let s1:f64=compute_svd_singular(r.svd,1)?;let s2:f64=compute_svd_singular(r.svd,2)?;
+ require(s0>3.99999&&s0<4.00001&&s1>1.99999&&s1<2.00001&&s2>0.49999&&s2<0.50001,3)?;
+ require(compute_svd_residual(r.svd)>0.49999&&compute_svd_residual(r.svd)<0.50001,4)?;
+ let x:[f32;8]=[0.5,0.25,-0.5,0.125,-0.25,0.5,0.25,-0.125];matrix(r,1,2,4,&x[0] as *f32)?;matrix(r,2,2,3,0 as *f32)?;
+ compute_low_rank(r.q,r.b[1],compute_svd_left(r.svd),compute_svd_right(r.svd),r.b[2])?;
+ let mut out:[f32;6]=[0.0;6];compute_download(&mut out[0] as *f32,r.b[2],6)?;
+ printf("svd singular %.9f %.9f %.9f residual=%.9f sweeps=%llu values",s0,s1,s2,compute_svd_residual(r.svd),compute_svd_sweeps(r.svd));for i in 0..6{printf(" %.9f",out[i] as f64);}printf("\n");
+ compute_svd_free(&mut r.svd as **ComputeSvd);r.svd=compute_svd(r.q,r.b[0],3)?;require(compute_svd_residual(r.svd)<0.000002,5)?;
+ compute_svd_free(&mut r.svd as **ComputeSvd);r.b[3]=compute_transpose(r.b[0])?;r.svd=compute_svd(r.q,r.b[3],3)?;require(compute_svd_residual(r.svd)<0.000002,6)?;
+ clear(r);
+ // Zero and rank-deficient wide matrices must not divide by a zero norm.
+ let deficient:[f32;6]=[1.0,2.0,3.0,2.0,4.0,6.0];matrix(r,0,2,3,&deficient[0] as *f32)?;r.svd=compute_svd(r.q,r.b[0],1)?;require(compute_svd_residual(r.svd)<0.00001,7)?;clear(r);
+ let zero:[f32;6]=[0.0;6];matrix(r,0,2,3,&zero[0] as *f32)?;r.svd=compute_svd(r.q,r.b[0],1)?;require(compute_svd_residual(r.svd)==0.0&&compute_svd_singular(r.svd,0)?==0.0,8)?;clear(r);
+ // Balanced factors stay finite even when sigma_0 is larger than f32::MAX.
+ let extreme:[f32;2]=[3.4028234663852886e38,3.4028234663852886e38];matrix(r,0,1,2,&extreme[0] as *f32)?;r.svd=compute_svd(r.q,r.b[0],1)?;
+ let mut left:[f32;1]=[0.0];let mut right:[f32;2]=[0.0;2];compute_download(&mut left[0] as *f32,compute_svd_left(r.svd),1)?;compute_download(&mut right[0] as *f32,compute_svd_right(r.svd),2)?;
+ require(left[0]<3.4028234663852886e38&&right[0]<3.4028234663852886e38&&compute_svd_residual(r.svd)/3.4028234663852886e38<0.000001,9)?;clear(r);
+ Result::Ok(())
+}
+fn exercise(r:*Resources,backend:i32,path:*u8)->Result<(),ComputeError>{r.q=compute_queue_with_provider(backend,1048576,path)?;
+ let mut graph:*ComputeGraph=compute_graph_new()?;compute_graph_scalar(graph,1.0)?;
+ let boundary:Result<*ComputeBuffer,ComputeError>=compute_graph_run(graph,r.q,0 as **ComputeBuffer,0,1);compute_graph_free(&mut graph as **ComputeGraph);
+ match boundary{Result::Ok(value)=>{r.b[0]=value;require(backend==COMPUTE_CPU,11)?;clear(r);},Result::Err(e)=>{require(backend!=COMPUTE_CPU&&e.code==COMPUTE_DEVICE,11)?;}}
+ chain(r)?;singular(r)?;let stats:ComputeQueueStats=compute_queue_stats(r.q);require(stats.used_bytes==0&&stats.failed==0,10)?;printf("planning backend=%d submitted=%llu peak=%llu remaining=%llu\n",backend,stats.submitted,stats.peak_bytes,stats.used_bytes);Result::Ok(())}
+fn main(argc:i32,argv:**u8)->i32{
+ let mut backend:i32=COMPUTE_CPU;let mut path:*u8=0 as *u8;if argc>1{if strcmp(argv[1],"metal")==0{backend=COMPUTE_METAL;}else if strcmp(argv[1],"vulkan")==0{backend=COMPUTE_VULKAN;}else if strcmp(argv[1],"cpu")!=0{return 2;}}
+ if backend!=COMPUTE_CPU{if argc!=3{return 2;}path=argv[2];}
+ let mut r:Resources=Resources{q:0 as *ComputeQueue,b:[0 as *ComputeBuffer;12],plan:0 as *ComputeChainPlan,svd:0 as *ComputeSvd};let answer:Result<(),ComputeError>=exercise(&mut r as *Resources,backend,path);clear(&mut r as *Resources);compute_queue_close(&mut r.q as **ComputeQueue);
+ match answer{Result::Ok(_)=>0,Result::Err(e)=>{printf("planning error=%d native=%lld\n",e.code,e.native);1}}
+}

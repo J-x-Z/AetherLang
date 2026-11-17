@@ -1,0 +1,78 @@
+// One-sided Jacobi SVD for finite f32 matrices, 1..64 rows/columns. Computation
+// uses charged f64 host scratch and at most 64 sweeps. It returns rank-r factors
+// U*sqrt(Sigma) and sqrt(Sigma)*transpose(V) on the selected queue. Balanced
+// factors avoid overflowing f32 when a singular value exceeds f32::MAX.
+// Column correlations use relative tolerance 1e-12; columns below 1e-14 of
+// the Frobenius norm are numerically null. A nonconverged solve is an error.
+// No implicit GPU claim for the host solver.
+use compute::*;
+use result::Result;
+extern "C"{fn malloc(size:usize)->*void;fn free(value:*void);fn sqrt(value:f64)->f64;fn hypot(a:f64,b:f64)->f64;}
+pub struct ComputeSvd{left:*ComputeBuffer,right:*ComputeBuffer,singular:[f64;64],count:u64,rank:u64,sweeps:u64,residual:f64}
+struct Solve{queue:*ComputeQueue,input:*ComputeBuffer,scratch:*ComputeScratch,result:*ComputeSvd,rows:u64,cols:u64,rank:u64,source:*f32,b:*f64,v:*f64,sigma:*f64}
+fn abs(value:f64)->f64{if value<0.0{-value}else{value}}
+pub fn compute_svd_free(owner:**ComputeSvd){
+ if owner==0 as **ComputeSvd||*owner==0 as *ComputeSvd{return;}
+ let value:*ComputeSvd=*owner;*owner=0 as *ComputeSvd;compute_buffer_free(&mut value.left as **ComputeBuffer);compute_buffer_free(&mut value.right as **ComputeBuffer);free(value as *void);
+}
+// Borrowed factors remain valid until compute_svd_free; do not free them.
+pub fn compute_svd_left(value:*ComputeSvd)->*ComputeBuffer{value.left}
+pub fn compute_svd_right(value:*ComputeSvd)->*ComputeBuffer{value.right}
+pub fn compute_svd_residual(value:*ComputeSvd)->f64{value.residual}
+pub fn compute_svd_sweeps(value:*ComputeSvd)->u64{value.sweeps}
+pub fn compute_svd_singular(value:*ComputeSvd,index:u64)->Result<f64,ComputeError>{if value==0 as *ComputeSvd||index>=value.count{return Result::Err(compute_error(COMPUTE_BOUNDS,0));}Result::Ok(value.singular[index])}
+pub fn compute_svd(queue:*ComputeQueue,input:*ComputeBuffer,rank:u64)->Result<*ComputeSvd,ComputeError>{
+ if input==0 as *ComputeBuffer{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+ let shape:ComputeLayout=compute_buffer_layout(input);let rows:u64=shape.shape[0];let cols:u64=shape.shape[1];
+ if shape.rank!=2||rows==0||cols==0||rows>64||cols>64||rank==0||rank>rows||rank>cols{return Result::Err(compute_error(COMPUTE_SHAPE,0));}
+ let source_bytes:u64=(rows*cols*4+7)&(-8 as u64);
+ let scratch:*ComputeScratch=compute_scratch_new(queue,source_bytes+(rows*cols+cols*cols+cols)*8+(rows*rank+rank*cols)*4)?;
+ let raw:*u8=compute_scratch_data(scratch);let b:*f64=(raw+source_bytes) as *f64;let v:*f64=b+rows*cols;
+ let mut solve:Solve=Solve{queue:queue,input:input,scratch:scratch,result:0 as *ComputeSvd,rows:rows,cols:cols,rank:rank,source:raw as *f32,b:b,v:v,sigma:v+cols*cols};
+ let answer:Result<(),ComputeError>=solve_inner(&mut solve as *Solve);
+ compute_scratch_free(&mut solve.scratch as **ComputeScratch);
+ match answer{Result::Ok(_)=>Result::Ok(solve.result),Result::Err(e)=>{compute_svd_free(&mut solve.result as **ComputeSvd);Result::Err(e)}}
+}
+fn solve_inner(s:*Solve)->Result<(),ComputeError>{
+ let m:u64=s.rows;let n:u64=s.cols;compute_download(s.source,s.input,m*n)?;
+ let mut norm_squared:f64=0.0;let mut i:u64=0;while i<m*n{let value:f32=s.source[i];if value!=value||value>3.4028234663852886e38||value< -3.4028234663852886e38{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}s.b[i]=value as f64;norm_squared+=(value as f64)*(value as f64);i+=1;}
+ i=0;while i<n*n{s.v[i]=0.0;i+=1;}i=0;while i<n{s.v[i*n+i]=1.0;i+=1;}
+ let mut sweeps:u64=0;let mut converged:bool=false;
+ while sweeps<64{
+  let mut changed:bool=false;let mut p:u64=0;
+  while p<n{let mut q:u64=p+1;while q<n{
+   let mut alpha:f64=0.0;let mut beta:f64=0.0;let mut gamma:f64=0.0;i=0;
+   while i<m{let a:f64=s.b[i*n+p];let b:f64=s.b[i*n+q];alpha+=a*a;beta+=b*b;gamma+=a*b;i+=1;}
+   if alpha>norm_squared*1e-28&&beta>norm_squared*1e-28&&abs(gamma)>0.000000000001*sqrt(alpha)*sqrt(beta){
+    let tau:f64=(beta-alpha)/(2.0*gamma);let t:f64=(if tau<0.0{-1.0}else{1.0})/(abs(tau)+hypot(1.0,tau));
+    let c:f64=1.0/sqrt(1.0+t*t);let sine:f64=c*t;
+    i=0;while i<m{let a:f64=s.b[i*n+p];let b:f64=s.b[i*n+q];s.b[i*n+p]=c*a-sine*b;s.b[i*n+q]=sine*a+c*b;i+=1;}
+    i=0;while i<n{let a:f64=s.v[i*n+p];let b:f64=s.v[i*n+q];s.v[i*n+p]=c*a-sine*b;s.v[i*n+q]=sine*a+c*b;i+=1;}changed=true;
+   }
+   q+=1;
+  }p+=1;}
+  sweeps+=1;if !changed{converged=true;break;}
+ }
+ if !converged{return Result::Err(compute_error(COMPUTE_EXECUTION,0));}
+ let mut col:u64=0;while col<n{let mut norm:f64=0.0;i=0;while i<m{norm+=s.b[i*n+col]*s.b[i*n+col];i+=1;}s.sigma[col]=sqrt(norm);col+=1;}
+ // Stable descending singular values; factor columns move with their value.
+ col=0;while col<n{let mut best:u64=col;let mut j:u64=col+1;while j<n{if s.sigma[j]>s.sigma[best]{best=j;}j+=1;}
+  if best!=col{let norm:f64=s.sigma[col];s.sigma[col]=s.sigma[best];s.sigma[best]=norm;
+   i=0;while i<m{let value:f64=s.b[i*n+col];s.b[i*n+col]=s.b[i*n+best];s.b[i*n+best]=value;i+=1;}
+   i=0;while i<n{let value:f64=s.v[i*n+col];s.v[i*n+col]=s.v[i*n+best];s.v[i*n+best]=value;i+=1;}}
+  col+=1;
+ }
+ s.result=malloc(size_of(ComputeSvd)) as *ComputeSvd;if s.result==0 as *ComputeSvd{return Result::Err(compute_error(COMPUTE_ALLOCATION,0));}
+ *s.result=ComputeSvd{left:0 as *ComputeBuffer,right:0 as *ComputeBuffer,singular:[0.0;64],count:if m<n{m}else{n},rank:s.rank,sweeps:sweeps,residual:0.0};
+ col=0;while col<s.result.count{s.result.singular[col]=s.sigma[col];col+=1;}
+ let left:*f32=(s.sigma+n) as *f32;let right:*f32=left+m*s.rank;
+ i=0;while i<m{col=0;while col<s.rank{left[i*s.rank+col]=if s.sigma[col]==0.0{0.0}else{(s.b[i*n+col]/sqrt(s.sigma[col])) as f32};col+=1;}i+=1;}
+ col=0;while col<s.rank{i=0;while i<n{right[col*n+i]=(s.v[i*n+col]*sqrt(s.sigma[col])) as f32;i+=1;}col+=1;}
+ let mut error:f64=0.0;i=0;while i<m{col=0;while col<n{
+  let mut value:f64=0.0;let mut k:u64=0;while k<s.rank{value+=(left[i*s.rank+k] as f64)*(right[k*n+col] as f64);k+=1;}
+  let difference:f64=(s.source[i*n+col] as f64)-value;error+=difference*difference;col+=1;
+ }i+=1;}s.result.residual=sqrt(error);
+ let ls:[u64;2]=[m,s.rank];let rs:[u64;2]=[s.rank,n];
+ s.result.left=compute_buffer_new(s.queue,COMPUTE_F32,2,&ls[0] as *u64)?;s.result.right=compute_buffer_new(s.queue,COMPUTE_F32,2,&rs[0] as *u64)?;
+ compute_upload(s.result.left,left,m*s.rank)?;compute_upload(s.result.right,right,s.rank*n)
+}
