@@ -1,19 +1,16 @@
 // The local project manifest has explicit ownership: every parsed string points
 // into storage, which is released exactly once by config_free.
+use binary_io::read_path_bytes;
+use vec::{Vec, vec_new, vec_push, vec_free};
+use result::Result;
 extern "C" {
-    fn fopen(path: *u8, mode: *u8) -> *void;
-    fn fclose(file: *void) -> i32;
-    fn fread(buf: *void, size: u64, count: u64, file: *void) -> u64;
-    fn fseek(file: *void, offset: i64, whence: i32) -> i32;
-    fn ftell(file: *void) -> i64;
-    fn malloc(size: u64) -> *void;
     fn realloc(ptr: *void, size: u64) -> *void;
     fn free(ptr: *void);
     fn strcmp(a: *u8, b: *u8) -> i32;
     fn strncmp(a: *u8, b: *u8, count: u64) -> i32;
     fn strlen(s: *u8) -> u64;
+    fn strerror(code: i32) -> *u8;
     fn puts(s: *u8) -> i32;
-    fn perror(s: *u8);
 }
 
 pub struct Config {
@@ -26,7 +23,7 @@ pub struct Config {
     pub module_path_count: u64,
     pub link_objects: **u8,
     pub link_object_count: u64,
-    pub storage: *u8,
+    pub storage: Vec<u8>,
     pub valid: bool,
 }
 
@@ -171,8 +168,7 @@ pub fn config_free(cfg: *Config) {
     cfg.module_path_count = 0;
     cfg.link_objects = 0 as **u8;
     cfg.link_object_count = 0;
-    free(cfg.storage as *void);
-    cfg.storage = 0 as *u8;
+    vec_free(&mut cfg.storage as *Vec<u8>);
     cfg.valid = false;
 }
 
@@ -187,35 +183,22 @@ pub fn config_load() -> Config {
         module_path_count: 0,
         link_objects: 0 as **u8,
         link_object_count: 0,
-        storage: 0 as *u8,
+        storage: vec_new(),
         valid: false,
     };
-    let file: *void = fopen("Jxz.toml\0" as *u8, "rb\0" as *u8);
-    if file == (0 as *void) {
-        perror("jxz: Jxz.toml\0" as *u8);
+    cfg.storage = match read_path_bytes("Jxz.toml", 1048576) {
+        Result::Ok(bytes) => bytes,
+        Result::Err(code) => { puts("jxz: cannot read Jxz.toml (1 MiB limit)"); puts(strerror(code)); return cfg; },
+    };
+    let count: u64 = cfg.storage.len;
+    if !vec_push(&mut cfg.storage as *Vec<u8>, 0 as u8) {
+        puts("jxz: cannot allocate manifest terminator");
+        config_free(&mut cfg as *Config);
         return cfg;
     }
-    if fseek(file, 0, 2) != 0 { fclose(file); return cfg; }
-    let size: i64 = ftell(file);
-    if size < 0 || size > 1048576 {
-        puts("jxz: manifest exceeds 1 MiB or cannot be read\0" as *u8);
-        fclose(file);
-        return cfg;
-    }
-    if fseek(file, 0, 0) != 0 { fclose(file); return cfg; }
-    cfg.storage = malloc(size as u64 + 1) as *u8;
-    if cfg.storage == (0 as *u8) { fclose(file); return cfg; }
-    let count: u64 = fread(cfg.storage as *void, 1, size as u64, file);
-    let closed: i32 = fclose(file);
-    if count != size as u64 || closed != 0 {
-        puts("jxz: cannot read complete manifest\0" as *u8);
-        config_free(&cfg as *Config);
-        return cfg;
-    }
-    cfg.storage[count] = 0;
     let mut scan: u64 = 0;
     while scan < count {
-        if cfg.storage[scan] == 0 { puts("jxz: NUL in manifest\0" as *u8); config_free(&cfg as *Config); return cfg; }
+        if cfg.storage.data[scan] == 0 { puts("jxz: NUL in manifest\0" as *u8); config_free(&cfg as *Config); return cfg; }
         scan = scan + 1;
     }
     if !config_parse(&cfg as *Config) { config_free(&cfg as *Config); }
@@ -223,7 +206,7 @@ pub fn config_load() -> Config {
 }
 
 fn config_parse(cfg: *Config) -> bool {
-    let mut line: *u8 = cfg.storage;
+    let mut line: *u8 = cfg.storage.data;
     let mut section: i32 = 0;
     let mut seen: i32 = 0;
     while line[0] != 0 {

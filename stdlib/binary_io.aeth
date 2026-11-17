@@ -1,0 +1,58 @@
+// Binary POSIX I/O on 64-bit Darwin/Linux. The successful Vec belongs to the caller.
+// fd_read_bytes borrows the descriptor. Path functions close every acquired fd.
+use fd::{Descriptor, fd_open_read, fd_open_write, fd_read, fd_write_all, fd_close};
+use vec::{Vec, vec_new, vec_reserve, vec_free};
+use posix::{EINVAL, ENOMEM, EFBIG};
+use result::Result;
+extern "C" {
+    fn memcpy(dest: *void, src: *void, size: u64) -> *void;
+}
+
+pub fn fd_read_bytes(raw: i32, limit: u64) -> Result<Vec<u8>, i32> {
+    let mut bytes: Vec<u8> = vec_new();
+    let mut chunk: [u8; 4096] = [0; 4096];
+    loop {
+        let remaining: u64 = limit - bytes.len;
+        // Probe one additional byte to distinguish an exact-length file from overflow.
+        let request: u64 = if remaining < 4096 { remaining + 1 } else { 4096 };
+        let count: u64 = match fd_read(raw, &mut chunk[0] as *u8, request) {
+            Result::Ok(n) => n,
+            Result::Err(code) => { vec_free(&mut bytes as *Vec<u8>); return Result::Err(code); },
+        };
+        if count == 0 { return Result::Ok(bytes); }
+        if count > remaining { vec_free(&mut bytes as *Vec<u8>); return Result::Err(EFBIG); }
+        let needed: u64 = bytes.len + count;
+        if needed > bytes.capacity {
+            let mut next: u64 = needed;
+            if bytes.capacity > limit / 2 { next = limit; }
+            else if bytes.capacity * 2 > needed { next = bytes.capacity * 2; }
+            if !vec_reserve(&mut bytes as *Vec<u8>, next) {
+                vec_free(&mut bytes as *Vec<u8>);
+                return Result::Err(ENOMEM);
+            }
+        }
+        memcpy((bytes.data + bytes.len) as *void, (&chunk[0] as *u8) as *void, count);
+        bytes.len = needed;
+    }
+}
+
+pub fn read_path_bytes(path: *u8, limit: u64) -> Result<Vec<u8>, i32> {
+    let mut opened: Descriptor = fd_open_read(path)?;
+    let outcome: Result<Vec<u8>, i32> = fd_read_bytes(opened.value, limit);
+    let closed: Result<(), i32> = fd_close(&mut opened as *Descriptor);
+    match outcome {
+        Result::Err(code) => Result::Err(code),
+        Result::Ok(value) => match closed {
+            Result::Ok(_) => Result::Ok(value),
+            Result::Err(code) => { let mut owned: Vec<u8> = value; vec_free(&mut owned as *Vec<u8>); Result::Err(code) },
+        },
+    }
+}
+
+pub fn write_path_bytes(path: *u8, data: *u8, size: u64) -> Result<(), i32> {
+    if data == 0 as *u8 && size > 0 { return Result::Err(EINVAL); }
+    let mut opened: Descriptor = fd_open_write(path, false)?;
+    let written: Result<(), i32> = fd_write_all(opened.value, data, size);
+    let closed: Result<(), i32> = fd_close(&mut opened as *Descriptor);
+    match written { Result::Ok(_) => closed, Result::Err(code) => Result::Err(code) }
+}

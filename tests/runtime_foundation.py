@@ -52,6 +52,7 @@ class RuntimeFoundation(unittest.TestCase):
             raise AssertionError(result.stderr)
         for backend in ARGS.backends:
             for name, source in [('foundation', ROOT / 'tests/regressions/runtime/foundation.aeth'),
+                                 ('byte_stream', ROOT / 'tests/regressions/runtime/byte_stream.aeth'),
                                  ('file_errors', ROOT / 'tests/regressions/runtime/file_errors.aeth'),
                                  ('accumulator', ROOT / 'examples/upgrade/accumulator.aeth')]:
                 binary = WORK / f'{name}-{backend}'
@@ -76,6 +77,21 @@ class RuntimeFoundation(unittest.TestCase):
                 result = command([BINARIES['foundation', backend], self.work, 'hello world', '--', '-literal'])
                 self.record(backend, 'foundation', result, 0)
                 self.assertEqual(result.stdout, 'literal %% text\n')
+
+    def test_binary_streams_keep_length_and_errors(self):
+        for backend in ARGS.backends:
+            for count in (0, 3, 4096, 8193, 9000, 9001):
+                with self.subTest(backend=backend, count=count):
+                    data = bytes(i % 251 for i in range(count))
+                    target = self.work / f'{backend}-{count}'
+                    result = subprocess.run([BINARIES['byte_stream', backend], target, self.work/'missing'],
+                                            input=data, capture_output=True, timeout=10, env=ENV)
+                    self.assertEqual(result.returncode, 27 if count > 9000 else 0, result.stderr)
+                    if count <= 9000:
+                        self.assertEqual(target.read_bytes(), data)
+                    else:
+                        self.assertFalse(target.exists())
+                    RECORDS.append(dict(test='bounded-binary-stream', backend=backend, bytes=count, exit=result.returncode))
 
     def test_file_write_checks_buffered_close_errors(self):
         for backend in ARGS.backends:
