@@ -410,3 +410,60 @@ fn script_limits_report_original_locations_and_keep_ordinary_programs() {
         );
     }
 }
+
+#[test]
+fn generated_expression_mutations_preserve_diagnostic_boundaries() {
+    let project = Project::new();
+    // Fixed seed and finite grammar make a failing input reproducible. The
+    // original is well-typed; each edit breaks exactly one specified rule.
+    let mut state = 947_u32;
+    for sample in 0..24 {
+        let mut expression = "α".to_owned();
+        for _ in 0..sample % 7 + 1 {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            let op = ["+", "-", "*", "^"][(state >> 30) as usize];
+            expression = format!("({expression} {op} {})", (state >> 12) % 13);
+        }
+        let function = format!("fn main()->i32 {{ /* λ */ let α:i32=2; return {expression}; }}");
+        let path = project.file("mutation.aeth", &function);
+        assert!(check(&path).status.success(), "{function}");
+        for (broken, expected) in [
+            (function.replace("=2;", "=0x;"), "E1000"),
+            (function.replacen('(', "[", 1), "E1000"),
+            (function.replace("α:i32", "α:bool"), "E2100"),
+        ] {
+            let path = project.file("mutation.aeth", &broken);
+            let out = check(&path);
+            assert_eq!(out.status.code(), Some(1), "{broken}");
+            let d: Value = serde_json::from_slice(&out.stderr).unwrap();
+            assert_eq!(d["code"], expected, "{broken}: {d}");
+            let loc = &d["location"];
+            for key in ["start", "end"] {
+                let offset = loc[key].as_u64().unwrap() as usize;
+                assert!(broken.is_char_boundary(offset), "{broken}: {d}");
+            }
+        }
+    }
+}
+
+#[test]
+fn recursive_specialization_is_bounded_and_templates_are_checked_when_used() {
+    let project = Project::new();
+    for (source, expected) in [
+        ("fn count<T>(v:T,n:i32)->i32 {if n==0{return 42;} count(v,n-1)} fn main()->i32 {count(1,3)}", None),
+        ("type A=B; type B=A; fn main(){let v:A=1;}", Some("finite type expansion")),
+        ("fn grow<T>(v:T){grow(&v);} fn main(){grow(1);}", Some("finite type expansion")),
+        ("fn f<T>(v:T)->bool{3} fn main()->i32{0}", None),
+        ("fn f<T>(v:T)->bool{3} fn main()->i32{if f(2){0}else{1}}", Some("Type mismatch")),
+    ] {
+        let path = project.file("specialize.aeth", source);
+        let out = check(&path);
+        assert_eq!(out.status.code(), Some(if expected.is_some() { 1 } else { 0 }), "{source}");
+        if let Some(expected) = expected {
+            let d: Value = serde_json::from_slice(&out.stderr).unwrap();
+            assert_eq!(d["code"], "E2100");
+            assert!(d["message"].as_str().unwrap().contains(expected));
+            assert_eq!(d["location"]["file"].as_str().unwrap(), path.to_str().unwrap());
+        }
+    }
+}

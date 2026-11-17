@@ -62,3 +62,25 @@ allocator shim injects failure at each allocation boundary and checks that live
 allocation counts return to zero. C and LLVM emitted failure workloads run with
 AddressSanitizer/UndefinedBehaviorSanitizer; the numerical C workload also runs
 with both sanitizers. The shim only controls allocation; it implements no math.
+
+## Native math consumers
+
+`stdlib/blas.aeth` binds LP64 CBLAS with 32-bit dimensions and C `size_t`
+indices for raw IAMAX. Its OpenBLAS consumer checks a 2×3 by 3×2 matrix
+product, vector updates and a double-precision dot product.
+
+On macOS, `runtime/metal/bridge.m` exposes retained Metal handles. Release
+them with `aether_mtl_release`. The pointer from `aether_mtl_buffer_contents`
+is borrowed for the lifetime of its buffer. `metal_sync` returns the command
+completion status. The tested Aether consumer allocates a shared buffer,
+compiles a Metal kernel, dispatches it and checks every one of 257 results
+before releasing its resources. The output includes the device registry ID.
+
+```sh
+python3 tests/ffi_modules.py --compiler "$AETHC" --work-dir "$WORK/native-sdks" \
+  --backends c llvm --metal --openblas "$OPENBLAS_LIBRARY"
+```
+
+CUDA-Q uses its own SDK backend. Aether's Metal compute interface runs a Metal
+kernel directly. Shared operator scheduling, quantum circuits on Metal and
+Adreno execution are tracked in T21–T24.
