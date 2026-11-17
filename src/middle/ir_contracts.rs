@@ -58,6 +58,8 @@ impl IRGenerator {
             self.local_addresses = saved_addresses;
             checked?;
         }
+        if let Some(value)=&value {self.transfer_owned_value(value);}
+        self.cleanup_owned_scope(0)?;
         self.set_terminator_current(Terminator::Return { value });
         Ok(())
     }

@@ -318,6 +318,7 @@ impl SemanticAnalyzer {
         self.collect_methods(program)?;
         self.check_interface_implementations(program)?;
         self.check_owned_declarations(program)?;
+        self.collect_destructors(program)?;
         self.prepare_constant_facts()?;
 
         // Pass 2: Type check all items
@@ -330,10 +331,10 @@ impl SemanticAnalyzer {
         self.check_hosted_abi(program)?;
         self.check_tuple_abi_boundaries(program)?;
         self.check_system_attributes(program)?;
+        self.analyze_flows(program)?;
         self.infer_effects(program)?;
         self.check_contract_effects(program)?;
         self.check_interface_effect_bounds()?;
-        self.analyze_flows(program)?;
         if self.errors.is_empty() {
             Ok(())
         } else {
@@ -358,7 +359,7 @@ impl SemanticAnalyzer {
             Self::type_key(ret, true), variadic)
     }
 
-    fn type_identity(ty: &ResolvedType) -> String {
+    pub(crate) fn type_identity(ty: &ResolvedType) -> String {
         Self::type_key(ty, false)
     }
 
@@ -1805,7 +1806,13 @@ impl SemanticAnalyzer {
                 _ => Err(Error::Expected("mutable reference or raw pointer".into(), *span)),
             },
             Expr::Field { expr: base, .. } | Expr::Index { expr: base, .. } => {
-                match self.check_expr(base)? {
+                let base_type=self.check_expr(base)?;
+                let mut payload=&base_type;
+                while let ResolvedType::Reference{inner,..}=payload {payload=inner;}
+                if matches!(payload,ResolvedType::Owned(_)) && self.unsafe_depth==0 {
+                    return Err(Error::semantic_expected("E2405","unsafe block to mutate an owned resource's raw payload",expr.span()));
+                }
+                match base_type {
                     ResolvedType::Pointer(_) | ResolvedType::Reference { mutable: true, .. } => Ok(()),
                     ResolvedType::Reference { mutable: false, .. } => Err(Error::Expected("mutable reference".into(), expr.span())),
                     _ => self.check_assignable(base),

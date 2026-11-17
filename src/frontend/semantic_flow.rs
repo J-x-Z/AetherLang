@@ -3,6 +3,9 @@
 use super::*;
 use std::hash::{Hash, Hasher};
 
+#[path = "semantic_flow_owned.rs"]
+mod owned;
+
 type BindingId = usize;
 type Path = Vec<Projection>;
 /// A finite abstract region: all storage of `ty` reachable from a parameter
@@ -61,6 +64,7 @@ struct Reference {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Value {
+    owners: HashSet<BindingId>,
     ty: ResolvedType,
     references: Vec<Reference>,
     holders: HashSet<BindingId>,
@@ -68,6 +72,7 @@ struct Value {
 impl Value {
     fn empty(ty: ResolvedType) -> Self {
         Self {
+            owners: HashSet::new(),
             ty,
             references: vec![],
             holders: HashSet::new(),
@@ -162,6 +167,7 @@ struct State {
 }
 #[derive(Clone)]
 struct Binding {
+    declaration: Span,
     name: String,
     ty: ResolvedType,
     depth: usize,
@@ -182,6 +188,9 @@ struct WriteSummary {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub(super) struct FunctionFlow {
+    owned_bindings: HashMap<Span, ResolvedType>,
+    owned_moves: HashMap<Span, Span>,
+    drop_calls: HashSet<String>,
     returned: Vec<Reference>,
     writes: Vec<WriteSummary>,
 }
@@ -193,6 +202,10 @@ struct LoopExits {
 }
 
 struct Flow<'a> {
+    owned_bindings: HashMap<Span, ResolvedType>,
+    owned_moves: HashMap<Span, Span>,
+    drop_calls: HashSet<String>,
+    destructor_parameter: Option<Span>,
     analyzer: &'a SemanticAnalyzer,
     summaries: &'a HashMap<String, FunctionFlow>,
     bindings: Vec<Binding>,
@@ -211,7 +224,7 @@ struct Flow<'a> {
 }
 
 impl SemanticAnalyzer {
-    pub(super) fn analyze_flows(&self, program: &Program) -> Result<()> {
+    pub(super) fn analyze_flows(&mut self, program: &Program) -> Result<()> {
         let mut functions = Vec::new();
         for item in &program.items {
             match item {
@@ -249,7 +262,11 @@ impl SemanticAnalyzer {
             if !function.type_params.is_empty() {
                 continue;
             }
-            Flow::new(self, &summaries, true).function(&function)?;
+            let result=Flow::new(self, &summaries, true).function(&function)?;
+            let key=self.facts.method_signatures.get(&function.name.name).map(|s|s.emitted_name.clone()).unwrap_or_else(||function.name.name.clone());
+            for (span,ty) in result.owned_bindings { self.facts.owned_bindings.insert((key.clone(),span),ty); }
+            for (span,binding) in result.owned_moves { self.facts.owned_moves.insert((key.clone(),span),binding); }
+            self.facts.drop_calls.insert(key,result.drop_calls);
         }
         Ok(())
     }
@@ -262,6 +279,10 @@ impl<'a> Flow<'a> {
         validate: bool,
     ) -> Self {
         Self {
+            owned_bindings: HashMap::new(),
+            owned_moves: HashMap::new(),
+            drop_calls: HashSet::new(),
+            destructor_parameter: None,
             analyzer,
             summaries,
             bindings: vec![],
@@ -302,6 +323,7 @@ impl<'a> Flow<'a> {
         }
     }
     fn function(mut self, function: &Function) -> Result<FunctionFlow> {
+        self.destructor_parameter = if function.annotations.iter().any(|a|a.name.name=="drop") { function.params.first().map(|p|p.name.span) } else {None};
         self.function_key = self.analyzer.facts.method_signatures.get(&function.name.name)
             .map(|signature| signature.emitted_name.clone()).unwrap_or_else(|| function.name.name.clone());
         if let Some((target, _)) = function.name.name.rsplit_once("::") {
@@ -364,16 +386,22 @@ impl<'a> Flow<'a> {
             .sort_by_key(|reference| format!("{:?}", reference));
         self.returned.dedup();
         Ok(FunctionFlow {
+            owned_bindings:self.owned_bindings,
+            owned_moves:self.owned_moves,
+            drop_calls:self.drop_calls,
             returned: self.returned,
             writes,
         })
     }
     fn declare(&mut self, name: &Ident, ty: ResolvedType, value: Option<Value>) -> BindingId {
+        if matches!(ty,ResolvedType::Owned(_)) { self.owned_bindings.insert(name.span,ty.clone()); }
+        if let Some(value)=&value { self.consume_owned_value(value); }
         let id = if let Some(id) = self.declarations.get(&name.span) {
             *id
         } else {
             let id = self.bindings.len();
             self.bindings.push(Binding {
+                declaration: name.span,
                 name: name.name.clone(),
                 ty: ty.clone(),
                 depth: self.scopes.len() - 1,
@@ -389,6 +417,7 @@ impl<'a> Flow<'a> {
             .insert(name.name.clone(), id)
         {
             if previous != id {
+                self.record_owned_drop(previous);
                 self.state.slots.remove(&previous);
             }
         }
@@ -401,6 +430,7 @@ impl<'a> Flow<'a> {
                 value: {
                     let mut v = value.unwrap_or_else(|| Value::empty(ty.clone()));
                     v.ty = ty;
+                    v.owners.clear();
                     v
                 },
             },
@@ -697,7 +727,10 @@ impl<'a> Flow<'a> {
                 value.holders.insert(id);
                 if consume && (owned || value.references.iter().any(|reference| reference.mutable)) {
                     let slot = self.state.slots.get_mut(&id).unwrap();
-                    if owned { slot.owned_live = false; }
+                    if owned {
+                        slot.owned_live = false;
+                        self.owned_moves.insert(span,self.bindings[id].declaration);
+                    }
                     slot.initialized.set(&address.place.path, false);
                     slot.value
                         .references
@@ -835,6 +868,7 @@ impl<'a> Flow<'a> {
         references.sort_by_key(|reference| format!("{:?}", reference));
     }
     fn union_value(left: &mut Value, right: &Value) {
+        left.owners.extend(right.owners.iter().copied());
         for reference in &right.references {
             Self::join_reference(&mut left.references, reference.clone());
         }
@@ -885,6 +919,8 @@ impl<'a> Flow<'a> {
                 return Err(Error::semantic_expected("E2405", "consume the previous owned value before replacing it", span));
             }
         }
+        self.consume_owned_value(&value);
+        value.owners.clear();
         value.ty = address.ty.clone();
         for reference in &mut value.references {
             Self::normalize_reference(reference);
@@ -963,6 +999,8 @@ impl<'a> Flow<'a> {
                 Self::join_reference(&mut self.returned, reference.clone());
             }
         }
+        self.consume_owned_value(value);
+        self.record_owned_cleanup(0);
         Ok(())
     }
     fn merge(states: &[State]) -> State {
@@ -1053,6 +1091,7 @@ impl<'a> Flow<'a> {
             self.expire(&live, &protected);
             let after = live_names(&block.stmts[index + 1..], &local_after);
             result = self.statement(statement, &after)?;
+            if result.is_some() {self.cleanup_owned_temporaries(self.scopes.len()-1,if index+1==block.stmts.len(){result.as_ref()}else{None});}
         }
         if let Some(value) = &result {
             if self.validate {
@@ -1071,6 +1110,7 @@ impl<'a> Flow<'a> {
                 }
             }
         }
+        if let Some(value)=&result { self.consume_owned_value(value); self.record_owned_cleanup(self.scopes.len()-1); }
         self.end_scope();
         self.protected_live.pop();
         Ok(result)
@@ -1131,6 +1171,7 @@ impl<'a> Flow<'a> {
                 Ok(None)
             }
             Stmt::Break { .. } => {
+                if let Some(exits)=self.loops.last() { self.record_owned_cleanup(exits.scope_depth); }
                 if let Some(exits) = self.loops.last_mut() {
                     let mut state = self.state.clone();
                     state
@@ -1141,6 +1182,7 @@ impl<'a> Flow<'a> {
                 Ok(None)
             }
             Stmt::Continue { .. } => {
+                if let Some(exits)=self.loops.last() { self.record_owned_cleanup(exits.scope_depth); }
                 if let Some(exits) = self.loops.last_mut() {
                     let mut state = self.state.clone();
                     state
@@ -1394,7 +1436,7 @@ impl<'a> Flow<'a> {
             .is_some_and(|ty| matches!(ty.unqualified(), ResolvedType::Tuple(_) | ResolvedType::Struct { .. } | ResolvedType::Array { .. } | ResolvedType::Owned(_)))
     }
 
-    fn expr(
+    fn expr_inner(
         &mut self,
         expression: &Expr,
         consume: bool,
@@ -1608,6 +1650,8 @@ impl<'a> Flow<'a> {
                 let Some(mut value) = self.expr(expr, consume, live)? else {
                     return Ok(None);
                 };
+                self.consume_owned_value(&value);
+                value.owners.clear();
                 value.ty = self.resolve(ty)?;
                 if !matches!(value.ty, ResolvedType::Reference { .. }) {
                     value.references.clear();
@@ -1623,7 +1667,7 @@ impl<'a> Flow<'a> {
                 else_block,
                 ..
             } => {
-                if self.expr(cond, true, live)?.is_none() {
+                if self.condition(cond, live)?.is_none() {
                     return Ok(None);
                 }
                 let before = self.state.clone();
@@ -1653,7 +1697,7 @@ impl<'a> Flow<'a> {
                 }
             }
             Expr::Match { expr, arms, .. } => {
-                let Some(scrutinee) = self.expr(expr, true, live)? else {
+                let Some(scrutinee) = self.condition(expr, live)? else {
                     return Ok(None);
                 };
                 let before = self.state.clone();
@@ -1664,12 +1708,14 @@ impl<'a> Flow<'a> {
                     self.scopes.push(HashMap::new());
                     self.bind_pattern(&arm.pattern, &scrutinee)?;
                     if let Some(guard) = &arm.guard {
-                        if self.expr(guard, true, live)?.is_none() {
+                        if self.condition(guard, live)?.is_none() {
                             self.end_scope();
                             continue;
                         }
                     }
                     if let Some(value) = self.expr(&arm.body, consume, live)? {
+                        self.consume_owned_value(&value);
+                        self.record_owned_cleanup(self.scopes.len()-1);
                         self.end_scope();
                         states.push(self.state.clone());
                         if let Some(previous) = &mut result {
@@ -1782,7 +1828,7 @@ impl<'a> Flow<'a> {
             }
             Expr::Range { start, end, .. } => {
                 for expr in [start, end].into_iter().flatten() {
-                    if self.expr(expr, true, live)?.is_none() {
+                    if self.condition(expr, live)?.is_none() {
                         return Ok(None);
                     }
                 }
@@ -1842,7 +1888,7 @@ impl<'a> Flow<'a> {
         loop {
             self.state = head.clone();
             if let Some(cond) = condition {
-                if self.expr(cond, true, &loop_live)?.is_none() {
+                if self.condition(cond, &loop_live)?.is_none() {
                     return Ok(None);
                 }
             }
@@ -2169,6 +2215,7 @@ impl<'a> Flow<'a> {
             values.push(value);
         }
         self.temporary_loans.truncate(old_temporaries);
+        for value in &values { self.consume_owned_value(value); }
         let mut result = Value::empty(ret);
         if let Some((enum_name, variant)) = name.rsplit_once("::") {
             if let Some(tag) = self
@@ -2195,6 +2242,7 @@ impl<'a> Flow<'a> {
         if let Some(summary) = self.summaries.get(&name).cloned() {
             result = self.instantiate_value(
                 &Value {
+                    owners: HashSet::new(),
                     ty: result.ty,
                     references: summary.returned,
                     holders: HashSet::new(),

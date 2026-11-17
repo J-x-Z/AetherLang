@@ -168,6 +168,99 @@ impl SemanticAnalyzer {
         visit(self, ty, allow_owner, span, &mut HashSet::new())
     }
 
+    pub(super) fn destructor_for(&self, ty: &ResolvedType) -> Option<&String> {
+        let ResolvedType::Owned(inner) = ty else {
+            return None;
+        };
+        self.facts.drop_functions.get(&Self::type_identity(inner))
+    }
+
+    pub(super) fn collect_destructors(&mut self, program: &Program) -> Result<()> {
+        for item in &program.items {
+            let invalid = match item {
+                Item::Struct(def) => def.annotations.iter().find(|a| a.name.name == "drop"),
+                Item::Static(def) => def.annotations.iter().find(|a| a.name.name == "drop"),
+                Item::Extern(block) => block.items.iter().find_map(|item| match item {
+                    ForeignItem::Fn { annotations, .. } => {
+                        annotations.iter().find(|a| a.name.name == "drop")
+                    }
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some(annotation) = invalid {
+                return Err(unsupported(
+                    "@drop requires a concrete language function with a body",
+                    annotation.span,
+                ));
+            }
+            if let Item::Impl(block) = item {
+                if block
+                    .methods
+                    .iter()
+                    .any(|method| method.annotations.iter().any(|a| a.name.name == "drop"))
+                {
+                    return Err(unsupported(
+                        "@drop requires a top-level ordinary function",
+                        block.span,
+                    ));
+                }
+            }
+            let Item::Function(function) = item else {
+                continue;
+            };
+            let markers: Vec<_> = function
+                .annotations
+                .iter()
+                .filter(|a| a.name.name == "drop")
+                .collect();
+            if markers.is_empty() {
+                continue;
+            }
+            if markers.len() != 1
+                || !markers[0].args.is_empty()
+                || !function.type_params.is_empty()
+                || !function.contracts.is_empty()
+            {
+                return Err(unsupported("@drop is a single argument-free annotation on a concrete function without contracts", function.span));
+            }
+            let Some(Symbol {
+                kind: SymbolKind::Function { params, ret, .. },
+                ..
+            }) = self.symbols.lookup(&function.name.name)
+            else {
+                unreachable!()
+            };
+            if params.len() != 1
+                || *ret != ResolvedType::UNIT
+                || !matches!(&params[0], ResolvedType::Owned(_))
+            {
+                return Err(unsupported(
+                    "@drop requires exactly one own T parameter and a unit return",
+                    function.span,
+                ));
+            }
+            let ResolvedType::Owned(inner) = &params[0] else {
+                unreachable!()
+            };
+            let key = Self::type_identity(inner);
+            if let Some(previous) = self
+                .facts
+                .drop_functions
+                .insert(key.clone(), function.name.name.clone())
+            {
+                return Err(unsupported(
+                    format!(
+                        "one destructor for {key}; both '{previous}' and '{}' were declared",
+                        function.name.name
+                    ),
+                    function.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn check_owned_match(&mut self, value: &Expr) -> Result<()> {
         if matches!(
             self.check_expr(value)?.unqualified(),

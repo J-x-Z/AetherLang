@@ -59,6 +59,7 @@ impl IRGenerator {
                     if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
                     values.push(self.coerce_value(value, expected));
                 }
+                for value in &values {self.transfer_owned_value(value);}
                 let dest = if ret_type == IRType::Void { None } else { Some(self.alloc_register()) };
                 self.emit_current_with_type(Instruction::Call { dest, func: signature.emitted_name, args: values }, ret_type);
                 Ok(dest.map(Value::Register).unwrap_or(Value::Unit))

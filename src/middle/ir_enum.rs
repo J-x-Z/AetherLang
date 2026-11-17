@@ -342,7 +342,9 @@ impl IRGenerator {
         expr: &Expr,
         arms: &[ast::MatchArm],
     ) -> Result<Value> {
+        let temporary_start=self.owned_checkpoint();
         let value = self.generate_expr(expr)?;
+        self.cleanup_owned_temporaries(temporary_start,self.owned.depth,None)?;
         if self.get_current_terminator().is_some() {
             return Ok(Value::Unit);
         }
@@ -371,7 +373,9 @@ impl IRGenerator {
             self.pattern_branch(&arm.pattern, value.clone(), &ty, guard, next)?;
             if let Some(condition) = &arm.guard {
                 self.current_block = guard;
+                let temporary_start=self.owned_checkpoint();
                 let condition = self.generate_expr(condition)?;
+                self.cleanup_owned_temporaries(temporary_start,self.owned.depth,None)?;
                 self.set_terminator_current(Terminator::Branch {
                     cond: condition,
                     then_target: body,
@@ -382,6 +386,7 @@ impl IRGenerator {
             let result = self.generate_expr(&arm.body)?;
             if self.get_current_terminator().is_none() {
                 reaches_exit = true;
+                self.transfer_owned_value(&result);
                 if !matches!(self.get_value_type(&result), Some(IRType::Unit | IRType::Void)) {
                     let ty = result_ty
                         .get_or_insert_with(|| self.get_value_type(&result).unwrap_or(IRType::I64))

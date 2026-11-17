@@ -28,11 +28,14 @@ mod methods;
 mod contracts;
 #[path = "ir_tuple.rs"]
 mod tuples;
+#[path = "ir_owned.rs"]
+mod owned;
 #[path = "ir_host.rs"]
 mod host;
 
 /// IR Generator
 pub struct IRGenerator {
+    owned: owned::OwnedScopes,
     semantic_facts: Option<SemanticFacts>,
     resolved_aliases: HashMap<String, IRType>,
     constants: HashMap<String, (IRType, Constant)>,
@@ -66,6 +69,7 @@ pub struct IRGenerator {
 impl IRGenerator {
     pub fn new(module_name: &str) -> Self {
         Self {
+            owned: owned::OwnedScopes::default(),
             module: IRModule::new(module_name),
             semantic_facts: None,
             resolved_aliases: HashMap::new(),
@@ -384,6 +388,7 @@ impl IRGenerator {
         self.local_addresses.clear();
         self.reg_types.clear();
         self.loop_targets.clear();
+        self.begin_owned(func);
         let parameter_types = self.function_parameters.get(name).ok_or_else(|| crate::utils::Error::CodeGen(format!("missing collected signature for '{}'", name)))?;
         if parameter_types.len() != func.params.len() { return Err(crate::utils::Error::CodeGen(format!("parameter count changed after checking '{}'", name))); }
         let params: Vec<_> = func.params.iter().zip(parameter_types).map(|(p, ty)| (p.name.name.clone(), ty.clone())).collect();
@@ -404,7 +409,8 @@ impl IRGenerator {
         for (index, (name, ty)) in params.into_iter().enumerate() {
             let reg = self.alloc_register();
             self.emit_current_with_type(Instruction::Assign { dest: reg, value: Value::Parameter(index) }, ty.clone());
-            let address = self.allocate_local(&ty, Some(Value::Register(reg)));
+            let address = self.owner_local_storage(func.params[index].name.span, &ty, Some(Value::Register(reg)));
+            self.bind_owned(func.params[index].name.span,address.clone(),true)?;
             self.locals.insert(name.clone(), (address.clone(), ty));
             self.local_addresses.insert(name, address);
         }
@@ -431,13 +437,18 @@ impl IRGenerator {
 
     /// Generate IR for a block
     fn generate_block(&mut self, block: &ast::Block) -> Result<Option<Value>> {
+        self.owned.depth+=1;
         let mut last_value = None;
         let saved_locals = self.locals.clone();
         let saved_addresses = self.local_addresses.clone();
-        for stmt in &block.stmts {
+        for (index,stmt) in block.stmts.iter().enumerate() {
             if self.get_current_terminator().is_some() { break; }
             last_value = self.generate_stmt(stmt)?;
+            self.cleanup_owned_temporaries(0,self.owned.depth,if index+1==block.stmts.len(){last_value.as_ref()}else{None})?;
         }
+        if let Some(value)=&last_value {self.promote_owned_value(value);}
+        self.cleanup_owned_scope(self.owned.depth)?;
+        self.owned.depth-=1;
         self.locals = saved_locals;
         self.local_addresses = saved_addresses;
         Ok(last_value)
@@ -451,7 +462,10 @@ impl IRGenerator {
                 let val = value.as_ref().map(|expr| self.generate_expr_expected(expr, declared.as_ref())).transpose()?;
                 if self.get_current_terminator().is_some() { return Ok(None); }
                 let var_type = declared.or_else(|| val.as_ref().and_then(|v| self.get_value_type(v))).unwrap_or(IRType::I64);
-                let address = self.allocate_local(&var_type, val);
+                if let Some(value)=&val {self.transfer_owned_value(value);}
+                let initialized=val.is_some();
+                let address = self.owner_local_storage(name.span,&var_type,val);
+                self.bind_owned(name.span,address.clone(),initialized)?;
                 self.locals.insert(name.name.clone(), (address.clone(), var_type));
                 self.local_addresses.insert(name.name.clone(), address);
                 Ok(None)
@@ -478,6 +492,7 @@ impl IRGenerator {
             Stmt::Break { .. } => {
                 let (_, target) = self.loop_targets.last().copied()
                     .ok_or_else(|| crate::utils::Error::CodeGen("break outside a loop".into()))?;
+                self.cleanup_owned_scope(*self.owned.loops.last().unwrap())?;
                 self.set_terminator_current(Terminator::Jump { target });
                 Ok(None)
             }
@@ -485,6 +500,7 @@ impl IRGenerator {
             Stmt::Continue { .. } => {
                 let (target, _) = self.loop_targets.last().copied()
                     .ok_or_else(|| crate::utils::Error::CodeGen("continue outside a loop".into()))?;
+                self.cleanup_owned_scope(*self.owned.loops.last().unwrap())?;
                 self.set_terminator_current(Terminator::Jump { target });
                 Ok(None)
             }
@@ -498,6 +514,11 @@ impl IRGenerator {
     fn generate_expr(&mut self, expr: &ast::Expr) -> Result<Value> {
         if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
         let value = self.generate_expr_inner(expr)?;
+        let owned_type=self.checked_expr_type(expr).cloned();
+        if let Some(ty @ ResolvedType::Owned(_))=&owned_type {
+            self.move_owned_binding(expr);
+            self.remember_owned_temporary(&value,ty)?;
+        }
         let checked_type = self.checked_expr_type(expr);
         if checked_type == Some(&ResolvedType::NEVER) {
             if self.get_current_terminator().is_none() { self.set_terminator_current(Terminator::Unreachable); }
@@ -580,6 +601,8 @@ impl IRGenerator {
                         self.emit_current_with_type(Instruction::BinOp { dest, op: operation, left: old, right: value }, ty.unqualified().clone());
                         value = Value::Register(dest);
                     }
+                    self.transfer_owned_value(&value);
+                    self.initialize_owned_place(&address);
                     self.emit_current(Instruction::Store { ptr: address, value: value.clone() });
                     return Ok(value);
                 }
@@ -727,6 +750,7 @@ impl IRGenerator {
                     arg_vals.push(val);
                 }
 
+                for value in &arg_vals {self.transfer_owned_value(value);}
                 // Resolve the semantic return type.
                 let ret_type = self.function_signatures.get(&func_name)
                     .cloned()
@@ -763,7 +787,9 @@ impl IRGenerator {
             }
 
             Expr::If { cond, then_block, else_block, .. } => {
+                let temporary_start=self.owned_checkpoint();
                 let cond_val = self.generate_expr(cond)?;
+                self.cleanup_owned_temporaries(temporary_start,self.owned.depth,None)?;
                 if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
 
                 let then_id = self.add_block("then");
@@ -780,6 +806,7 @@ impl IRGenerator {
                 let then_result = self.generate_block(then_block)?;
                 
                 let then_jumps_to_merge = if self.get_current_terminator().is_none() {
+                    if let Some(value)=&then_result {self.transfer_owned_value(value);}
                     self.set_terminator_current(Terminator::Jump { target: merge_id });
                     true
                 } else { false };
@@ -791,6 +818,7 @@ impl IRGenerator {
                 } else { None }; // Void if no else
                 
                 let else_jumps_to_merge = if self.get_current_terminator().is_none() {
+                    if let Some(value)=&else_result {self.transfer_owned_value(value);}
                     self.set_terminator_current(Terminator::Jump { target: merge_id });
                     true
                 } else { false };
@@ -883,8 +911,10 @@ impl IRGenerator {
                 self.set_terminator_current(Terminator::Jump { target: body_block });
                 self.current_block = body_block;
                 self.loop_targets.push((body_block, exit_block));
+                self.owned.loops.push(self.owned.depth+1);
                 self.generate_block(body)?;
                 self.loop_targets.pop();
+                self.owned.loops.pop();
                 if self.get_current_terminator().is_none() {
                     self.set_terminator_current(Terminator::Jump { target: body_block });
                 }
@@ -895,7 +925,9 @@ impl IRGenerator {
                 let cond_block = self.add_block("while_cond");
                 self.set_terminator_current(Terminator::Jump { target: cond_block });
                 self.current_block = cond_block;
+                let temporary_start=self.owned_checkpoint();
                 let cond_val = self.generate_expr(cond)?;
+                self.cleanup_owned_temporaries(temporary_start,self.owned.depth,None)?;
                 if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
                 let body_block = self.add_block("while_body");
                 let exit_block = self.add_block("while_exit");
@@ -904,8 +936,10 @@ impl IRGenerator {
                 });
                 self.current_block = body_block;
                 self.loop_targets.push((cond_block, exit_block));
+                self.owned.loops.push(self.owned.depth+1);
                 self.generate_block(body)?;
                 self.loop_targets.pop();
+                self.owned.loops.pop();
                 if self.get_current_terminator().is_none() {
                     self.set_terminator_current(Terminator::Jump { target: cond_block });
                 }
@@ -919,8 +953,10 @@ impl IRGenerator {
                         "for requires a bounded integer range (start..end)".into())),
                 };
                 // Evaluate each bound exactly once before entering the loop.
+                let temporary_start=self.owned_checkpoint();
                 let start_val = self.generate_expr(start)?;
                 let end_val = self.generate_expr(end)?;
+                self.cleanup_owned_temporaries(temporary_start,self.owned.depth,None)?;
                 if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
                 let ty = self.get_value_type(&start_val).unwrap_or(IRType::I64);
                 let end_val = self.coerce_value(end_val, &ty);
@@ -943,8 +979,10 @@ impl IRGenerator {
                 });
                 self.current_block = body_block;
                 self.loop_targets.push((step_block, exit_block));
+                self.owned.loops.push(self.owned.depth+1);
                 self.generate_block(body)?;
                 self.loop_targets.pop();
+                self.owned.loops.pop();
                 if self.get_current_terminator().is_none() {
                     self.set_terminator_current(Terminator::Jump { target: step_block });
                 }
@@ -981,6 +1019,7 @@ impl IRGenerator {
             Expr::Cast { expr, ty, .. } => {
                 let val = self.generate_expr(expr)?;
                 let target_ty = self.ast_type_to_ir(ty);
+                self.transfer_owned_value(&val);
                 if self.get_value_type(&val).as_ref() == Some(&target_ty) { return Ok(val); }
                 let dest = self.alloc_register();
                 self.emit_current_with_type(Instruction::Cast {

@@ -23,6 +23,7 @@ fn owned_transfer_boundaries_are_checked_before_codegen() {
         ("erase", "fn main(){let value:own Handle=make();let copied:Handle=value as Handle;}","E2405"),
         ("active_loan", "fn main(){let value:own Handle=make();let loan:&own Handle=&value;consume(value);let n:i32=loan.raw;}","E2302"),
         ("escape", "fn local()->&i32{let value:own Handle=make();&value.raw}fn main(){}","E2302"),
+        ("generic", "fn identity<T>(value:T)->T{value}fn main(){let value:own Handle=make();let other:own Handle=identity(value);consume(value);}","E2301"),
         ("alias", "type Owner=own Handle;fn main(){let value:Owner=make();let other:Owner=value;consume(value);}","E2301"),
     ] {
         let path=work.join(format!("{name}.aeth"));

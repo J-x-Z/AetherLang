@@ -148,7 +148,7 @@ when an application requires a particular message or process status.
 `atof` and `strcmp` carry the `read` effect because they inspect pointed-to
 memory; wrappers must include it when declaring an explicit effect bound.
 
-## Explicit affine resource values (first stage)
+## Explicit affine resources and opt-in cleanup
 
 `own Descriptor` now retains a distinct canonical type. A by-value assignment,
 argument, or return moves the owner; later reads of the old binding fail with
@@ -167,9 +167,33 @@ retain their existing manual lifetime contracts.
 
 `owned_fd::owned_fd_number(&descriptor)` borrows its numeric descriptor;
 `owned_fd::owned_fd_close(descriptor)` consumes and explicitly closes it, even
-when close reports an error. There is **no implicit destructor or scope cleanup**
-yet: abandoned affine values can leak. Close every successfully acquired owner
-on the paths that finish using it; returning it transfers that responsibility.
+when close reports an error. Without a registered destructor, abandoned affine values can still leak; close
+successfully acquired owners explicitly or return them to another owner.
+
+Register automatic cleanup with `@drop fn destroy(value: own Handle) { ... }`.
+The function must be concrete, have exactly one owned parameter, return unit,
+and have no contracts. A canonical payload type has at most one registered
+destructor across the whole program, including aliases and imported modules.
+Registration affects only `own Handle`, never ordinary `Handle` values or raw
+pointers. The destructor's own parameter is exempt from recursive implicit drop.
+
+Registered owners are destroyed in reverse construction order on normal block
+exit, return, `?` error return, break, and continue. Moves transfer that duty;
+explicitly consuming close operations cancel the old slot's cleanup. Return
+values are evaluated before cleanup, and a returned owner is transferred to the
+caller. Arguments are transferred only when the call executes: if evaluating a
+later argument returns early, already evaluated owner temporaries are cleaned.
+Discarded owner temporaries are destroyed at the full-expression boundary.
+Destructor effects propagate through callers; a pure forwarding function that
+returns its owner does not gain a cleanup effect.
+
+There is no exception or process-exit unwinding: trap, `exit`, and nontermination
+do not promise cleanup. Automatic destruction cannot report a close error;
+use `owned_fd_close` explicitly when its captured error code matters. Fallible
+operations should first borrow/prepare, then consume only on success. Containers
+of owners and `Result<own T, E>` remain outside this stage. Mutating or mutably
+borrowing an owner's raw payload requires `unsafe` because replacing a handle
+can invalidate uniqueness; transferring the whole owner remains checked.
 
 This first stage accepts named struct payloads without reference or owner fields.
 Owner values inside arrays, tuples, records, enum payloads, globals, raw-pointer

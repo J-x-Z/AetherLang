@@ -1,0 +1,54 @@
+use result::Result;
+static mut DESTROYED:i32=0;
+static mut ORDER:i64=0;
+struct Handle{number:i32}
+@drop
+fn destroy(value:own Handle){
+    DESTROYED=DESTROYED+1;
+    ORDER=ORDER*10+value.number as i64;
+}
+fn make(n:i32)->own Handle{unsafe{Handle{number:n} as own Handle}}
+fn identity<T>(value:T)->T{value}
+fn relay(value:own Handle)->own Handle pure {value}
+fn consume(value:own Handle){}
+fn pair(a:own Handle,b:i32){}
+fn normal(){let a:own Handle=make(1);let b:own Handle=make(2);}
+fn early(){let a:own Handle=make(3);{let b:own Handle=make(4);return;}}
+fn partial_arguments()->i32{pair(make(5),{return 17;});99}
+fn prepare(value:&own Handle,succeed:bool)->bool{succeed&&value.number==9}
+fn optional(flag:bool){let x:own Handle=make(9);if prepare(&x,flag){consume(x);}}
+fn branch(flag:bool){let a:own Handle=make(6);if flag{consume(a);}else{let b:own Handle=relay(a);}}
+fn error()->Result<i32,i32>{Result::Err(9)}
+fn success()->Result<i32,i32>{Result::Ok(7)}
+fn propagate()->Result<i32,i32>{let value:own Handle=make(7);let code:i32=error()?;Result::Ok(code)}
+fn keep_success()->Result<i32,i32>{let value:own Handle=make(8);let code:i32=success()?;if value.number!=8{return Result::Err(100);}Result::Ok(code)}
+fn predicate(value:own Handle)->bool {value.number<2}
+fn loop_condition(){let mut n:i32=0;while predicate(make(n)){n=n+1;}}
+fn transfers()->own Handle{let x:own Handle=make(3);let y:own Handle=identity(x);return relay(y);}
+fn main()->i32{
+    normal();if DESTROYED!=2||ORDER!=21{return 1;}
+    ORDER=0;early();if DESTROYED!=4||ORDER!=43{return 2;}
+    ORDER=0;if partial_arguments()!=17||DESTROYED!=5||ORDER!=5{return 3;}
+    ORDER=0;branch(true);branch(false);if DESTROYED!=7||ORDER!=66{return 4;}
+    ORDER=0;match propagate(){Result::Err(9)=>{},_=>{return 5;}}
+    if DESTROYED!=8||ORDER!=7{return 6;}
+    ORDER=0;match keep_success(){Result::Ok(7)=>{},_=>{return 7;}}
+    if DESTROYED!=9||ORDER!=8{return 8;}
+    ORDER=0;for i in 0..4 {let item:own Handle=make(i as i32);if i==1{continue;}if i==2{break;}}
+    if DESTROYED!=12||ORDER!=12{return 9;}
+    ORDER=0;loop_condition();if DESTROYED!=15||ORDER!=12{return 10;}
+    ORDER=0;{let value:own Handle=transfers();if value.number!=3{return 11;}}
+    if DESTROYED!=16||ORDER!=3{return 12;}
+    ORDER=0;{let value:own Handle=if true{make(4)}else{make(9)};if value.number!=4{return 13;}}
+    if DESTROYED!=17||ORDER!=4{return 14;}
+    ORDER=0;{let value:own Handle=match false{true=>make(9),false=>make(5)};if value.number!=5{return 15;}}
+    if DESTROYED!=18||ORDER!=5{return 16;}
+    ORDER=0;make(6);if DESTROYED!=19||ORDER!=6{return 17;}
+    ORDER=0;{let value:own Handle=make(7);{let value:own Handle=make(8);}}
+    if DESTROYED!=21||ORDER!=87{return 18;}
+    ORDER=0;optional(true);optional(false);if DESTROYED!=23||ORDER!=99{return 19;}
+    ORDER=0;
+    if true{make(1)}else{make(2)}
+    if DESTROYED!=24||ORDER!=1{return 20;}
+    return 0;
+}

@@ -68,6 +68,9 @@ impl Specializer {
                     Some(&d.name)
                 }
                 Item::Function(d) => {
+                    if !d.type_params.is_empty() && d.annotations.iter().any(|a| a.name.name == "drop") {
+                        return Err(Error::semantic_expected("E2405", "concrete function for @drop registration", d.name.span));
+                    }
                     if !d.type_params.is_empty() && d.annotations.iter().any(|a| a.name.name == "no_mangle") {
                         return Err(Error::semantic_expected("E2202", "non-generic function for a fixed #[no_mangle] C ABI symbol", d.name.span));
                     }

@@ -1,0 +1,27 @@
+use fd::{Descriptor,Pipe,fd_pipe,fd_close};
+use owned_fd::{owned_fd_close,owned_fd_number};
+use posix::F_GETFD;
+use result::Result;
+extern "C" {fn fcntl(fd:i32,command:i32,...)->i32;}
+static mut CLOSED:i32=0;
+@drop
+fn close_owner(value:own Descriptor){owned_fd_close(value);CLOSED=CLOSED+1;}
+fn unwind(connection:Pipe,early:bool)->i32{
+    let reader:own Descriptor=unsafe{connection.reader as own Descriptor};
+    let writer:own Descriptor=unsafe{connection.writer as own Descriptor};
+    if early{return 9;}
+    return 0;
+}
+fn main()->i32{
+    let p:Pipe=match fd_pipe(){Result::Ok(value)=>value,Result::Err(_)=>{return 1;}};
+    let read_number:i32=p.reader.value;let write_number:i32=p.writer.value;
+    if unwind(p,true)!=9{return 2;}
+    if CLOSED!=2||fcntl(read_number,F_GETFD)>=0||fcntl(write_number,F_GETFD)>=0{return 3;}
+    let next:Pipe=match fd_pipe(){Result::Ok(value)=>value,Result::Err(_)=>{return 4;}};
+    let next_reader:i32=next.reader.value;let next_writer:i32=next.writer.value;
+    {let r:own Descriptor=unsafe{next.reader as own Descriptor};match owned_fd_close(r){Result::Ok(_)=>{},Result::Err(_)=>{fd_close(&next.writer as *Descriptor);return 5;}}
+     let w:own Descriptor=unsafe{next.writer as own Descriptor};}
+    // Explicit close consumes r, so only w reaches the implicit destructor.
+    if CLOSED!=3||fcntl(next_reader,F_GETFD)>=0||fcntl(next_writer,F_GETFD)>=0{return 6;}
+    return 0;
+}

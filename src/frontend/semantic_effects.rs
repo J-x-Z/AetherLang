@@ -150,6 +150,7 @@ impl SemanticAnalyzer {
             let mut callees = vec![];
             let function_key = self.facts.method_signatures.get(name)
                 .map(|signature| &signature.emitted_name).unwrap_or(name);
+            if let Some(drops)=self.facts.drop_calls.get(function_key) { callees.extend(drops.iter().cloned()); }
             let walker = EffectWalker { facts: &self.facts, function: function_key };
             walker.block(&function.body, &mut |expr, access| {
                 self.collect_effect_node(function_key, expr, access, &mut effects, &mut callees);
