@@ -1,0 +1,8 @@
+pub struct Summary { count:i64,sum:i64,squares:i64 }
+struct Private { value:i64 }
+fn helper(value:i64)->i64 {return value*value;}
+pub fn reset(values:*Summary) {values.count=0;values.sum=0;values.squares=0;}
+pub fn add(values:*Summary,value:i64) {
+ values.count=values.count+1;values.sum=values.sum+value;
+ values.squares=values.squares+helper(value);
+}

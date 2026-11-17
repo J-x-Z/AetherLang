@@ -1,11 +1,13 @@
-fn boot_error(ctx:*BootContext,token:*BootToken,message:*u8) {
+use model::*;
+pub fn boot_error(ctx:*BootContext,token:*BootToken,message:*u8) {
  if ctx.failed {return;}
  ctx.failed=true;
  let mut line:i32=1;let mut column:i32=1;
- if token!=0 as *BootToken {line=token.line;column=token.column;}
- printf("%s:%d:%d: %s\n",ctx.path,line,column,message);
+ let mut path:*u8=ctx.path;
+ if token!=0 as *BootToken {line=token.line;column=token.column;if token.path!=(0 as *u8) {path=token.path;}}
+ printf("%s:%d:%d: %s\n",path,line,column,message);
 }
-fn boot_alloc(ctx:*BootContext,size:u64)->*void {
+pub fn boot_alloc(ctx:*BootContext,size:u64)->*void {
  if ctx.failed {return 0 as *void;}
  let total:u64=size+(size_of(BootArena) as u64);
  if size>536870912 || total>536870912-ctx.allocated {
@@ -17,21 +19,21 @@ fn boot_alloc(ctx:*BootContext,size:u64)->*void {
  let payload:*u8=(allocation as *u8)+(size_of(BootArena) as u64);
  memset(payload as *void,0,size);return payload as *void;
 }
-fn boot_copy(ctx:*BootContext,text:*u8,length:u64)->*u8 {
+pub fn boot_copy(ctx:*BootContext,text:*u8,length:u64)->*u8 {
  if length>33554432 {boot_error(ctx,ctx.cursor,"text exceeds 32 MiB limit");return 0 as *u8;}
  let copy:*u8=boot_alloc(ctx,length+1) as *u8;
  if copy==0 as *u8 {return copy;}
  memcpy(copy as *void,text as *void,length);copy[length]=0;return copy;
 }
-fn boot_id(ctx:*BootContext)->i32 {
+pub fn boot_id(ctx:*BootContext)->i32 {
  ctx.next_id=ctx.next_id+1;return ctx.next_id;
 }
-fn boot_node(ctx:*BootContext,kind:i32,token:*BootToken)->*BootNode {
+pub fn boot_node(ctx:*BootContext,kind:i32,token:*BootToken)->*BootNode {
  let node:*BootNode=boot_alloc(ctx,size_of(BootNode) as u64) as *BootNode;
  if node==0 as *BootNode {return node;}
- node.kind=kind;node.id=boot_id(ctx);node.token=token;return node;
+ node.kind=kind;node.id=boot_id(ctx);node.token=token;node.owner=ctx.module;return node;
 }
-fn boot_type(ctx:*BootContext,kind:i32)->*BootType {
+pub fn boot_type(ctx:*BootContext,kind:i32)->*BootType {
  let mut ty:*BootType=ctx.types;
  while ty!=0 as *BootType {if ty.kind==kind {return ty;}ty=ty.next;}
  let created:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;
@@ -39,7 +41,7 @@ fn boot_type(ctx:*BootContext,kind:i32)->*BootType {
  created.kind=kind;created.id=boot_id(ctx);created.complete=true;
  created.next=ctx.types;ctx.types=created;return created;
 }
-fn boot_ptr_type(ctx:*BootContext,inner:*BootType)->*BootType {
+pub fn boot_ptr_type(ctx:*BootContext,inner:*BootType)->*BootType {
  let mut ty:*BootType=ctx.types;
  while ty!=0 as *BootType {if ty.kind==BY_PTR && ty.inner==inner {return ty;}ty=ty.next;}
  let created:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;
@@ -47,24 +49,95 @@ fn boot_ptr_type(ctx:*BootContext,inner:*BootType)->*BootType {
  created.kind=BY_PTR;created.id=boot_id(ctx);created.inner=inner;created.complete=true;
  created.next=ctx.types;ctx.types=created;return created;
 }
-fn boot_named_type(ctx:*BootContext,name:*u8)->*BootType {
+pub fn boot_named_type(ctx:*BootContext,name:*u8)->*BootType {
  let mut ty:*BootType=ctx.types;
- while ty!=0 as *BootType {if ty.kind==BY_STRUCT && strcmp(ty.name,name)==0 {return ty;}ty=ty.next;}
+ while ty!=0 as *BootType {if ty.kind==BY_STRUCT && ty.owner==ctx.module && strcmp(ty.name,name)==0 {return ty;}ty=ty.next;}
  let created:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;
  if created==0 as *BootType {return created;}
- created.kind=BY_STRUCT;created.id=boot_id(ctx);created.name=name;
+ created.kind=BY_STRUCT;created.id=boot_id(ctx);created.name=name;created.owner=ctx.module;
  created.next=ctx.types;ctx.types=created;return created;
 }
-fn boot_context_new(source:*u8,length:u64,path:*u8)->*BootContext {
+pub fn boot_context_new(source:*u8,length:u64,path:*u8)->*BootContext {
  let ctx:*BootContext=malloc(size_of(BootContext) as u64) as *BootContext;
  if ctx==0 as *BootContext {return ctx;}
  memset(ctx as *void,0,size_of(BootContext) as u64);
  ctx.source=source;ctx.length=length;ctx.path=path;
  return ctx;
 }
-fn boot_context_free(ctx:*BootContext) {
+pub fn boot_context_free(ctx:*BootContext) {
  if ctx==0 as *BootContext {return;}
  let mut item:*BootArena=ctx.arena;
  while item!=0 as *BootArena {let next:*BootArena=item.next;free(item as *void);item=next;}
  free(ctx as *void);
+}
+
+pub fn boot_module_item(module:*BootModule,name:*u8)->*BootNode {
+ if module==(0 as *BootModule) { return 0 as *BootNode; }
+ let mut item:*BootNode=module.items;
+ while item!=(0 as *BootNode) { if item.owner==module && strcmp(item.name,name)==0 { return item; } item=item.next; }
+ return 0 as *BootNode;
+}
+pub fn boot_exported(item:*BootNode)->bool { return item!=(0 as *BootNode) && (item.flags&10)!=0; }
+pub fn boot_import_module(ctx:*BootContext,name:*u8,token:*BootToken)->*BootModule {
+ if ctx.module!=(0 as *BootModule) {
+  let mut import:*BootImport=ctx.module.imports;
+  while import!=(0 as *BootImport) {
+   if import.symbol==(0 as *u8) && strcmp(import.alias,name)==0 { return import.target; }
+   import=import.next;
+  }
+ }
+ boot_error(ctx,token,"unknown imported module");return 0 as *BootModule;
+}
+pub fn boot_imported(ctx:*BootContext,name:*u8,token:*BootToken)->*BootNode {
+ if ctx.module==(0 as *BootModule) { return 0 as *BootNode; }
+ let mut import:*BootImport=ctx.module.imports;let mut found:*BootNode=0 as *BootNode;
+ while import!=(0 as *BootImport) {
+  let mut item:*BootNode=0 as *BootNode;
+  if import.wildcard { item=boot_module_item(import.target,name); }
+  else { if import.symbol!=(0 as *u8) && strcmp(import.alias,name)==0 { item=boot_module_item(import.target,import.symbol); } }
+  if boot_exported(item) {
+   if found!=(0 as *BootNode) && found!=item && !boot_foreign_same(found,item) { boot_error(ctx,token,"ambiguous imported name");return 0 as *BootNode; }
+   found=item;
+  }
+  import=import.next;
+ }
+ return found;
+}
+pub fn boot_lookup(ctx:*BootContext,name:*u8,module:*BootModule,token:*BootToken)->*BootNode {
+ if module!=(0 as *BootModule) {
+  let item:*BootNode=boot_module_item(module,name);
+  if !boot_exported(item) { boot_error(ctx,token,"unknown or private imported name");return 0 as *BootNode; }
+  return item;
+ }
+ if ctx.module==(0 as *BootModule) {
+  let mut item:*BootNode=ctx.program.body;
+  while item!=(0 as *BootNode) { if strcmp(item.name,name)==0 { return item; } item=item.next; }
+  return 0 as *BootNode;
+ }
+ let local:*BootNode=boot_module_item(ctx.module,name);
+ if local!=(0 as *BootNode) { return local; }
+ return boot_imported(ctx,name,token);
+}
+pub fn boot_resolve_type(ctx:*BootContext,name:*u8,module:*BootModule,token:*BootToken)->*BootType {
+ if module!=(0 as *BootModule) {
+  let item:*BootNode=boot_lookup(ctx,name,module,token);
+  if item==(0 as *BootNode) { return 0 as *BootType; }
+  if item.kind!=BN_STRUCT {boot_error(ctx,token,"imported name is not a struct type");return 0 as *BootType;}
+  return item.ty;
+ }
+ let imported:*BootNode=boot_imported(ctx,name,token);
+ if ctx.failed {return 0 as *BootType;}
+ if imported!=(0 as *BootNode) {
+  if imported.kind!=BN_STRUCT {boot_error(ctx,token,"imported name is not a struct type");return 0 as *BootType;}
+  return imported.ty;
+ }
+ return boot_named_type(ctx,name);
+}
+
+pub fn boot_foreign_same(a:*BootNode,b:*BootNode)->bool {
+ if a.kind!=BN_FN || b.kind!=BN_FN || (a.flags&2)==0 || (b.flags&2)==0 {return false;}
+ if strcmp(a.name,b.name)!=0 || a.ty!=b.ty || (a.flags&4)!=(b.flags&4) {return false;}
+ let mut left:*BootNode=a.params;let mut right:*BootNode=b.params;
+ while left!=(0 as *BootNode) && right!=(0 as *BootNode) {if left.ty!=right.ty {return false;}left=left.next;right=right.next;}
+ return left==(0 as *BootNode) && right==(0 as *BootNode);
 }

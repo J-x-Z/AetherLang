@@ -13,13 +13,45 @@ python3 tests/bootstrap_core.py --compiler /path/to/aethc \
   --work-dir /external/work/bootstrap --backend llvm
 ```
 
-Use `--backend c` for a C-only seed. The runner concatenates the seven source
-modules verbatim, builds stage1 from stage0, then uses the Aether compiler to
-compile the same complete source into stages2, 3 and 4. Clang compiles generated
-C into machine code. Stages1 onward never invoke the Rust compiler; the runner
-places a failing `aethc` command in PATH to enforce that boundary. Every generated
-C file must be byte-identical; the self-compiled compiler must also compile
-and execute real workloads.
+Use `--backend c` for a C-only seed. The runner copies the nine source files
+verbatim into its work directory and builds stage1 from the real entry
+`src_aether/core/main.aeth`. Each Aether compiler then finds, opens, lexes and
+parses its own module graph to generate stages2, 3 and 4. No source concatenation,
+Python import expansion, or generated front-end shim is involved. Clang compiles
+generated C into machine code. Stages1 onward never invoke the Rust compiler;
+the runner places a failing `aethc` command in PATH to enforce that boundary.
+The three generated C files must be byte-identical. The self-compiled compiler
+also compiles and executes independent single-file and multi-module workloads.
+
+A built Core compiler accepts:
+
+```sh
+aethc-core project/main.aeth -I shared/modules -I other/modules --check
+aethc-core project/main.aeth -I shared/modules -o program.c
+clang -std=c11 -O2 program.c -lm -o program
+```
+
+Imports must precede declarations. Supported forms are `use library;`,
+`use library as alias;`, `use library::item;`, `use library::item as alias;`,
+and `use library::*;`. Named imports permit `library::function()`,
+`library::CONSTANT`, and `*library::Type`; selected and wildcard imports bring
+public declarations into the file's scope. A wildcard also binds its module
+name. Grouped imports and re-exports are not yet supported.
+
+Each module has private functions, constants and nominal struct types; `pub`
+exports a declaration, while `extern "C"` declarations expose their ABI name.
+Exported struct fields follow the existing Core field-access rules. Imports do
+not expose another module's imports. Conflicting imported names, duplicate
+bindings, private-name access and incompatible foreign declarations are errors.
+Repeated compatible declarations of the same C symbol share that ABI identity;
+an alias of a different C symbol cannot silently replace a local declaration.
+
+Resolution tries `name.aeth`, then `name/mod.aeth` in the importing file's real
+source directory, then each `-I` directory in argument order. Paths are
+canonicalized, so diamonds and symlink aliases reuse one parsed module and one
+nominal type identity. Cyclic imports are rejected. The root file alone supplies
+the executable `main`; an imported file's private `main` remains an ordinary
+function. Diagnostics retain the originating file, line and column.
 
 Core v1 supports functions, C FFI and variadics, explicit scalar/pointer/struct
 types, constants, lexical locals, casts, fields, indexing, `size_of`, arithmetic,
@@ -43,23 +75,30 @@ escapes to a Unicode scalar such as `\u{e9}` (UTF-8 `c3 a9`), or write numeric
 Core still has no character-literal syntax. The semantic corpus includes
 native byte checks for UTF-8 boundaries, NUL, ASCII escapes, and raw Unicode.
 
-The bootstrap compiler rejects imports, generics, enums, methods, arrays,
-references, attributes and other syntax outside this subset. Its own modules
-use a deterministic concatenation manifest instead of an import resolver.
-These features remain available in the primary compiler. This is a real minimal
-self-host, not a replacement of the full compiler or an assertion that LLVM code
+The bootstrap compiler still rejects generics, enums, methods, arrays,
+references, attributes and other syntax outside this subset. These features
+remain available in the primary compiler. The Core compiler targets the
+existing 64-bit host C ABI; its `usize`/`isize` and libc declarations do not yet
+provide a cross-target data model. This is a real self-host with native module
+loading, not a replacement of the full compiler or an assertion that LLVM code
 generation itself is self-hosted.
 
 The compiler owns an arena released on success and failure, limits input to
-32 MiB and arena allocations to 512 MiB, and checks syntactic and actual AST
-depth. Output is written to a temporary sibling and atomically renamed; failed
-compilation leaves an existing output intact. Diagnostics include source line
-and column. Handles and raw pointers in compiled programs have explicit
+32 MiB across the source graph and arena allocations to 512 MiB. Module
+loading is limited to 256 unique files and an import depth of 64; syntactic and
+actual AST depth are also bounded. Output is written to a temporary sibling and atomically renamed; failed
+compilation leaves an existing output intact. Output may not replace the
+entry source or any imported source, including canonical path aliases. Handles and raw pointers in compiled programs have explicit
 lifetimes; this subset does not add an automatic destructor system.
 
 Validation includes recursive heap structures, NUL-containing files, call and
 assignment order, numeric boundaries, malformed inputs, and ASan/UBSan builds
-of the compiler compiling itself. Results contain stage hashes, sizes, commands
+of the compiler compiling itself and loading valid/invalid module graphs. The
+external file-statistics project combines heap ownership, byte parsing, private
+helpers, imported structs and filesystem I/O. Run its module corpus separately
+with `python3 tests/bootstrap_modules.py --compiler /path/to/aethc-core
+--work-dir /external/work/core-modules`; `--compare` accepts another generation
+for byte-identical generated C checks. Results contain stage hashes, sizes, commands
 and single-run timings. The earlier placeholder `src_aether/*.aeth` pipelines
 and stale bootstrap binaries were removed; their history remains in Git.
 

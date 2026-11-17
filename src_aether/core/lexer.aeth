@@ -1,3 +1,5 @@
+use model::*;
+use runtime::*;
 // Bootstrap lexer: owned token text lives in the context arena. Keywords stay
 // identifiers; the parser gives them meaning. Columns count source bytes.
 struct BootLexer {
@@ -18,7 +20,7 @@ fn boot_lex_advance(lexer:*BootLexer) {
 }
 fn boot_lex_problem(lexer:*BootLexer,message:*u8)->bool {
  let token:*BootToken=boot_alloc(lexer.context,size_of(BootToken) as u64) as *BootToken;
- if token!=(0 as *BootToken) { token.line=lexer.token_line;token.column=lexer.token_column; }
+ if token!=(0 as *BootToken) { token.line=lexer.token_line;token.column=lexer.token_column;token.path=lexer.context.path; }
  boot_error(lexer.context,token,message);
  return false;
 }
@@ -27,7 +29,7 @@ fn boot_lex_token(lexer:*BootLexer,kind:i32,text:*u8,length:u64)->bool {
  let token:*BootToken=boot_alloc(lexer.context,size_of(BootToken) as u64) as *BootToken;
  if token==(0 as *BootToken) { return false; }
  token.kind=kind;token.text=text;token.length=length;
- token.line=lexer.token_line;token.column=lexer.token_column;
+ token.line=lexer.token_line;token.column=lexer.token_column;token.path=lexer.context.path;
  if lexer.tail==(0 as *BootToken) { lexer.context.tokens=token; }
  else { lexer.tail.next=token; }
  lexer.tail=token;
@@ -219,7 +221,7 @@ fn boot_lex_punctuation(lexer:*BootLexer)->bool {
  while index<length { boot_lex_advance(lexer);index=index+1; }
  return boot_lex_token(lexer,kind,boot_copy(lexer.context,lexer.context.source+start,length),length);
 }
-fn boot_lex(ctx:*BootContext)->bool {
+pub fn boot_lex(ctx:*BootContext)->bool {
  let lexer:*BootLexer=boot_alloc(ctx,size_of(BootLexer) as u64) as *BootLexer;
  if lexer==(0 as *BootLexer) { return false; }
  lexer.context=ctx;lexer.line=1;lexer.column=1;

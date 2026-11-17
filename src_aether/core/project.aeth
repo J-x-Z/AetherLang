@@ -1,0 +1,134 @@
+// Native source graph loading. Imports precede declarations; imported files are
+// read, lexed and parsed by this compiler, never concatenated by an external tool.
+use model::*;
+use runtime::*;
+use lexer::boot_lex;
+use parser::*;
+extern "C" { fn realpath(path:*u8,resolved:*u8)->*u8; }
+fn boot_project_word(token:*BootToken,word:*u8)->bool {
+ return token!=(0 as *BootToken) && token.kind==BT_IDENT && strcmp(token.text,word)==0;
+}
+fn boot_project_name(ctx:*BootContext,token:*BootToken)->bool {
+ if token==(0 as *BootToken) || token.kind!=BT_IDENT || boot_p_reserved(token.text) {boot_error(ctx,token,"expected an import identifier");return false;}
+ return true;
+}
+fn boot_project_join(ctx:*BootContext,directory:*u8,name:*u8,suffix:*u8)->*u8 {
+ let a:u64=strlen(directory);let b:u64=strlen(name);let c:u64=strlen(suffix);
+ if a+b+c>8192 {boot_error(ctx,ctx.cursor,"module path exceeds 8192 bytes");return 0 as *u8;}
+ let path:*u8=boot_alloc(ctx,a+b+c+2) as *u8;if path==(0 as *u8) {return path;}
+ memcpy(path as *void,directory as *void,a);path[a]=47;
+ memcpy((path+a+1) as *void,name as *void,b);
+ memcpy((path+a+b+1) as *void,suffix as *void,c);path[a+b+c+1]=0;return path;
+}
+fn boot_project_candidate(ctx:*BootContext,directory:*u8,name:*u8)->*u8 {
+ let path:*u8=boot_project_join(ctx,directory,name,".aeth");if path==(0 as *u8) {return path;}
+ let mut resolved:*u8=realpath(path,0 as *u8);
+ if resolved==(0 as *u8) {
+  let nested:*u8=boot_project_join(ctx,directory,name,"/mod.aeth");if nested==(0 as *u8) {return nested;}
+  resolved=realpath(nested,0 as *u8);
+ }
+ if resolved==(0 as *u8) {return resolved;}
+ let result:*u8=boot_copy(ctx,resolved,strlen(resolved));free(resolved as *void);return result;
+}
+fn boot_project_find(ctx:*BootContext,module:*BootModule,name:*u8,token:*BootToken)->*u8 {
+ let local:*u8=boot_project_candidate(ctx,module.directory,name);if local!=(0 as *u8) || ctx.failed {return local;}
+ let mut root:*BootRoot=ctx.roots;
+ while root!=(0 as *BootRoot) {
+  let path:*u8=boot_project_candidate(ctx,root.path,name);if path!=(0 as *u8) || ctx.failed {return path;}
+  root=root.next;
+ }
+ boot_error(ctx,token,"imported module not found in source directory or -I roots");return 0 as *u8;
+}
+pub fn boot_project_root(ctx:*BootContext,path:*u8)->bool {
+ let resolved:*u8=realpath(path,0 as *u8);
+ if resolved==(0 as *u8) {boot_error(ctx,0 as *BootToken,"cannot resolve -I root");return false;}
+ let root:*BootRoot=boot_alloc(ctx,size_of(BootRoot) as u64) as *BootRoot;
+ if root==(0 as *BootRoot) {free(resolved as *void);return false;}
+ root.path=boot_copy(ctx,resolved,strlen(resolved));free(resolved as *void);if root.path==(0 as *u8) {return false;}
+ if ctx.roots==(0 as *BootRoot) {ctx.roots=root;}
+ else {let mut last:*BootRoot=ctx.roots;while last.next!=(0 as *BootRoot) {last=last.next;}last.next=root;}
+ return true;
+}
+fn boot_project_read(ctx:*BootContext,module:*BootModule,token:*BootToken)->bool {
+ let file:*void=fopen(module.path,"rb");if file==(0 as *void) {boot_error(ctx,token,"cannot open module source");return false;}
+ if fseek(file,0,2)!=0 {fclose(file);boot_error(ctx,token,"cannot seek module source");return false;}
+ let measured:i64=ftell(file);
+ if measured<0 || measured>33554432 || (measured as u64)>33554432-ctx.source_total {fclose(file);boot_error(ctx,token,"source graph must be at most 32 MiB");return false;}
+ if fseek(file,0,0)!=0 {fclose(file);boot_error(ctx,token,"cannot rewind module source");return false;}
+ module.length=measured as u64;module.source=boot_alloc(ctx,module.length+1) as *u8;
+ if module.source==(0 as *u8) {fclose(file);return false;}
+ let count:u64=fread(module.source,1,module.length,file);let failed:i32=ferror(file);let closed:i32=fclose(file);
+ if count!=module.length || failed!=0 || closed!=0 {boot_error(ctx,token,"cannot completely read module source");return false;}
+ module.source[module.length]=0;ctx.source_total=ctx.source_total+module.length;return true;
+}
+fn boot_project_context(ctx:*BootContext,module:*BootModule) {
+ ctx.module=module;ctx.path=module.path;ctx.source=module.source;ctx.length=module.length;ctx.tokens=module.tokens;
+}
+fn boot_project_load(ctx:*BootContext,path:*u8,depth:i32,token:*BootToken)->*BootModule {
+ if depth>64 {boot_error(ctx,token,"module import depth exceeds 64");return 0 as *BootModule;}
+ let mut found:*BootModule=ctx.modules;
+ while found!=(0 as *BootModule) {
+  if strcmp(found.path,path)==0 {if found.state==1 {boot_error(ctx,token,"cyclic module import");return 0 as *BootModule;}return found;}
+  found=found.next;
+ }
+ if ctx.module_count>=256 {boot_error(ctx,token,"source graph exceeds 256 modules");return 0 as *BootModule;}
+ let module:*BootModule=boot_alloc(ctx,size_of(BootModule) as u64) as *BootModule;if module==(0 as *BootModule) {return module;}
+ module.path=path;module.state=1;ctx.module_count=ctx.module_count+1;module.id=ctx.module_count;
+ let mut length:u64=strlen(path);while length>0 && path[length-1]!=47 {length=length-1;}
+ if length>1 {length=length-1;}module.directory=boot_copy(ctx,path,length);
+ if ctx.modules==(0 as *BootModule) {ctx.modules=module;ctx.root_module=module;}else{ctx.modules_tail.next=module;}ctx.modules_tail=module;
+ if !boot_project_read(ctx,module,token) {return 0 as *BootModule;}
+ boot_project_context(ctx,module);
+ if !boot_lex(ctx) {return 0 as *BootModule;}module.tokens=ctx.tokens;
+ let mut cursor:*BootToken=module.tokens;let mut tail:*BootImport=0 as *BootImport;
+ while boot_project_word(cursor,"use") {
+  let original:*BootToken=cursor;cursor=cursor.next;
+  if !boot_project_name(ctx,cursor) {return 0 as *BootModule;}
+  let name:*u8=cursor.text;let mut alias:*u8=name;let mut symbol:*u8=0 as *u8;let mut wildcard:bool=false;cursor=cursor.next;
+  if cursor.kind==58 {
+   cursor=cursor.next;if cursor.kind!=58 {boot_error(ctx,cursor,"expected :: in import");return 0 as *BootModule;}cursor=cursor.next;
+   if cursor.kind==42 {wildcard=true;cursor=cursor.next;}
+   else {if !boot_project_name(ctx,cursor) {return 0 as *BootModule;}symbol=cursor.text;alias=symbol;cursor=cursor.next;}
+  }
+  if boot_project_word(cursor,"as") {
+   if wildcard {boot_error(ctx,cursor,"wildcard import cannot have an alias");return 0 as *BootModule;}
+   cursor=cursor.next;if !boot_project_name(ctx,cursor) {return 0 as *BootModule;}alias=cursor.text;cursor=cursor.next;
+  }
+  if cursor.kind!=59 {boot_error(ctx,cursor,"import requires ';'");return 0 as *BootModule;}cursor=cursor.next;
+  let mut previous:*BootImport=module.imports;
+  while previous!=(0 as *BootImport) {if strcmp(previous.alias,alias)==0 {boot_error(ctx,original,"duplicate import binding");return 0 as *BootModule;}previous=previous.next;}
+  let target_path:*u8=boot_project_find(ctx,module,name,original);if target_path==(0 as *u8) {return 0 as *BootModule;}
+  let target:*BootModule=boot_project_load(ctx,target_path,depth+1,original);if target==(0 as *BootModule) {return target;}
+  boot_project_context(ctx,module);ctx.cursor=original;
+  if symbol!=(0 as *u8) && !boot_exported(boot_module_item(target,symbol)) {boot_error(ctx,original,"unknown or private imported name");return 0 as *BootModule;}
+  let import:*BootImport=boot_alloc(ctx,size_of(BootImport) as u64) as *BootImport;if import==(0 as *BootImport) {return 0 as *BootModule;}
+  import.alias=alias;import.symbol=symbol;import.target=target;import.wildcard=wildcard;import.token=original;
+  if tail==(0 as *BootImport) {module.imports=import;}else{tail.next=import;}tail=import;
+ }
+ ctx.tokens=cursor;ctx.cursor=cursor;
+ if !boot_parse(ctx) {return 0 as *BootModule;}module.items=ctx.program.body;module.state=2;return module;
+}
+pub fn boot_project(ctx:*BootContext,path:*u8)->bool {
+ let canonical:*u8=realpath(path,0 as *u8);if canonical==(0 as *u8) {boot_error(ctx,0 as *BootToken,"cannot resolve input source");return false;}
+ let owned:*u8=boot_copy(ctx,canonical,strlen(canonical));free(canonical as *void);if owned==(0 as *u8) {return false;}
+ let root:*BootModule=boot_project_load(ctx,owned,0,0 as *BootToken);if root==(0 as *BootModule) {return false;}
+ boot_project_context(ctx,root);ctx.cursor=root.tokens;
+ let program:*BootNode=boot_node(ctx,BN_PROGRAM,root.tokens);if program==(0 as *BootNode) {return false;}
+ let mut module:*BootModule=ctx.modules;let mut tail:*BootNode=0 as *BootNode;
+ while module!=(0 as *BootModule) {
+  if module.items!=(0 as *BootNode) {
+   if tail==(0 as *BootNode) {program.body=module.items;}else{tail.next=module.items;}
+   tail=module.items;while tail.next!=(0 as *BootNode) {tail=tail.next;}
+  }
+  module=module.next;
+ }
+ ctx.program=program;return true;
+}
+pub fn boot_project_output(ctx:*BootContext,path:*u8)->bool {
+ let canonical:*u8=realpath(path,0 as *u8);if canonical==(0 as *u8) {return true;}
+ let mut module:*BootModule=ctx.modules;let mut same:bool=false;
+ while module!=(0 as *BootModule) {if strcmp(canonical,module.path)==0 {same=true;}module=module.next;}
+ free(canonical as *void);
+ if same {boot_error(ctx,0 as *BootToken,"output must not replace any module source");return false;}
+ return true;
+}

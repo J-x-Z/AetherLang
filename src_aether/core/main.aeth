@@ -1,0 +1,3 @@
+// Standalone project entry used unchanged by the Rust seed and every Core stage.
+use driver::boot_driver;
+fn main(argc:i32,argv:**u8)->i32 { return boot_driver(argc,argv); }

@@ -1,0 +1,23 @@
+use statistics;
+extern "C" { fn fopen(path:*u8,mode:*u8)->*void; fn fgetc(file:*void)->i32;
+ fn ferror(file:*void)->i32; fn fclose(file:*void)->i32; }
+struct Private { value:u8 }
+fn helper(value:i32)->bool {return value>=48 && value<=57;}
+pub fn scan(path:*u8,values:*statistics::Summary)->bool {
+ let file:*void=fopen(path,"rb");if file==(0 as *void) {return false;}
+ let mut value:i64=0;let mut digits:i32=0;let mut valid:bool=true;
+ let mut current:i32=fgetc(file);
+ while current!=-1 && valid {
+  if helper(current) {
+   if digits>=8 {valid=false;}else{value=value*10+((current-48) as i64);digits=digits+1;}
+  } else {
+   if current==10 || current==32 || current==13 {
+    if digits>0 {statistics::add(values,value);value=0;digits=0;}
+   }else{valid=false;}
+  }
+  current=fgetc(file);
+ }
+ if digits>0 && valid {statistics::add(values,value);}
+ let error:i32=ferror(file);let closed:i32=fclose(file);
+ return valid && error==0 && closed==0;
+}

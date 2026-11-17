@@ -1,3 +1,5 @@
+use model::*;
+use runtime::*;
 // Typed AST -> C11. Every effectful operand is sequenced into a temporary;
 // assignment evaluates its place first, calls evaluate arguments left-to-right.
 fn boot_c_text(ctx:*BootContext,text:*u8) {fputs(text,ctx.output);}
@@ -243,7 +245,7 @@ fn boot_emit_constant(ctx:*BootContext,node:*BootNode) {
  else {boot_emit_float_constant(ctx,node.left);}
  boot_c_text(ctx,";\n");
 }
-fn boot_emit(ctx:*BootContext)->bool {
+pub fn boot_emit(ctx:*BootContext)->bool {
  if ctx.failed||ctx.program==0 as *BootNode||ctx.output==0 as *void{return false;}
  if !boot_choose_namespace(ctx){return false;}
  boot_c_text(ctx,"/* Aether Core compiler output. */\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n");
@@ -268,7 +270,7 @@ fn boot_emit(ctx:*BootContext)->bool {
  }
  item=ctx.program.body;
  while item!=0 as *BootNode {
-  if item.kind==BN_FN&&(item.flags&2)==0&&strcmp(item.name,"main")==0 {
+  if item.kind==BN_FN&&(item.flags&2)==0&&item.owner==ctx.root_module&&strcmp(item.name,"main")==0 {
    boot_c_text(ctx,"int main(int argc,char **argv){");if item.ty.kind!=BY_VOID{boot_c_text(ctx,"return (int)");}
    boot_c_function(ctx,item);boot_c_text(ctx,"(");if item.params!=0 as *BootNode{boot_c_text(ctx,"argc,(uint8_t**)argv");}
    boot_c_text(ctx,");");if item.ty.kind==BY_VOID{boot_c_text(ctx,"return 0;");}boot_c_text(ctx,"}\n");

@@ -1,3 +1,5 @@
+use model::*;
+use runtime::*;
 // Recursive-descent declarations/statements and a Pratt expression parser.
 // Every accepted construct produces a real AST node; unsupported syntax fails.
 fn boot_p_kind(ctx:*BootContext)->i32 {
@@ -20,7 +22,7 @@ fn boot_p_expect(ctx:*BootContext,kind:i32,message:*u8)->bool {
  if boot_p_take(ctx,kind) {return true;}
  boot_error(ctx,ctx.cursor,message);return false;
 }
-fn boot_p_reserved(text:*u8)->bool {
+pub fn boot_p_reserved(text:*u8)->bool {
  if strcmp(text,"fn")==0 || strcmp(text,"let")==0 || strcmp(text,"mut")==0 || strcmp(text,"if")==0 || strcmp(text,"else")==0 {return true;}
  if strcmp(text,"while")==0 || strcmp(text,"return")==0 || strcmp(text,"break")==0 || strcmp(text,"continue")==0 {return true;}
  if strcmp(text,"struct")==0 || strcmp(text,"extern")==0 || strcmp(text,"const")==0 || strcmp(text,"unsafe")==0 {return true;}
@@ -54,7 +56,14 @@ fn boot_p_type_inner(ctx:*BootContext)->*BootType {
  }
  let token:*BootToken=boot_p_name(ctx);
  if token==0 as *BootToken {return 0 as *BootType;}
- let name:*u8=token.text;
+ let mut name:*u8=token.text;
+ let mut lookup:*BootModule=0 as *BootModule;
+ if boot_p_take(ctx,58) {
+  if !boot_p_expect(ctx,58,"expected :: in imported type") {return 0 as *BootType;}
+  lookup=boot_import_module(ctx,name,token); if lookup==(0 as *BootModule) {return 0 as *BootType;}
+  let member:*BootToken=boot_p_name(ctx);if member==(0 as *BootToken) {return 0 as *BootType;}name=member.text;
+  return boot_resolve_type(ctx,name,lookup,token);
+ }
  if strcmp(name,"void")==0 {return boot_type(ctx,BY_VOID);}
  if strcmp(name,"bool")==0 {return boot_type(ctx,BY_BOOL);}
  if strcmp(name,"i8")==0 {return boot_type(ctx,BY_I8);}
@@ -67,7 +76,7 @@ fn boot_p_type_inner(ctx:*BootContext)->*BootType {
  if strcmp(name,"u64")==0 || strcmp(name,"usize")==0 {return boot_type(ctx,BY_U64);}
  if strcmp(name,"f32")==0 {return boot_type(ctx,BY_F32);}
  if strcmp(name,"f64")==0 {return boot_type(ctx,BY_F64);}
- return boot_named_type(ctx,name);
+ return boot_resolve_type(ctx,name,0 as *BootModule,token);
 }
 fn boot_p_bp(kind:i32)->i32 {
  if kind==BT_OR {return 1;}
@@ -154,7 +163,14 @@ fn boot_p_primary(ctx:*BootContext)->*BootNode {
   let name:*BootToken=boot_p_name(ctx);
   if name==0 as *BootToken {return 0 as *BootNode;}
   let node:*BootNode=boot_node(ctx,BN_IDENT,token);
-  if node!=0 as *BootNode {node.name=name.text;}
+  if node!=0 as *BootNode {
+   node.name=name.text;
+   if boot_p_take(ctx,58) {
+    if !boot_p_expect(ctx,58,"expected :: in imported name") {return 0 as *BootNode;}
+    node.lookup=boot_import_module(ctx,node.name,token);if node.lookup==(0 as *BootModule) {return 0 as *BootNode;}
+    let member:*BootToken=boot_p_name(ctx);if member==(0 as *BootToken) {return 0 as *BootNode;}node.name=member.text;
+   }
+  }
   return node;
  }
  boot_error(ctx,token,"expected expression (literal, name, unary operator or parentheses)");
@@ -164,7 +180,7 @@ fn boot_p_call(ctx:*BootContext,callee:*BootNode)->*BootNode {
  if callee.kind!=BN_IDENT {boot_error(ctx,ctx.cursor,"Core calls require a function name");return 0 as *BootNode;}
  let node:*BootNode=boot_node(ctx,BN_CALL,callee.token);
  if node==0 as *BootNode {return node;}
- node.name=callee.name;boot_p_advance(ctx);
+ node.name=callee.name;node.lookup=callee.lookup;boot_p_advance(ctx);
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed && boot_p_kind(ctx)!=41 {
   let argument:*BootNode=boot_p_expression(ctx,0);
@@ -412,7 +428,7 @@ fn boot_p_constant(ctx:*BootContext)->*BootNode {
  if node!=0 as *BootNode {node.name=name.text;node.ty=ty;node.left=value;}
  return node;
 }
-fn boot_parse(ctx:*BootContext)->bool {
+pub fn boot_parse(ctx:*BootContext)->bool {
  ctx.cursor=ctx.tokens;ctx.depth=0;
  let program:*BootNode=boot_node(ctx,BN_PROGRAM,ctx.cursor);
  if program==0 as *BootNode {return false;}
@@ -420,7 +436,10 @@ fn boot_parse(ctx:*BootContext)->bool {
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed && boot_p_kind(ctx)!=BT_EOF {
   let mut node:*BootNode=0 as *BootNode;
+  let mut public:bool=false;
+  if boot_p_word(ctx,"pub") {public=true;boot_p_advance(ctx);}
   if boot_p_word(ctx,"extern") {
+   if public {boot_error(ctx,ctx.cursor,"extern declarations are already public");return false;}
    boot_p_advance(ctx);
    if boot_p_kind(ctx)!=BT_STRING {boot_error(ctx,ctx.cursor,"expected foreign ABI string \"C\"");return false;}
    if ctx.cursor.length!=1 || strcmp(ctx.cursor.text,"C")!=0 {boot_error(ctx,ctx.cursor,"Core supports only extern \"C\"");return false;}
@@ -439,6 +458,7 @@ fn boot_parse(ctx:*BootContext)->bool {
    else if boot_p_word(ctx,"const") {node=boot_p_constant(ctx);}
    else {boot_error(ctx,ctx.cursor,"expected fn, struct, const or extern \"C\"; construct outside Core v1");return false;}
    if node==0 as *BootNode {return false;}
+   if public {node.flags=node.flags|8;}
    if tail==0 as *BootNode {program.body=node;} else {tail.next=node;}
    tail=node;
   }

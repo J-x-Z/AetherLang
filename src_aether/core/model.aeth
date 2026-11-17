@@ -1,6 +1,5 @@
-// Shared model of the self-hosting Core compiler. The build concatenates these
-// modules verbatim; all lexing, parsing, checking and emission runs in Aether.
-// No generics/modules/method syntax is needed to compile the compiler itself.
+// Shared model of the independently loaded Core compiler modules. Source loading,
+// imports, lexing, parsing, checking and C emission all run in Aether.
 extern "C" {
  fn malloc(size:u64)->*void; fn free(pointer:*void);
  fn memset(pointer:*void,value:i32,size:u64)->*void;
@@ -14,17 +13,17 @@ extern "C" {
  fn printf(format:*u8,...)->i32; fn fprintf(file:*void,format:*u8,...)->i32;
  fn fputs(text:*u8,file:*void)->i32; fn fputc(value:i32,file:*void)->i32;
 }
-const BT_EOF:i32=0; const BT_IDENT:i32=1; const BT_INT:i32=2;
-const BT_FLOAT:i32=3; const BT_STRING:i32=4;
-const BT_ARROW:i32=256; const BT_EQ:i32=257; const BT_NE:i32=258;
-const BT_LE:i32=259; const BT_GE:i32=260; const BT_AND:i32=261;
-const BT_OR:i32=262; const BT_SHL:i32=263; const BT_SHR:i32=264;
-const BT_ELLIPSIS:i32=265;
+pub const BT_EOF:i32=0; pub const BT_IDENT:i32=1; pub const BT_INT:i32=2;
+pub const BT_FLOAT:i32=3; pub const BT_STRING:i32=4;
+pub const BT_ARROW:i32=256; pub const BT_EQ:i32=257; pub const BT_NE:i32=258;
+pub const BT_LE:i32=259; pub const BT_GE:i32=260; pub const BT_AND:i32=261;
+pub const BT_OR:i32=262; pub const BT_SHL:i32=263; pub const BT_SHR:i32=264;
+pub const BT_ELLIPSIS:i32=265;
 // Primitive type kinds; pointer/struct types are interned in BootContext.types.
-const BY_VOID:i32=0; const BY_BOOL:i32=1; const BY_I8:i32=2; const BY_U8:i32=3;
-const BY_I16:i32=4; const BY_U16:i32=5; const BY_I32:i32=6; const BY_U32:i32=7;
-const BY_I64:i32=8; const BY_U64:i32=9; const BY_F32:i32=10; const BY_F64:i32=11;
-const BY_PTR:i32=12; const BY_STRUCT:i32=13;
+pub const BY_VOID:i32=0; pub const BY_BOOL:i32=1; pub const BY_I8:i32=2; pub const BY_U8:i32=3;
+pub const BY_I16:i32=4; pub const BY_U16:i32=5; pub const BY_I32:i32=6; pub const BY_U32:i32=7;
+pub const BY_I64:i32=8; pub const BY_U64:i32=9; pub const BY_F32:i32=10; pub const BY_F64:i32=11;
+pub const BY_PTR:i32=12; pub const BY_STRUCT:i32=13;
 // Node fields by kind:
 // PROGRAM: body=top-level list. STRUCT: name, body=FIELD list, ty.
 // FN: name, params=PARAM list, ty=return type, body=BLOCK or null (extern).
@@ -37,28 +36,34 @@ const BY_PTR:i32=12; const BY_STRUCT:i32=13;
 // CAST: left=expr,ty=destination. SIZEOF: aux=queried type, ty=i64 after checking.
 // INT/FLOAT/STRING/IDENT/BOOL: token/text (BOOL.value=0/1), IDENT.decl=binding.
 // Struct literals and implicit coercions are intentionally outside Core v1.
-const BN_PROGRAM:i32=1; const BN_STRUCT:i32=2; const BN_FIELD:i32=3;
-const BN_FN:i32=4; const BN_PARAM:i32=5; const BN_BLOCK:i32=6;
-const BN_LET:i32=7; const BN_IF:i32=8; const BN_WHILE:i32=9;
-const BN_RETURN:i32=10; const BN_BREAK:i32=11; const BN_CONTINUE:i32=12;
-const BN_EXPR:i32=13; const BN_ASSIGN:i32=14; const BN_CALL:i32=15;
-const BN_BINARY:i32=16; const BN_UNARY:i32=17; const BN_MEMBER:i32=18;
-const BN_INDEX:i32=19; const BN_CAST:i32=20; const BN_SIZEOF:i32=21;
-const BN_INT:i32=22; const BN_FLOAT:i32=23; const BN_STRING:i32=24;
-const BN_IDENT:i32=25; const BN_BOOL:i32=26; const BN_CONST:i32=27;
-// flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic.
-struct BootArena { next:*BootArena, reserved:u64 }
-struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,next:*BootToken }
-struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32 }
-struct BootNode {
+pub const BN_PROGRAM:i32=1; pub const BN_STRUCT:i32=2; pub const BN_FIELD:i32=3;
+pub const BN_FN:i32=4; pub const BN_PARAM:i32=5; pub const BN_BLOCK:i32=6;
+pub const BN_LET:i32=7; pub const BN_IF:i32=8; pub const BN_WHILE:i32=9;
+pub const BN_RETURN:i32=10; pub const BN_BREAK:i32=11; pub const BN_CONTINUE:i32=12;
+pub const BN_EXPR:i32=13; pub const BN_ASSIGN:i32=14; pub const BN_CALL:i32=15;
+pub const BN_BINARY:i32=16; pub const BN_UNARY:i32=17; pub const BN_MEMBER:i32=18;
+pub const BN_INDEX:i32=19; pub const BN_CAST:i32=20; pub const BN_SIZEOF:i32=21;
+pub const BN_INT:i32=22; pub const BN_FLOAT:i32=23; pub const BN_STRING:i32=24;
+pub const BN_IDENT:i32=25; pub const BN_BOOL:i32=26; pub const BN_CONST:i32=27;
+// flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
+pub struct BootArena { next:*BootArena, reserved:u64 }
+pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
+pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule }
+pub struct BootNode {
  kind:i32,id:i32,op:i32,flags:i32,tree_depth:i32,value:i64,name:*u8,token:*BootToken,
  ty:*BootType,aux:*BootType,decl:*BootNode,left:*BootNode,right:*BootNode,
- third:*BootNode,body:*BootNode,params:*BootNode,next:*BootNode
+ third:*BootNode,body:*BootNode,params:*BootNode,next:*BootNode,owner:*BootModule,lookup:*BootModule
 }
-struct BootBinding { name:*u8,node:*BootNode,depth:i32,next:*BootBinding }
-struct BootContext {
+pub struct BootBinding { name:*u8,node:*BootNode,depth:i32,next:*BootBinding }
+pub struct BootContext {
  arena:*BootArena,allocated:u64,source:*u8,length:u64,path:*u8,
  tokens:*BootToken,cursor:*BootToken,types:*BootType,program:*BootNode,
  failed:bool,next_id:i32,depth:i32,bindings:*BootBinding,
- function:*BootNode,loop_depth:i32,output:*void,c_namespace:i32
+ function:*BootNode,loop_depth:i32,output:*void,c_namespace:i32,
+ module:*BootModule,root_module:*BootModule,modules:*BootModule,modules_tail:*BootModule,
+ module_count:i32,source_total:u64,roots:*BootRoot
 }
+
+pub struct BootImport { alias:*u8,symbol:*u8,target:*BootModule,wildcard:bool,token:*BootToken,next:*BootImport }
+pub struct BootModule { id:i32,path:*u8,directory:*u8,source:*u8,length:u64,tokens:*BootToken,items:*BootNode,imports:*BootImport,state:i32,next:*BootModule }
+pub struct BootRoot { path:*u8,next:*BootRoot }

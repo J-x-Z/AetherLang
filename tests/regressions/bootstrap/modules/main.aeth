@@ -1,0 +1,13 @@
+use reader::scan;
+use statistics as stats;
+use output::*;
+extern "C" { fn malloc(size:u64)->*void; fn free(pointer:*void); }
+fn main(argc:i32,argv:**u8)->i32 {
+ if argc!=2 {return 2;}
+ let values:*stats::Summary=malloc(size_of(stats::Summary) as u64) as *stats::Summary;
+ if values==(0 as *stats::Summary) {return 3;}
+ stats::reset(values);
+ let ok:bool=scan(argv[1],values);
+ if !ok {free(values as *void);return 4;}
+ show(values);free(values as *void);return 0;
+}

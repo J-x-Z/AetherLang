@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build the Aether-written Core compiler through four native generations.
 
-Only concatenation and native C compilation happen in this Python harness. Every
-stage after the seed lexes, parses, checks and emits C by executing Aether code.
+The harness copies source files verbatim and invokes native C compilation. Every
+stage after the seed loads modules, lexes, parses, checks and emits C in Aether.
 All intermediate source, executables and evidence stay below --work-dir.
 """
 import argparse
@@ -88,13 +88,17 @@ def run(name, command, expected=0, timeout=120, **options):
     return result
 
 
-modules = ['model', 'runtime', 'lexer', 'parser', 'semantic', 'emitter', 'driver']
+modules = ['main', 'model', 'runtime', 'lexer', 'parser', 'semantic', 'emitter', 'project', 'driver']
 paths = [root / 'src_aether' / 'core' / f'{name}.aeth' for name in modules]
-source = work / 'aether-core.aeth'
-# Byte concatenation only: no translating, filtering, parsing or generated shim.
-source.write_bytes(b'\n'.join(path.read_bytes() for path in paths) + b'\n')
+source_tree = work / 'core-source'
+source_tree.mkdir(exist_ok=True)
+# File copies only: the compiler itself finds, reads and resolves every import.
+for path in paths:
+    shutil.copyfile(path, source_tree / path.name)
+source = source_tree / 'main.aeth'
 metadata.update(seed_compiler=str(compiler), seed_sha256=digest(compiler),
-                source_sha256=digest(source), source_bytes=source.stat().st_size,
+                source_sha256=digest(source), source_bytes=sum(p.stat().st_size for p in paths),
+                source_entry=str(source), source_loading="compiler-native-module-graph",
                 source_modules={str(p.relative_to(root)): digest(p) for p in paths},
                 cc=cc, platform=sys.platform, backend=args.backend,
                 core_commit=subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root,
@@ -161,6 +165,10 @@ for level in ['0', '2']:
 run('semantic-corpus-stage2', [sys.executable, root / 'tests' / 'core_semantics.py',
                               '--compiler', stages[2], '--work-dir', work / 'semantics-stage2', '--cc', cc], timeout=180)
 
+run('module-projects-stage2', [sys.executable, root / 'tests' / 'bootstrap_modules.py',
+                              '--compiler', stages[2], '--compare', stages[4],
+                              '--work-dir', work / 'modules-stage2', '--cc', cc], timeout=180)
+
 bad_lexemes = [b'0x', b'1e+', b'1__2', b'1_', b'123abc', b'"\\q"', b'"\\x0"',
                b'"unterminated', b'/* unfinished', b'/* /* */', b'@', b'\0']
 for number, data in enumerate(bad_lexemes):
@@ -211,6 +219,9 @@ if not args.skip_sanitizers:
     run('semantic-corpus-sanitized', [sys.executable, root / 'tests' / 'core_semantics.py',
                                     '--compiler', sanitized, '--work-dir', work / 'semantics-sanitized', '--cc', cc],
         env=sanitizer_env, timeout=180)
+    run('module-projects-sanitized', [sys.executable, root / 'tests' / 'bootstrap_modules.py',
+                                    '--compiler', sanitized, '--work-dir', work / 'modules-sanitized',
+                                    '--sanitize', '--cc', cc], env=sanitizer_env, timeout=180)
     for name, expected in fixtures.items():
         generated = work / f'{name}-sanitized.c'
         run(f'sanitized-{name}-emit', [sanitized, fixture_root / f'{name}.aeth', '-o', generated], env=sanitizer_env)
