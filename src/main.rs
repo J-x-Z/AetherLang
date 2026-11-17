@@ -108,17 +108,18 @@ fn main() {
 }
 
 fn run(cli: &Cli) -> Result<(), Diagnostic> {
+    let llvm_backend = matches!(cli.backend, Backend::Llvm) && !cli.emit_c && !cli.emit_ir;
     let (input, check) = match &cli.command {
         Some(Commands::Build { input }) => (input, false),
         Some(Commands::Check { input }) => (input, true),
-        Some(Commands::Lsp) => return lsp::serve(module_search(cli)?, cli.target.clone()).map_err(Diagnostic::from),
+        Some(Commands::Lsp) => return lsp::serve(module_search(cli)?, cli.target.clone(), llvm_backend).map_err(Diagnostic::from),
         Some(Commands::Symbols { input }) => (input, true),
         Some(Commands::Version) => { println!("aethc {}", env!("CARGO_PKG_VERSION")); return Ok(()); }
         None => (cli.input.as_ref().ok_or("no input file; use aethc build <FILE> or aethc check <FILE>")?, false),
     };
     let source = fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
     let session = Session::parse_for_target(input, source, module_search(cli)?, Default::default(), &cli.target)?;
-    let facts = session.check(&cli.target)?;
+    let facts = session.check(&cli.target, llvm_backend)?;
     if matches!(cli.command, Some(Commands::Symbols { .. })) {
         println!("{}", serde_json::to_string(&frontend::symbols::SymbolIndex::new(&session, Some(&facts))).expect("serializable symbols"));
         return Ok(());

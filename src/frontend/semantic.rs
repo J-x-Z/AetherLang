@@ -193,6 +193,7 @@ pub struct SemanticAnalyzer {
     c_abi_definitions: HashSet<String>,
     check_entrypoint: bool,
     system_target: String,
+    llvm_abi: Option<crate::types::ffi_target::ForeignAbiTarget>,
     /// Whether we're in strict mode (@production) or lenient mode (@prototype)
     strict_mode: bool,
 }
@@ -226,6 +227,7 @@ impl SemanticAnalyzer {
             c_abi_definitions: HashSet::new(),
             check_entrypoint: true,
             system_target: "native".into(),
+            llvm_abi: None,
             strict_mode: false, // Default: lenient mode
         };
         analyzer.register_builtins();
@@ -333,7 +335,7 @@ impl SemanticAnalyzer {
         // Call identities and receiver adjustments are now known; effects use
         // those same facts instead of guessing from a method suffix.
         self.check_hosted_abi(program)?;
-        self.check_tuple_abi_boundaries(program)?;
+        self.check_foreign_abi_boundaries(program)?;
         self.check_system_attributes(program)?;
         self.analyze_flows(program)?;
         self.infer_effects(program)?;

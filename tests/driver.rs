@@ -449,3 +449,27 @@ fn unsized_types_and_untyped_uninitialized_locals_fail_before_codegen() {
         run(&p.0.join("good"), 3);
     }
 }
+
+#[cfg(feature = "llvm")]
+#[test]
+fn unsupported_foreign_abi_is_diagnosed_while_checking_the_selected_backend() {
+    let p = Project::new();
+    for source in [
+        "struct Pair{x:f32,y:f32} extern \"C\"{fn consume(x:Pair);} fn main(){}",
+        "struct V{x:f32x4} extern \"C\"{fn consume(x:V);} fn main(){}",
+        "extern \"C\"{fn consume(x:f32x8);} fn main(){}",
+    ] {
+        p.source("ffi.aeth", source);
+        let mut results = Vec::new();
+        for mode in ["check","build"] {
+            let out = p.compiler(&[mode,"ffi.aeth","--target","wasm32-unknown-unknown","--backend","llvm","--error-format","json"]);
+            assert_eq!(out.status.code(), Some(1), "{out:?}");
+            let diagnostic: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+            assert_eq!(diagnostic["code"], "E2407");
+            assert!(diagnostic["location"]["column"].is_number());
+            results.push(diagnostic);
+        }
+        assert_eq!(results[0], results[1]);
+        success(&p.compiler(&["check","ffi.aeth","--target","wasm32-unknown-unknown","--backend","c"]));
+    }
+}

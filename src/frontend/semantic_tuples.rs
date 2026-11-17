@@ -1,5 +1,6 @@
 //! Tuple values are structural language aggregates, not a promised C ABI.
 use super::*;
+use crate::types::ffi_target::{ForeignAbiTarget, AGGREGATE_ABI_ERROR, VECTOR_ABI_ERROR};
 
 impl SemanticAnalyzer {
     fn contains_value_tuple(&self, ty: &ResolvedType, seen: &mut HashSet<String>) -> bool {
@@ -18,8 +19,38 @@ impl SemanticAnalyzer {
         }
     }
 
-    fn check_tuple_c_type(&self, ty: &Type) -> Result<()> {
-        self.check_tuple_abi_type(&self.resolve_type(ty)?, ty.span())
+    fn foreign_vector_present(&self, ty: &ResolvedType, seen: &mut HashSet<String>) -> bool {
+        match ty {
+            ResolvedType::Vector(..) => true,
+            ResolvedType::Array { elem, .. } | ResolvedType::Volatile(elem) => self.foreign_vector_present(elem, seen),
+            ResolvedType::Struct { name, .. } if seen.insert(name.clone()) => self.symbols.lookup(name).is_some_and(|s|
+                matches!(&s.kind, SymbolKind::Struct { fields, .. } if fields.iter().any(|(_, t)| self.foreign_vector_present(t, seen)))),
+            ResolvedType::Enum { name } if seen.insert(name.clone()) => self.facts.enum_variants.get(name)
+                .is_some_and(|variants| variants.iter().any(|(_, fields)| fields.iter().any(|t| self.foreign_vector_present(t, seen)))),
+            _ => false,
+        }
+    }
+
+    fn check_foreign_type(&self, ty: &Type, function_edge: bool) -> Result<()> {
+        let resolved = self.resolve_type(ty)?;
+        self.check_tuple_abi_type(&resolved, ty.span())?;
+        let Some(target) = self.llvm_abi.filter(|_| function_edge) else { return Ok(()) };
+        let ty_kind = resolved.unqualified();
+        if self.foreign_vector_present(ty_kind, &mut HashSet::new()) {
+            let direct = matches!(ty_kind, ResolvedType::Vector(element, lanes)
+                if matches!(element.as_ref(), ResolvedType::Primitive(p) if p.size_of() * lanes == 16));
+            if !direct || !target.supports_vector128() {
+                return Err(Error::semantic_expected("E2407", VECTOR_ABI_ERROR, ty.span()));
+            }
+        } else if !target.supports_aggregates() &&
+            matches!(ty_kind, ResolvedType::Array { .. } | ResolvedType::Struct { .. } | ResolvedType::Enum { .. }) {
+            return Err(Error::semantic_expected("E2407", AGGREGATE_ABI_ERROR, ty.span()));
+        }
+        Ok(())
+    }
+
+    pub fn select_llvm_abi(&mut self, target: &str) {
+        self.llvm_abi = Some(ForeignAbiTarget::for_triple(target));
     }
 
     pub(super) fn check_tuple_abi_type(&self, ty: &ResolvedType, span: Span) -> Result<()> {
@@ -30,7 +61,7 @@ impl SemanticAnalyzer {
         Ok(())
     }
 
-    pub(super) fn check_tuple_abi_boundaries(&self, program: &Program) -> Result<()> {
+    pub(super) fn check_foreign_abi_boundaries(&self, program: &Program) -> Result<()> {
         for item in &program.items {
             match item {
                 Item::Extern(block) => {
@@ -40,13 +71,13 @@ impl SemanticAnalyzer {
                                 params, ret_type, ..
                             } => {
                                 for param in params {
-                                    self.check_tuple_c_type(&param.ty)?;
+                                    self.check_foreign_type(&param.ty, true)?;
                                 }
                                 if let Some(ty) = ret_type {
-                                    self.check_tuple_c_type(ty)?;
+                                    self.check_foreign_type(ty, true)?;
                                 }
                             }
-                            ForeignItem::Static { ty, .. } => self.check_tuple_c_type(ty)?,
+                            ForeignItem::Static { ty, .. } => self.check_foreign_type(ty, false)?,
                         }
                     }
                 }
@@ -57,10 +88,10 @@ impl SemanticAnalyzer {
                         .any(|a| a.name.name == "no_mangle") =>
                 {
                     for param in &function.params {
-                        self.check_tuple_c_type(&param.ty)?;
+                        self.check_foreign_type(&param.ty, true)?;
                     }
                     if let Some(ty) = &function.ret_type {
-                        self.check_tuple_c_type(ty)?;
+                        self.check_foreign_type(ty, true)?;
                     }
                 }
                 _ => {}

@@ -68,8 +68,9 @@ impl Session {
         let program = super::specialize::specialize_for_width(program, width).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
         Ok(Self { program, resolver, script_map })
     }
-    pub fn check(&self, target: &str) -> Result<SemanticFacts, Diagnostic> {
+    pub fn check(&self, target: &str, llvm_backend: bool) -> Result<SemanticFacts, Diagnostic> {
         let mut analyzer = SemanticAnalyzer::for_target(target).map_err(Diagnostic::from)?;
+        if llvm_backend { analyzer.select_llvm_abi(target); }
         analyzer.analyze(&self.program).map_err(|e| self.diagnostic(&e))?;
         Ok(analyzer.into_facts())
     }

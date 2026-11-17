@@ -11,7 +11,7 @@ def run(label,cmd,fail=False):
  return r
 obj=work/'abi.o';run('C ABI companion',[cc,'-O2','-c',root/'abi.c','-o',obj])
 for name in ['values','abi']:
- source=root/(name+'.aeth');run(name+'/check',[compiler,'check',source])
+ source=root/(name+'.aeth');run(name+'/check',[compiler,'check',source,'--backend','c'])
  for backend in a.backends:
   if name=='abi' and backend=='llvm' and not(platform.system()=='Darwin' and platform.machine()=='arm64'):
    r=run('foreign vector ABI unsupported',[compiler,source,'--backend',backend,'--emit-obj','-o',work/'unsupported.o'],True)
