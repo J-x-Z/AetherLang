@@ -22,13 +22,14 @@ pub struct Transpiler {
     is_main: bool,
     loop_depth: usize,
     temporary: usize,
+    reserved_names: HashSet<String>,
 }
 
 impl Transpiler {
     pub fn new() -> Self {
         Self { output: String::new(), source_lines: Vec::new(), source_line: 1, indent: 0, source_file: None,
             functions: HashMap::new(), locals: BTreeMap::new(), assigned: HashSet::new(),
-            return_type: "void".into(), is_main: false, loop_depth: 0, temporary: 0 }
+            return_type: "void".into(), is_main: false, loop_depth: 0, temporary: 0, reserved_names: HashSet::new() }
     }
 
     pub fn with_source_file(mut self, path: &str) -> Self {
@@ -39,7 +40,12 @@ impl Transpiler {
     pub fn transpile(&mut self, module: &ScriptModule) -> Result<String> {
         self.output.clear();
         self.source_lines.clear();
+        self.source_line = 1;
+        self.indent = 0;
         self.functions.clear();
+        self.temporary = 0;
+        self.reserved_names.clear();
+        self.reserve_source_names(module);
         for statement in &module.stmts {
             let Stmt::FunctionDef(function) = statement else {
                 return Err("Script top-level statements must be function definitions".into());
@@ -64,6 +70,55 @@ impl Transpiler {
         Ok(std::mem::take(&mut self.output))
     }
 
+    /// Reserve the whole source inventory before emitting any hidden binder.
+    /// Later assignments, nested loops and function names must be protected too,
+    /// not just locals discovered before a particular lowering operation.
+    fn reserve_source_names(&mut self, module: &ScriptModule) {
+        let mut statements: Vec<&Stmt> = module.stmts.iter().collect();
+        let mut expressions: Vec<&Expr> = Vec::new();
+        while let Some(statement) = statements.pop() {
+            match statement {
+                Stmt::FunctionDef(function) => {
+                    self.reserved_names.insert(function.name.clone());
+                    for parameter in &function.params { self.reserved_names.insert(parameter.name.clone()); }
+                    statements.extend(&function.body);
+                }
+                Stmt::Assign(assignment) => { expressions.push(&assignment.target); expressions.push(&assignment.value); }
+                Stmt::Expr(expr) => expressions.push(expr),
+                Stmt::Return(ret) => { if let Some(expr) = &ret.value { expressions.push(expr); } }
+                Stmt::If(branch) => {
+                    expressions.push(&branch.condition); statements.extend(&branch.then_block);
+                    if let Some(other) = &branch.else_block { statements.extend(other); }
+                }
+                Stmt::While(loop_) => { expressions.push(&loop_.condition); statements.extend(&loop_.body); }
+                Stmt::For(loop_) => {
+                    self.reserved_names.insert(loop_.var.clone());
+                    expressions.push(&loop_.iterable); statements.extend(&loop_.body);
+                }
+                Stmt::Pass | Stmt::Break | Stmt::Continue => {},
+            }
+        }
+        while let Some(expr) = expressions.pop() {
+            match expr {
+                Expr::Identifier { name, .. } => { self.reserved_names.insert(name.clone()); }
+                Expr::Unary { expr, .. } => expressions.push(expr),
+                Expr::Binary { left, right, .. } => { expressions.push(left); expressions.push(right); }
+                Expr::Call { func, args, .. } => { expressions.push(func); expressions.extend(args); }
+                Expr::FieldAccess { target, field, .. } => { expressions.push(target); self.reserved_names.insert(field.clone()); }
+                Expr::List { elements, .. } => expressions.extend(elements),
+                Expr::Integer { .. } | Expr::Boolean { .. } | Expr::Float { .. } | Expr::String { .. } => {},
+            }
+        }
+    }
+
+    fn fresh_name(&mut self, role: &str) -> String {
+        loop {
+            self.temporary += 1;
+            let name = format!("__aeth_script_{}_{}", role, self.temporary);
+            if self.reserved_names.insert(name.clone()) { return name; }
+        }
+    }
+
     fn function(&mut self, function: &FunctionDef) -> Result<()> {
         if function.is_comptime { return Err("Script @comptime execution is not implemented".into()); }
         self.source_line = function.span.line;
@@ -81,7 +136,7 @@ impl Transpiler {
                 return Err(format!("duplicate parameter '{}'", param.name));
             }
             self.assigned.insert(param.name.clone());
-            let internal = format!("__aeth_script_arg_{}", param.name);
+            let internal = self.fresh_name("arg");
             parameters.push(format!("{}: {}", internal, ty));
             copies.push(format!("{} = {};", param.name, internal));
         }
@@ -193,8 +248,7 @@ impl Transpiler {
                 let before = self.assigned.clone();
                 self.locals.entry(loop_.var.clone()).or_insert(ty);
                 self.assigned.insert(loop_.var.clone());
-                self.temporary += 1;
-                let internal = format!("__aeth_script_iter_{}", self.temporary);
+                let internal = self.fresh_name("iter");
                 self.line(&format!("for {} in {}..{} {{", internal, start, end));
                 self.indent += 1; self.loop_depth += 1;
                 self.line(&format!("{} = {};", loop_.var, internal));
@@ -327,4 +381,37 @@ mod tests {
         let program = parser.parse_program().unwrap();
         crate::frontend::semantic::SemanticAnalyzer::new().analyze(&program).unwrap();
     }
+    #[test]
+    fn generated_binders_avoid_every_source_identifier() {
+        let source = "def f(x: int) -> int:\n    __aeth_script_arg_x = 3\n    __aeth_script_arg_1 = 5\n    for i in range(2):\n        __aeth_script_iter_2 = 7\n    return x + __aeth_script_arg_x + __aeth_script_arg_1\ndef main():\n    __aeth_script_iter_1 = 100\n    total = 0\n    for i in range(3):\n        total = total + __aeth_script_iter_1\n    return total + f(4) - 312\n";
+        let core = lower(source).unwrap();
+        let program = crate::frontend::parser::Parser::new(crate::frontend::lexer::Lexer::new(&core, 0)).parse_program().unwrap();
+        crate::frontend::semantic::SemanticAnalyzer::new().analyze(&program).unwrap();
+        // Every generated parameter/iteration binder must be disjoint from the
+        // source inventory, including an assignment first seen inside a loop.
+        let module = Parser::new(source).parse().unwrap();
+        let mut inventory = Transpiler::new(); inventory.reserve_source_names(&module);
+        for item in &program.items {
+            if let crate::frontend::ast::Item::Function(function) = item {
+                for parameter in &function.params { assert!(!inventory.reserved_names.contains(&parameter.name.name)); }
+            }
+        }
+        for line in core.lines().filter(|line| line.trim_start().starts_with("for ")) {
+            let binder = line.split_whitespace().nth(1).unwrap();
+            assert!(!inventory.reserved_names.contains(binder), "{line}");
+        }
+    }
+
+    #[test]
+    fn fresh_names_and_source_mapping_are_repeatable_on_reuse() {
+        let source = "def f(x: int) -> int:\n    for i in range(2):\n        x = x + i\n    return x\ndef main():\n    return f(3) - 4\n";
+        let module = Parser::new(source).parse().unwrap();
+        let mut transpiler = Transpiler::new();
+        let first = transpiler.transpile(&module).unwrap();
+        let lines = transpiler.source_lines.clone();
+        assert_eq!(transpiler.transpile(&module).unwrap(), first);
+        assert_eq!(transpiler.source_lines, lines);
+        assert_eq!(first.lines().count(), lines.len());
+    }
+
 }

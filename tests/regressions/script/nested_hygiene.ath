@@ -1,0 +1,16 @@
+def __aeth_script_iter_1() -> int:
+    return 9
+
+def step(__aeth_script_arg_1: int) -> int:
+    __aeth_script_arg___aeth_script_arg_1 = 5
+    __aeth_script_arg_2 = 7
+    return __aeth_script_arg_1 + __aeth_script_arg___aeth_script_arg_1 + __aeth_script_arg_2
+
+def main():
+    __aeth_script_iter_2 = 100
+    total = 0
+    for outer in range(3):
+        __aeth_script_iter_4 = 1000
+        for inner in range(2):
+            total = total + __aeth_script_iter_2 + __aeth_script_iter_4 + __aeth_script_iter_1()
+    return total + step(4) - 6670

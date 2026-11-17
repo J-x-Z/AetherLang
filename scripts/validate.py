@@ -112,11 +112,14 @@ script_outputs = {
     'compute': '338350\n25\n',
     'branches': 'quoted: "Aether"\\path\n',
     'float_math': '3.25\n',
+    'loop_hygiene': '',
+    'param_hygiene': '',
+    'nested_hygiene': '',
 }
 for name, expected_output in script_outputs.items():
     source = ROOT / 'tests/regressions/script' / (name + '.ath')
     for backend in a.backends:
-        for level in [0, 2]:
+        for level in (a.levels if name.endswith("_hygiene") else [0, 2]):
             binary, compiled = build(source, backend, level)
             result, runtime = command([binary])
             assert result.stdout == expected_output, (source.name, result.stdout)

@@ -1,0 +1,5 @@
+def f(x: int) -> int:
+    __aeth_script_arg_x = 3
+    return x + __aeth_script_arg_x
+def main():
+    return f(4) - 7

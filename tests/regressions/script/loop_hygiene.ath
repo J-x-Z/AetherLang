@@ -1,0 +1,6 @@
+def main():
+    __aeth_script_iter_1 = 100
+    total = 0
+    for i in range(3):
+        total = total + __aeth_script_iter_1
+    return total - 300
