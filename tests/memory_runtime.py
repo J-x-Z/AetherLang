@@ -82,6 +82,11 @@ if result.returncode == 0:
                             r'fence seq_cst\b', r'fence acquire\b', r'fence release\b']
                 text = ir.read_text() if result.returncode == 0 else ''
                 missing = [pattern for pattern in patterns if not re.search(pattern, text)]
+                if level != '0':
+                    for order in ('acquire', 'release'):
+                        body = re.search(r'(?m)^define[^\n]*@observe_' + order + r'_fence\([^}]*}', text)
+                        if not body or not re.search(r'\bfence ' + order + r'\b', body[0]):
+                            missing.append(f'observe_{order}_fence must execute fence {order}')
                 record('volatile and ordering instructions', 'llvm-ir', result,
                        result.returncode == 0 and not missing, level=level, missing_patterns=missing)
 

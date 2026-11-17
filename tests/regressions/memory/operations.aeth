@@ -3,6 +3,11 @@ use mmio::{mmio_read_u8, mmio_write_u8, mmio_read_u16, mmio_write_u16, mmio_read
 
 fn identity<T>(value: T) -> T { value }
 
+// Separate ABI entries let an external caller exercise each order independently.
+// In main, consecutive fences may legally collapse into the strongest fence.
+#[no_mangle] fn observe_acquire_fence() { memory_fence_acquire(); }
+#[no_mangle] fn observe_release_fence() { memory_fence_release(); }
+
 fn main() -> i32 {
     let mut byte: u8 = 0;
     let mut word: u16 = 0;
