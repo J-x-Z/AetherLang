@@ -1,0 +1,105 @@
+// Compound f32 operators over the common checked queue. GEMM and its reverse
+// rule execute on the selected device. Host activations are explicit transfers
+// and synchronization, never described as GPU kernels or implicit fallback.
+use compute::*;
+use result::Result;
+fn shape_error(queue:*ComputeQueue)->ComputeError { compute_error(COMPUTE_SHAPE,if queue==0 as *ComputeQueue{0}else{compute_queue_stats(queue).backend}) }
+fn same_queue(queue:*ComputeQueue,value:*ComputeBuffer)->bool {
+    value!=0 as *ComputeBuffer && compute_buffer_queue(value)==queue
+}
+pub fn compute_gemm_sync(queue:*ComputeQueue,a:*ComputeBuffer,b:*ComputeBuffer,c:*ComputeBuffer)->Result<(),ComputeError> {
+    let mut event:*ComputeEvent=compute_gemm(queue,a,b,c)?;
+    compute_event_free(&mut event as **ComputeEvent)
+}
+// Computes X*(U*V) as (X*U)*V, retaining the rank-r intermediate only. It does
+// not claim to find a rank-r approximation: factor selection is a separate step.
+pub fn compute_low_rank(queue:*ComputeQueue,input:*ComputeBuffer,u:*ComputeBuffer,v:*ComputeBuffer,output:*ComputeBuffer)->Result<(),ComputeError> {
+    if !same_queue(queue,input)||!same_queue(queue,u)||!same_queue(queue,v)||!same_queue(queue,output) { return Result::Err(shape_error(queue)); }
+    let x:ComputeLayout=compute_buffer_layout(input);let a:ComputeLayout=compute_buffer_layout(u);
+    let b:ComputeLayout=compute_buffer_layout(v);let y:ComputeLayout=compute_buffer_layout(output);
+    if x.rank!=2||a.rank!=2||b.rank!=2||y.rank!=2||x.shape[1]!=a.shape[0]||a.shape[1]!=b.shape[0]
+        ||y.shape[0]!=x.shape[0]||y.shape[1]!=b.shape[1] {return Result::Err(shape_error(queue));}
+    if compute_buffers_alias(output,input)||compute_buffers_alias(output,u)||compute_buffers_alias(output,v) {return Result::Err(compute_error(COMPUTE_ALIAS,compute_queue_stats(queue).backend));}
+    let shape:[u64;2]=[x.shape[0],a.shape[1]];
+    let mut temporary:*ComputeBuffer=compute_buffer_new(queue,COMPUTE_F32,2,&shape[0] as *u64)?;
+    let first:Result<(),ComputeError>=compute_gemm_sync(queue,input,u,temporary);
+    let answer:Result<(),ComputeError>=match first {Result::Ok(_)=>compute_gemm_sync(queue,temporary,v,output),Result::Err(e)=>Result::Err(e)};
+    compute_buffer_free(&mut temporary as **ComputeBuffer);answer
+}
+// Reverse-mode rule for C=A*B: dA=dC*transpose(B), dB=transpose(A)*dC.
+// Results overwrite dA/dB. Callers that accumulate shared-node gradients must
+// explicitly add them; this API never silently overwrites a graph accumulator.
+pub fn compute_gemm_backward(queue:*ComputeQueue,a:*ComputeBuffer,b:*ComputeBuffer,dc:*ComputeBuffer,da:*ComputeBuffer,db:*ComputeBuffer)->Result<(),ComputeError> {
+    if !same_queue(queue,a)||!same_queue(queue,b)||!same_queue(queue,dc)||!same_queue(queue,da)||!same_queue(queue,db) {return Result::Err(shape_error(queue));}
+    let x:ComputeLayout=compute_buffer_layout(a);let y:ComputeLayout=compute_buffer_layout(b);let z:ComputeLayout=compute_buffer_layout(dc);
+    let gx:ComputeLayout=compute_buffer_layout(da);let gy:ComputeLayout=compute_buffer_layout(db);
+    if x.rank!=2||y.rank!=2||z.rank!=2||gx.rank!=2||gy.rank!=2||x.shape[1]!=y.shape[0]
+        ||z.shape[0]!=x.shape[0]||z.shape[1]!=y.shape[1]||gx.shape[0]!=x.shape[0]||gx.shape[1]!=x.shape[1]
+        ||gy.shape[0]!=y.shape[0]||gy.shape[1]!=y.shape[1] {return Result::Err(shape_error(queue));}
+    if compute_buffers_alias(da,db)||compute_buffers_alias(da,a)||compute_buffers_alias(da,b)||compute_buffers_alias(da,dc)
+        ||compute_buffers_alias(db,a)||compute_buffers_alias(db,b)||compute_buffers_alias(db,dc) {return Result::Err(compute_error(COMPUTE_ALIAS,compute_queue_stats(queue).backend));}
+    let mut at:*ComputeBuffer=compute_transpose(a)?;
+    let mut bt:*ComputeBuffer=match compute_transpose(b){Result::Ok(value)=>value,Result::Err(e)=>{compute_buffer_free(&mut at as **ComputeBuffer);return Result::Err(e);}};
+    let first:Result<(),ComputeError>=compute_gemm_sync(queue,dc,bt,da);
+    let answer:Result<(),ComputeError>=match first{Result::Ok(_)=>compute_gemm_sync(queue,at,dc,db),Result::Err(e)=>Result::Err(e)};
+    compute_buffer_free(&mut at as **ComputeBuffer);compute_buffer_free(&mut bt as **ComputeBuffer);answer
+}
+fn batch_view(buffer:*ComputeBuffer,index:u64)->Result<*ComputeBuffer,ComputeError>{
+    let original:ComputeLayout=compute_buffer_layout(buffer);let mut view:ComputeLayout=original;
+    view.rank=2;view.offset+=index*original.strides[0];view.shape[0]=original.shape[1];view.shape[1]=original.shape[2];
+    view.strides[0]=original.strides[1];view.strides[1]=original.strides[2];view.count=view.shape[0]*view.shape[1];
+    compute_buffer_view(buffer,view)
+}
+// vmap over leading batch dimensions, with no broadcasting. Each mapped GEMM
+// is a real queue submission, completed before moving to the next shared view.
+pub fn compute_vmap_gemm(queue:*ComputeQueue,a:*ComputeBuffer,b:*ComputeBuffer,c:*ComputeBuffer)->Result<(),ComputeError>{
+    if !same_queue(queue,a)||!same_queue(queue,b)||!same_queue(queue,c){return Result::Err(shape_error(queue));}
+    let x:ComputeLayout=compute_buffer_layout(a);let y:ComputeLayout=compute_buffer_layout(b);let z:ComputeLayout=compute_buffer_layout(c);
+    if x.rank!=3||y.rank!=3||z.rank!=3||x.shape[0]!=y.shape[0]||x.shape[0]!=z.shape[0]
+        ||x.shape[2]!=y.shape[1]||z.shape[1]!=x.shape[1]||z.shape[2]!=y.shape[2]{return Result::Err(shape_error(queue));}
+    if compute_buffers_alias(a,c)||compute_buffers_alias(b,c){return Result::Err(compute_error(COMPUTE_ALIAS,compute_queue_stats(queue).backend));}
+    let mut i:u64=0;
+    while i<x.shape[0]{
+        let mut av:*ComputeBuffer=batch_view(a,i)?;
+        let mut bv:*ComputeBuffer=match batch_view(b,i){Result::Ok(v)=>v,Result::Err(e)=>{compute_buffer_free(&mut av as **ComputeBuffer);return Result::Err(e);}};
+        let mut cv:*ComputeBuffer=match batch_view(c,i){Result::Ok(v)=>v,Result::Err(e)=>{compute_buffer_free(&mut av as **ComputeBuffer);compute_buffer_free(&mut bv as **ComputeBuffer);return Result::Err(e);}};
+        let result:Result<(),ComputeError>=compute_gemm_sync(queue,av,bv,cv);
+        compute_buffer_free(&mut av as **ComputeBuffer);compute_buffer_free(&mut bv as **ComputeBuffer);compute_buffer_free(&mut cv as **ComputeBuffer);
+        result?;i+=1;
+    }
+    Result::Ok(())
+}
+// Per-channel bias plus ReLU on host. Inputs/outputs use the selected queue's
+// mapped buffer and charged scratch; a pending producer is rejected as BUSY.
+pub fn compute_bias_relu_host(queue:*ComputeQueue,value:*ComputeBuffer,bias:*ComputeBuffer)->Result<(),ComputeError>{
+    if !same_queue(queue,value)||!same_queue(queue,bias){return Result::Err(shape_error(queue));}
+    let shape:ComputeLayout=compute_buffer_layout(value);let bs:ComputeLayout=compute_buffer_layout(bias);
+    if shape.rank!=2||bs.rank!=1||shape.shape[1]!=bs.shape[0]{return Result::Err(shape_error(queue));}
+    if shape.count>compute_max_bytes()/4-bs.count{return Result::Err(compute_error(COMPUTE_OVERFLOW,compute_queue_stats(queue).backend));}
+    let mut scratch:*ComputeScratch=compute_scratch_new(queue,(shape.count+bs.count)*4)?;
+    let data:*f32=compute_scratch_data(scratch) as *f32;let biases:*f32=data+shape.count;
+    let answer:Result<(),ComputeError>=bias_relu_data(value,bias,data,biases,shape);
+    compute_scratch_free(&mut scratch as **ComputeScratch);answer
+}
+fn bias_relu_data(value:*ComputeBuffer,bias:*ComputeBuffer,data:*f32,biases:*f32,shape:ComputeLayout)->Result<(),ComputeError>{
+    compute_download(data,value,shape.count)?;compute_download(biases,bias,shape.shape[1])?;
+    let mut i:u64=0;while i<shape.count{let x:f32=data[i]+biases[i%shape.shape[1]];data[i]=if x<0.0{0.0}else{x};i+=1;}
+    compute_upload(value,data,shape.count)
+}
+// Derivative at ReLU's non-differentiable zero is explicitly defined as zero.
+pub fn compute_relu_backward_host(queue:*ComputeQueue,activated:*ComputeBuffer,gradient:*ComputeBuffer)->Result<(),ComputeError>{
+    if !same_queue(queue,activated)||!same_queue(queue,gradient){return Result::Err(shape_error(queue));}
+    let a:ComputeLayout=compute_buffer_layout(activated);let g:ComputeLayout=compute_buffer_layout(gradient);
+    if a.rank!=g.rank||a.count!=g.count{return Result::Err(shape_error(queue));}
+    let mut axis:u64=0;while axis<a.rank{if a.shape[axis]!=g.shape[axis]{return Result::Err(shape_error(queue));}axis+=1;}
+    if a.count>compute_max_bytes()/8{return Result::Err(compute_error(COMPUTE_OVERFLOW,compute_queue_stats(queue).backend));}
+    let mut scratch:*ComputeScratch=compute_scratch_new(queue,a.count*8)?;
+    let data:*f32=compute_scratch_data(scratch) as *f32;
+    let answer:Result<(),ComputeError>=relu_gradient_data(activated,gradient,data,data+a.count,a.count);
+    compute_scratch_free(&mut scratch as **ComputeScratch);answer
+}
+fn relu_gradient_data(activated:*ComputeBuffer,gradient:*ComputeBuffer,a:*f32,g:*f32,count:u64)->Result<(),ComputeError>{
+    compute_download(a,activated,count)?;compute_download(g,gradient,count)?;
+    let mut i:u64=0;while i<count{if !(a[i]>0.0){g[i]=0.0;}i+=1;}
+    compute_upload(gradient,g,count)
+}

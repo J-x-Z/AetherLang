@@ -36,6 +36,11 @@ struct ComputeStorage {
     refs:u64, busy:u64, failed:bool,
 }
 pub struct ComputeBuffer { storage:*ComputeStorage, layout:ComputeLayout }
+// Host-side operator scratch participates in the same queue budget. Its bytes
+// are caller-managed and never submitted directly to a GPU. The owner retains
+// the queue; copies of its pointer or data pointer are borrowed views.
+pub struct ComputeScratch { queue:*ComputeQueue, data:*u8, bytes:u64, charge:u64 }
+
 pub struct ComputeEvent {
     queue:*ComputeQueue, command:*void, charge:u64,
     first:*ComputeStorage, second:*ComputeStorage, output:*ComputeStorage,
@@ -102,6 +107,28 @@ pub fn compute_device_caps(queue:*ComputeQueue)->ComputeDeviceCaps {
     if queue.provider!=0 as *void { aether_gpu_caps(queue.provider,&mut caps as *ComputeDeviceCaps); }
     caps
 }
+pub fn compute_scratch_new(queue:*ComputeQueue,bytes:u64)->Result<*ComputeScratch,ComputeError> {
+    if queue==0 as *ComputeQueue { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    if queue.closed { return Result::Err(compute_error(COMPUTE_CLOSED,queue.backend)); }
+    if bytes>compute_max_bytes() || queue.refs==9223372036854775807 { return Result::Err(compute_error(COMPUTE_OVERFLOW,queue.backend)); }
+    let amount:u64=if bytes==0 {1}else{bytes};
+    if !can_charge(queue,amount) { return Result::Err(compute_error(COMPUTE_BUDGET,queue.backend)); }
+    let owner:*ComputeScratch=malloc(size_of(ComputeScratch)) as *ComputeScratch;
+    let data:*u8=malloc(amount as usize) as *u8;
+    if owner==0 as *ComputeScratch || data==0 as *u8 {
+        free(owner as *void);free(data as *void);return Result::Err(compute_error(COMPUTE_ALLOCATION,queue.backend));
+    }
+    *owner=ComputeScratch{queue:queue,data:data,bytes:bytes,charge:amount};
+    queue.refs+=1;charge(queue,amount);Result::Ok(owner)
+}
+pub fn compute_scratch_data(owner:*ComputeScratch)->*u8 { owner.data }
+pub fn compute_scratch_size(owner:*ComputeScratch)->u64 { owner.bytes }
+pub fn compute_scratch_free(owner:**ComputeScratch) {
+    if owner==0 as **ComputeScratch || *owner==0 as *ComputeScratch { return; }
+    let value:*ComputeScratch=*owner;*owner=0 as *ComputeScratch;
+    let queue:*ComputeQueue=value.queue;
+    queue.used-=value.charge;free(value.data as *void);free(value as *void);release_queue(queue);
+}
 fn release_storage(storage:*ComputeStorage) {
     storage.refs-=1;
     if storage.refs==0 {
@@ -147,6 +174,10 @@ pub fn compute_buffer_free(owner:**ComputeBuffer) {
     release_storage(buffer.storage);free(buffer as *void);
 }
 pub fn compute_buffer_layout(buffer:*ComputeBuffer)->ComputeLayout { buffer.layout }
+// Borrowed identity helpers let compound operators validate all operands before
+// submitting work. The returned queue remains retained by the buffer.
+pub fn compute_buffer_queue(buffer:*ComputeBuffer)->*ComputeQueue { buffer.storage.queue }
+pub fn compute_buffers_alias(a:*ComputeBuffer,b:*ComputeBuffer)->bool { a.storage==b.storage }
 pub fn compute_buffer_view(buffer:*ComputeBuffer,layout:ComputeLayout)->Result<*ComputeBuffer,ComputeError> {
     if buffer==0 as *ComputeBuffer { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
     let storage:*ComputeStorage=buffer.storage;

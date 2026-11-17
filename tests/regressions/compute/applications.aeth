@@ -1,0 +1,156 @@
+use compute::*;
+use compute_ops::*;
+use compute_sparse::*;
+use compute_quant::*;
+use result::Result;
+extern "C" {fn strcmp(a:*u8,b:*u8)->i32;fn printf(format:*u8,...)->i32;fn sin(x:f64)->f64;fn exp(x:f64)->f64;}
+struct Resources{queue:*ComputeQueue,buffers:[*ComputeBuffer;24],csr:*ComputeCsr,q8:*ComputeQ8}
+fn require(value:bool,code:i32)->Result<(),ComputeError>{if value{Result::Ok(())}else{Result::Err(compute_error(1000+code,0))}}
+fn abs(x:f64)->f64{if x<0.0{-x}else{x}}
+fn matrix(r:*Resources,slot:u64,rows:u64,cols:u64,data:*f32)->Result<(),ComputeError>{
+    let shape:[u64;2]=[rows,cols];r.buffers[slot]=compute_buffer_new(r.queue,COMPUTE_F32,2,&shape[0] as *u64)?;
+    if data!=0 as *f32{compute_upload(r.buffers[slot],data,rows*cols)?;}Result::Ok(())
+}
+fn clear_buffers(r:*Resources){for i in 0..24{compute_buffer_free(&mut r.buffers[i] as **ComputeBuffer);}}
+fn loss(x:*f32,w:*f32,bias:*f32,changed:i64,delta:f64)->f64{
+    let mut total:f64=0.0;for row in 0..4{for col in 0..3{
+        let mut value:f64=bias[col] as f64;for k in 0..6{let index:i64=row*6+k;let v:f64=x[index] as f64+if index==changed{delta}else{0.0};value+=v*(w[k*3+col] as f64);}
+        if value>0.0{total+=value;}
+    }}total
+}
+fn neural(r:*Resources)->Result<(),ComputeError>{
+    let mut x:[f32;24]=[0.0;24];let mut u:[f32;12]=[0.0;12];let v:[f32;6]=[0.5,-0.25,0.75,0.125,0.25,-0.5];let mut w:[f32;18]=[0.0;18];
+    for i in 0..24{x[i]=((i%7-3) as f32)*0.125;}for i in 0..12{u[i]=((i%5-2) as f32)*0.25;}
+    for i in 0..6{for j in 0..3{let mut sum:f64=0.0;for k in 0..2{sum+=(u[i*2+k] as f64)*(v[k*3+j] as f64);}w[i*3+j]=sum as f32;}}
+    matrix(r,0,4,6,&x[0] as *f32)?;matrix(r,1,6,2,&u[0] as *f32)?;matrix(r,2,2,3,&v[0] as *f32)?;
+    matrix(r,3,4,3,0 as *f32)?;matrix(r,4,6,3,&w[0] as *f32)?;matrix(r,5,4,3,0 as *f32)?;
+    compute_low_rank(r.queue,r.buffers[0],r.buffers[1],r.buffers[2],r.buffers[3])?;
+    compute_gemm_sync(r.queue,r.buffers[0],r.buffers[4],r.buffers[5])?;
+    let mut low:[f32;12]=[0.0;12];let mut dense:[f32;12]=[0.0;12];compute_download(&mut low[0] as *f32,r.buffers[3],12)?;compute_download(&mut dense[0] as *f32,r.buffers[5],12)?;
+    let mut low_error:f64=0.0;for i in 0..12{let error:f64=abs((low[i] as f64)-(dense[i] as f64));if error>low_error{low_error=error;}require(error<=0.000001,1)?;}
+    r.q8=compute_q8_new(r.queue,r.buffers[4])?;require(compute_q8_storage_bytes(r.q8)==44,2)?;
+    r.buffers[6]=compute_q8_dequantize(r.q8)?;matrix(r,7,4,3,0 as *f32)?;compute_gemm_sync(r.queue,r.buffers[0],r.buffers[6],r.buffers[7])?;
+    let mut quant:[f32;12]=[0.0;12];compute_download(&mut quant[0] as *f32,r.buffers[7],12)?;let mut quant_error:f64=0.0;
+    for row in 0..4{for col in 0..3{
+        let error:f64=abs((quant[row*3+col] as f64)-(dense[row*3+col] as f64));if error>quant_error{quant_error=error;}
+        let mut bound:f64=0.000001;for k in 0..6{bound+=abs(x[row*6+k] as f64)*(compute_q8_scale(r.q8,k as u64)? as f64)*0.5;}
+        require(error<=bound,3)?;
+    }}
+    let bias:[f32;3]=[0.7,0.9,1.1];let shape:[u64;1]=[3];r.buffers[8]=compute_buffer_new(r.queue,COMPUTE_F32,1,&shape[0] as *u64)?;compute_upload(r.buffers[8],&bias[0] as *f32,3)?;
+    compute_bias_relu_host(r.queue,r.buffers[5],r.buffers[8])?;
+    let ones:[f32;12]=[1.0;12];matrix(r,9,4,3,&ones[0] as *f32)?;
+    compute_relu_backward_host(r.queue,r.buffers[5],r.buffers[9])?;
+    matrix(r,10,4,6,0 as *f32)?;matrix(r,11,6,3,0 as *f32)?;
+    compute_gemm_backward(r.queue,r.buffers[0],r.buffers[4],r.buffers[9],r.buffers[10],r.buffers[11])?;
+    let mut dx:[f32;24]=[0.0;24];compute_download(&mut dx[0] as *f32,r.buffers[10],24)?;
+    let mut grad_error:f64=0.0;for i in 0..24{
+        let numerical:f64=(loss(&x[0] as *f32,&w[0] as *f32,&bias[0] as *f32,i,0.0001)-loss(&x[0] as *f32,&w[0] as *f32,&bias[0] as *f32,i,-0.0001))/0.0002;
+        let error:f64=abs(numerical-(dx[i] as f64));if error>grad_error{grad_error=error;}require(error<=0.00001,4)?;
+    }
+    let mut dw:[f32;18]=[0.0;18];compute_download(&mut dw[0] as *f32,r.buffers[11],18)?;
+    // Every preactivation above is strictly positive. For sum(ReLU(XW+b)),
+    // the independent dW oracle is the column sum of X, repeated per output.
+    for k in 0..6{let mut expected:f64=0.0;for row in 0..4{expected+=x[row*6+k] as f64;}
+        for col in 0..3{require(abs((dw[k*3+col] as f64)-expected)<=0.000001,16)?;}}
+    // All ReLU boundary cases have specified behavior, including derivative at 0.
+    let activation:[f32;3]=[-1.0,0.0,2.0];let gradient:[f32;3]=[3.0,4.0,5.0];matrix(r,12,1,3,&activation[0] as *f32)?;matrix(r,13,1,3,&gradient[0] as *f32)?;
+    compute_relu_backward_host(r.queue,r.buffers[12],r.buffers[13])?;let mut gd:[f32;3]=[0.0;3];compute_download(&mut gd[0] as *f32,r.buffers[13],3)?;require(gd[0]==0.0&&gd[1]==0.0&&gd[2]==5.0,5)?;
+    printf("neural lowrank_error=%.9f quant_error=%.9f gradient_error=%.9f packed_bytes=%llu\n",low_error,quant_error,grad_error,compute_q8_storage_bytes(r.q8));
+    printf("quantized");for i in 0..12{printf(" %.9f",quant[i] as f64);}printf("\n");
+    compute_q8_free(&mut r.q8 as **ComputeQ8);clear_buffers(r);Result::Ok(())
+}
+fn batched(r:*Resources)->Result<(),ComputeError>{
+    let xs:[u64;3]=[2,2,3];let ys:[u64;3]=[2,3,2];let zs:[u64;3]=[2,2,2];let mut x:[f32;12]=[0.0;12];let mut y:[f32;12]=[0.0;12];
+    for i in 0..12{x[i]=(i as f32-4.0)*0.125;y[i]=(5.0-i as f32)*0.25;}
+    r.buffers[0]=compute_buffer_new(r.queue,COMPUTE_F32,3,&xs[0] as *u64)?;r.buffers[1]=compute_buffer_new(r.queue,COMPUTE_F32,3,&ys[0] as *u64)?;r.buffers[2]=compute_buffer_new(r.queue,COMPUTE_F32,3,&zs[0] as *u64)?;
+    compute_upload(r.buffers[0],&x[0] as *f32,12)?;compute_upload(r.buffers[1],&y[0] as *f32,12)?;
+    compute_vmap_gemm(r.queue,r.buffers[0],r.buffers[1],r.buffers[2])?;
+    let mut output:[f32;8]=[0.0;8];compute_download(&mut output[0] as *f32,r.buffers[2],8)?;
+    printf("vmap");for i in 0..8{printf(" %.9f",output[i] as f64);}printf("\n");clear_buffers(r);Result::Ok(())
+}
+fn diffusion(r:*Resources)->Result<(),ComputeError>{
+    let mut offsets:[u64;9]=[0;9];let mut columns:[u64;24]=[0;24];let mut values:[f32;24]=[0.0;24];let mut field:[f32;8]=[0.0;8];let mut nnz:u64=0;
+    for i in 0..8{
+        offsets[i]=nnz;field[i]=sin(6.283185307179586*(i as f64)/8.0) as f32;
+        for j in 0..8{if i==j||(i+1)%8==j||(i+7)%8==j{columns[nnz]=j as u64;values[nnz]=if i==j{0.6}else{0.2};nnz+=1;}}
+    }offsets[8]=nnz;
+    r.csr=compute_csr_new(r.queue,8,8,24,&offsets[0] as *u64,&columns[0] as *u64,&values[0] as *f32)?;
+    r.buffers[0]=compute_csr_dense(r.csr)?;matrix(r,1,8,1,&field[0] as *f32)?;matrix(r,2,8,1,0 as *f32)?;
+    r.buffers[3]=compute_csr_spmm_host(r.csr,r.buffers[1])?;compute_gemm_sync(r.queue,r.buffers[0],r.buffers[1],r.buffers[2])?;
+    let mut sparse:[f32;8]=[0.0;8];let mut dense:[f32;8]=[0.0;8];compute_download(&mut sparse[0] as *f32,r.buffers[3],8)?;compute_download(&mut dense[0] as *f32,r.buffers[2],8)?;
+    for i in 0..8{require(abs((sparse[i] as f64)-(dense[i] as f64))<0.000001,6)?;}
+    for step in 1..16{let temporary:*ComputeBuffer=r.buffers[1];r.buffers[1]=r.buffers[2];r.buffers[2]=temporary;compute_gemm_sync(r.queue,r.buffers[0],r.buffers[1],r.buffers[2])?;}
+    compute_download(&mut dense[0] as *f32,r.buffers[2],8)?;
+    let wave:f64=sin(3.141592653589793/8.0);let lambda:f64=1.0-0.8*wave*wave;let mut decay:f64=1.0;for step in 0..16{decay*=lambda;}
+    let mut error:f64=0.0;let mut mass:f64=0.0;for i in 0..8{mass+=dense[i] as f64;let difference:f64=abs((dense[i] as f64)-sin(6.283185307179586*(i as f64)/8.0)*decay);if difference>error{error=difference;}}
+    require(error<0.00001&&abs(mass)<0.00001,7)?;
+    printf("diffusion error=%.9f mass=%.9f amplitude=%.9f\n",error,mass,dense[2] as f64);
+    compute_csr_free(&mut r.csr as **ComputeCsr);clear_buffers(r);Result::Ok(())
+}
+fn finance(r:*Resources)->Result<(),ComputeError>{
+    // Explicit Black-Scholes PDE in asset price, 65 grid points / 100 timesteps.
+    // Dirichlet boundaries are exact; this is a numerical fixture, not pricing advice.
+    let mut operator:[f32;4225]=[0.0;4225];let mut field:[f32;65]=[0.0;65];
+    let dt:f64=0.001;let sigma:f64=0.2;let rate:f64=0.05;
+    for i in 0..65{let asset:f64=(i as f64)*3.125;field[i]=if asset>100.0{(asset-100.0) as f32}else{0.0};}
+    for i in 1..64{
+        let index:f64=i as f64;
+        operator[i*65+i-1]=(0.5*dt*(sigma*sigma*index*index-rate*index)) as f32;
+        operator[i*65+i]=(1.0-dt*(sigma*sigma*index*index+rate)) as f32;
+        operator[i*65+i+1]=(0.5*dt*(sigma*sigma*index*index+rate*index)) as f32;
+    }
+    operator[4224]=1.0;matrix(r,0,65,65,&operator[0] as *f32)?;matrix(r,1,65,1,&field[0] as *f32)?;matrix(r,2,65,1,0 as *f32)?;
+    for step in 0..100{
+        compute_gemm_sync(r.queue,r.buffers[0],r.buffers[1],r.buffers[2])?;
+        compute_download(&mut field[0] as *f32,r.buffers[2],65)?;
+        field[0]=0.0;field[64]=(200.0-100.0*exp(-rate*dt*((step+1) as f64))) as f32;
+        compute_upload(r.buffers[2],&field[0] as *f32,65)?;
+        let temporary:*ComputeBuffer=r.buffers[1];r.buffers[1]=r.buffers[2];r.buffers[2]=temporary;
+    }
+    printf("finance value=%.9f boundary=%.9f\n",field[32] as f64,field[64] as f64);
+    clear_buffers(r);Result::Ok(())
+}
+fn maxcut(r:*Resources)->Result<(),ComputeError>{
+    let graph:[f32;16]=[0.0,1.0,0.0,1.0,1.0,0.0,1.0,0.0,0.0,1.0,0.0,1.0,1.0,0.0,1.0,0.0];let mut spins:[f32;64]=[0.0;64];
+    for state in 0..16{for i in 0..4{spins[state*4+i]=if (state&(1<<i))==0{-1.0}else{1.0};}}
+    matrix(r,0,16,4,&spins[0] as *f32)?;matrix(r,1,4,4,&graph[0] as *f32)?;matrix(r,2,16,4,0 as *f32)?;
+    compute_gemm_sync(r.queue,r.buffers[0],r.buffers[1],r.buffers[2])?;
+    let mut output:[f32;64]=[0.0;64];compute_download(&mut output[0] as *f32,r.buffers[2],64)?;
+    let mut best:f64=0.0;for state in 0..16{let mut energy:f64=0.0;for i in 0..4{energy+=(spins[state*4+i] as f64)*(output[state*4+i] as f64);}let cut:f64=2.0-0.25*energy;if cut>best{best=cut;}}
+    require(best==4.0,8)?;printf("maxcut optimum=%.0f\n",best);clear_buffers(r);Result::Ok(())
+}
+fn boundaries(r:*Resources)->Result<(),ComputeError>{
+    let before:ComputeQueueStats=compute_queue_stats(r.queue);
+    let bad_offsets:[u64;2]=[0,2];let bad_columns:[u64;2]=[0,0];let values:[f32;2]=[1.0,2.0];
+    match compute_csr_new(r.queue,1,2,2,&bad_offsets[0] as *u64,&bad_columns[0] as *u64,&values[0] as *f32){Result::Ok(_)=>{return require(false,9);},Result::Err(e)=>{require(e.code==COMPUTE_BOUNDS,9)?;}}
+    match compute_scratch_new(r.queue,before.byte_limit+1){Result::Ok(_)=>{return require(false,10);},Result::Err(e)=>{require(e.code==COMPUTE_BUDGET,10)?;}}
+    require(compute_queue_stats(r.queue).used_bytes==before.used_bytes,11)?;
+    let mut nonfinite:[f32;1]=[0.0];let mut zero:f32=0.0;
+    nonfinite[0]=zero/zero;matrix(r,0,1,1,&nonfinite[0] as *f32)?;
+    let allocated:u64=compute_queue_stats(r.queue).used_bytes;
+    match compute_q8_new(r.queue,r.buffers[0]){Result::Ok(_)=>{return require(false,14);},Result::Err(e)=>{require(e.code==COMPUTE_ARGUMENT,14)?;}}
+    require(compute_queue_stats(r.queue).used_bytes==allocated,15)?;clear_buffers(r);
+
+    let extremes:[f32;4]=[3.4028234663852886e38,-3.4028234663852886e38,0.0,1.0];
+    matrix(r,0,1,4,&extremes[0] as *f32)?;r.q8=compute_q8_new(r.queue,r.buffers[0])?;
+    r.buffers[1]=compute_q8_dequantize(r.q8)?;let mut decoded:[f32;4]=[0.0;4];compute_download(&mut decoded[0] as *f32,r.buffers[1],4)?;
+    require(decoded[0]==extremes[0]&&decoded[1]==extremes[1]&&decoded[2]==0.0,17)?;
+    compute_q8_free(&mut r.q8 as **ComputeQ8);clear_buffers(r);
+    let mut q:*ComputeQueue=compute_queue_new(COMPUTE_CPU,8)?;let mut scratch:*ComputeScratch=compute_scratch_new(q,8)?;
+    let data:*u8=compute_scratch_data(scratch);compute_queue_close(&mut q as **ComputeQueue);data[0]=41;data[7]=1;require(data[0]+data[7]==42,12)?;compute_scratch_free(&mut scratch as **ComputeScratch);
+    Result::Ok(())
+}
+fn exercise(r:*Resources,backend:i32,path:*u8)->Result<(),ComputeError>{
+    r.queue=compute_queue_with_provider(backend,4194304,path)?;boundaries(r)?;neural(r)?;batched(r)?;diffusion(r)?;finance(r)?;maxcut(r)?;
+    let stats:ComputeQueueStats=compute_queue_stats(r.queue);require(stats.used_bytes==0&&stats.failed==0&&stats.submitted==stats.observed_completed,13)?;
+    printf("applications backend=%d device=%llu submissions=%llu peak=%llu remaining=%llu\n",backend,compute_device_id(r.queue),stats.submitted,stats.peak_bytes,stats.used_bytes);Result::Ok(())
+}
+fn main(argc:i32,argv:**u8)->i32{
+    let mut backend:i32=COMPUTE_CPU;let mut path:*u8=0 as *u8;
+    if argc>1{if strcmp(argv[1],"metal")==0{backend=COMPUTE_METAL;}else if strcmp(argv[1],"vulkan")==0{backend=COMPUTE_VULKAN;}else if strcmp(argv[1],"cpu")!=0{return 2;}}
+    if backend!=COMPUTE_CPU{if argc!=3{return 2;}path=argv[2];}
+    let mut r:Resources=Resources{queue:0 as *ComputeQueue,buffers:[0 as *ComputeBuffer;24],csr:0 as *ComputeCsr,q8:0 as *ComputeQ8};
+    let answer:Result<(),ComputeError>=exercise(&mut r as *Resources,backend,path);
+    clear_buffers(&mut r as *Resources);compute_csr_free(&mut r.csr as **ComputeCsr);compute_q8_free(&mut r.q8 as **ComputeQ8);compute_queue_close(&mut r.queue as **ComputeQueue);
+    match answer{Result::Ok(_)=>0,Result::Err(e)=>{printf("application error=%d backend=%d native=%lld\n",e.code,e.backend,e.native);1}}
+}

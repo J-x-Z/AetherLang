@@ -1,0 +1,76 @@
+// Symmetric signed int8 storage with one f32 scale per matrix row, zero point 0.
+// Rounding is nearest with ties away from zero; codes are [-127,127]. Decoding
+// clips rounded scale products to finite f32 endpoints. This is
+// a storage transform, not sparse encoding or low-rank approximation. Device
+// GEMM consumes explicitly dequantized f32 buffers, never pretends to use int8.
+use compute::*;
+use result::Result;
+extern "C" {fn malloc(bytes:usize)->*void;fn free(value:*void);}
+pub struct ComputeQ8 {queue:*ComputeQueue,storage:*ComputeScratch,rows:u64,cols:u64,scale_offset:u64}
+fn scales(value:*ComputeQ8)->*f32{(compute_scratch_data(value.storage)+value.scale_offset) as *f32}
+pub fn compute_q8_new(queue:*ComputeQueue,buffer:*ComputeBuffer)->Result<*ComputeQ8,ComputeError>{
+    if buffer==0 as *ComputeBuffer{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let layout:ComputeLayout=compute_buffer_layout(buffer);
+    if layout.rank!=2{return Result::Err(compute_error(COMPUTE_SHAPE,0));}
+    let scale_offset:u64=(layout.count+3)&(-4 as u64);
+    if layout.shape[0]>(compute_max_bytes()-scale_offset)/4{return Result::Err(compute_error(COMPUTE_OVERFLOW,0));}
+    let mut temporary:*ComputeScratch=compute_scratch_new(queue,layout.count*4)?;
+    let source:*f32=compute_scratch_data(temporary) as *f32;
+    let answer:Result<*ComputeQ8,ComputeError>=quantize_data(queue,buffer,source,layout,scale_offset);
+    compute_scratch_free(&mut temporary as **ComputeScratch);answer
+}
+fn quantize_data(queue:*ComputeQueue,buffer:*ComputeBuffer,source:*f32,layout:ComputeLayout,scale_offset:u64)->Result<*ComputeQ8,ComputeError>{
+    compute_download(source,buffer,layout.count)?;
+    let mut i:u64=0;while i<layout.count{
+        let x:f32=source[i];if x!=x||x>3.4028234663852886e38||x< -3.4028234663852886e38{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}i+=1;
+    }
+    let mut storage:*ComputeScratch=compute_scratch_new(queue,scale_offset+layout.shape[0]*4)?;
+    let value:*ComputeQ8=malloc(size_of(ComputeQ8)) as *ComputeQ8;
+    if value==0 as *ComputeQ8{compute_scratch_free(&mut storage as **ComputeScratch);return Result::Err(compute_error(COMPUTE_ALLOCATION,0));}
+    *value=ComputeQ8{queue:queue,storage:storage,rows:layout.shape[0],cols:layout.shape[1],scale_offset:scale_offset};
+    let codes:*i8=compute_scratch_data(storage) as *i8;let scale:*f32=scales(value);
+    let mut row:u64=0;while row<value.rows{
+        let mut maximum:f32=0.0;let mut col:u64=0;
+        while col<value.cols{let x:f32=source[row*value.cols+col];let magnitude:f32=if x<0.0{-x}else{x};if magnitude>maximum{maximum=magnitude;}col+=1;}
+        let mut step:f32=if maximum==0.0{1.0}else{maximum/127.0};
+        if step==0.0{step=maximum;}
+        scale[row]=step;col=0;
+        while col<value.cols{
+            let x:f32=source[row*value.cols+col]/step;
+            let mut rounded:i32=(if x<0.0{x-0.5}else{x+0.5}) as i32;
+            if rounded>127{rounded=127;}if rounded< -127{rounded= -127;}
+            codes[row*value.cols+col]=rounded as i8;col+=1;
+        }
+        row+=1;
+    }
+    Result::Ok(value)
+}
+pub fn compute_q8_free(owner:**ComputeQ8){
+    if owner==0 as **ComputeQ8||*owner==0 as *ComputeQ8{return;}
+    let value:*ComputeQ8=*owner;*owner=0 as *ComputeQ8;
+    compute_scratch_free(&mut value.storage as **ComputeScratch);free(value as *void);
+}
+pub fn compute_q8_storage_bytes(value:*ComputeQ8)->u64{compute_scratch_size(value.storage)}
+pub fn compute_q8_scale(value:*ComputeQ8,row:u64)->Result<f32,ComputeError>{
+    if value==0 as *ComputeQ8||row>=value.rows{return Result::Err(compute_error(COMPUTE_BOUNDS,0));}Result::Ok(scales(value)[row])
+}
+pub fn compute_q8_dequantize(value:*ComputeQ8)->Result<*ComputeBuffer,ComputeError>{
+    if value==0 as *ComputeQ8{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let count:u64=value.rows*value.cols;let shape:[u64;2]=[value.rows,value.cols];
+    let mut scratch:*ComputeScratch=compute_scratch_new(value.queue,count*4)?;
+    let output:*f32=compute_scratch_data(scratch) as *f32;let codes:*i8=compute_scratch_data(value.storage) as *i8;let scale:*f32=scales(value);
+    let mut i:u64=0;while i<count{
+        // Rounded f32 scale can make 127*scale slightly exceed f32::MAX.
+        // Compute in f64 and clip before narrowing, preserving finite inputs.
+        let mut decoded:f64=(codes[i] as f64)*(scale[i/value.cols] as f64);
+        if decoded>3.4028234663852886e38{decoded=3.4028234663852886e38;}
+        if decoded< -3.4028234663852886e38{decoded= -3.4028234663852886e38;}
+        output[i]=decoded as f32;i+=1;
+    }
+    let answer:Result<*ComputeBuffer,ComputeError>=dequantize_buffer(value,shape,output,count);
+    compute_scratch_free(&mut scratch as **ComputeScratch);answer
+}
+fn dequantize_buffer(value:*ComputeQ8,shape:[u64;2],data:*f32,count:u64)->Result<*ComputeBuffer,ComputeError>{
+    let mut result:*ComputeBuffer=compute_buffer_new(value.queue,COMPUTE_F32,2,&shape[0] as *u64)?;
+    match compute_upload(result,data,count){Result::Ok(_)=>Result::Ok(result),Result::Err(e)=>{compute_buffer_free(&mut result as **ComputeBuffer);Result::Err(e)}}
+}

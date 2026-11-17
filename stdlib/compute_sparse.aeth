@@ -1,0 +1,76 @@
+// Canonical rank-2 CSR. Indices are strictly increasing within each row: no
+// duplicates or implicit coalescing. All owned indices/values count against the
+// queue budget. Sparse multiplication here is explicitly a host algorithm;
+// compute_csr_dense permits deliberate dense device execution where appropriate.
+use compute::*;
+use result::Result;
+extern "C" {fn malloc(bytes:usize)->*void;fn free(value:*void);}
+pub struct ComputeCsr {queue:*ComputeQueue,storage:*ComputeScratch,rows:u64,cols:u64,nnz:u64}
+fn offsets(matrix:*ComputeCsr)->*u64{compute_scratch_data(matrix.storage) as *u64}
+fn columns(matrix:*ComputeCsr)->*u64{offsets(matrix)+matrix.rows+1}
+fn values(matrix:*ComputeCsr)->*f32{(columns(matrix)+matrix.nnz) as *f32}
+pub fn compute_csr_new(queue:*ComputeQueue,rows:u64,cols:u64,nnz:u64,row_offsets:*u64,column_indices:*u64,data:*f32)->Result<*ComputeCsr,ComputeError>{
+    let limit:u64=compute_max_bytes();
+    if rows>=limit/8||cols>limit/4||nnz>limit/12||rows+1>(limit-nnz*12)/8{return Result::Err(compute_error(COMPUTE_OVERFLOW,0));}
+    if row_offsets==0 as *u64||(nnz>0&&(column_indices==0 as *u64||data==0 as *f32)){return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    if row_offsets[0]!=0||row_offsets[rows]!=nnz{return Result::Err(compute_error(COMPUTE_SHAPE,0));}
+    let mut row:u64=0;
+    while row<rows{
+        let begin:u64=row_offsets[row];let end:u64=row_offsets[row+1];
+        if begin>end||end>nnz{return Result::Err(compute_error(COMPUTE_BOUNDS,0));}
+        let mut i:u64=begin;while i<end{
+            if column_indices[i]>=cols||(i>begin&&column_indices[i]<=column_indices[i-1]){return Result::Err(compute_error(COMPUTE_BOUNDS,0));}
+            i+=1;
+        }
+        row+=1;
+    }
+    let mut storage:*ComputeScratch=compute_scratch_new(queue,(rows+1)*8+nnz*12)?;
+    let matrix:*ComputeCsr=malloc(size_of(ComputeCsr)) as *ComputeCsr;
+    if matrix==0 as *ComputeCsr{compute_scratch_free(&mut storage as **ComputeScratch);return Result::Err(compute_error(COMPUTE_ALLOCATION,0));}
+    *matrix=ComputeCsr{queue:queue,storage:storage,rows:rows,cols:cols,nnz:nnz};
+    let o:*u64=offsets(matrix);let c:*u64=columns(matrix);let v:*f32=values(matrix);
+    let mut i:u64=0;while i<=rows{o[i]=row_offsets[i];i+=1;}
+    i=0;while i<nnz{c[i]=column_indices[i];v[i]=data[i];i+=1;}
+    Result::Ok(matrix)
+}
+pub fn compute_csr_free(owner:**ComputeCsr){
+    if owner==0 as **ComputeCsr||*owner==0 as *ComputeCsr{return;}
+    let matrix:*ComputeCsr=*owner;*owner=0 as *ComputeCsr;
+    compute_scratch_free(&mut matrix.storage as **ComputeScratch);free(matrix as *void);
+}
+pub fn compute_csr_dense(matrix:*ComputeCsr)->Result<*ComputeBuffer,ComputeError>{
+    if matrix==0 as *ComputeCsr{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let shape:[u64;2]=[matrix.rows,matrix.cols];let layout:ComputeLayout=compute_layout(COMPUTE_F32,2,&shape[0] as *u64)?;
+    let mut scratch:*ComputeScratch=compute_scratch_new(matrix.queue,layout.count*4)?;
+    let data:*f32=compute_scratch_data(scratch) as *f32;let mut i:u64=0;while i<layout.count{data[i]=0.0;i+=1;}
+    let o:*u64=offsets(matrix);let c:*u64=columns(matrix);let v:*f32=values(matrix);let mut row:u64=0;
+    while row<matrix.rows{i=o[row];while i<o[row+1]{data[row*matrix.cols+c[i]]=v[i];i+=1;}row+=1;}
+    let answer:Result<*ComputeBuffer,ComputeError>=buffer_from_data(matrix.queue,shape,data,layout.count);
+    compute_scratch_free(&mut scratch as **ComputeScratch);answer
+}
+fn buffer_from_data(queue:*ComputeQueue,shape:[u64;2],data:*f32,count:u64)->Result<*ComputeBuffer,ComputeError>{
+    let mut buffer:*ComputeBuffer=compute_buffer_new(queue,COMPUTE_F32,2,&shape[0] as *u64)?;
+    match compute_upload(buffer,data,count){Result::Ok(_)=>Result::Ok(buffer),Result::Err(e)=>{compute_buffer_free(&mut buffer as **ComputeBuffer);Result::Err(e)}}
+}
+pub fn compute_csr_spmm_host(matrix:*ComputeCsr,right:*ComputeBuffer)->Result<*ComputeBuffer,ComputeError>{
+    if matrix==0 as *ComputeCsr||right==0 as *ComputeBuffer{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let b:ComputeLayout=compute_buffer_layout(right);
+    if b.rank!=2||b.shape[0]!=matrix.cols{return Result::Err(compute_error(COMPUTE_SHAPE,0));}
+    let shape:[u64;2]=[matrix.rows,b.shape[1]];let output:ComputeLayout=compute_layout(COMPUTE_F32,2,&shape[0] as *u64)?;
+    if b.count>compute_max_bytes()/4-output.count{return Result::Err(compute_error(COMPUTE_OVERFLOW,0));}
+    let mut scratch:*ComputeScratch=compute_scratch_new(matrix.queue,(b.count+output.count)*4)?;
+    let data:*f32=compute_scratch_data(scratch) as *f32;let result:*f32=data+b.count;
+    let answer:Result<*ComputeBuffer,ComputeError>=spmm_data(matrix,right,data,result,shape,output.count);
+    compute_scratch_free(&mut scratch as **ComputeScratch);answer
+}
+fn spmm_data(matrix:*ComputeCsr,right:*ComputeBuffer,b:*f32,out:*f32,shape:[u64;2],count:u64)->Result<*ComputeBuffer,ComputeError>{
+    compute_download(b,right,compute_buffer_layout(right).count)?;
+    let o:*u64=offsets(matrix);let c:*u64=columns(matrix);let v:*f32=values(matrix);
+    let mut row:u64=0;while row<matrix.rows{
+        let mut col:u64=0;while col<shape[1]{
+            let mut sum:f64=0.0;let mut i:u64=o[row];while i<o[row+1]{sum+=(v[i] as f64)*(b[c[i]*shape[1]+col] as f64);i+=1;}
+            out[row*shape[1]+col]=sum as f32;col+=1;
+        }row+=1;
+    }
+    buffer_from_data(matrix.queue,shape,out,count)
+}
