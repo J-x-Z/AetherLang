@@ -117,7 +117,7 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
     let session = Session::parse(input, source, search_paths(cli)?, Default::default())?;
     let facts = session.check()?;
     if matches!(cli.command, Some(Commands::Symbols { .. })) {
-        println!("{}", serde_json::to_string(&frontend::symbols::SymbolIndex::new(&session)).expect("serializable symbols"));
+        println!("{}", serde_json::to_string(&frontend::symbols::SymbolIndex::new(&session, Some(&facts))).expect("serializable symbols"));
         return Ok(());
     }
     if check {

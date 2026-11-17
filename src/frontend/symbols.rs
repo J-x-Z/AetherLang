@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use serde::Serialize;
 use super::{ast::*, session::{Location, Session}};
 use crate::utils::Span;
+use crate::types::ResolvedType;
+use super::semantic::{SemanticFacts, ResolvedMethodCall};
 
 #[derive(Clone, Serialize)]
 pub struct Symbol {
@@ -19,12 +21,15 @@ pub struct SymbolIndex { pub symbols: Vec<Symbol>, pub references: Vec<Reference
 struct Builder<'a> {
     index: SymbolIndex,
     session: &'a Session,
+    facts: Option<&'a SemanticFacts>,
+    function_name: String,
+    binding_types: HashMap<usize, String>,
     scopes: Vec<HashMap<String, usize>>,
     fields: HashMap<String, HashMap<String, usize>>,
 }
 impl SymbolIndex {
-    pub fn new(session: &Session) -> Self {
-        let mut builder = Builder { index: Self::default(), session, scopes: vec![HashMap::new()], fields: HashMap::new() };
+    pub fn new(session: &Session, facts: Option<&SemanticFacts>) -> Self {
+        let mut builder = Builder { index: Self::default(), session, facts, function_name: String::new(), binding_types: HashMap::new(), scopes: vec![HashMap::new()], fields: HashMap::new() };
         for item in &session.program.items { builder.item_definition(item); }
         for item in &session.program.items { builder.item_body(item); }
         builder.index
@@ -93,7 +98,7 @@ impl Builder<'_> {
                     let key = format!("{}::{}",s.name.name,field.name.name);
                     if let Some(id) = self.define(&key,&field.name.name,"field",type_name(&field.ty),field.name.span) { fields.insert(field.name.name.clone(),id); }
                 }
-                self.fields.insert(display_name(&s.name.name), fields);
+                self.fields.insert(s.name.name.clone(), fields);
             }
             Item::Enum(e) => { self.define(&e.name.name,&e.name.name,"enum",display_name(&e.name.name),e.name.span); }
             Item::Union(u) => { self.define(&u.name.name,&u.name.name,"union",display_name(&u.name.name),u.name.span); }
@@ -101,7 +106,7 @@ impl Builder<'_> {
             Item::Static(s) => { self.define(&s.name.name,&s.name.name,"static",type_name(&s.ty),s.name.span); }
             Item::TypeAlias(t) => { self.define(&t.name.name,&t.name.name,"type",type_name(&t.ty),t.name.span); }
             Item::Impl(i) => for f in &i.methods {
-                self.define(&format!("{}_{}",i.target.name,f.name.name),&f.name.name,"method",Self::signature(f),f.name.span);
+                self.define(&format!("{}::{}",i.target.name,f.name.name),&f.name.name,"method",Self::signature(f),f.name.span);
             },
             Item::Extern(ext) => for item in &ext.items { match item {
                 ForeignItem::Fn { name, params, ret_type, .. } => { self.define(&name.name,&name.name,"extern function",format!("fn({}) -> {}",params.iter().map(|p|type_name(&p.ty)).collect::<Vec<_>>().join(", "),ret_type.as_ref().map(type_name).unwrap_or("()".into())),name.span); }
@@ -112,14 +117,30 @@ impl Builder<'_> {
     }
     fn item_body(&mut self, item: &Item) {
         match item {
-            Item::Function(f) => self.function(f), Item::Impl(i) => for f in &i.methods { self.function(f); },
+            Item::Function(f) => self.function(f, f.name.name.clone()),
+            Item::Impl(i) => for f in &i.methods {
+                let key = format!("{}::{}", i.target.name, f.name.name);
+                let emitted = self.facts.and_then(|facts| facts.method_signatures.get(&key))
+                    .map(|sig| sig.emitted_name.clone()).unwrap_or(key);
+                self.function(f, emitted);
+            },
             Item::Const(c) => self.expr(&c.value), Item::Static(s) => if let Some(value)=&s.value { self.expr(value); },
             _ => {},
         }
     }
-    fn function(&mut self, f: &Function) {
+    fn typed_binding(&mut self, name: &Ident, kind: &str, ty: Option<&Type>) {
+        let Some(id) = self.define(&name.name, &name.name, kind,
+            ty.map(type_name).unwrap_or_else(|| "inferred".into()), name.span) else { return; };
+        let Some(mut base) = ty else { return; };
+        while let Type::Ref { inner, .. } | Type::Pointer(inner, _) | Type::Volatile(inner, _) = base {
+            base = inner;
+        }
+        if let Type::Named(key, _) = base { self.binding_types.insert(id, key.clone()); }
+    }
+    fn function(&mut self, f: &Function, emitted: String) {
+        self.function_name = emitted;
         self.scopes.push(HashMap::new());
-        for p in &f.params { self.define(&p.name.name,&p.name.name,"parameter",type_name(&p.ty),p.name.span); }
+        for p in &f.params { self.typed_binding(&p.name, "parameter", Some(&p.ty)); }
         self.block(&f.body);
         self.scopes.pop();
     }
@@ -128,7 +149,7 @@ impl Builder<'_> {
         for stmt in &block.stmts { match stmt {
             Stmt::Let { name, ty, value, .. } => {
                 if let Some(value) = value { self.expr(value); }
-                self.define(&name.name,&name.name,"variable",ty.as_ref().map(type_name).unwrap_or("inferred".into()),name.span);
+                self.typed_binding(name, "variable", ty.as_ref());
             }
             Stmt::Expr(e) | Stmt::Semi(e) => self.expr(e), Stmt::Return { value: Some(e), .. } => self.expr(e), _ => {},
         } }
@@ -137,22 +158,31 @@ impl Builder<'_> {
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Ident(i) => self.reference(&i.name,i.span),
-            Expr::Path { segments, span } => { let key=segments.iter().map(|i|i.name.as_str()).collect::<Vec<_>>().join("_"); self.reference(&key,*span); }
+            Expr::Path { segments, span } => { let key=segments.iter().map(|i|i.name.as_str()).collect::<Vec<_>>().join("::"); self.reference(&key,*span); }
             Expr::Binary { left, right, .. } => { self.expr(left);self.expr(right); }
             Expr::Unary { expr, .. } | Expr::Ref { expr, .. } | Expr::Deref { expr, .. } | Expr::Cast { expr, .. } | Expr::Try { expr, .. } => self.expr(expr),
             Expr::Call { func, args, .. } => { self.expr(func); for a in args {self.expr(a);} }
             Expr::Field { expr, field, .. } => {
                 self.expr(expr);
-                if let Expr::Ident(i) = expr.as_ref() {
-                    if let Some(id)=self.lookup(&i.name) {
-                        let ty=self.index.symbols[id].type_name.trim_start_matches('&').trim_start_matches("mut ").trim_start_matches('*');
-                        if let Some(symbol)=self.fields.get(ty).and_then(|f|f.get(&field.name)).copied() {
-                            if let Some(location)=self.session.location(field.span) { self.index.references.push(Reference {symbol,location}); }
-                        }
-                    }
+                let ty = self.facts.and_then(|facts| facts.expr_types.get(&(self.function_name.clone(), expr.span())));
+                let owner = ty.and_then(|mut base| {
+                    while let ResolvedType::Reference { inner, .. } | ResolvedType::Pointer(inner) | ResolvedType::Volatile(inner) = base { base = inner; }
+                    match base { ResolvedType::Struct { name, .. } => Some(name), _ => None }
+                }).or_else(|| match expr.as_ref() {
+                    Expr::Ident(id) => self.lookup(&id.name).and_then(|symbol| self.binding_types.get(&symbol)),
+                    _ => None,
+                });
+                if let Some(id) = owner.and_then(|key| self.fields.get(key)).and_then(|fields| fields.get(&field.name)).copied() {
+                    if let Some(location) = self.session.location(field.span) { self.index.references.push(Reference { symbol: id, location }); }
                 }
             }
-            Expr::MethodCall { expr, args, .. } => { self.expr(expr);for a in args {self.expr(a);} }
+            Expr::MethodCall { expr, method, args, span } => {
+                self.expr(expr);
+                if let Some(ResolvedMethodCall::Function { symbol, .. }) = self.facts.and_then(|f| f.method_calls.get(&(self.function_name.clone(), *span))) {
+                    self.reference(symbol, method.span);
+                }
+                for arg in args { self.expr(arg); }
+            }
             Expr::Index { expr, index, .. } => { self.expr(expr);self.expr(index); }
             Expr::Block(block) | Expr::Unsafe { body: block, .. } | Expr::Loop { body: block, .. } => self.block(block),
             Expr::If { cond, then_block, else_block, .. } => {self.expr(cond);self.block(then_block);if let Some(b)=else_block{self.block(b);} }
@@ -165,7 +195,7 @@ impl Builder<'_> {
                 self.scopes.push(HashMap::new());self.pattern(&arm.pattern);
                 if let Some(guard)=&arm.guard{self.expr(guard);}self.expr(&arm.body);self.scopes.pop();
             }}
-            Expr::StructLit {name,fields,..} => {self.reference(&name.name,name.span);for (_,v) in fields{self.expr(v);}}
+            Expr::StructLit {name,fields,..} => {self.reference(&name.name,name.span);for (field,value) in fields {self.reference(&format!("{}::{}", name.name, field.name),field.span);self.expr(value);}}
             Expr::Array {elements,..}|Expr::Tuple {elements,..} => for e in elements{self.expr(e);},
             Expr::Range {start,end,..} => {if let Some(e)=start{self.expr(e);}if let Some(e)=end{self.expr(e);}}
             Expr::Closure {body,..} => self.expr(body), _=>{},

@@ -4,12 +4,12 @@ use serde_json::{json,Value};
 use crate::frontend::{resolve::Resolver, session::{Diagnostic,Location,Session}, symbols::SymbolIndex};
 
 struct Document { text: String, version: i64 }
-struct Server { documents: BTreeMap<PathBuf,Document>, paths: Vec<PathBuf>, published: HashSet<String>, shutdown: bool }
+struct Server { indexes: BTreeMap<PathBuf,SymbolIndex>, documents: BTreeMap<PathBuf,Document>, paths: Vec<PathBuf>, published: HashSet<String>, shutdown: bool }
 
 pub fn serve(paths: Vec<PathBuf>) -> Result<(),String> {
     let stdin=io::stdin();let stdout=io::stdout();
     let mut input=stdin.lock();let mut output=stdout.lock();
-    let mut server=Server {documents:BTreeMap::new(),paths,published:HashSet::new(),shutdown:false};
+    let mut server=Server {indexes:BTreeMap::new(),documents:BTreeMap::new(),paths,published:HashSet::new(),shutdown:false};
     while let Some(message)=read_message(&mut input)? {
         if message.get("method").and_then(Value::as_str)==Some("exit") { return if server.shutdown {Ok(())}else{Err("LSP exited without shutdown".into())}; }
         for reply in server.handle(message) {write_message(&mut output,&reply)?;}
@@ -66,10 +66,15 @@ impl Server {
         Session::parse(path,source,self.paths.clone(),self.documents.iter().map(|(p,d)|(p.clone(),d.text.clone())).collect::<HashMap<_,_>>())
     }
     fn diagnostics(&mut self)->Vec<Value>{
+        self.indexes.clear();
         let mut diagnostics:BTreeMap<String,Vec<Value>>=BTreeMap::new();
         for path in self.documents.keys(){
             let uri=uri_from_path(&path.to_string_lossy());diagnostics.entry(uri.clone()).or_default();
-            let result=self.session(path).and_then(|s|s.check().map(|_|()));
+            let result = self.session(path).and_then(|session| {
+                let checked = session.check();
+                self.indexes.insert(path.clone(), SymbolIndex::new(&session, checked.as_ref().ok()));
+                checked.map(|_| ())
+            });
             if let Err(d)=result {
                 let target=d.location.as_ref().map(|l|uri_from_path(&l.file)).unwrap_or(uri);
                 let position=d.location.as_ref().map(range).unwrap_or(json!({"start":{"line":0,"character":0},"end":{"line":0,"character":0}}));
@@ -111,21 +116,44 @@ impl Server {
             "textDocument/didSave"=>self.diagnostics(),
             "textDocument/hover"|"textDocument/definition"|"textDocument/references"|"textDocument/documentSymbol"|"textDocument/completion"=>{
                 let Some(path)=params["textDocument"]["uri"].as_str().and_then(path_from_uri)else{return error(-32602,"expected file URI");};
-                let session=match self.session(&path){Ok(s)=>s,Err(_)=>return reply(Value::Null)};
-                let index=SymbolIndex::new(&session);let file=path.to_string_lossy();
+                let disk_index;
+                let index = if let Some(open) = self.indexes.get(&path) { open }
+                    else if let Ok(session) = self.session(&path) {
+                        disk_index = SymbolIndex::new(&session, session.check().as_ref().ok());
+                        &disk_index
+                    } else { return reply(Value::Null); };
+                let file=path.to_string_lossy();
                 if method=="textDocument/documentSymbol"{
                     return reply(Value::Array(index.symbols.iter().filter(|s|s.definition.file==file).map(|s|json!({"name":s.name,"detail":s.type_name,"kind":match s.kind.as_str(){"function"|"method"|"extern function"=>12,"struct"|"union"=>23,"enum"=>10,"constant"=>14,_=>13},"range":range(&s.definition),"selectionRange":range(&s.definition)})).collect()));
                 }
                 if method=="textDocument/completion"{
                     return reply(json!({"isIncomplete":false,"items":index.symbols.iter().map(|s|json!({"label":s.name,"detail":s.type_name,"kind":if s.kind.contains("function"){3}else{6}})).collect::<Vec<_>>()}));
                 }
-                let text=self.documents.get(&path).map(|d|d.text.as_str()).or_else(||session.source(0)).unwrap_or("");
+                let disk_text;
+                let text=if let Some(doc)=self.documents.get(&path) { &doc.text } else { disk_text=std::fs::read_to_string(&path).unwrap_or_default(); &disk_text };
                 let byte=byte_at(text,&params["position"]);
                 let Some(symbol)=index.at(&file,byte)else{return reply(Value::Null);};
                 match method{
                     "textDocument/hover"=>reply(json!({"contents":{"kind":"plaintext","value":format!("{}: {}",symbol.name,symbol.type_name)}})),
                     "textDocument/definition"=>reply(location(&symbol.definition)),
-                    _=>{let mut values:Vec<_>=index.references.iter().filter(|r|r.symbol==symbol.id).map(|r|location(&r.location)).collect();if params["context"]["includeDeclaration"].as_bool().unwrap_or(false){values.push(location(&symbol.definition));}reply(Value::Array(values))}
+                    _ => {
+                        let definition = &symbol.definition;
+                        let mut hits = BTreeMap::new();
+                        for candidate in self.indexes.values().chain(std::iter::once(index)) {
+                            for reference in &candidate.references {
+                                let target = &candidate.symbols[reference.symbol];
+                                if target.definition.file == definition.file && target.definition.start == definition.start &&
+                                    target.definition.end == definition.end && target.kind == symbol.kind {
+                                    let loc = &reference.location;
+                                    hits.insert((&loc.file, loc.start, loc.end), location(loc));
+                                }
+                            }
+                        }
+                        if params["context"]["includeDeclaration"].as_bool().unwrap_or(false) {
+                            hits.insert((&definition.file, definition.start, definition.end), location(definition));
+                        }
+                        reply(Value::Array(hits.into_values().collect()))
+                    }
                 }
             }
             _=>error(-32601,"method not supported"),

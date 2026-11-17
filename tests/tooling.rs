@@ -51,15 +51,55 @@ fn lsp_updates_unsaved_imports_and_serves_real_hover_definition_and_diagnostics(
         json!({"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}),
         json!({"jsonrpc":"2.0","method":"exit","params":null}),
     ];
-    let mut child_process=compiler().arg("lsp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-    let mut input=child_process.stdin.take().unwrap();for message in messages{let body=serde_json::to_vec(&message).unwrap();write!(input,"Content-Length: {}\r\n\r\n",body.len()).unwrap();input.write_all(&body).unwrap();}drop(input);
-    let output=child_process.wait_with_output().unwrap();assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
-    let mut bytes=output.stdout.as_slice();let mut replies=vec![];
-    while !bytes.is_empty(){let boundary=bytes.windows(4).position(|w|w==b"\r\n\r\n").unwrap();let header=std::str::from_utf8(&bytes[..boundary]).unwrap();let count:usize=header.strip_prefix("Content-Length: ").unwrap().parse().unwrap();bytes=&bytes[boundary+4..];replies.push(serde_json::from_slice::<Value>(&bytes[..count]).unwrap());bytes=&bytes[count..];}
+    let replies = lsp_messages(messages);
     assert_eq!(replies.iter().find(|r|r["id"]==2).unwrap()["result"]["uri"],uri(&child));
     assert!(replies.iter().find(|r|r["id"]==3).unwrap()["result"]["contents"]["value"].as_str().unwrap().contains("i32"));
     let changes:Vec<_>=replies.iter().filter(|r|r["method"]=="textDocument/publishDiagnostics"&&r["params"]["uri"]==uri(&child)).collect();
     assert!(changes.iter().any(|r|!r["params"]["diagnostics"].as_array().unwrap().is_empty()));
     assert!(changes.last().unwrap()["params"]["diagnostics"].as_array().unwrap().is_empty());
     assert_eq!(fs::read_to_string(child).unwrap(),"pub fn answer() -> i32 { return 42; }");
+}
+fn lsp_messages(messages: Vec<Value>) -> Vec<Value> {
+    let mut child_process=compiler().arg("lsp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut input=child_process.stdin.take().unwrap();for message in messages{let body=serde_json::to_vec(&message).unwrap();write!(input,"Content-Length: {}\r\n\r\n",body.len()).unwrap();input.write_all(&body).unwrap();}drop(input);
+    let output=child_process.wait_with_output().unwrap();assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+    let mut bytes=output.stdout.as_slice();let mut replies=vec![];
+    while !bytes.is_empty(){let boundary=bytes.windows(4).position(|w|w==b"\r\n\r\n").unwrap();let header=std::str::from_utf8(&bytes[..boundary]).unwrap();let count:usize=header.strip_prefix("Content-Length: ").unwrap().parse().unwrap();bytes=&bytes[boundary+4..];replies.push(serde_json::from_slice::<Value>(&bytes[..count]).unwrap());bytes=&bytes[count..];}
+    replies
+}
+
+#[test]
+fn field_definitions_and_workspace_references_use_declaration_identity() {
+    let p = Project::new();
+    let left_text = "pub struct Point { x:i32 }";
+    let left = p.file("left.aeth", left_text);
+    let right = p.file("right.aeth", left_text);
+    let root_text = "use left::Point as L; use right::Point as R; fn main()->i32{let a:L=L{x:1};let b:R=R{x:2};a.x+b.x}";
+    let main = p.file("main.aeth", root_text);
+    let other_text = "use left::Point; fn f(p:*Point)->i32 { p.x } fn main()->i32 { 0 }";
+    let other = p.file("other.aeth", other_text);
+    let open = |path, text| json!({"method":"textDocument/didOpen","params":{"textDocument":{"uri":uri(path),"text":text,"version":1}}});
+    let query = |id, method, path, col, include| json!({"id":id,"method":method,"params":{"textDocument":{"uri":uri(path)},"position":{"line":0,"character":col},"context":{"includeDeclaration":include}}});
+    let left_ref = left_text.find("x:i32").unwrap();
+    let responses = lsp_messages(vec![
+        json!({"id":1,"method":"initialize","params":{}}),
+        open(&main, root_text), open(&other, other_text), open(&left, left_text),
+        query(2,"textDocument/definition",&main,root_text.find("a.x").unwrap()+2,false),
+        query(3,"textDocument/definition",&main,root_text.find("b.x").unwrap()+2,false),
+        query(4,"textDocument/references",&left,left_ref,true),
+        json!({"method":"textDocument/didChange","params":{"textDocument":{"uri":uri(&other),"version":2},"contentChanges":[{"text":"fn main()->i32{0}"}]}}),
+        query(5,"textDocument/references",&left,left_ref,false),
+        json!({"id":6,"method":"shutdown"}), json!({"method":"exit"}),
+    ]);
+    let result = |id: i32| &responses.iter().find(|r| r["id"]==id).unwrap()["result"];
+    assert_eq!(result(2)["uri"],uri(&left));
+    assert_eq!(result(3)["uri"],uri(&right));
+    let hits = result(4).as_array().unwrap();
+    assert_eq!(hits.len(),4,"{hits:?}");
+    for (file,count) in [(&left,1),(&main,2),(&other,1)] {
+        assert_eq!(hits.iter().filter(|hit|hit["uri"]==uri(file)).count(),count);
+    }
+    let edited = result(5).as_array().unwrap();
+    assert_eq!(edited.len(),2);
+    assert!(edited.iter().all(|hit|hit["uri"]==uri(&main)));
 }
