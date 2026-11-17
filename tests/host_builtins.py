@@ -50,6 +50,16 @@ for backend in args.backends:
         else:
             run([compiler, source, '--backend', backend, f'-O{level}', '-o', binary])
         run([binary])
+if os.name == 'posix' and 'c' in args.backends:
+    source = work/'temp-dir.aeth'
+    source.write_text('extern "C"{fn mkdtemp(p:*u8)->*u8;fn rmdir(p:*u8)->i32;} fn main(argc:i32,argv:**u8)->i32{if argc!=2 || mkdtemp(argv[1])!=argv[1] {return 1;}rmdir(argv[1])}')
+    emitted = source.with_suffix('.c')
+    run([compiler,source,'--emit-c','-o',emitted])
+    for dialect in ['c11','gnu11']:
+        binary = work/f'temp-dir-{dialect}'
+        run(['clang','-std='+dialect,'-Werror=incompatible-pointer-types',emitted,'-o',binary])
+        run([binary,work/'owned-XXXXXX'])
+
 for target,bits in [('x86_64-pc-windows-msvc',32),('x86_64-unknown-linux-gnu',64)]:
     for width in (32,64):
         declaration = work/f'long-{width}.aeth'

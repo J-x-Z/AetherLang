@@ -1144,7 +1144,7 @@ impl CCodeGen {
         // foreign function receives a prototype, including its variadic marker.
         const HEADER_FUNCTIONS: &[&str] = &[
             "abort", "exit", "malloc", "calloc", "realloc", "free", "atoi", "atol", "atof", "strtol", "strtoul",
-            "system", "getenv", "setenv", "unsetenv", "realpath", "mkstemp", "qsort", "bsearch", "abs", "labs", "llabs", "rand", "srand",
+            "system", "getenv", "setenv", "unsetenv", "realpath", "qsort", "bsearch", "abs", "labs", "llabs", "rand", "srand",
             "puts", "putchar", "getchar", "printf", "fprintf", "sprintf", "snprintf", "scanf", "sscanf", "fscanf",
             "fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "rewind", "fgets", "fputs", "fflush", "feof", "ferror", "clearerr",
             "tmpfile", "remove", "rename", "perror", "setbuf", "setvbuf", "fileno", "fgetc", "fputc", "getc", "putc", "ungetc", "freopen",
@@ -1164,6 +1164,15 @@ impl CCodeGen {
         ];
         let mut declared = HashSet::new();
         for ext in &module.externs {
+            // Strict ISO modes may hide POSIX declarations; when imported,
+            // use the exact system prototype in either feature-test mode.
+            if !module.no_std && matches!(ext.name.as_str(), "mkdtemp" | "mkstemp") {
+                if declared.insert(ext.name.clone()) {
+                    let result = if ext.name == "mkdtemp" { "char *" } else { "int " };
+                    self.writeln(&format!("extern {result}{}(char *);", ext.name));
+                }
+                continue;
+            }
             if (!module.no_std && HEADER_FUNCTIONS.contains(&ext.name.as_str())) || !declared.insert(ext.name.clone()) { continue; }
             let mut params: Vec<_> = ext.params.iter().map(|(_, ty)| self.ir_type_to_c(ty)).collect();
             if ext.variadic { params.push("...".into()); }

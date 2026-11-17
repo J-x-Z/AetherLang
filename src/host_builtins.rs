@@ -127,6 +127,8 @@ pub fn host_c_signature(name: &str, width: PointerWidth, long_bits: Option<u8>) 
         return Some((params, result, false));
     }
     Some(match name {
+        "mkdtemp" => (vec![bytes.clone()], bytes, false),
+        "mkstemp" => (vec![bytes], T::I32, false),
         "printf" => (vec![bytes], T::I32, true),
         "puts" => (vec![bytes], T::I32, false),
         "malloc" => (vec![size], bytes, false),
