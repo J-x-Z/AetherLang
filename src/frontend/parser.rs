@@ -214,7 +214,7 @@ impl Parser {
             items.push(self.parse_item()?);
         }
 
-        Ok(Program { items, inner_attrs })
+        Ok(Program { items, inner_attrs, module_owners: Default::default() })
     }
     
     /// Parse inner attribute: #![name]
@@ -273,7 +273,15 @@ impl Parser {
                         },
                         TokenKind::Interface => {
                             self.advance(); // consume 'pub'
-                            Ok(Item::Interface(self.parse_interface()?))
+                            let mut definition = self.parse_interface()?;
+                            definition.is_pub = true;
+                            Ok(Item::Interface(definition))
+                        },
+                        TokenKind::Trait => {
+                            self.advance(); // consume 'pub'
+                            let mut definition = self.parse_trait_def()?;
+                            definition.is_pub = true;
+                            Ok(Item::Trait(definition))
                         },
                         TokenKind::Type => {
                             self.advance(); // consume 'pub'
@@ -1814,6 +1822,7 @@ impl Parser {
         let mut methods = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
             methods.push(self.parse_fn_sig()?);
+            self.consume(&TokenKind::Semicolon);
         }
 
         self.expect(TokenKind::RBrace)?;
@@ -1845,11 +1854,12 @@ impl Parser {
             None
         };
 
+        let effects = self.parse_effect_annotation()?;
         Ok(FunctionSig {
             name,
             params,
             ret_type,
-            effects: EffectSet::default(),
+            effects,
             contracts: Vec::new(),
             span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
         })

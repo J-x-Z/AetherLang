@@ -2,6 +2,7 @@
 #![allow(unused_imports)]
 
 pub mod codegen;
+pub(crate) mod system_attributes;
 pub mod linker;
 
 // C Backend (always available)

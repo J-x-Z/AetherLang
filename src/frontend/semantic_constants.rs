@@ -3,6 +3,7 @@ use super::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct SemanticFacts {
+    pub pointer_width: PointerWidth,
     pub places: HashMap<(String, Span), ResolvedPlace>,
     pub method_signatures: HashMap<String, ResolvedMethodSignature>,
     pub method_calls: HashMap<(String, Span), ResolvedMethodCall>,

@@ -261,36 +261,24 @@ impl LLVMCodeGen {
                 };
                 self.parameter_values.push(value);
             }
-            // Add naked attribute if function is marked naked
-            if func.naked {
-                let naked_attr_kind = llvm_sys::core::LLVMGetEnumAttributeKindForName(
-                    b"naked\0".as_ptr() as *const _,
-                    5
-                );
-                if naked_attr_kind != 0 {
-                    let naked_attr = llvm_sys::core::LLVMCreateEnumAttribute(
-                        self.context,
-                        naked_attr_kind,
-                        0
-                    );
-                    // Function index is -1 (LLVMAttributeFunctionIndex)
-                    llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, u32::MAX, naked_attr);
-                }
-            }
-
-            // Add interrupt attribute if function is marked interrupt
-            if func.interrupt {
-                let interrupt_attr_kind = llvm_sys::core::LLVMGetEnumAttributeKindForName(
-                    b"interrupt\0".as_ptr() as *const _,
-                    9
-                );
-                if interrupt_attr_kind != 0 {
-                    let interrupt_attr = llvm_sys::core::LLVMCreateEnumAttribute(
-                        self.context,
-                        interrupt_attr_kind,
-                        0
-                    );
-                    llvm_sys::core::LLVMAddAttributeAtIndex(llvm_func, u32::MAX, interrupt_attr);
+            if func.naked || func.interrupt {
+                let attribute = |name: &str| {
+                    let kind = LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len());
+                    if kind != 0 { LLVMAddAttributeAtIndex(llvm_func, u32::MAX, LLVMCreateEnumAttribute(self.context, kind, 0)); }
+                };
+                attribute("noinline");
+                if func.naked { attribute("naked"); }
+                if func.interrupt {
+                    // llvm::CallingConv::X86_INTR, not an optional string attribute.
+                    LLVMSetFunctionCallConv(llvm_func, 83);
+                    attribute("noredzone");
+                    attribute("noimplicitfloat");
+                    let IRType::Ptr(frame) = &func.params[0].1 else { unreachable!("validated interrupt frame") };
+                    let byval = LLVMGetEnumAttributeKindForName(b"byval".as_ptr().cast(), 5);
+                    LLVMAddAttributeAtIndex(llvm_func, 1, LLVMCreateTypeAttribute(self.context, byval, self.ir_type_to_llvm(frame)));
+                    let name = b"target-features";
+                    let features = b"-sse,-sse2,-mmx,-x87,-avx,-avx2";
+                    LLVMAddAttributeAtIndex(llvm_func, u32::MAX, LLVMCreateStringAttribute(self.context, name.as_ptr().cast(), name.len() as u32, features.as_ptr().cast(), features.len() as u32));
                 }
             }
 
@@ -642,7 +630,8 @@ impl LLVMCodeGen {
 
                 Instruction::Layout { dest, query, ty, field } => {
                     let value = self.layout_value(*query, ty, *field)?;
-                    self.value_map.insert(*dest, LLVMConstInt(LLVMInt64TypeInContext(self.context), value, 0));
+                    let result = llvm_sys::target::LLVMIntPtrTypeInContext(self.context, self.target_data);
+                    self.value_map.insert(*dest, LLVMConstInt(result, value, 0));
                 }
                 Instruction::ZeroInitialize { ptr, ty } => {
                     let ptr = self.get_value(ptr)?;
@@ -1132,8 +1121,14 @@ impl LLVMCodeGen {
 
 impl LLVMCodeGen {
     fn prepare_module(&mut self, module: &IRModule) -> Result<()> {
+        crate::backend::system_attributes::validate(module, &self.target_triple)?;
         Self::init_targets();
         self.initialize_target()?;
+        let bytes = unsafe { llvm_sys::target::LLVMPointerSize(self.target_data) } as usize;
+        if bytes != module.pointer_width.bytes() {
+            return Err(Error::CodeGen(format!("LLVM target '{}' has {bytes}-byte pointers, expected {}",
+                self.target_triple, module.pointer_width.bytes())));
+        }
         self.type_definitions = module.structs.iter().map(|definition| (definition.name.clone(), definition.clone())).collect();
         self.global_types = module.globals.iter().map(|global| (global.name.clone(), global.ty.clone())).collect();
         

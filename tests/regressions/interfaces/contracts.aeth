@@ -1,0 +1,9 @@
+// Interface Self is lexical even when the module defines the same name.
+type Self = i64;
+pub interface Value {
+    fn read(self: &Self) -> i32 effect[read];
+    fn set(self: &mut Self, value: i32) effect[write];
+}
+pub trait Construct {
+    fn make(value: i32) -> Self;
+}

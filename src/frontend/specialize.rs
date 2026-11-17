@@ -119,7 +119,8 @@ impl Specializer {
         }
         for name in crate::intrinsics::vector_names() {
             let spec = crate::intrinsics::vector(&name).expect("vector inventory");
-            let params = spec.params().iter().map(intrinsic_type).collect::<Option<Vec<_>>>();
+            // This pass consumes source type names. The checker assigns their target widths.
+            let params = spec.params(Default::default()).iter().map(intrinsic_type).collect::<Option<Vec<_>>>();
             if let (Some(params),Some(ret)) = (params,intrinsic_type(&spec.result())) {
                 this.signatures.insert(name,Signature {params,ret});
             }
@@ -259,6 +260,7 @@ impl Specializer {
         Ok(Program {
             items: self.output,
             inner_attrs: program.inner_attrs,
+            module_owners: program.module_owners,
         })
     }
 
@@ -1385,6 +1387,8 @@ fn intrinsic_type(ty: &crate::types::ResolvedType) -> Option<Type> {
     Some(match ty {
         R::Primitive(P::Unit) => Type::Unit(span),
         R::Primitive(P::Never) => Type::Never(span),
+        R::Primitive(P::Usize(_)) => named("usize", span),
+        R::Primitive(P::Isize(_)) => named("isize", span),
         R::Primitive(primitive) => named(&format!("{primitive:?}").to_lowercase(), span),
         R::Pointer(inner) => Type::Pointer(Box::new(intrinsic_type(inner)?), span),
         R::Vector(inner,lanes) => match inner.as_ref() {

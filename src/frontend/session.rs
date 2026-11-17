@@ -64,8 +64,8 @@ impl Session {
         let program = super::specialize::specialize(program).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
         Ok(Self { program, resolver, script_map })
     }
-    pub fn check(&self) -> Result<SemanticFacts, Diagnostic> {
-        let mut analyzer = SemanticAnalyzer::new();
+    pub fn check(&self, target: &str) -> Result<SemanticFacts, Diagnostic> {
+        let mut analyzer = SemanticAnalyzer::for_target(target).map_err(Diagnostic::from)?;
         analyzer.analyze(&self.program).map_err(|e| self.diagnostic(&e))?;
         Ok(analyzer.facts().clone())
     }

@@ -1,0 +1,9 @@
+use implementation::{Counter, local_private, generic_private, public_export};
+fn main() -> i32 {
+    let mut value: Counter = Counter::make(7);
+    if value.read() != 7 { return 1; }
+    value.set(11);
+    if value.read() != 11 || local_private(&value) != 12 { return 2; }
+    if generic_private(&value, 17) != 17 || public_export() != 31 { return 3; }
+    return 0;
+}

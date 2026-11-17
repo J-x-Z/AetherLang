@@ -3,6 +3,8 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedMethodSignature {
+    pub module: usize,
+    pub is_pub: bool,
     pub emitted_name: String,
     pub target: ResolvedType,
     pub params: Vec<ResolvedType>,
@@ -61,6 +63,7 @@ impl SemanticAnalyzer {
                 }
                 self.facts.method_signatures.insert(symbol.clone(), ResolvedMethodSignature {
                     emitted_name, target: target.clone(), params: params.clone(), ret: ret.clone(),
+                    module: self.module_owners.get(&method.span).copied().unwrap_or(0), is_pub: method.is_pub,
                 });
                 self.symbols.define(Symbol {
                     name: symbol,
@@ -78,6 +81,16 @@ impl SemanticAnalyzer {
                     span: method.span,
                     mutable: false,
                 })?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_method_visibility(&self, symbol: &str, span: Span) -> Result<()> {
+        if let Some(method) = self.facts.method_signatures.get(symbol) {
+            if !method.is_pub && method.module != self.current_module {
+                return Err(Error::Semantic { code: "E2004", span,
+                    message: format!("method '{}' is private to its defining module", symbol) });
             }
         }
         Ok(())
@@ -117,6 +130,7 @@ impl SemanticAnalyzer {
             ResolvedType::Struct { name, .. } | ResolvedType::Enum { name } => format!("{}::{}", name, method.name),
             _ => return Err(Error::UndefinedVariable { name: method.name.clone(), span }),
         };
+        self.check_method_visibility(&symbol, span)?;
         let signature = self.facts.method_signatures.get(&symbol).cloned()
             .ok_or_else(|| Error::UndefinedVariable { name: symbol.clone(), span })?;
         if signature.params.is_empty() || signature.params.len() != args.len() + 1 {

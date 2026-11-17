@@ -16,6 +16,8 @@ use crate::utils::{Span, Error, Result};
 
 #[path = "semantic_constants.rs"]
 mod constants;
+#[path = "semantic_system.rs"]
+mod system;
 #[path = "semantic_flow.rs"]
 mod flow;
 #[path = "semantic_effects.rs"]
@@ -24,6 +26,8 @@ mod effects;
 mod methods;
 #[path = "semantic_places.rs"]
 mod places;
+#[path = "semantic_interfaces.rs"]
+mod interfaces;
 #[path = "semantic_enums.rs"]
 mod enums;
 #[path = "semantic_memory.rs"]
@@ -376,6 +380,10 @@ pub struct SemanticAnalyzer {
     // AI-Native extensions
     current_return: Option<ResolvedType>,
     current_function_name: Option<String>,
+    current_module: usize,
+    module_owners: HashMap<Span, usize>,
+    interfaces: HashMap<String, InterfaceDef>,
+    interface_effect_bounds: Vec<(String, EffectSet, Span)>,
     unsafe_depth: usize,
     loop_depth: usize,
     loop_breaks: Vec<bool>,
@@ -389,6 +397,7 @@ pub struct SemanticAnalyzer {
     /// may share their identity, but must never replace the body's semantics.
     c_abi_definitions: HashSet<String>,
     check_entrypoint: bool,
+    system_target: String,
     /// Whether we're in strict mode (@production) or lenient mode (@prototype)
     strict_mode: bool,
     /// Module resolver for use statements
@@ -399,11 +408,19 @@ pub struct SemanticAnalyzer {
 
 impl SemanticAnalyzer {
     pub fn new() -> Self {
+        Self::for_pointer_width(PointerWidth::default())
+    }
+
+    pub fn for_pointer_width(pointer_width: PointerWidth) -> Self {
         let mut analyzer = Self {
             symbols: SymbolTable::new(),
             errors: Vec::new(),
             current_return: None,
             current_function_name: None,
+            current_module: 0,
+            module_owners: HashMap::new(),
+            interfaces: HashMap::new(),
+            interface_effect_bounds: Vec::new(),
             unsafe_depth: 0,
             loop_depth: 0,
             loop_breaks: Vec::new(),
@@ -411,10 +428,11 @@ impl SemanticAnalyzer {
             declared_types: HashMap::new(),
             type_aliases: HashMap::new(),
             constant_defs: HashMap::new(),
-            facts: SemanticFacts::default(),
+            facts: SemanticFacts { pointer_width, ..SemanticFacts::default() },
             foreign_signatures: HashMap::new(),
             c_abi_definitions: HashSet::new(),
             check_entrypoint: true,
+            system_target: "native".into(),
             strict_mode: false, // Default: lenient mode
             module_resolver: ModuleResolver::new(),
             imported_modules: HashMap::new(),
@@ -423,6 +441,12 @@ impl SemanticAnalyzer {
         analyzer
     }
     
+    pub fn for_target(target: &str) -> std::result::Result<Self, String> {
+        let mut analyzer = Self::for_pointer_width(PointerWidth::for_target(target)?);
+        analyzer.system_target = target.into();
+        Ok(analyzer)
+    }
+
     /// Set strict mode for production-level checking
     pub fn set_strict_mode(&mut self, strict: bool) {
         self.strict_mode = strict;
@@ -493,6 +517,7 @@ impl SemanticAnalyzer {
 
     /// Analyze a program
     pub fn analyze(&mut self, program: &Program) -> Result<()> {
+        self.module_owners = program.module_owners.clone();
         self.check_entrypoint = !program.inner_attrs.iter().any(|attribute| attribute.name.name == "no_main");
         // Nominal names are known before resolving any signatures. This supports
         // forward and pointer-recursive structs without accepting invented types.
@@ -527,7 +552,9 @@ impl SemanticAnalyzer {
         }
 
         self.collect_enum_facts(program)?;
+        self.collect_interfaces(program)?;
         self.collect_methods(program)?;
+        self.check_interface_implementations(program)?;
         self.prepare_constant_facts()?;
 
         // Pass 2: Type check all items
@@ -537,7 +564,9 @@ impl SemanticAnalyzer {
 
         // Call identities and receiver adjustments are now known; effects use
         // those same facts instead of guessing from a method suffix.
+        self.check_system_attributes(program)?;
         self.infer_effects(program)?;
+        self.check_interface_effect_bounds()?;
         self.analyze_flows(program)?;
         if self.errors.is_empty() {
             Ok(())
@@ -1181,8 +1210,11 @@ impl SemanticAnalyzer {
     /// Type check a function
     fn check_function(&mut self, func: &Function) -> Result<()> {
         let previous=self.current_function_name.replace(func.name.name.clone());
+        let previous_module = self.current_module;
+        self.current_module = self.module_owners.get(&func.span).copied().unwrap_or(0);
         let result=self.check_function_inner(func);
         self.current_function_name=previous;
+        self.current_module = previous_module;
         result
     }
     fn check_function_inner(&mut self, func: &Function) -> Result<()> {
@@ -1396,7 +1428,7 @@ impl SemanticAnalyzer {
                         return Err(Error::UnknownField {field:field.as_ref().map(|f|f.name.clone()).unwrap_or_default(),span:*span});
                     }
                 }
-                Ok(ResolvedType::Primitive(PrimitiveType::Usize))
+                Ok(ResolvedType::Primitive(PrimitiveType::Usize(self.facts.pointer_width)))
             }
             
             Expr::Ident(ident) => {
@@ -1449,6 +1481,7 @@ impl SemanticAnalyzer {
                     
                     // Also check qualified name lookup (module::symbol registered in symbol table)
                     let qualified_name = segments.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join("::");
+                    self.check_method_visibility(&qualified_name, *span)?;
                     if let Some(symbol) = self.symbols.lookup(&qualified_name) {
                         return Ok(symbol.ty.clone());
                     }
@@ -2342,12 +2375,12 @@ impl SemanticAnalyzer {
                     "i16" => Ok(ResolvedType::Primitive(PrimitiveType::I16)),
                     "i32" => Ok(ResolvedType::Primitive(PrimitiveType::I32)),
                     "i64" => Ok(ResolvedType::Primitive(PrimitiveType::I64)),
-                    "isize" => Ok(ResolvedType::Primitive(PrimitiveType::Isize)),
+                    "isize" => Ok(ResolvedType::Primitive(PrimitiveType::Isize(self.facts.pointer_width))),
                     "u8" => Ok(ResolvedType::Primitive(PrimitiveType::U8)),
                     "u16" => Ok(ResolvedType::Primitive(PrimitiveType::U16)),
                     "u32" => Ok(ResolvedType::Primitive(PrimitiveType::U32)),
                     "u64" => Ok(ResolvedType::Primitive(PrimitiveType::U64)),
-                    "usize" => Ok(ResolvedType::Primitive(PrimitiveType::Usize)),
+                    "usize" => Ok(ResolvedType::Primitive(PrimitiveType::Usize(self.facts.pointer_width))),
                     "f32" => Ok(ResolvedType::Primitive(PrimitiveType::F32)),
                     "f64" => Ok(ResolvedType::Primitive(PrimitiveType::F64)),
                     "bool" => Ok(ResolvedType::Primitive(PrimitiveType::Bool)),

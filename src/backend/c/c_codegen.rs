@@ -42,6 +42,7 @@ pub struct CCodeGen {
     // Current function being generated (for main's argc/argv handling)
     current_func_name: String,
     current_func_param_count: usize,
+    no_std: bool,
 }
 
 impl CCodeGen {
@@ -63,6 +64,7 @@ impl CCodeGen {
             undefined_calls: HashSet::new(),
             current_func_name: String::new(),
             current_func_param_count: 0,
+            no_std: false,
         }
 
 
@@ -291,8 +293,8 @@ impl CCodeGen {
             Value::Constant(c) => match c {
                 Constant::Int(n) if *n == i64::MIN => "INT64_MIN".to_string(),
                 Constant::Int(n) => format!("{}LL", n),
-                Constant::Float(f) if f.is_nan() => "NAN".into(),
-                Constant::Float(f) if f.is_infinite() => if f.is_sign_negative() { "(-INFINITY)".into() } else { "INFINITY".into() },
+                Constant::Float(f) if f.is_nan() => "__builtin_nan(\"\")".into(),
+                Constant::Float(f) if f.is_infinite() => if f.is_sign_negative() { "(-__builtin_inf())".into() } else { "__builtin_inf()".into() },
                 Constant::Float(f) => format!("{:?}", f),
                 Constant::Bool(b) => if *b { "1" } else { "0" }.to_string(),
                 Constant::String(s) => format!("\"{}\"", Self::escape_for_c(s)),
@@ -435,7 +437,7 @@ impl CCodeGen {
         if func.interrupt {
             self.writeln("/* @interrupt: interrupt handler */");
             self.writeln("#if defined(__GNUC__) || defined(__clang__)");
-            self.writeln("__attribute__((interrupt))");
+            self.writeln("__attribute__((interrupt, target(\"general-regs-only\")))");
             self.writeln("#endif");
         }
         
@@ -443,6 +445,16 @@ impl CCodeGen {
         self.writeln(&format!("{} {}({}) {{", ret_type, func.name, params_str));
 
         self.indent += 1;
+        if func.naked {
+            for instruction in &func.blocks[0].instructions {
+                if let Instruction::InlineAsm { template, .. } = instruction {
+                    self.writeln(&format!("__asm__ volatile(\"{}\");", Self::escape_for_c(template)));
+                }
+            }
+            self.indent -= 1;
+            self.writeln("}");
+            return Ok(());
+        }
 
         // Generate precondition assertions (requires clauses)
         if !func.contracts.requires.is_empty() {
@@ -685,7 +697,7 @@ impl CCodeGen {
                 let var = self.get_var(*dest);
                 let pointer = self.value_to_c(ptr);
                 // memcpy preserves unaligned packed fields and strict aliasing.
-                self.writeln(&format!("if (sizeof({0}) != 0) memcpy((void*)&{0}, (const void*){1}, sizeof({2})); else memset(&{0}, 0, sizeof({0}));", var, pointer, var));
+                self.writeln(&format!("if (sizeof({0}) != 0) __builtin_memcpy((void*)&{0}, (const void*){1}, sizeof({2})); else __builtin_memset(&{0}, 0, sizeof({0}));", var, pointer, var));
                 self.reg_types.insert(*dest, ty.clone());
             }
             Instruction::Store { ptr, value } => {
@@ -695,7 +707,7 @@ impl CCodeGen {
                     Some(IRType::Ptr(inner)) => *inner,
                     _ => return Err(Error::CodeGen("store requires pointer type".into())),
                 };
-                self.writeln(&format!("{{ {} _store = {}; if (sizeof(_store) != 0) memcpy((void*){}, (const void*)&_store, sizeof(_store)); }}", self.ir_type_to_c(&ty), value_str, pointer));
+                self.writeln(&format!("{{ {} _store = {}; if (sizeof(_store) != 0) __builtin_memcpy((void*){}, (const void*)&_store, sizeof(_store)); }}", self.ir_type_to_c(&ty), value_str, pointer));
             }
             Instruction::ArrayElementPtr { dest, ptr, index, array_ty } => {
                 let var = self.get_var(*dest);
@@ -731,7 +743,7 @@ impl CCodeGen {
             }
             Instruction::ZeroInitialize { ptr, ty } => {
                 let pointer = self.value_to_c(ptr);
-                self.writeln(&format!("if (sizeof({1}) != 0) memset((void*){0}, 0, sizeof({1}));", pointer, self.ir_type_to_c(ty)));
+                self.writeln(&format!("if (sizeof({1}) != 0) __builtin_memset((void*){0}, 0, sizeof({1}));", pointer, self.ir_type_to_c(ty)));
             }
             Instruction::Cast { dest, value, ty } => {
                 let var = self.get_var(*dest);
@@ -744,7 +756,7 @@ impl CCodeGen {
                     let max = if signed { format!("INT{}_MAX", bits) } else { format!("UINT{}_MAX", bits) };
                     let min = if signed { format!("INT{}_MIN", bits) } else { "0".into() };
                     let lower = if signed { -boundary } else { 0.0 };
-                    self.writeln(&format!("{} = isnan({}) ? 0 : (({}) >= {:.1} ? {} : (({}) <= {:.1} ? {} : ({})({})));", var, val, val, boundary, max, val, lower, min, type_name, val));
+                    self.writeln(&format!("{} = __builtin_isnan({}) ? 0 : (({}) >= {:.1} ? {} : (({}) <= {:.1} ? {} : ({})({})));", var, val, val, boundary, max, val, lower, min, type_name, val));
                 } else {
                     self.writeln(&format!("{} = ({}){};", var, type_name, val));
                 }
@@ -929,7 +941,9 @@ impl CCodeGen {
 
     /// Generate the complete C source file
     pub fn generate_source(&mut self, module: &IRModule) -> Result<String> {
+        crate::backend::system_attributes::validate(module, &self.target_triple)?;
         self.output.clear();
+        self.no_std = module.no_std;
         self.union_names = module.structs.iter().filter(|definition| definition.is_union).map(|definition| definition.name.clone()).collect();
         self.struct_layouts = module.structs.iter().map(|definition| (definition.name.clone(), definition.fields.clone())).collect();
         self.global_types = module.globals.iter().map(|global| (global.name.clone(), global.ty.clone())).collect();
@@ -937,13 +951,19 @@ impl CCodeGen {
         // Header
         self.writeln("/* Generated by AetherLang C Backend */");
         self.writeln("#include <stdint.h>");
-        self.writeln("#include <errno.h>");
+        if module.functions.iter().flat_map(|function| &function.blocks).flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(instruction, Instruction::Platform { op: crate::intrinsics::PlatformOp::ErrnoGet, .. })) {
+            self.writeln("#include <errno.h>");
+        }
         self.writeln("#include <stddef.h>");
         self.writeln("#include <stdbool.h>");
-        self.writeln("#include <stdio.h>");
-        self.writeln("#include <stdlib.h>");
-        self.writeln("#include <string.h>");
-        self.writeln("#include <math.h>");
+        if !module.no_std {
+            self.writeln("#include <stdio.h>");
+            self.writeln("#include <stdlib.h>");
+            self.writeln("#include <string.h>");
+            self.writeln("#include <math.h>");
+        }
+        self.writeln(&format!("_Static_assert(sizeof(void*) == {}, \"Aether target pointer width mismatch\");", module.pointer_width.bytes()));
         self.writeln("struct __aeth_unit { }; /* zero-sized language unit */");
         // Fixed-width portable vector representation: the host compiler selects ISA.
         for element in [IRType::F32,IRType::F64,IRType::I32,IRType::I64,IRType::U32,IRType::U64] {
@@ -1145,7 +1165,7 @@ impl CCodeGen {
         ];
         let mut declared = HashSet::new();
         for ext in &module.externs {
-            if HEADER_FUNCTIONS.contains(&ext.name.as_str()) || !declared.insert(ext.name.clone()) { continue; }
+            if (!module.no_std && HEADER_FUNCTIONS.contains(&ext.name.as_str())) || !declared.insert(ext.name.clone()) { continue; }
             let mut params: Vec<_> = ext.params.iter().map(|(_, ty)| self.ir_type_to_c(ty)).collect();
             if ext.variadic { params.push("...".into()); }
             if params.is_empty() { params.push("void".into()); }
@@ -1164,7 +1184,8 @@ impl CCodeGen {
                     .collect()
             };
             let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
-            self.writeln(&format!("{} {}({});", ret_type, func.name, params_str));
+            let attribute = if func.interrupt { "__attribute__((interrupt, target(\"general-regs-only\"))) " } else if func.naked { "__attribute__((naked)) " } else { "" };
+            self.writeln(&format!("{}{} {}({});", attribute, ret_type, func.name, params_str));
         }
 
         self.writeln("");
@@ -1192,8 +1213,9 @@ impl CCodeGen {
         let mut last_error = String::new();
         
         for compiler in &compilers {
-            let result = Command::new(compiler)
-                .args(&["-c", "-o"])
+            let mut command = Command::new(compiler);
+            if self.no_std { command.arg("-ffreestanding"); }
+            let result = command.args(&["-c", "-o"])
                 .arg(&obj_file)
                 .arg(&c_file)
                 .output();

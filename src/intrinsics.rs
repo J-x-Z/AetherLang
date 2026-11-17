@@ -183,13 +183,13 @@ pub enum VectorKind { New, Splat, Add, Sub, Mul, Div, Sum, Extract, Load, Store,
 pub struct VectorSpec { pub kind: VectorKind, pub element: P, pub lanes: usize }
 impl VectorSpec {
     pub fn vector(&self) -> T { T::Vector(Box::new(T::Primitive(self.element.clone())), self.lanes) }
-    pub fn params(&self) -> Vec<T> {
+    pub fn params(&self, width: crate::types::PointerWidth) -> Vec<T> {
         use VectorKind::*;
         let scalar = T::Primitive(self.element.clone()); let vector = self.vector();
         match self.kind {
             New => vec![scalar; self.lanes], Splat => vec![scalar],
             Load => vec![T::Pointer(Box::new(scalar))], Store => vec![T::Pointer(Box::new(scalar)), vector],
-            Extract => vec![vector, T::Primitive(P::Usize)],
+            Extract => vec![vector, T::Primitive(P::Usize(width))],
             Sum | All | Any => vec![vector], _ => vec![vector.clone(), vector],
         }
     }

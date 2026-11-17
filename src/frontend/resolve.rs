@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use super::ast::*;
 use super::{lexer::Lexer, parser::Parser};
-use crate::utils::{Error, Result};
+use crate::utils::{Error, Result, Span};
 
 #[derive(Clone)]
 pub struct SourceFile {
@@ -27,13 +27,14 @@ pub struct Resolver {
     loading: Vec<PathBuf>,
     items: Vec<Item>,
     next_module: usize,
+    module_owners: HashMap<Span, usize>,
     entrypoint_enabled: bool,
     overlays: HashMap<PathBuf, String>,
 }
 
 impl Resolver {
     pub fn new(search_paths: Vec<PathBuf>) -> Self {
-        Self { sources: vec![], search_paths, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, entrypoint_enabled: true, overlays: HashMap::new() }
+        Self { sources: vec![], search_paths, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, module_owners: HashMap::new(), entrypoint_enabled: true, overlays: HashMap::new() }
     }
 
     pub fn with_overlays(mut self, overlays: HashMap<PathBuf, String>) -> Self {
@@ -65,7 +66,7 @@ impl Resolver {
         });
         // Foreign declarations are compared after semantic alias resolution.
         // Comparing source spellings here rejects equivalent aliases.
-        Ok(Program { items: std::mem::take(&mut self.items), inner_attrs: attrs })
+        Ok(Program { items: std::mem::take(&mut self.items), inner_attrs: attrs, module_owners: std::mem::take(&mut self.module_owners) })
     }
 
     fn parse(&mut self, path: &Path, text: String) -> Result<Program> {
@@ -170,6 +171,11 @@ impl Resolver {
         for mut item in items {
             if matches!(item, Item::Use(_) | Item::Module(_)) { continue; }
             Rewriter { names: &names, modules: modules.keys().cloned().collect(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: root && self.entrypoint_enabled, zero_status_returns: false }.item(&mut item)?;
+            match &item {
+                Item::Function(function) => { self.module_owners.insert(function.span, id); }
+                Item::Impl(block) => { for method in &block.methods { self.module_owners.insert(method.span, id); } }
+                _ => {},
+            }
             self.items.push(item);
         }
         Ok(exports)
@@ -287,7 +293,10 @@ impl Rewriter<'_> {
             Item::Struct(def) => self.bind_generics(&def.generic_params, &def.type_params),
             Item::Enum(def) => self.bind_generics(&def.generic_params, &def.type_params),
             Item::TypeAlias(def) => self.bind_generics(&[], &def.type_params),
-            Item::Trait(def) | Item::Interface(def) => self.bind_generics(&[], &def.type_params),
+            Item::Trait(def) | Item::Interface(def) => {
+                self.bind_generics(&[], &def.type_params);
+                self.type_locals.insert("Self".into());
+            },
             Item::Impl(_) => { self.type_locals.insert("Self".into()); }
             _ => {},
         }

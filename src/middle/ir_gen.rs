@@ -76,6 +76,7 @@ impl IRGenerator {
     }
 
     pub fn with_semantic_facts(mut self, facts: SemanticFacts) -> Self {
+        self.module.pointer_width = facts.pointer_width;
         self.semantic_facts = Some(facts);
         self
     }
@@ -134,7 +135,7 @@ impl IRGenerator {
     }
 
     fn function_has_c_abi(func: &ast::Function, name: &str) -> bool {
-        name == "main" || func.annotations.iter().any(|annotation| annotation.name.name == "no_mangle")
+        name == "main" || func.annotations.iter().any(|annotation| matches!(annotation.name.name.as_str(), "no_mangle" | "interrupt" | "naked"))
     }
 
     /// Unit remains a language value, but a C ABI function has no result slot
@@ -417,8 +418,8 @@ impl IRGenerator {
             match annotation.name.name.as_str() {
                 "no_mangle" => ir_func.c_abi = true,
                 "simd" => ir_func.simd = true,
-                "naked" => ir_func.naked = true,
-                "interrupt" => ir_func.interrupt = true,
+                "naked" => { ir_func.naked = true; ir_func.c_abi = true; },
+                "interrupt" => { ir_func.interrupt = true; ir_func.c_abi = true; },
                 "volatile" => ir_func.volatile = true,
                 _ => {}
             }
@@ -436,7 +437,9 @@ impl IRGenerator {
         let last_value = self.prepare_implicit_return(last_value)?;
         if self.get_current_terminator().is_none() {
             let ty = self.current_fn.as_ref().unwrap().ret_type.clone();
-            self.set_terminator_current(if ty == IRType::Void {
+            self.set_terminator_current(if self.current_fn.as_ref().unwrap().naked {
+                Terminator::Unreachable
+            } else if ty == IRType::Void {
                 Terminator::Return { value: None }
             } else if let Some(value) = last_value {
                 Terminator::Return { value: Some(value) }
@@ -545,7 +548,7 @@ impl IRGenerator {
                 };
                 let query = match query { ast::LayoutQuery::Size => IRLayoutQuery::Size, ast::LayoutQuery::Align => IRLayoutQuery::Align, ast::LayoutQuery::Offset => IRLayoutQuery::Offset };
                 let dest = self.alloc_register();
-                self.emit_current_with_type(Instruction::Layout { dest, query, ty, field }, IRType::U64);
+                self.emit_current_with_type(Instruction::Layout { dest, query, ty, field }, Self::pointer_integer(self.pointer_width(), false));
                 Ok(Value::Register(dest))
             }
             Expr::Literal(lit) => Ok(self.generate_literal(lit)),
@@ -1473,12 +1476,24 @@ impl IRGenerator {
         }
     }
 
+    fn pointer_width(&self) -> crate::types::PointerWidth {
+        self.module.pointer_width
+    }
+
+    fn pointer_integer(width: crate::types::PointerWidth, signed: bool) -> IRType {
+        use crate::types::PointerWidth::*;
+        match (width, signed) {
+            (W32, true) => IRType::I32, (W32, false) => IRType::U32,
+            (W64, true) => IRType::I64, (W64, false) => IRType::U64,
+        }
+    }
+
     fn resolved_type_to_ir(ty: &ResolvedType) -> Result<IRType> {
         use PrimitiveType as P;
         Ok(match ty {
             ResolvedType::Primitive(primitive) => match primitive {
-                P::I8 => IRType::I8, P::I16 => IRType::I16, P::I32 => IRType::I32, P::I64 | P::Isize => IRType::I64,
-                P::U8 => IRType::U8, P::U16 => IRType::U16, P::U32 | P::Char => IRType::U32, P::U64 | P::Usize => IRType::U64,
+                P::I8 => IRType::I8, P::I16 => IRType::I16, P::I32 => IRType::I32, P::I64 => IRType::I64, P::Isize(width) => Self::pointer_integer(*width, true),
+                P::U8 => IRType::U8, P::U16 => IRType::U16, P::U32 | P::Char => IRType::U32, P::U64 => IRType::U64, P::Usize(width) => Self::pointer_integer(*width, false),
                 P::F32 => IRType::F32, P::F64 => IRType::F64, P::Bool => IRType::Bool, P::Unit => IRType::Unit, P::Never => IRType::Void,
             },
             ResolvedType::Pointer(inner) | ResolvedType::Reference { inner, .. } => IRType::Ptr(Box::new(Self::resolved_type_to_ir(inner)?)),
@@ -1501,11 +1516,13 @@ impl IRGenerator {
                     "i8" => IRType::I8,
                     "i16" => IRType::I16,
                     "i32" => IRType::I32,
-                    "i64" | "int" | "isize" => IRType::I64,
+                    "i64" | "int" => IRType::I64,
+                    "isize" => Self::pointer_integer(self.pointer_width(), true),
                     "u8" | "byte" => IRType::U8,
                     "u16" => IRType::U16,
                     "u32" | "char" => IRType::U32,
-                    "u64" | "usize" => IRType::U64,
+                    "u64" => IRType::U64,
+                    "usize" => Self::pointer_integer(self.pointer_width(), false),
                     "f32" => IRType::F32,
                     "f64" | "float" => IRType::F64,
                     "bool" => IRType::Bool,

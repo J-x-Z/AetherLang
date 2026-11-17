@@ -4,7 +4,7 @@ impl IRGenerator {
     pub(super) fn generate_vector_call(&mut self, name: &str, args: &[Expr]) -> Result<Value> {
         let spec = crate::intrinsics::vector(name).unwrap();
         let mut values = vec![];
-        for (arg, param) in args.iter().zip(spec.params()) {
+        for (arg, param) in args.iter().zip(spec.params(self.pointer_width())) {
             let ty = Self::resolved_type_to_ir(&param)?;
             let value = self.generate_expr_expected(arg, Some(&ty))?;
             if self.get_current_terminator().is_some() {

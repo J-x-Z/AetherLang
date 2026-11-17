@@ -108,14 +108,14 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
     let (input, check) = match &cli.command {
         Some(Commands::Build { input }) => (input, false),
         Some(Commands::Check { input }) => (input, true),
-        Some(Commands::Lsp) => return lsp::serve(search_paths(cli)?).map_err(Diagnostic::from),
+        Some(Commands::Lsp) => return lsp::serve(search_paths(cli)?, cli.target.clone()).map_err(Diagnostic::from),
         Some(Commands::Symbols { input }) => (input, true),
         Some(Commands::Version) => { println!("aethc {}", env!("CARGO_PKG_VERSION")); return Ok(()); }
         None => (cli.input.as_ref().ok_or("no input file; use aethc build <FILE> or aethc check <FILE>")?, false),
     };
     let source = fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
     let session = Session::parse(input, source, search_paths(cli)?, Default::default())?;
-    let facts = session.check()?;
+    let facts = session.check(&cli.target)?;
     if matches!(cli.command, Some(Commands::Symbols { .. })) {
         println!("{}", serde_json::to_string(&frontend::symbols::SymbolIndex::new(&session, Some(&facts))).expect("serializable symbols"));
         return Ok(());
@@ -146,18 +146,19 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
     if cli.emit_llvm && matches!(cli.backend, Backend::C) {
         return Err("--emit-llvm requires --backend llvm".into());
     }
+    let target = effective_target(&cli.target)?;
     if cli.emit_c || matches!(cli.backend, Backend::C) {
-        let c = CCodeGen::new(&cli.target).generate_source(&ir).map_err(|e| e.to_string())?;
+        let c = CCodeGen::new(&target.triple).generate_source(&ir).map_err(|e| e.to_string())?;
         if cli.emit_c { write(&output, c.as_bytes())?; }
         else {
             let temp = Temporary::new("c", c.as_bytes())?;
-            native_compile(cli, &temp.path, &output, cli.emit_obj)?;
+            native_compile(cli, &target, &temp.path, &output, cli.emit_obj, ir.no_std, ir.functions.iter().any(|function|function.interrupt))?;
         }
     } else {
         #[cfg(feature = "llvm")]
         {
-            let target = target_triple(&cli.target);
-            let mut codegen = backend::llvm::LLVMCodeGen::new(&target).with_opt_level(cli.opt_level);
+            let triple = target_triple(&target.triple);
+            let mut codegen = backend::llvm::LLVMCodeGen::new(&triple).with_opt_level(cli.opt_level);
             if cli.emit_llvm {
                 let text = codegen.generate_llvm_ir(&ir).map_err(|e| e.to_string())?;
                 write(&output, text.as_bytes())?;
@@ -166,7 +167,7 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
                 if cli.emit_obj { write(&output, &bytes)?; }
                 else {
                     let temp = Temporary::new("o", &bytes)?;
-                    native_compile(cli, &temp.path, &output, false)?;
+                    native_compile(cli, &target, &temp.path, &output, false, ir.no_std, ir.functions.iter().any(|function|function.interrupt))?;
                 }
             }
         }
@@ -202,13 +203,17 @@ fn search_paths(cli: &Cli) -> Result<Vec<PathBuf>, String> {
             return Ok(paths);
         }
     }
-    // Only binaries in their actual Cargo build tree may use developer sources.
-    // A relocated installation must never silently borrow a different checkout.
+    // Only the actual Cargo profile executable may use developer sources.
+    // In particular, copied installations/test prefixes anywhere below target/
+    // must not silently borrow a different checkout's library.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let build_root = option_env!("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| manifest.join("target"));
     let build_root = if build_root.is_absolute() { build_root } else { manifest.join(build_root) };
     if let Ok(build_root) = fs::canonicalize(build_root) {
-        if executable.starts_with(build_root) { paths.push(manifest.join("stdlib")); }
+        let filename = format!("aethc{}", std::env::consts::EXE_SUFFIX);
+        if ["debug", "release"].iter().any(|profile| executable == build_root.join(profile).join(&filename)) {
+            paths.push(manifest.join("stdlib"));
+        }
     }
     Ok(paths)
 }
@@ -257,14 +262,22 @@ impl Temporary {
 }
 impl Drop for Temporary { fn drop(&mut self) { let _ = fs::remove_file(&self.path); } }
 
-fn native_compile(cli: &Cli, input: &Path, output: &Path, object: bool) -> Result<(), String> {
+fn native_compile(cli: &Cli, target: &EffectiveTarget, input: &Path, output: &Path, object: bool, freestanding: bool, interrupt: bool) -> Result<(), String> {
     let staged = OutputFile::new(output)?;
     let compilers = if let Some(cc) = cli.cc.clone().or_else(|| std::env::var_os("CC").map(PathBuf::from)) { vec![cc] }
         else { ["clang", "gcc", "cc"].iter().map(PathBuf::from).collect() };
     for compiler in &compilers {
         let mut command = Command::new(compiler);
         command.arg(format!("-O{}", cli.opt_level));
-        if cli.target != "native" { command.arg(format!("--target={}", cli.target)); }
+        if freestanding { command.arg("-ffreestanding"); }
+        if interrupt { command.arg("-mno-red-zone"); }
+        if target.pass_target { command.arg(format!("--target={}", target.triple)); }
+        if let Some(version) = &target.macos_deployment {
+            command.arg(format!("-mmacosx-version-min={version}"));
+            // A versioned CLI target wins over a conflicting environment value.
+            command.env("MACOSX_DEPLOYMENT_TARGET", version);
+        }
+        if let Some(sdk) = &target.sdk { command.arg("-isysroot").arg(sdk); }
         if object { command.arg("-c"); }
         command.arg(input).arg("-o").arg(&staged.path);
         if !object {
@@ -273,7 +286,12 @@ fn native_compile(cli: &Cli, input: &Path, output: &Path, object: bool) -> Resul
         }
         if let Some(script) = &cli.linker_script { command.arg("-T").arg(script).arg("-nostdlib"); }
         match command.output() {
-            Ok(result) if result.status.success() => return staged.publish(output),
+            Ok(result) if result.status.success() => {
+                // Linkers can succeed while diagnosing incompatible objects.
+                // Quiet suppresses progress, never meaningful tool diagnostics.
+                if !result.stderr.is_empty() { eprint!("{}", String::from_utf8_lossy(&result.stderr)); }
+                return staged.publish(output);
+            },
             Ok(result) => return Err(format!("{} failed ({}):\n{}{}", compiler.display(), result.status,
                 String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -291,5 +309,123 @@ fn target_triple(target: &str) -> String {
         let target = std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned();
         llvm_sys::core::LLVMDisposeMessage(raw);
         target
+    }
+}
+
+/// One macOS deployment choice is shared by code generation and the C driver.
+/// Darwin kernel versions are not macOS deployment versions; never derive one
+/// from LLVM's host triple (which can be newer than the selected SDK).
+struct EffectiveTarget {
+    triple: String,
+    pass_target: bool,
+    macos_deployment: Option<String>,
+    sdk: Option<PathBuf>,
+}
+
+fn deployment_version(value: &str) -> Result<String, String> {
+    let parts = value.split('.').collect::<Vec<_>>();
+    if parts.is_empty() || parts.len() > 3 || parts.iter().any(|part| part.is_empty()
+        || !part.bytes().all(|byte| byte.is_ascii_digit()) || part.parse::<u16>().is_err()) {
+        return Err(format!("invalid macOS deployment version '{value}'; use a numeric version such as 13.0"));
+    }
+    let mut numbers = parts.iter().map(|part| part.parse::<u16>().unwrap()).collect::<Vec<_>>();
+    if numbers[0] < 10 { return Err(format!("invalid macOS deployment version '{value}'")); }
+    while numbers.len() < 2 { numbers.push(0); }
+    Ok(numbers.iter().map(u16::to_string).collect::<Vec<_>>().join("."))
+}
+
+fn macos_target(requested: &str) -> Result<Option<(String, Option<String>)>, String> {
+    if requested == "native" {
+        return Ok(if cfg!(target_os = "macos") {
+            Some((format!("{}-apple-macosx", std::env::consts::ARCH), None))
+        } else { None });
+    }
+    let Some((prefix, system)) = requested.split_once("-apple-") else { return Ok(None); };
+    let version = if let Some(version) = system.strip_prefix("macosx") { version }
+        else if let Some(version) = system.strip_prefix("macos") { version }
+        else if system == "darwin" { "" }
+        else if system.starts_with("darwin") {
+            return Err("a versioned Darwin kernel triple is ambiguous for macOS deployment; use --target <arch>-apple-macosx<version>".into());
+        } else { return Ok(None); };
+    Ok(Some((format!("{prefix}-apple-macosx"), if version.is_empty() { None } else { Some(deployment_version(version)?) })))
+}
+
+/// Resolve standard SDK paths without spawning xcrun for every compilation.
+/// Explicit SDKROOT/DEVELOPER_DIR and xcode-select's on-disk selection win.
+fn macos_sdk() -> Result<Option<PathBuf>, String> {
+    if let Some(root) = std::env::var_os("SDKROOT").filter(|value| !value.is_empty()) {
+        let root = PathBuf::from(root);
+        if !root.is_dir() { return Err(format!("SDKROOT {} is not an SDK directory", root.display())); }
+        return Ok(Some(root));
+    }
+    let developer = std::env::var_os("DEVELOPER_DIR").filter(|value| !value.is_empty()).map(PathBuf::from)
+        .or_else(|| fs::read_link("/var/db/xcode_select_link").ok());
+    let developer = developer.map(|path| {
+        if path.extension().is_some_and(|extension| extension == "app") { path.join("Contents/Developer") } else { path }
+    });
+    let candidates = if let Some(developer) = developer {
+        vec![developer.join("Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"), developer.join("SDKs/MacOSX.sdk")]
+    } else if cfg!(target_os = "macos") {
+        vec![PathBuf::from("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")]
+    } else { vec![] };
+    Ok(candidates.into_iter().find(|path| path.is_dir()))
+}
+
+fn sdk_deployment(sdk: &Path) -> Result<Option<String>, String> {
+    let settings = sdk.join("SDKSettings.json");
+    let text = match fs::read_to_string(&settings) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("reading {}: {error}", settings.display())),
+    };
+    let settings: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("reading {}: {error}", settings.display()))?;
+    if let Some(targets) = settings.get("SupportedTargets") {
+        if targets.get("macosx").is_none() && targets.get("macos").is_none() {
+            return Err(format!("SDK {} does not support a macOS target", sdk.display()));
+        }
+    }
+    let version = settings.pointer("/SupportedTargets/macosx/DefaultDeploymentTarget")
+        .or_else(|| settings.pointer("/SupportedTargets/macos/DefaultDeploymentTarget"))
+        .or_else(|| settings.get("DefaultDeploymentTarget"))
+        .or_else(|| settings.pointer("/DefaultProperties/MACOSX_DEPLOYMENT_TARGET"))
+        .and_then(serde_json::Value::as_str);
+    version.map(deployment_version).transpose()
+}
+
+fn effective_target(requested: &str) -> Result<EffectiveTarget, String> {
+    let Some((prefix, explicit)) = macos_target(requested)? else {
+        return Ok(EffectiveTarget { triple: requested.into(), pass_target: requested != "native", macos_deployment: None, sdk: None });
+    };
+    let sdk = macos_sdk()?;
+    // Validate platform compatibility even when deployment was selected explicitly.
+    let sdk_default = sdk.as_deref().map(sdk_deployment).transpose()?.flatten();
+    let version = if let Some(version) = explicit { version }
+        else if let Some(version) = std::env::var_os("MACOSX_DEPLOYMENT_TARGET").filter(|value| !value.is_empty()) {
+            deployment_version(version.to_str().ok_or("MACOSX_DEPLOYMENT_TARGET must be a numeric UTF-8 version")?)?
+        } else {
+            sdk_default.ok_or("cannot determine macOS deployment target; set MACOSX_DEPLOYMENT_TARGET, use a versioned --target, or select a macOS SDK with SDKROOT")?
+        };
+    if (prefix.starts_with("aarch64-") || prefix.starts_with("arm64-")) && version.split('.').next().unwrap().parse::<u16>().unwrap() < 11 {
+        return Err("macOS arm64 requires deployment target 11.0 or later".into());
+    }
+    Ok(EffectiveTarget { triple: format!("{prefix}{version}"), pass_target: requested != "native", macos_deployment: Some(version), sdk })
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+    #[test]
+    fn macos_deployments_are_distinct_from_darwin_kernel_versions() {
+        assert_eq!(macos_target("arm64-apple-macosx13.2.1").unwrap(), Some(("arm64-apple-macosx".into(), Some("13.2.1".into()))));
+        assert_eq!(macos_target("x86_64-apple-macos12").unwrap(), Some(("x86_64-apple-macosx".into(), Some("12.0".into()))));
+        assert_eq!(macos_target("aarch64-apple-darwin").unwrap(), Some(("aarch64-apple-macosx".into(), None)));
+        assert!(macos_target("aarch64-apple-darwin27.0").is_err());
+        for target in ["aarch64-unknown-linux-gnu", "aarch64-apple-ios18.0", "x86_64-pc-windows-msvc"] {
+            assert!(macos_target(target).unwrap().is_none());
+        }
+        for version in ["", "13..0", "13.0beta", "13.0.0.1", "999999", "-13", "0"] {
+            assert!(deployment_version(version).is_err(), "{version}");
+        }
     }
 }

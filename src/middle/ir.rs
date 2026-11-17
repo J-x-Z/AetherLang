@@ -52,6 +52,7 @@ pub struct IREnum {
 /// IR Module - contains all functions
 #[derive(Debug, Clone)]
 pub struct IRModule {
+    pub pointer_width: crate::types::PointerWidth,
     pub name: String,
     pub functions: Vec<IRFunction>,
     pub structs: Vec<IRStruct>,
@@ -98,6 +99,7 @@ pub struct IRExtern {
 impl IRModule {
     pub fn new(name: &str) -> Self {
         Self {
+            pointer_width: Default::default(),
             name: name.to_string(),
             functions: Vec::new(),
             structs: Vec::new(),

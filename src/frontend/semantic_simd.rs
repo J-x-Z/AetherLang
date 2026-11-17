@@ -12,7 +12,7 @@ impl SemanticAnalyzer {
             };
             self.define_builtin_with_effects(
                 &name,
-                spec.params(),
+                spec.params(self.facts.pointer_width),
                 spec.result(),
                 EffectSet {
                     is_pure: effects.is_empty(),

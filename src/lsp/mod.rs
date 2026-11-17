@@ -4,12 +4,13 @@ use serde_json::{json,Value};
 use crate::frontend::{resolve::Resolver, session::{Diagnostic,Location,Session}, symbols::SymbolIndex};
 
 struct Document { text: String, version: i64 }
-struct Server { indexes: BTreeMap<PathBuf,SymbolIndex>, documents: BTreeMap<PathBuf,Document>, paths: Vec<PathBuf>, published: HashSet<String>, shutdown: bool }
+struct Server { indexes: BTreeMap<PathBuf,SymbolIndex>, target: String, documents: BTreeMap<PathBuf,Document>, paths: Vec<PathBuf>, published: HashSet<String>, shutdown: bool }
 
-pub fn serve(paths: Vec<PathBuf>) -> Result<(),String> {
+pub fn serve(paths: Vec<PathBuf>, target: String) -> Result<(),String> {
+    crate::types::PointerWidth::for_target(&target)?;
     let stdin=io::stdin();let stdout=io::stdout();
     let mut input=stdin.lock();let mut output=stdout.lock();
-    let mut server=Server {indexes:BTreeMap::new(),documents:BTreeMap::new(),paths,published:HashSet::new(),shutdown:false};
+    let mut server=Server {indexes:BTreeMap::new(),target,documents:BTreeMap::new(),paths,published:HashSet::new(),shutdown:false};
     while let Some(message)=read_message(&mut input)? {
         if message.get("method").and_then(Value::as_str)==Some("exit") { return if server.shutdown {Ok(())}else{Err("LSP exited without shutdown".into())}; }
         for reply in server.handle(message) {write_message(&mut output,&reply)?;}
@@ -71,7 +72,7 @@ impl Server {
         for path in self.documents.keys(){
             let uri=uri_from_path(&path.to_string_lossy());diagnostics.entry(uri.clone()).or_default();
             let result = self.session(path).and_then(|session| {
-                let checked = session.check();
+                let checked = session.check(&self.target);
                 self.indexes.insert(path.clone(), SymbolIndex::new(&session, checked.as_ref().ok()));
                 checked.map(|_| ())
             });
@@ -119,7 +120,7 @@ impl Server {
                 let disk_index;
                 let index = if let Some(open) = self.indexes.get(&path) { open }
                     else if let Ok(session) = self.session(&path) {
-                        disk_index = SymbolIndex::new(&session, session.check().as_ref().ok());
+                        disk_index = SymbolIndex::new(&session, session.check(&self.target).as_ref().ok());
                         &disk_index
                     } else { return reply(Value::Null); };
                 let file=path.to_string_lossy();

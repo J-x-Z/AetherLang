@@ -1,0 +1,19 @@
+#![no_std]
+#![no_main]
+@repr(C)
+struct Frame {ip:u64,cs:u64,flags:u64,sp:u64,ss:u64}
+static mut TICKS:u64=0;
+@interrupt
+pub fn tick(frame:*Frame) {
+    unsafe {
+        __atomic_fetch_add_u64(&mut TICKS as *u64,1);
+        frame.ip=frame.ip+1;
+    }
+}
+@interrupt
+pub fn exception(frame:*Frame,error:u64) {
+    unsafe {
+        if error==0 {frame.flags=frame.flags|1;}
+        else {frame.ip=frame.ip+error;}
+    }
+}

@@ -43,6 +43,9 @@ pub struct Program {
     pub items: Vec<Item>,
     /// Inner attributes: #![no_std], #![no_main], etc.
     pub inner_attrs: Vec<Annotation>,
+    /// Lexical module identity survives flattening and generic specialization.
+    /// Parsed, unresolved programs leave this map empty (one module).
+    pub module_owners: std::collections::HashMap<Span, usize>,
 }
 
 /// Top-level items

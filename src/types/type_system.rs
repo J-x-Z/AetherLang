@@ -1,11 +1,13 @@
 //! Type System for AetherLang
 #![allow(dead_code)]
 
+use super::PointerWidth;
+
 /// Primitive types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PrimitiveType {
-    I8, I16, I32, I64, Isize,
-    U8, U16, U32, U64, Usize,
+    I8, I16, I32, I64, Isize(PointerWidth),
+    U8, U16, U32, U64, Usize(PointerWidth),
     F32, F64,
     Bool,
     Char,
@@ -20,7 +22,8 @@ impl PrimitiveType {
             Self::I8 | Self::U8 | Self::Bool => 1,
             Self::I16 | Self::U16 => 2,
             Self::I32 | Self::U32 | Self::F32 | Self::Char => 4,
-            Self::I64 | Self::U64 | Self::F64 | Self::Isize | Self::Usize => 8,
+            Self::I64 | Self::U64 | Self::F64 => 8,
+            Self::Isize(width) | Self::Usize(width) => width.bytes(),
             Self::Unit | Self::Never => 0,
         }
     }
@@ -32,14 +35,14 @@ impl PrimitiveType {
     
     /// Check if this is a signed integer type
     pub fn is_signed(&self) -> bool {
-        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize)
+        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize(_))
     }
     
     /// Check if this is an integer type
     pub fn is_integer(&self) -> bool {
         matches!(self, 
-            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize |
-            Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::Usize
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize(_) |
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::Usize(_)
         )
     }
     

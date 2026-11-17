@@ -1,0 +1,15 @@
+#![no_std]
+#![no_main]
+type Count = usize;
+@repr(C) struct Slot { ptr: *u8, count: Count }
+static WORD: usize = size_of(usize);
+
+@no_mangle pub fn unsigned_width(n: Count) -> usize { return n; }
+@no_mangle pub fn signed_width(n: isize) -> isize { return n; }
+@no_mangle pub fn layout_result() -> i32 {
+    let words: usize = size_of(*u8);
+    if WORD != words || align_of(isize) != align_of(*u8) { return -1; }
+    if offset_of(Slot, count) != words || size_of(Slot) != words * 2 { return -2; }
+    if signed_width(-7) != -7 || unsigned_width(42) != 42 { return -3; }
+    return WORD as i32;
+}

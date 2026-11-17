@@ -1,0 +1,16 @@
+use contracts::{Value, Construct};
+pub struct Counter { value: i32 }
+impl Construct for Counter {
+    pub fn make(input: i32) -> Self { return Counter { value: input }; }
+}
+impl Value for Counter {
+    pub fn read(self: &Self) -> i32 { return self.value; }
+    pub fn set(self: &mut Self, input: i32) { self.value = input; }
+}
+impl Counter {
+    fn secret(self: &Self) -> i32 { return self.value + 1; }
+}
+pub fn local_private(value: &Counter) -> i32 { return value.secret(); }
+pub fn generic_private<T>(value: &Counter, result: T) -> T { value.secret(); return result; }
+#[no_mangle]
+pub fn public_export() -> i32 { let value: Counter = Counter::make(30); return value.secret(); }

@@ -1328,7 +1328,7 @@ impl<'a> Flow<'a> {
     ) -> Result<Option<Value>> {
         let value = match expression {
             Expr::Literal(literal) => Value::empty(self.analyzer.literal_type(literal)),
-            Expr::Layout { .. } => Value::empty(ResolvedType::Primitive(PrimitiveType::Usize)),
+            Expr::Layout { .. } => Value::empty(ResolvedType::Primitive(PrimitiveType::Usize(self.analyzer.facts.pointer_width))),
             Expr::Ident(name) if self.binding(&name.name).is_none() => Value::empty(
                 self.analyzer
                     .symbols
