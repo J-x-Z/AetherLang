@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -14,7 +15,11 @@ import tempfile
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=Path, required=True, help='new local release directory')
 p.add_argument('--work-dir', type=Path, required=True, help='persistent bootstrap evidence')
+p.add_argument('--bundle-linux-llvm', action='store_true',
+               help='include the Linux compiler LLVM shared library and verify its relative RUNPATH')
 args = p.parse_args()
+if args.bundle_linux_llvm and sys.platform != 'linux':
+    p.error('--bundle-linux-llvm requires a native Linux host')
 root = Path(__file__).resolve().parents[1]
 work, out = args.work_dir.resolve(), args.output.resolve()
 out.parent.mkdir(parents=True, exist_ok=True)
@@ -29,7 +34,28 @@ def output(*args):
     return subprocess.check_output(list(map(str, args)), cwd=root, text=True).strip()
 
 def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    sha = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            sha.update(chunk)
+    return sha.hexdigest()
+
+def bundle_linux_llvm(seed):
+    # Use the actual SONAME selected by the linker, including distro suffixes.
+    deps = output('ldd', seed)
+    matches = re.findall(r'^\s*(libLLVM[^/\s]*\.so[^/\s]*) => (/.+?) \(0x[0-9a-f]+\)$', deps, re.M)
+    if len(matches) != 1:
+        sys.exit(f'expected one resolved LLVM shared library for {seed}:\n{deps}')
+    name, source = matches[0]
+    library = seed.parent / 'lib' / name
+    library.parent.mkdir()
+    shutil.copy2(source, library)
+    clean_env = {k: v for k, v in os.environ.items() if k != 'LD_LIBRARY_PATH'}
+    relocated = subprocess.check_output(['ldd', seed], env=clean_env, text=True)
+    if f'{name} => {library} (' not in relocated or 'not found' in relocated:
+        sys.exit(f'packaged compiler dependencies could not be resolved locally:\n{relocated}')
+    command(seed, '--version', env=clean_env)
+    return relocated.replace(str(seed.parent), '$PACKAGE').splitlines()
 
 def source_commit():
     changes = output('git', 'status', '--porcelain', '--', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
@@ -52,10 +78,21 @@ with tempfile.TemporaryDirectory(prefix='.aether-package-', dir=out.parent) as s
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root/path, dest)
     checks, generated = {}, []
+    relocated_deps = None
     for backend in ('c', 'llvm'):
-        command('sh', 'scripts/build.sh', backend, env=env)
+        build_env = env
+        if backend == 'llvm' and args.bundle_linux_llvm:
+            build_env = dict(env)
+            flag = '-Clink-arg=-Wl,-rpath,$ORIGIN/lib'
+            if 'CARGO_ENCODED_RUSTFLAGS' in build_env:
+                build_env['CARGO_ENCODED_RUSTFLAGS'] = '\x1f'.join(filter(None, [build_env['CARGO_ENCODED_RUSTFLAGS'], flag]))
+            else:
+                build_env['RUSTFLAGS'] = ' '.join(filter(None, [build_env.get('RUSTFLAGS'), flag]))
+        command('sh', 'scripts/build.sh', backend, env=build_env)
         seed = stage / ('aethc' if backend == 'llvm' else 'aethc-c')
         shutil.copy2(target/'release/aethc', seed)
+        if backend == 'llvm' and args.bundle_linux_llvm:
+            relocated_deps = bundle_linux_llvm(seed)
         jxz = stage / ('jxz' if backend == 'llvm' else 'jxz-c')
         command('sh', 'jxz/build.sh', jxz, env={**env, 'AETHC': str(seed), 'AETHER_BACKEND': backend})
         command(jxz, '--version')
@@ -73,7 +110,7 @@ with tempfile.TemporaryDirectory(prefix='.aether-package-', dir=out.parent) as s
     files = [dict(name=str(f.relative_to(stage)), bytes=f.stat().st_size, sha256=digest(f))
              for f in sorted(stage.rglob('*')) if f.is_file() and f.parent != stage/'stdlib']
     deps = ['otool', '-L'] if sys.platform == 'darwin' else ['ldd']
-    deps = output(*deps, stage/'aethc').splitlines()
+    deps = relocated_deps or output(*deps, stage/'aethc').splitlines()
     manifest = dict(release_id=out.name, source_commit=commit, platform=dict(system=platform.system(), machine=platform.machine()),
                     compiler_features=['llvm', 'c'], artifacts=files, stdlib=dict(files=libs),
                     bootstrap=checks, core_generated_c_sha256=generated[0], rust=output('rustc', '--version'),
