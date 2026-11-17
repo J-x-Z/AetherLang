@@ -91,6 +91,13 @@ if shutil.which('node') and shutil.which('wasm-ld') and shutil.which('clang'):
              '--cc','clang','--emit-obj','-O2','-o',abi_obj])
         run(['wasm-ld','--no-entry','--export=verify',abi_obj,'-o',abi_wasm])
         run(['node','-e',"const fs=require('fs'); const m=new WebAssembly.Module(fs.readFileSync(process.argv[1])); process.exit(new WebAssembly.Instance(m).exports.verify());",abi_wasm])
+        const_source = Path(__file__).resolve().parent / 'regressions/layout/const_width.aeth'
+        const_obj = work / f'const-layout-{backend}.o'
+        const_wasm = const_obj.with_suffix('.wasm')
+        run([compiler, const_source, '--target', 'wasm32-unknown-unknown', '--backend', backend,
+             '--cc', 'clang', '--emit-obj', '-O2', '-o', const_obj])
+        run(['wasm-ld', '--no-entry', '--export=verify_const_layout', const_obj, '-o', const_wasm])
+        run(['node', '-e', "const fs=require('fs'); process.exit(new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[1]))).exports.verify_const_layout());", const_wasm])
         obj = work / f'layout-{backend}.o'
         wasm = obj.with_suffix('.wasm')
         run([compiler, source, '--target', 'wasm32-unknown-unknown', '--backend', backend,

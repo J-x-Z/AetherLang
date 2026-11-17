@@ -117,7 +117,7 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
         None => (cli.input.as_ref().ok_or("no input file; use aethc build <FILE> or aethc check <FILE>")?, false),
     };
     let source = fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
-    let session = Session::parse(input, source, module_search(cli)?, Default::default())?;
+    let session = Session::parse_for_target(input, source, module_search(cli)?, Default::default(), &cli.target)?;
     let facts = session.check(&cli.target)?;
     if matches!(cli.command, Some(Commands::Symbols { .. })) {
         println!("{}", serde_json::to_string(&frontend::symbols::SymbolIndex::new(&session, Some(&facts))).expect("serializable symbols"));

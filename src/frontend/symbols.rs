@@ -50,6 +50,7 @@ impl Builder<'_> {
         match ty {
             Type::Named(name, _) => self.display_name(name), Type::Pointer(ty, _) => format!("*{}", self.type_name(ty)),
             Type::Ref { mutable, inner, .. } => format!("&{}{}", if *mutable { "mut " } else { "" }, self.type_name(inner)),
+            Type::ArrayExpr {elem,..} => format!("[{}; const]", self.type_name(elem)),
             Type::Array { elem, size, .. } => format!("[{}; {}]", self.type_name(elem), size),
             Type::Slice(ty, _) => format!("[{}]", self.type_name(ty)),
             Type::Tuple(types, _) => format!("({})", types.iter().map(|ty| self.type_name(ty)).collect::<Vec<_>>().join(", ")),

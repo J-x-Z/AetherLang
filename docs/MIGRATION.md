@@ -201,3 +201,58 @@ storage, C ABI signatures, pattern matches, and contract snapshots are rejected
 with `E2405` until their move and cleanup rules are implemented. References to
 owners may be borrowed in ordinary language functions. The old `shared T`
 placeholder is now rejected rather than being treated as an ordinary copy.
+
+## Const generic arrays and records (2026-11-18)
+
+Core now accepts integer/bool const parameters in functions, structs and enums:
+
+```aether
+struct Buffer<T, const N: usize> { values: [T; N] }
+fn count<T, const N: usize>(values: [T; N]) -> usize { N }
+const WIDTH: usize = 3;
+fn main() {
+    let buffer: Buffer<i64, WIDTH> = Buffer { values: [2, 4, 6] };
+    let count: usize = count(buffer.values);
+}
+```
+
+Arguments are typed constants. Use braces for expressions, such as
+`Buffer<i64, {1 + 2}>`; identical evaluated arguments reuse one nominal instance.
+Different const arguments remain different types, even when their fields happen
+to have identical layouts. Array lengths must be nonnegative and representable
+by the compilation target's `usize`. Const arithmetic uses the existing checked
+constant rules: overflow and division by zero are diagnostics. Explicit casts
+retain their normal conversion semantics. Ordinary runtime integer arithmetic
+continues to wrap.
+
+Function arguments and annotated result types infer parameters from direct
+array dimensions and instantiated record/enum types. A dimension such as
+`N + 1` is evaluated after another position supplies `N`; the compiler does not
+solve arbitrary arithmetic equations. Function calls currently use inference,
+not explicit generic call arguments. Generic type aliases remain type-parameter
+aliases, and can refer to concrete const-generic layouts. Const parameters may
+not be shadowed by parameters, local variables or pattern bindings. Templates
+are specialized on demand; unused bodies are not a proof of correctness for all
+possible instantiations.
+
+Script uses the same Core specializer:
+
+```python
+def copy[const N: int](values: Array[int, N]) -> Array[int, N]:
+    return values
+
+def main():
+    original = [2, 4, 6]
+    copied = copy(original)
+    copied[0] = 10
+    return original[0] - 2
+```
+
+Script `Array[Element, Length]` and array literals are fixed-size values. Copying,
+passing and returning them copies their elements; indexing and element assignment
+lower to ordinary Core array operations. Nested fixed arrays are supported.
+Lengths in Script hints are integer literals or declared const parameters;
+empty literals without an element type and dynamic-list operations remain
+unsupported. Script `int` is `i64`, including an `int` const parameter; use
+`usize` explicitly when target-width arithmetic is desired. Captured closures,
+dynamic trait dispatch and async are separate T25 tasks, not part of this change.

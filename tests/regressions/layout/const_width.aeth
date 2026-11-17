@@ -1,0 +1,15 @@
+#![no_std]
+#![no_main]
+struct ConstBlock<const N:usize>{data:[i32;N]}
+fn total<const N:usize>(data:[i32;N])->i32{
+    let mut sum:i32=0;
+    let mut index:usize=0;
+    while index<N{sum=sum+data[index];index=index+1;}
+    sum
+}
+#[no_mangle]
+fn verify_const_layout()->i32{
+    let block:ConstBlock<3>=ConstBlock{data:[2,4,6]};
+    if size_of(ConstBlock<3>)!=12{return 1;}
+    total(block.data)-12
+}

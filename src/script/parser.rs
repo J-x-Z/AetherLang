@@ -149,6 +149,22 @@ impl Parser {
             _ => return Err("Expected function name".to_string()),
         };
         
+        let mut const_params = Vec::new();
+        if self.match_kind(TokenKind::LBracket) {
+            loop {
+                let keyword = self.advance().clone();
+                if !matches!(keyword.kind, TokenKind::Identifier(ref name) if name == "const") {
+                    return Err("Script generic parameters use 'const N: int'".into());
+                }
+                let token = self.advance().clone();
+                let TokenKind::Identifier(name) = token.kind else { return Err("Expected const parameter name".into()); };
+                self.consume(TokenKind::Colon, "Expected ':' in const parameter")?;
+                let type_hint = Some(self.parse_type_hint()?);
+                const_params.push(Param {name,type_hint,span:token.span});
+                if !self.match_kind(TokenKind::Comma) { break; }
+            }
+            self.consume(TokenKind::RBracket, "Expected ']' after const parameters")?;
+        }
         self.consume(TokenKind::LParen, "Expected '('")?;
         let params = self.parse_params()?;
         self.consume(TokenKind::RParen, "Expected ')'")?;
@@ -168,6 +184,7 @@ impl Parser {
         Ok(Stmt::FunctionDef(FunctionDef {
             name,
             params,
+            const_params,
             return_type,
             body,
             is_comptime,
@@ -215,9 +232,10 @@ impl Parser {
 
     fn parse_type_hint_inner(&mut self) -> Result<TypeHint, String> {
         let t = self.peek().clone();
-        let name = match t.kind {
-            TokenKind::Identifier(s) => { self.advance(); s },
-            _ => return Err("Expected type name".to_string()),
+        let (name,const_value) = match t.kind {
+            TokenKind::Identifier(s) => { self.advance(); (s,None) },
+            TokenKind::Integer(value) => { self.advance(); (String::new(),Some(value)) },
+            _ => return Err("Expected type name or array dimension".to_string()),
         };
         
         let mut generics = Vec::new();
@@ -231,7 +249,7 @@ impl Parser {
             self.consume(TokenKind::RBracket, "Expected ']'")?;
         }
         
-        Ok(TypeHint { name, generics, span: t.span })
+        Ok(TypeHint { name, generics, const_value, span: t.span })
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
@@ -447,6 +465,12 @@ impl Parser {
                 let mut span = expr.span_owned();
                 span.end = self.tokens[self.pos - 1].span.end;
                 expr = Expr::Call { func: Box::new(expr), args, span };
+            } else if self.match_kind(TokenKind::LBracket) {
+                let index = self.parse_expr()?;
+                self.consume(TokenKind::RBracket, "Expected ']' after array index")?;
+                let mut span = expr.span_owned();
+                span.end = self.tokens[self.pos - 1].span.end;
+                expr = Expr::Index {target:Box::new(expr),index:Box::new(index),span};
             } else if self.match_kind(TokenKind::Dot) {
                 let name = match self.peek().kind.clone() {
                     TokenKind::Identifier(s) => { self.advance(); s },
@@ -494,6 +518,17 @@ impl Parser {
                 self.advance();
                 Ok(Expr::String { value: s, span: t.span })
             }
+            TokenKind::LBracket => {
+                self.advance();
+                let mut elements = Vec::new();
+                while self.peek().kind != TokenKind::RBracket {
+                    elements.push(self.parse_expr()?);
+                    if !self.match_kind(TokenKind::Comma) { break; }
+                }
+                self.consume(TokenKind::RBracket, "Expected ']' after fixed array")?;
+                let mut span = t.span; span.end = self.tokens[self.pos - 1].span.end;
+                Ok(Expr::List {elements,span})
+            }
             TokenKind::LParen => {
                 self.advance();
                 let expr = self.parse_expr()?;
@@ -516,7 +551,7 @@ impl Expr {
             Expr::Binary { span, .. } => *span,
             Expr::Call { span, .. } => *span,
             Expr::FieldAccess { span, .. } => *span,
-            Expr::List { span, .. } => *span,
+            Expr::List { span, .. } | Expr::Index {span,..} => *span,
         }
     }
 }

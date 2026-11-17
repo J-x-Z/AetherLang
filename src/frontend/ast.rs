@@ -81,6 +81,7 @@ pub enum Item {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: Ident,
+    pub generic_params: Vec<GenericParam>,
     pub params: Vec<Param>,
     pub ret_type: Option<Type>,
     pub body: Block,
@@ -796,6 +797,8 @@ pub enum Type {
         size: usize,
         span: Span,
     },
+    /// Symbolic length, resolved by specialization before semantic/IR lowering.
+    ArrayExpr { elem: Box<Type>, size: Box<Expr>, span: Span },
     /// Slice type ([T])
     Slice(Box<Type>, Span),
     /// Tuple type ((T1, T2, ...))
@@ -830,7 +833,7 @@ impl Type {
             Type::GenericWithArgs { span, .. } => *span,
             Type::Pointer(_, s) => *s,
             Type::Ref { span, .. } => *span,
-            Type::Array { span, .. } => *span,
+            Type::Array { span, .. } | Type::ArrayExpr { span, .. } => *span,
             Type::Slice(_, s) => *s,
             Type::Tuple(_, s) => *s,
             Type::Function { span, .. } => *span,

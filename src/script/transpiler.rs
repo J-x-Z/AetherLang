@@ -8,6 +8,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use super::ast::*;
 
 type Result<T> = std::result::Result<T, String>;
+#[path = "transpiler_types.rs"]
+mod types;
+use types::{ScriptType, Dimension};
 
 pub struct Transpiler {
     output: String,
@@ -15,21 +18,23 @@ pub struct Transpiler {
     source_line: usize,
     indent: usize,
     source_file: Option<String>,
-    functions: HashMap<String, String>,
-    locals: BTreeMap<String, String>,
+    functions: HashMap<String, ScriptType>,
+    locals: BTreeMap<String, ScriptType>,
     assigned: HashSet<String>,
-    return_type: String,
+    return_type: ScriptType,
     is_main: bool,
     loop_depth: usize,
     temporary: usize,
     reserved_names: HashSet<String>,
+    definitions: HashMap<String, FunctionDef>,
+    const_parameters: HashMap<String, ScriptType>,
 }
 
 impl Transpiler {
     pub fn new() -> Self {
         Self { output: String::new(), source_lines: Vec::new(), source_line: 1, indent: 0, source_file: None,
             functions: HashMap::new(), locals: BTreeMap::new(), assigned: HashSet::new(),
-            return_type: "void".into(), is_main: false, loop_depth: 0, temporary: 0, reserved_names: HashSet::new() }
+            return_type: "void".into(), is_main: false, loop_depth: 0, temporary: 0, reserved_names: HashSet::new(), definitions: HashMap::new(), const_parameters: HashMap::new() }
     }
 
     pub fn with_source_file(mut self, path: &str) -> Self {
@@ -43,6 +48,7 @@ impl Transpiler {
         self.source_line = 1;
         self.indent = 0;
         self.functions.clear();
+        self.definitions.clear();
         self.temporary = 0;
         self.reserved_names.clear();
         self.reserve_source_names(module);
@@ -50,6 +56,8 @@ impl Transpiler {
             let Stmt::FunctionDef(function) = statement else {
                 return Err("Script top-level statements must be function definitions".into());
             };
+            Self::validate_signature(function)?;
+            self.definitions.insert(function.name.clone(),function.clone());
             let ret = if let Some(hint) = &function.return_type { Self::map_type(hint)? }
                 else if function.name == "main" { "i32".into() } else { "void".into() };
             if self.functions.insert(function.name.clone(), ret).is_some() {
@@ -80,7 +88,7 @@ impl Transpiler {
             match statement {
                 Stmt::FunctionDef(function) => {
                     self.reserved_names.insert(function.name.clone());
-                    for parameter in &function.params { self.reserved_names.insert(parameter.name.clone()); }
+                    for parameter in function.params.iter().chain(&function.const_params) { self.reserved_names.insert(parameter.name.clone()); }
                     statements.extend(&function.body);
                 }
                 Stmt::Assign(assignment) => { expressions.push(&assignment.target); expressions.push(&assignment.value); }
@@ -106,6 +114,7 @@ impl Transpiler {
                 Expr::Call { func, args, .. } => { expressions.push(func); expressions.extend(args); }
                 Expr::FieldAccess { target, field, .. } => { expressions.push(target); self.reserved_names.insert(field.clone()); }
                 Expr::List { elements, .. } => expressions.extend(elements),
+                Expr::Index {target,index,..} => {expressions.push(target);expressions.push(index);},
                 Expr::Integer { .. } | Expr::Boolean { .. } | Expr::Float { .. } | Expr::String { .. } => {},
             }
         }
@@ -124,6 +133,18 @@ impl Transpiler {
         self.source_line = function.span.line;
         self.locals.clear();
         self.assigned.clear();
+        self.const_parameters.clear();
+        let mut generic_parameters = Vec::new();
+        for parameter in &function.const_params {
+            let ty = Self::map_type(parameter.type_hint.as_ref().ok_or("const parameter needs an integer or bool type")?)?;
+            if !matches!(ty.as_str(),"i8"|"u8"|"i16"|"u16"|"i32"|"u32"|"i64"|"u64"|"isize"|"usize"|"bool") {
+                return Err("const parameters require integer or bool types".into());
+            }
+            if self.const_parameters.insert(parameter.name.clone(),ty.clone()).is_some() {return Err(format!("duplicate const parameter '{}'",parameter.name));}
+            self.assigned.insert(parameter.name.clone());
+            generic_parameters.push(format!("const {}: {}",parameter.name,ty));
+        }
+        if function.name == "main" && !generic_parameters.is_empty() { return Err("main cannot have const parameters".into()); }
         self.loop_depth = 0;
         self.is_main = function.name == "main";
         self.return_type = self.functions[&function.name].clone();
@@ -132,7 +153,7 @@ impl Transpiler {
         for param in &function.params {
             let hint = param.type_hint.as_ref().ok_or_else(|| format!("Script parameter '{}' needs a type annotation", param.name))?;
             let ty = Self::map_type(hint)?;
-            if self.locals.insert(param.name.clone(), ty.clone()).is_some() {
+            if self.const_parameters.contains_key(&param.name) || self.locals.insert(param.name.clone(), ty.clone()).is_some() {
                 return Err(format!("duplicate parameter '{}'", param.name));
             }
             self.assigned.insert(param.name.clone());
@@ -150,7 +171,8 @@ impl Transpiler {
         let body_lines = std::mem::replace(&mut self.source_lines, outer_lines);
         self.source_line = function.span.line;
         self.indent = 0;
-        self.line(&format!("fn {}({}) -> {} {{", function.name, parameters.join(", "), self.return_type));
+        let generics = if generic_parameters.is_empty() {String::new()} else {format!("<{}>",generic_parameters.join(", "))};
+        self.line(&format!("fn {}{}({}) -> {} {{", function.name, generics, parameters.join(", "), self.return_type));
         self.indent = 1;
         for (name, ty) in self.locals.clone() { self.line(&format!("let mut {}: {};", name, ty)); }
         self.output.push_str(&body);
@@ -189,9 +211,16 @@ impl Transpiler {
     fn statement_inner(&mut self, statement: &Stmt) -> Result<()> {
         match statement {
             Stmt::Assign(assignment) => {
+                if matches!(&assignment.target, Expr::Index {..}) {
+                    let target = self.expression(&assignment.target)?;
+                    let value = self.expression(&assignment.value)?;
+                    self.line(&format!("{} = {};", target, value));
+                    return Ok(());
+                }
                 let Expr::Identifier { name, .. } = &assignment.target else {
                     return Err("Script assignment currently requires a local variable".into());
                 };
+                if self.const_parameters.contains_key(name) {return Err(format!("cannot assign to const parameter '{}'",name));}
                 let value = self.expression(&assignment.value)?;
                 let ty = self.infer_type(&assignment.value)?;
                 if ty == "void" { return Err(format!("cannot assign a void result to '{}'", name)); }
@@ -238,6 +267,7 @@ impl Transpiler {
                 self.assigned = before;
             }
             Stmt::For(loop_) => {
+                if self.const_parameters.contains_key(&loop_.var) {return Err(format!("cannot assign to const parameter '{}'",loop_.var));}
                 let Expr::Call { func, args, .. } = &loop_.iterable else { return Err("Script for requires range(stop) or range(start, stop)".into()); };
                 if !matches!(func.as_ref(), Expr::Identifier { name, .. } if name == "range") || !(1..=2).contains(&args.len()) {
                     return Err("Script for requires range(stop) or range(start, stop)".into());
@@ -266,21 +296,31 @@ impl Transpiler {
         Ok(())
     }
 
-    fn infer_type(&self, expr: &Expr) -> Result<String> {
+    fn infer_type(&self, expr: &Expr) -> Result<ScriptType> {
         Ok(match expr {
             Expr::Integer { .. } => "i64".into(), Expr::Float { .. } => "f64".into(),
             Expr::Boolean { .. } => "bool".into(), Expr::String { .. } => "*u8".into(),
-            Expr::Identifier { name, .. } => self.locals.get(name).cloned().ok_or_else(|| format!("unknown Script variable '{}'", name))?,
+            Expr::Identifier { name, .. } => self.locals.get(name).or_else(||self.const_parameters.get(name)).cloned().ok_or_else(|| format!("unknown Script variable '{}'", name))?,
             Expr::Unary { op: UnaryOp::Not, .. } => "bool".into(),
             Expr::Unary { expr, .. } => self.infer_type(expr)?,
             Expr::Binary { op: BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::And | BinOp::Or, .. } => "bool".into(),
             Expr::Binary { left, .. } => self.infer_type(left)?,
-            Expr::Call { func, .. } => {
+            Expr::Call { func, args, .. } => {
                 let Expr::Identifier { name, .. } = func.as_ref() else { return Err("Script calls require a named function".into()); };
                 if name == "print" { "i32".into() }
-                else { self.functions.get(name).cloned().ok_or_else(|| format!("unknown Script function '{}'", name))? }
+                else { self.call_result_type(name,args)? }
             }
-            Expr::List { .. } | Expr::FieldAccess { .. } => return Err("Script lists and object fields are not implemented".into()),
+            Expr::List {elements,..} => {
+                let first = elements.first().ok_or("empty Script arrays need an explicit element type; use a typed Core constructor")?;
+                let ty = self.infer_type(first)?;
+                for element in &elements[1..] {if self.infer_type(element)? != ty {return Err("fixed array elements must have one type".into());}}
+                ScriptType::Array(Box::new(ty),Dimension::Value(elements.len() as u64))
+            }
+            Expr::Index {target,..} => match self.infer_type(target)? {
+                ScriptType::Array(element,_) => *element,
+                _ => return Err("Script indexing requires a fixed array".into()),
+            },
+            Expr::FieldAccess { .. } => return Err("Script object fields are not implemented".into()),
         })
     }
 
@@ -313,14 +353,17 @@ impl Transpiler {
                         "*u8" => format!("puts({})", values[0]),
                         "f32" | "f64" => format!("printf(\"%g\\n\", ({}) as f64)", values[0]),
                         "bool" => return Err("Script print currently accepts strings, integers, and floats".into()),
-                        _ => format!("printf(\"%lld\\n\", ({}) as i64)", values[0]),
+                        "i8"|"u8"|"i16"|"u16"|"i32"|"u32"|"i64"|"u64"|"isize"|"usize" => format!("printf(\"%lld\\n\", ({}) as i64)", values[0]),
+                        _ => return Err("Script print requires a scalar value".into()),
                     }
                 } else {
                     if !self.functions.contains_key(name) { return Err(format!("unknown Script function '{}'", name)); }
                     format!("{}({})", name, values.join(", "))
                 }
             }
-            Expr::List { .. } | Expr::FieldAccess { .. } => return Err("Script lists and object fields are not implemented".into()),
+            Expr::List {elements,..} => format!("[{}]",elements.iter().map(|e|self.expression(e)).collect::<Result<Vec<_>>>()?.join(", ")),
+            Expr::Index {target,index,..} => format!("({})[{}]",self.expression(target)?,self.expression(index)?),
+            Expr::FieldAccess { .. } => return Err("Script object fields are not implemented".into()),
         })
     }
 
@@ -331,11 +374,6 @@ impl Transpiler {
                 '\r' => escaped.push_str("\\r"), '\t' => escaped.push_str("\\t"), '\0' => escaped.push_str("\\0"), _ => escaped.push(c) }
         }
         escaped
-    }
-
-    fn map_type(hint: &TypeHint) -> Result<String> {
-        if !hint.generics.is_empty() { return Err("generic Script type hints are not implemented".into()); }
-        Ok(match hint.name.as_str() { "int" => "i64", "float" => "f64", "str" => "*u8", "None" => "void", other => other }.into())
     }
 
     fn line(&mut self, text: &str) {

@@ -425,7 +425,7 @@ impl SemanticAnalyzer {
                 if behind_pointer { Self::type_names(inner, true, names); }
             }
             Type::Volatile(inner, _) => Self::type_names(inner, true, names),
-            Type::Array { elem, .. } | Type::Owned { inner: elem, .. } => Self::type_names(elem, behind_pointer, names),
+            Type::Array { elem, .. } | Type::ArrayExpr {elem,..} | Type::Owned { inner: elem, .. } => Self::type_names(elem, behind_pointer, names),
             Type::Tuple(elements, _) => for elem in elements { Self::type_names(elem, behind_pointer, names); },
             Type::Generic(name, args, _) => {
                 names.push(name.clone());
@@ -1967,6 +1967,7 @@ impl SemanticAnalyzer {
                     size: *size,
                 })
             }
+            Type::ArrayExpr {span,..} => Err(Error::semantic_expected("E2500","a concrete array length after specialization",*span)),
             Type::Slice(elem, _) => {
                 Ok(ResolvedType::Slice(Box::new(self.resolve_type(elem)?)))
             }

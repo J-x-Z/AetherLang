@@ -7,10 +7,17 @@ use crate::frontend::ast::*;
 use crate::utils::{Error, Result, Span};
 use std::collections::{HashMap, HashSet};
 
-type Bindings = HashMap<String, Type>;
+#[path = "specialize_constants.rs"]
+mod constants;
+use constants::*;
+use crate::types::PointerWidth;
 
 pub fn specialize(program: Program) -> Result<Program> {
-    Specializer::new(&program)?.run(program)
+    specialize_for_width(program, PointerWidth::default())
+}
+
+pub fn specialize_for_width(program: Program, width: PointerWidth) -> Result<Program> {
+    Specializer::new(&program, width)?.run(program)
 }
 
 #[derive(Clone)]
@@ -25,7 +32,7 @@ struct Specializer {
     functions: HashMap<String, Function>,
     aliases: HashMap<String, TypeAliasDef>,
     signatures: HashMap<String, Signature>,
-    origins: HashMap<String, (String, Vec<Type>)>,
+    origins: HashMap<String, (String, Vec<InstanceArg>)>,
     instances: HashMap<String, String>,
     function_bindings: HashMap<String, Bindings>,
     names: HashSet<String>,
@@ -35,10 +42,12 @@ struct Specializer {
     bindings: Bindings,
     return_type: Option<Type>,
     expansion_depth: usize,
+    pointer_width: PointerWidth,
+    constant_defs: HashMap<String, ConstDef>,
 }
 
 impl Specializer {
-    fn new(program: &Program) -> Result<Self> {
+    fn new(program: &Program, pointer_width: PointerWidth) -> Result<Self> {
         let mut this = Self {
             structs: HashMap::new(),
             enums: HashMap::new(),
@@ -55,6 +64,8 @@ impl Specializer {
             bindings: Bindings::new(),
             return_type: None,
             expansion_depth: 0,
+            pointer_width,
+            constant_defs: HashMap::new(),
         };
         let mut definitions = HashSet::new();
         for item in &program.items {
@@ -68,10 +79,10 @@ impl Specializer {
                     Some(&d.name)
                 }
                 Item::Function(d) => {
-                    if !d.type_params.is_empty() && d.annotations.iter().any(|a| a.name.name == "drop") {
+                    if (!d.type_params.is_empty() || !d.generic_params.is_empty()) && d.annotations.iter().any(|a| a.name.name == "drop") {
                         return Err(Error::semantic_expected("E2405", "concrete function for @drop registration", d.name.span));
                     }
-                    if !d.type_params.is_empty() && d.annotations.iter().any(|a| a.name.name == "no_mangle") {
+                    if (!d.type_params.is_empty() || !d.generic_params.is_empty()) && d.annotations.iter().any(|a| a.name.name == "no_mangle") {
                         return Err(Error::semantic_expected("E2202", "non-generic function for a fixed #[no_mangle] C ABI symbol", d.name.span));
                     }
                     this.functions.insert(d.name.name.clone(), d.clone());
@@ -92,7 +103,7 @@ impl Specializer {
                     None
                 }
                 Item::Union(d) => Some(&d.name),
-                Item::Const(d) => Some(&d.name),
+                Item::Const(d) => { this.constant_defs.insert(d.name.name.clone(), d.clone()); Some(&d.name) },
                 Item::Static(d) => Some(&d.name),
                 _ => None,
             };
@@ -103,6 +114,18 @@ impl Specializer {
                         name: name.name.clone(),
                         span: name.span,
                     });
+                }
+            }
+        }
+        // Parameter declarations are validated even when a template is unused.
+        let aliases = this.aliases.iter().filter(|(_,a)| a.type_params.is_empty()).map(|(name,a)| (name.clone(),a.ty.clone())).collect();
+        for generic in this.functions.values().map(|d| &d.generic_params)
+            .chain(this.structs.values().map(|d| &d.generic_params))
+            .chain(this.enums.values().map(|d| &d.generic_params)) {
+            Bindings::parameters(generic,&[])?;
+            for parameter in generic {
+                if let GenericParam::Const {ty,..} = parameter {
+                    super::semantic::SemanticAnalyzer::specialization_parameter(pointer_width,&aliases,ty)?;
                 }
             }
         }
@@ -143,7 +166,7 @@ impl Specializer {
         for mut item in program.items {
             match &mut item {
                 Item::Function(f) => {
-                    if !f.type_params.is_empty() {
+                    if !f.type_params.is_empty() || !f.generic_params.is_empty() {
                         continue;
                     }
                     self.signature(f, &Bindings::new())?;
@@ -222,7 +245,7 @@ impl Specializer {
                 }
                 Item::Impl(d) => {
                     for f in &mut d.methods {
-                        if !f.type_params.is_empty() {
+                        if !f.type_params.is_empty() || !f.generic_params.is_empty() {
                             return Err(problem(
                                 "generic methods require a generic impl representation",
                                 f.span,
@@ -293,6 +316,7 @@ impl Specializer {
             .unwrap_or_default();
         self.locals = self.globals.clone();
         for p in &f.params {
+            self.reject_const_shadow(&p.name)?;
             self.locals.insert(p.name.name.clone(), p.ty.clone());
         }
         self.return_type = Some(f.ret_type.clone().unwrap_or(Type::Unit(f.span)));
@@ -308,7 +332,7 @@ impl Specializer {
             checked?;
         }
         self.block(&mut f.body, expected.as_ref())?;
-        self.bindings.clear();
+        self.bindings = Bindings::new();
         self.return_type = None;
         Ok(())
     }
@@ -330,6 +354,9 @@ impl Specializer {
     fn ty_inner(&mut self, ty: &Type, bindings: &Bindings) -> Result<Type> {
         Ok(match ty {
             Type::Named(n, s) => {
+                if bindings.const_types.contains_key(n) {
+                    return Err(problem("type parameter or named type, not a const parameter", *s));
+                }
                 if let Some(t) = bindings.get(n) {
                     t.clone()
                 } else if let Some(alias) = self.aliases.get(n).cloned() {
@@ -358,24 +385,13 @@ impl Specializer {
                 }
             }
             Type::Generic(n, args, s) => {
-                let args = args
-                    .iter()
-                    .map(|t| self.ty(t, bindings))
-                    .collect::<Result<Vec<_>>>()?;
-                self.instantiate_type(n, args, *s)?
+                let arguments = args.iter().cloned().map(GenericArg::Type).collect::<Vec<_>>();
+                let arguments = self.resolve_arguments(n, &arguments, bindings, *s)?;
+                self.instantiate_type(n, arguments, *s)?
             }
             Type::GenericWithArgs { name, args, span } => {
-                let args = args
-                    .iter()
-                    .map(|a| match a {
-                        GenericArg::Type(t) => self.ty(t, bindings),
-                        GenericArg::Const(_) => Err(problem(
-                            "type-only generics; const generic arguments are not implemented",
-                            *span,
-                        )),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                self.instantiate_type(name, args, *span)?
+                let arguments = self.resolve_arguments(name, args, bindings, *span)?;
+                self.instantiate_type(name, arguments, *span)?
             }
             Type::Pointer(t, s) => Type::Pointer(Box::new(self.ty(t, bindings)?), *s),
             Type::Ref {
@@ -389,11 +405,16 @@ impl Specializer {
                 inner: Box::new(self.ty(inner, bindings)?),
                 span: *span,
             },
-            Type::Array { elem, size, span } => Type::Array {
-                elem: Box::new(self.ty(elem, bindings)?),
-                size: *size,
-                span: *span,
+            Type::Array { elem, size, span } => {
+                if self.pointer_width == PointerWidth::W32 && *size > u32::MAX as usize {
+                    return Err(problem("array length representable by target usize", *span));
+                }
+                Type::Array { elem: Box::new(self.ty(elem, bindings)?), size: *size, span: *span }
             },
+            Type::ArrayExpr { elem, size, span } => {
+                let size = self.array_size(size, bindings)?;
+                Type::Array { elem: Box::new(self.ty(elem, bindings)?), size, span: *span }
+            }
             Type::Slice(t, s) => Type::Slice(Box::new(self.ty(t, bindings)?), *s),
             Type::Tuple(ts, s) if ts.is_empty() => Type::Unit(*s),
             Type::Tuple(ts, s) => Type::Tuple(
@@ -424,9 +445,10 @@ impl Specializer {
         })
     }
 
-    fn instantiate_type(&mut self, base: &str, args: Vec<Type>, span: Span) -> Result<Type> {
+    fn instantiate_type(&mut self, base: &str, args: Vec<InstanceArg>, span: Span) -> Result<Type> {
         if let Some(alias) = self.aliases.get(base).cloned() {
-            let bindings = bind_args(&alias.type_params, &args, base, span)?;
+            let params = parameters(&[], &alias.type_params);
+            let bindings = bind_instance_args(&params, &args, base, span)?;
             return self.ty(&alias.ty, &bindings);
         }
         let key = instance_key(base, &args);
@@ -444,8 +466,8 @@ impl Specializer {
             });
         };
         let params = match &definition {
-            Item::Struct(d) => type_params(&d.generic_params, &d.type_params, span)?,
-            Item::Enum(d) => type_params(&d.generic_params, &d.type_params, span)?,
+            Item::Struct(d) => parameters(&d.generic_params, &d.type_params),
+            Item::Enum(d) => parameters(&d.generic_params, &d.type_params),
             _ => unreachable!(),
         };
         if params.is_empty() {
@@ -454,7 +476,7 @@ impl Specializer {
                 span,
             ));
         }
-        let bindings = bind_args(&params, &args, base, span)?;
+        let bindings = bind_instance_args(&params, &args, base, span)?;
         let name = self.instance_name(base, &args, span)?;
         self.instances.insert(key, name.clone());
         self.origins.insert(name.clone(), (base.to_string(), args));
@@ -485,7 +507,7 @@ impl Specializer {
         Ok(named(&name, span))
     }
 
-    fn instance_name(&mut self, base: &str, args: &[Type], span: Span) -> Result<String> {
+    fn instance_name(&mut self, base: &str, args: &[InstanceArg], span: Span) -> Result<String> {
         if self.instances.len() >= 1024 {
             return Err(problem(
                 "at most 1024 generic instances (possible polymorphic recursion)",
@@ -494,7 +516,7 @@ impl Specializer {
         }
         let candidate = format!(
             "{base}__spec_{}",
-            args.iter().map(type_key).collect::<Vec<_>>().join("__")
+            args.iter().map(InstanceArg::key).collect::<Vec<_>>().join("__")
         );
         if candidate.len() > 16384 {
             return Err(problem(
@@ -517,7 +539,7 @@ impl Specializer {
         bindings: &Bindings,
         span: Span,
     ) -> Result<String> {
-        let args = template.type_params.iter().map(|p| bindings.get(&p.name).cloned().ok_or_else(|| problem(&format!("a concrete type for '{}' in call to '{}'; add an argument or result type annotation", p.name, template.name.name), span))).collect::<Result<Vec<_>>>()?;
+        let args = required_instance_args(&parameters(&template.generic_params, &template.type_params), bindings, &template.name.name, span)?;
         let key = instance_key(&template.name.name, &args);
         if let Some(name) = self.instances.get(&key) {
             return Ok(name.clone());
@@ -527,6 +549,7 @@ impl Specializer {
         let mut function = template.clone();
         function.name.name = name.clone();
         function.type_params.clear();
+        function.generic_params.clear();
         self.signature(&mut function, bindings)?;
         self.function_bindings
             .insert(name.clone(), bindings.clone());
@@ -543,6 +566,7 @@ impl Specializer {
                 Stmt::Let {
                     name, ty, value, ..
                 } => {
+                    self.reject_const_shadow(name)?;
                     if let Some(t) = ty {
                         *t = self.ty(t, &self.bindings.clone())?;
                     }
@@ -579,6 +603,13 @@ impl Specializer {
 
     fn expr(&mut self, expr: &mut Expr, expected: Option<&Type>) -> Result<Option<Type>> {
         let span = expr.span();
+        if let Expr::Ident(id) = expr {
+            if let Some(value) = self.bindings.constants.get(&id.name) {
+                let ty = value.ty.clone();
+                *expr = value.expression.clone();
+                return Ok(Some(ty));
+            }
+        }
         match expr {
             Expr::Layout { ty, .. } => {
                 *ty = self.ty(ty, &self.bindings.clone())?;
@@ -601,10 +632,10 @@ impl Specializer {
                 if let Some(template) = self
                     .functions
                     .get(&id.name)
-                    .filter(|f| !f.type_params.is_empty() && !self.locals.contains_key(&id.name))
+                    .filter(|f| (!f.type_params.is_empty() || !f.generic_params.is_empty()) && !self.locals.contains_key(&id.name))
                     .cloned()
                 {
-                    let mut bindings = Bindings::new();
+                    let mut bindings = Bindings::parameters(&template.generic_params, &template.type_params)?;
                     if let Some(Type::Function { params, ret, .. }) = expected {
                         for (p, a) in template.params.iter().zip(params) {
                             self.unify(&p.ty, a, &template.type_params, &mut bindings, span)?;
@@ -644,11 +675,11 @@ impl Specializer {
                         .functions
                         .get(&id.name)
                         .filter(|f| {
-                            !f.type_params.is_empty() && !self.locals.contains_key(&id.name)
+                            (!f.type_params.is_empty() || !f.generic_params.is_empty()) && !self.locals.contains_key(&id.name)
                         })
                         .cloned()
                     {
-                        let mut bindings = Bindings::new();
+                        let mut bindings = Bindings::parameters(&template.generic_params, &template.type_params)?;
                         if let (Some(ret), Some(want)) = (&template.ret_type, expected) {
                             self.unify(ret, want, &template.type_params, &mut bindings, span)?;
                         }
@@ -794,14 +825,10 @@ impl Specializer {
                 if !template.type_params.is_empty() || !template.generic_params.is_empty() {
                     let params =
                         type_params(&template.generic_params, &template.type_params, span)?;
-                    let mut bindings = Bindings::new();
+                    let mut bindings = Bindings::parameters(&template.generic_params, &template.type_params)?;
                     if let Some(want) = expected {
                         self.unify(
-                            &Type::Generic(
-                                name.name.clone(),
-                                params.iter().map(|p| named(&p.name, p.span)).collect(),
-                                span,
-                            ),
+                            &template_application(&name.name, &template.generic_params, &template.type_params, span),
                             want,
                             &params,
                             &mut bindings,
@@ -827,7 +854,7 @@ impl Specializer {
                             self.expr(value, None)?;
                         }
                     }
-                    let args = required_args(&params, &bindings, &name.name, span)?;
+                    let args = required_instance_args(&parameters(&template.generic_params, &template.type_params), &bindings, &name.name, span)?;
                     if let Type::Named(concrete, _) =
                         self.instantiate_type(&name.name, args, span)?
                     {
@@ -897,6 +924,7 @@ impl Specializer {
             Expr::For {
                 var, iter, body, ..
             } => {
+                self.reject_const_shadow(var)?;
                 self.expr(iter, None)?;
                 let saved = self.locals.clone();
                 self.locals.insert(var.name.clone(), named("i64", var.span));
@@ -1063,14 +1091,10 @@ impl Specializer {
         }
         if !template.generic_params.is_empty() || !template.type_params.is_empty() {
             let params = type_params(&template.generic_params, &template.type_params, span)?;
-            let mut bindings = Bindings::new();
+            let mut bindings = Bindings::parameters(&template.generic_params, &template.type_params)?;
             if let Some(want) = expected {
                 self.unify(
-                    &Type::Generic(
-                        template.name.name.clone(),
-                        params.iter().map(|p| named(&p.name, p.span)).collect(),
-                        span,
-                    ),
+                    &template_application(&template.name.name, &template.generic_params, &template.type_params, span),
                     want,
                     &params,
                     &mut bindings,
@@ -1078,7 +1102,7 @@ impl Specializer {
                 )?;
             }
             self.infer_arguments(&variant.fields, args, &params, &mut bindings, span)?;
-            let arguments = required_args(&params, &bindings, &template.name.name, span)?;
+            let arguments = required_instance_args(&parameters(&template.generic_params, &template.type_params), &bindings, &template.name.name, span)?;
             let ty = self.instantiate_type(&template.name.name, arguments, span)?;
             if let Type::Named(name, _) = &ty {
                 segments[0].name = name.clone();
@@ -1098,6 +1122,7 @@ impl Specializer {
     fn pattern(&mut self, pattern: &mut Pattern, source: Option<&Type>) -> Result<()> {
         match pattern {
             Pattern::Binding { name, .. } => {
+                self.reject_const_shadow(name)?;
                 if let Some(t) = source {
                     self.locals.insert(name.name.clone(), t.clone());
                 }
@@ -1329,13 +1354,11 @@ impl Specializer {
         }
         match (template, actual) {
             (Type::Generic(base, args, _), Type::Named(name, _)) => {
-                if let Some((origin, actual_args)) = self.origins.get(name).cloned() {
-                    if *base == origin {
-                        for (a, b) in args.iter().zip(&actual_args) {
-                            self.unify(a, b, params, bindings, span)?;
-                        }
-                    }
-                }
+                let arguments = args.iter().cloned().map(GenericArg::Type).collect::<Vec<_>>();
+                self.unify_instance(base, &arguments, name, params, bindings, span)?;
+            }
+            (Type::GenericWithArgs { name: base, args, .. }, Type::Named(name, _)) => {
+                self.unify_instance(base, args, name, params, bindings, span)?;
             }
             (Type::Generic(base, args, _), Type::Generic(actual_base, actual_args, _))
                 if base == actual_base =>
@@ -1352,6 +1375,10 @@ impl Specializer {
             (Type::Ref { inner: a, .. }, Type::Ref { inner: b, .. })
             | (Type::Owned { inner: a, .. }, Type::Owned { inner: b, .. }) => {
                 self.unify(a, b, params, bindings, span)?
+            }
+            (Type::ArrayExpr { elem: a, size, .. }, Type::Array { elem: b, size: actual_size, .. }) => {
+                self.unify(a, b, params, bindings, span)?;
+                self.infer_constant(size, &Expr::Literal(Literal::Int(*actual_size as i128, span)), bindings, span, None)?;
             }
             (Type::Array { elem: a, .. }, Type::Array { elem: b, .. }) => {
                 self.unify(a, b, params, bindings, span)?
@@ -1438,20 +1465,8 @@ fn is_numeric(ty: &Type) -> bool {
 fn is_float(ty: &Type) -> bool {
     matches!(ty, Type::Named(n, _) if matches!(n.as_str(), "f32"|"f64"))
 }
-fn type_params(generic: &[GenericParam], legacy: &[Ident], span: Span) -> Result<Vec<Ident>> {
-    if generic.is_empty() {
-        return Ok(legacy.to_vec());
-    }
-    generic
-        .iter()
-        .map(|p| match p {
-            GenericParam::Type(id) => Ok(id.clone()),
-            GenericParam::Const { .. } => Err(problem(
-                "type-only generics; const generic parameters are not implemented",
-                span,
-            )),
-        })
-        .collect()
+fn type_params(generic: &[GenericParam], legacy: &[Ident], _span: Span) -> Result<Vec<Ident>> {
+    Ok(parameters(generic, legacy).iter().filter_map(|p| match p { GenericParam::Type(id) => Some(id.clone()), _ => None }).collect())
 }
 fn bind_args(params: &[Ident], args: &[Type], base: &str, span: Span) -> Result<Bindings> {
     if params.len() != args.len() {
@@ -1470,32 +1485,8 @@ fn bind_args(params: &[Ident], args: &[Type], base: &str, span: Span) -> Result<
         .map(|(p, t)| (p.name.clone(), t.clone()))
         .collect())
 }
-fn required_args(
-    params: &[Ident],
-    bindings: &Bindings,
-    base: &str,
-    span: Span,
-) -> Result<Vec<Type>> {
-    params
-        .iter()
-        .map(|p| {
-            bindings.get(&p.name).cloned().ok_or_else(|| {
-                problem(
-                    &format!(
-                        "a concrete type for '{}' in '{base}'; add a type annotation",
-                        p.name
-                    ),
-                    span,
-                )
-            })
-        })
-        .collect()
-}
-fn instance_key(base: &str, args: &[Type]) -> String {
-    format!(
-        "{base}<{}>",
-        args.iter().map(type_key).collect::<Vec<_>>().join(",")
-    )
+fn instance_key(base: &str, args: &[InstanceArg]) -> String {
+    format!("{base}<{}>", args.iter().map(InstanceArg::key).collect::<Vec<_>>().join(","))
 }
 fn type_key(ty: &Type) -> String {
     match ty {
@@ -1511,6 +1502,7 @@ fn type_key(ty: &Type) -> String {
             format!("r{}{}", if *mutable { "m" } else { "c" }, type_key(inner))
         }
         Type::Array { elem, size, .. } => format!("a{size}_{}", type_key(elem)),
+        Type::ArrayExpr {elem,size,..} => format!("ax{}_{}", expression_key(size), type_key(elem)),
         Type::Slice(t, _) => format!("s{}", type_key(t)),
         Type::Tuple(ts, _) => format!(
             "t{}_{}",
@@ -1535,13 +1527,14 @@ fn type_key(ty: &Type) -> String {
 }
 fn has_unbound(ty: &Type, params: &[Ident], bindings: &Bindings) -> bool {
     match ty {
-        Type::Named(n, _) => params.iter().any(|p| p.name == *n) && !bindings.contains_key(n),
+        Type::Named(n, _) => (params.iter().any(|p| p.name == *n) && !bindings.contains_key(n)) || (bindings.const_types.contains_key(n) && !bindings.constants.contains_key(n)),
+        Type::ArrayExpr { elem, size, .. } => has_unbound(elem, params, bindings) || const_unbound(size, bindings),
         Type::Generic(_, ts, _) | Type::Tuple(ts, _) => {
             ts.iter().any(|t| has_unbound(t, params, bindings))
         }
         Type::GenericWithArgs { args, .. } => args
             .iter()
-            .any(|a| matches!(a, GenericArg::Type(t) if has_unbound(t, params, bindings))),
+            .any(|a| match a { GenericArg::Type(t) => has_unbound(t,params,bindings), GenericArg::Const(e) => const_unbound(e,bindings) }),
         Type::Pointer(t, _)
         | Type::Ref { inner: t, .. }
         | Type::Array { elem: t, .. }
@@ -1577,6 +1570,8 @@ fn substitute(ty: &Type, bindings: &Bindings) -> Type {
             ts.iter().map(|t| substitute(t, bindings)).collect(),
             *s,
         ),
+        Type::GenericWithArgs {name,args,span} => Type::GenericWithArgs { name:name.clone(), args:args.iter().map(|arg|match arg { GenericArg::Type(ty)=>GenericArg::Type(substitute(ty,bindings)), GenericArg::Const(expr)=>GenericArg::Const(substitute_constant(expr,bindings)) }).collect(), span:*span },
+        Type::ArrayExpr { elem, size, span } => Type::ArrayExpr { elem: Box::new(substitute(elem, bindings)), size: Box::new(substitute_constant(size, bindings)), span: *span },
         Type::Array { elem, size, span } => Type::Array {
             elem: Box::new(substitute(elem, bindings)),
             size: *size,

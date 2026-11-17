@@ -43,6 +43,7 @@ impl ParseLimits {
                 .map(|arg| self.depth(arg))
                 .fold(self.depth(func), usize::max),
             Expr::FieldAccess { target, .. } => self.depth(target),
+            Expr::Index {target,index,..} => self.depth(target).max(self.depth(index)),
             Expr::List { elements, .. } => elements
                 .iter()
                 .map(|element| self.depth(element))

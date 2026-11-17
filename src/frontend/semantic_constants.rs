@@ -56,6 +56,51 @@ pub enum InitializerValue {
 impl SemanticAnalyzer {
     pub fn facts(&self) -> &SemanticFacts { &self.facts }
 
+    /// The pre-semantics specializer uses the same checked evaluator and target
+    /// integer widths as ordinary constants. Only integer/bool generic values
+    /// are admitted; the returned AST preserves their canonical declared type.
+    pub(crate) fn specialization_parameter(width: PointerWidth, aliases: &HashMap<String,Type>, ty: &Type) -> Result<()> {
+        let mut analyzer = Self::for_pointer_width(width);
+        analyzer.type_aliases = aliases.clone();
+        let resolved = analyzer.resolve_type(ty)?;
+        if Self::is_integer(&resolved) || resolved == ResolvedType::BOOL { Ok(()) }
+        else { Err(Error::semantic_expected("E2501", "integer or bool const generic parameter", ty.span())) }
+    }
+
+    pub(crate) fn specialization_constant(
+        width: PointerWidth,
+        definitions: &HashMap<String, ConstDef>,
+        aliases: &HashMap<String, Type>,
+        expression: &Expr,
+        expected: Option<&Type>,
+    ) -> Result<(Type, Expr, String, Option<i128>)> {
+        let mut analyzer = Self::for_pointer_width(width);
+        analyzer.constant_defs = definitions.clone();
+        analyzer.type_aliases = aliases.clone();
+        let expected = expected.map(|ty| analyzer.resolve_type(ty)).transpose()?;
+        if expected.as_ref().is_some_and(|ty| !Self::is_integer(ty) && *ty != ResolvedType::BOOL) {
+            return Err(Error::semantic_expected("E2501", "integer or bool const generic parameter", expression.span()));
+        }
+        let value = analyzer.evaluate_scalar(expression, expected.as_ref(), &mut HashSet::new())?;
+        let span = expression.span();
+        if let Some(integer) = Self::integer_value(&value) {
+            let ResolvedType::Primitive(primitive) = value.ty else { unreachable!() };
+            let name = match primitive {
+                PrimitiveType::Usize(_) => "usize".into(), PrimitiveType::Isize(_) => "isize".into(),
+                primitive => format!("{primitive:?}").to_lowercase(),
+            };
+            let ty = Type::Named(name.clone(), span);
+            let literal = Expr::Literal(Literal::Int(integer, span));
+            let expression = Expr::Cast { expr: Box::new(literal), ty: ty.clone(), span };
+            Ok((ty, expression, format!("c{name}_{}{}", if integer < 0 { "m" } else { "p" }, integer.unsigned_abs()), Some(integer)))
+        } else if let ScalarConstant::Bool(boolean) = value.value {
+            Ok((Type::Named("bool".into(), span), Expr::Literal(Literal::Bool(boolean, span)), format!("cbool_{}", u8::from(boolean)), None))
+        } else {
+            Err(Error::semantic_expected("E2501", "integer or bool const generic argument", span))
+        }
+    }
+
+
     pub(super) fn prepare_constant_facts(&mut self) -> Result<()> {
         for (name, ty) in &self.type_aliases {
             self.facts.aliases.insert(name.clone(), self.resolve_type(ty)?);

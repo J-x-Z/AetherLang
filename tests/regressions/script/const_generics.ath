@@ -1,0 +1,27 @@
+def copy[const N: int](data: Array[int, N]) -> Array[int, N]:
+    return data
+
+def sum[const N: int](data: Array[int, N]) -> int:
+    total = 0
+    for i in range(N):
+        total = total + data[i]
+    return total
+
+def first_row[const Rows: int, const Cols: int](matrix: Array[Array[int, Cols], Rows]) -> Array[int, Cols]:
+    return matrix[0]
+
+def main():
+    data = [2, 4, 6]
+    other = copy(data)
+    if sum(other) != 12:
+        return 1
+    other[0] = 20
+    if sum(data) != 12 or sum(other) != 30:
+        return 4
+    matrix = [[7, 9], [11, 13]]
+    row = first_row(matrix)
+    if sum(row) != 16:
+        return 2
+    if copy([5, 6])[1] != 6:
+        return 3
+    return 0

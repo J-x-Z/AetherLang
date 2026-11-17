@@ -24,6 +24,7 @@ pub enum Stmt {
 pub struct FunctionDef {
     pub name: String,
     pub params: Vec<Param>,
+    pub const_params: Vec<Param>,
     pub return_type: Option<TypeHint>,
     pub body: Vec<Stmt>,
     pub is_comptime: bool,
@@ -41,6 +42,7 @@ pub struct Param {
 pub struct TypeHint {
     pub name: String,
     pub generics: Vec<TypeHint>,
+    pub const_value: Option<i64>,
     pub span: Span,
 }
 
@@ -90,6 +92,7 @@ pub enum Expr {
     String { value: String, span: Span },
     Binary { left: Box<Expr>, op: BinOp, right: Box<Expr>, span: Span },
     Call { func: Box<Expr>, args: Vec<Expr>, span: Span },
+    Index { target: Box<Expr>, index: Box<Expr>, span: Span },
     FieldAccess { target: Box<Expr>, field: String, span: Span },
     List { elements: Vec<Expr>, span: Span },
 }
@@ -110,7 +113,7 @@ impl Expr {
             Self::Identifier { span, .. } | Self::Integer { span, .. } | Self::Boolean { span, .. }
             | Self::Unary { span, .. } | Self::Float { span, .. } | Self::String { span, .. }
             | Self::Binary { span, .. } | Self::Call { span, .. } | Self::FieldAccess { span, .. }
-            | Self::List { span, .. } => *span,
+            | Self::List { span, .. } | Self::Index {span,..} => *span,
         }
     }
 }

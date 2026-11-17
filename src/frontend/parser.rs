@@ -406,14 +406,8 @@ impl Parser {
 
         let name = self.parse_ident()?;
 
-        let type_params = if self.check(&TokenKind::Lt) {
-            self.parse_generic_params()?.into_iter().map(|parameter| match parameter {
-                GenericParam::Type(ident) => Ok(ident),
-                GenericParam::Const { name, .. } => Err(Error::Expected("type generic parameter; function const generics are not implemented".into(), name.span)),
-            }).collect::<Result<Vec<_>>>()?
-        } else {
-            Vec::new()
-        };
+        let generic_params = if self.check(&TokenKind::Lt) { self.parse_generic_params()? } else { Vec::new() };
+        let type_params = generic_params.iter().filter_map(|p|match p {GenericParam::Type(name)=>Some(name.clone()),_=>None}).collect();
 
         self.expect(TokenKind::LParen)?;
         let params = self.parse_params()?;
@@ -439,6 +433,7 @@ impl Parser {
 
         Ok(Function {
             name,
+            generic_params,
             type_params,
             params,
             ret_type,
@@ -690,20 +685,14 @@ impl Parser {
         if self.consume(&TokenKind::LBracket) {
             let elem = self.parse_type()?;
             if self.consume(&TokenKind::Semicolon) {
-                let size = match self.current_kind() {
-                    TokenKind::IntLit(n) => {
-                        let n = usize::try_from(*n).map_err(|_| Error::Expected("array size representable on this host".into(), self.current().span))?;
-                        self.advance();
-                        n
-                    }
-                    _ => return Err(Error::ExpectedArraySize { span: self.current().span }),
-                };
+                let size = self.parse_expr()?;
                 self.expect(TokenKind::RBracket)?;
-                return Ok(Type::Array {
-                    elem: Box::new(elem),
-                    size,
-                    span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
-                });
+                let span=start.merge(&self.tokens[self.pos.saturating_sub(1)].span);
+                if let Expr::Literal(Literal::Int(n,_))=size {
+                    let size=usize::try_from(n).map_err(|_|Error::Expected("nonnegative array size representable on this host".into(),span))?;
+                    return Ok(Type::Array {elem:Box::new(elem),size,span});
+                }
+                return Ok(Type::ArrayExpr {elem:Box::new(elem),size:Box::new(size),span});
             } else {
                 self.expect(TokenKind::RBracket)?;
                 return Ok(Type::Slice(
@@ -834,7 +823,7 @@ impl Parser {
                 // brace. A following `*p = ...` is a new statement, not multiplication.
                 // Expression contexts (let/return/arguments) still use full precedence.
                 let expr = if matches!(self.current_kind(), TokenKind::If | TokenKind::While | TokenKind::For | TokenKind::Loop | TokenKind::Match | TokenKind::Unsafe | TokenKind::LBrace) {
-                    self.parse_primary()?
+                    self.parse_statement_control()?
                 } else { self.parse_expr()? };
                 if self.consume(&TokenKind::Semicolon) {
                     Ok(Stmt::Semi(expr))
@@ -1034,6 +1023,14 @@ impl Parser {
         })
     }
 
+    fn parse_statement_control(&mut self) -> Result<Expr> {
+        self.limits.enter(self.current().span)?;
+        let result = self.parse_atom(false);
+        self.limits.leave();
+        if let Ok(value) = &result { self.limits.expression(value)?; }
+        result
+    }
+
     fn parse_primary(&mut self) -> Result<Expr> {
         self.limits.enter(self.current().span)?;
         let result = self.parse_primary_inner();
@@ -1046,7 +1043,7 @@ impl Parser {
     // builds that match has a sizeable frame even when just parsing a '-'.
     fn parse_primary_inner(&mut self) -> Result<Expr> {
         if !matches!(self.current_kind(), TokenKind::Minus | TokenKind::Tilde | TokenKind::Not | TokenKind::Star | TokenKind::And) {
-            return self.parse_atom();
+            return self.parse_atom(true);
         }
         let token = self.advance();
         let mutable = token.kind == TokenKind::And && self.consume(&TokenKind::Mut);
@@ -1063,7 +1060,7 @@ impl Parser {
         self.parse_postfix(expr)
     }
 
-    fn parse_atom(&mut self) -> Result<Expr> {
+    fn parse_atom(&mut self, postfix: bool) -> Result<Expr> {
         let token = self.current().clone();
 
         let expr = match &token.kind {
@@ -1440,7 +1437,11 @@ impl Parser {
             _ => return Err(Error::ExpectedExpr { span: token.span }),
         };
 
-        self.parse_postfix(expr)
+        // Dot and '?' cannot start another statement, so keep those explicit
+        // suffixes even in statement position (e.g. unsafe { result() }?).
+        if postfix || matches!(self.current_kind(), TokenKind::Dot | TokenKind::Question) {
+            self.parse_postfix(expr)
+        } else { Ok(expr) }
     }
 
     fn parse_postfix(&mut self, mut expr: Expr) -> Result<Expr> {
@@ -2454,6 +2455,16 @@ mod tests {
     }
 
     #[test]
+    fn control_statements_do_not_capture_a_following_parenthesized_place() {
+        let program=parse("fn f(){let mut a:[i64;1]=[0];if true {} (a)[0]=2;while false{} (a)[0]=3;let b:[i64;1]=(if true{a}else{a});unsafe{g()}?;}").unwrap();
+        let Item::Function(function)=&program.items[0] else {panic!("function")};
+        assert_eq!(function.body.stmts.len(),7);
+        assert!(matches!(&function.body.stmts[6],Stmt::Semi(Expr::Try{..})));
+        assert!(matches!(&function.body.stmts[2],Stmt::Semi(Expr::Binary{op:BinOp::Assign,..})));
+        assert!(matches!(&function.body.stmts[4],Stmt::Semi(Expr::Binary{op:BinOp::Assign,..})));
+    }
+
+    #[test]
     fn qualified_types_and_const_generic_arguments_are_preserved() {
         let program = parse("fn f(x: module::Value, y: Array<i32, 4>) {}").unwrap();
         let Item::Function(function) = &program.items[0] else { panic!("expected fn") };
@@ -2520,7 +2531,10 @@ mod tests {
         assert_eq!(statements.len(),3);
         assert!(matches!(statements[1],Stmt::Let{value:Some(Expr::Binary{op:BinOp::Ge,..}),..}));
         assert!(matches!(statements[2],Stmt::Let{value:Some(Expr::Binary{op:BinOp::Shr,..}),..}));
-        assert!(parse("fn f<const N:usize>() {}").is_err());
+        let generic=parse("fn f<const N:usize>(values:[i64;N])->usize {N}").unwrap();
+        let Item::Function(f)=&generic.items[0] else {panic!("function")};
+        assert!(matches!(&f.generic_params[0], GenericParam::Const{name,..} if name.name=="N"));
+        assert!(matches!(&f.params[0].ty,Type::ArrayExpr{..}));
         let p=parse("fn f(x:Box<UUID>) {}").unwrap();
         let Item::Function(f)=&p.items[0] else {panic!("function")};
         assert!(matches!(&f.params[0].ty,Type::Generic(_,args,_) if matches!(&args[0],Type::Named(name,_) if name=="UUID")));

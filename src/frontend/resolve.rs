@@ -285,7 +285,7 @@ impl Resolver {
         }
         for mut item in items {
             if matches!(item, Item::Use(_) | Item::Module(_)) { continue; }
-            Rewriter { names: &names, foreign_uses: &mut self.foreign_uses, modules: modules.keys().cloned().collect(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: root && self.entrypoint_enabled, zero_status_returns: false }.item(&mut item)?;
+            Rewriter { names: &names, foreign_uses: &mut self.foreign_uses, modules: modules.keys().cloned().collect(), locals: HashSet::new(), type_locals: HashSet::new(), const_locals: HashSet::new(), normalize_main: root && self.entrypoint_enabled, zero_status_returns: false }.item(&mut item)?;
             match &item {
                 Item::Function(function) => { self.module_owners.insert(function.span, id); }
                 Item::Impl(block) => { for method in &block.methods { self.module_owners.insert(method.span, id); } }
@@ -354,18 +354,19 @@ fn definition(item: &Item) -> Option<(&str, bool)> {
     }
 }
 
-struct Rewriter<'a> { names: &'a HashMap<String, ResolvedName>, foreign_uses: &'a mut HashMap<Span, Span>, modules: HashSet<String>, locals: HashSet<String>, type_locals: HashSet<String>, normalize_main: bool, zero_status_returns: bool }
+struct Rewriter<'a> { names: &'a HashMap<String, ResolvedName>, foreign_uses: &'a mut HashMap<Span, Span>, modules: HashSet<String>, locals: HashSet<String>, type_locals: HashSet<String>, const_locals: HashSet<String>, normalize_main: bool, zero_status_returns: bool }
 impl Rewriter<'_> {
     fn name(&self, name: &mut String) { if let Some(new) = self.names.get(name) { *name = new.emitted.clone(); } }
     fn ident(&self, id: &mut Ident) { self.name(&mut id.name); }
     fn ty(&mut self, ty: &mut Type) -> Result<()> {
         match ty {
-            Type::Named(n, _) => if !self.type_locals.contains(n) { self.name(n); },
+            Type::Named(n, _) => if !self.type_locals.contains(n) && !self.const_locals.contains(n) { self.name(n); },
             Type::Generic(n, args, _) => { if !self.type_locals.contains(n) { self.name(n); } for ty in args { self.ty(ty)?; } }
             Type::GenericWithArgs { name, args, .. } => { if !self.type_locals.contains(name) { self.name(name); } for arg in args { match arg { GenericArg::Type(t) => self.ty(t)?, GenericArg::Const(e) => self.expr(e)? } } }
             Type::Pointer(t, _) | Type::Slice(t, _) | Type::Volatile(t, _) => self.ty(t)?,
             Type::Ref { inner, .. } | Type::Owned { inner, .. } => self.ty(inner)?,
             Type::Array { elem, .. } => self.ty(elem)?,
+            Type::ArrayExpr {elem,size,..} => {self.ty(elem)?;self.expr(size)?;}
             Type::Tuple(ts, _) => for t in ts { self.ty(t)?; },
             Type::Function { params, ret, .. } => { for t in params { self.ty(t)?; } self.ty(ret)?; }
             _ => {}
@@ -382,7 +383,9 @@ impl Rewriter<'_> {
         if rename { self.ident(&mut f.name); }
         let saved = self.locals.clone();
         let saved_types = self.type_locals.clone();
-        for parameter in &f.type_params { self.type_locals.insert(parameter.name.clone()); }
+        let saved_consts = self.const_locals.clone();
+        self.bind_generics(&f.generic_params, &f.type_params);
+        self.generic_types(&mut f.generic_params)?;
         for p in &mut f.params { self.ty(&mut p.ty)?; self.locals.insert(p.name.name.clone()); }
         if let Some(t) = &mut f.ret_type { self.ty(t)?; }
         for c in &mut f.contracts {
@@ -394,7 +397,12 @@ impl Rewriter<'_> {
         self.block(&mut f.body)?;
         self.locals = saved;
         self.type_locals = saved_types;
+        self.const_locals = saved_consts;
         self.zero_status_returns = saved_zero_status;
+        Ok(())
+    }
+    fn generic_types(&mut self, parameters: &mut [GenericParam]) -> Result<()> {
+        for parameter in parameters { if let GenericParam::Const {ty,..} = parameter { self.ty(ty)?; } }
         Ok(())
     }
     fn bind_generics(&mut self, parameters: &[GenericParam], legacy: &[Ident]) {
@@ -402,13 +410,14 @@ impl Rewriter<'_> {
         for parameter in parameters {
             match parameter {
                 GenericParam::Type(name) => { self.type_locals.insert(name.name.clone()); }
-                GenericParam::Const { name, .. } => { self.locals.insert(name.name.clone()); }
+                GenericParam::Const { name, .. } => { self.locals.insert(name.name.clone()); self.const_locals.insert(name.name.clone()); }
             }
         }
     }
     fn item(&mut self, item: &mut Item) -> Result<()> {
         let saved_locals = self.locals.clone();
         let saved_types = self.type_locals.clone();
+        let saved_consts = self.const_locals.clone();
         match &*item {
             Item::Struct(def) => self.bind_generics(&def.generic_params, &def.type_params),
             Item::Enum(def) => self.bind_generics(&def.generic_params, &def.type_params),
@@ -422,8 +431,8 @@ impl Rewriter<'_> {
         }
         match item {
             Item::Function(f) => self.function(f, true)?,
-            Item::Struct(s) => { self.ident(&mut s.name); for f in &mut s.fields { self.ty(&mut f.ty)?; } for i in &mut s.invariants { self.expr(&mut i.condition)?; } }
-            Item::Enum(e) => { self.ident(&mut e.name); for v in &mut e.variants { for t in &mut v.fields { self.ty(t)?; } } }
+            Item::Struct(s) => { self.generic_types(&mut s.generic_params)?; self.ident(&mut s.name); for f in &mut s.fields { self.ty(&mut f.ty)?; } for i in &mut s.invariants { self.expr(&mut i.condition)?; } }
+            Item::Enum(e) => { self.generic_types(&mut e.generic_params)?; self.ident(&mut e.name); for v in &mut e.variants { for t in &mut v.fields { self.ty(t)?; } } }
             Item::Impl(i) => { self.ident(&mut i.target); if let Some(t) = &mut i.interface { self.ident(t); } for f in &mut i.methods { self.function(f, false)?; } }
             Item::Const(c) => { self.ident(&mut c.name); if let Some(t) = &mut c.ty { self.ty(t)?; } self.expr(&mut c.value)?; }
             Item::Static(s) => { self.ident(&mut s.name); self.ty(&mut s.ty)?; if let Some(e) = &mut s.value { self.expr(e)?; } }
@@ -442,6 +451,7 @@ impl Rewriter<'_> {
         }
         self.locals = saved_locals;
         self.type_locals = saved_types;
+        self.const_locals = saved_consts;
         Ok(())
     }
     fn block(&mut self, block: &mut Block) -> Result<()> {
@@ -558,7 +568,7 @@ mod tests {
         let names = [("T", "__module_T"), ("N", "__module_N"), ("identity", "__module_identity"), ("Container", "__module_Container")]
             .into_iter().map(|(key, emitted)| (key.into(), ResolvedName { emitted: emitted.into(), foreign_declaration: None })).collect();
         let mut program = Parser::new(Lexer::new("fn identity<T>(value: T) -> T { value } struct Container<T, const N: usize> { value: T }", 0)).parse_program().unwrap();
-        let mut rewriter = Rewriter { names: &names, foreign_uses: &mut HashMap::new(), modules: HashSet::new(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: false, zero_status_returns: false };
+        let mut rewriter = Rewriter { names: &names, foreign_uses: &mut HashMap::new(), modules: HashSet::new(), locals: HashSet::new(), type_locals: HashSet::new(), const_locals: HashSet::new(), normalize_main: false, zero_status_returns: false };
         for item in &mut program.items { rewriter.item(item).unwrap(); }
         let Item::Function(function) = &program.items[0] else { panic!("expected fn") };
         assert_eq!(function.name.name, "__module_identity");
@@ -571,7 +581,7 @@ mod tests {
     fn default_entry_normalization_does_not_change_closure_returns() {
         let mut program = Parser::new(Lexer::new("fn main() { let callback: i64 = | | { return; }; return; }", 0)).parse_program().unwrap();
         let names = HashMap::new();
-        let mut rewriter = Rewriter { names: &names, foreign_uses: &mut HashMap::new(), modules: HashSet::new(), locals: HashSet::new(), type_locals: HashSet::new(), normalize_main: true, zero_status_returns: false };
+        let mut rewriter = Rewriter { names: &names, foreign_uses: &mut HashMap::new(), modules: HashSet::new(), locals: HashSet::new(), type_locals: HashSet::new(), const_locals: HashSet::new(), normalize_main: true, zero_status_returns: false };
         rewriter.item(&mut program.items[0]).unwrap();
         let Item::Function(function) = &program.items[0] else { panic!("expected fn") };
         let Stmt::Let { value: Some(Expr::Closure { body, .. }), .. } = &function.body.stmts[0] else { panic!("expected closure") };

@@ -51,6 +51,10 @@ pub struct Session {
 
 impl Session {
     pub fn parse(path: &Path, source: String, search: ModuleSearch, overlays: HashMap<PathBuf, String>) -> Result<Self, Diagnostic> {
+        Self::parse_for_target(path, source, search, overlays, "native")
+    }
+    pub fn parse_for_target(path: &Path, source: String, search: ModuleSearch, overlays: HashMap<PathBuf, String>, target: &str) -> Result<Self, Diagnostic> {
+        let width = crate::types::PointerWidth::for_target(target).map_err(Diagnostic::from)?;
         let (core, script_map) = if path.extension().is_some_and(|x| x == "ath") {
             let mut parser = crate::script::parser::Parser::new(&source);
             let module = parser.parse().map_err(|e| script_error(path, &source, "E1100", e))?;
@@ -61,7 +65,7 @@ impl Session {
         } else { (source, None) };
         let mut resolver = Resolver::new(search).with_overlays(overlays);
         let program = resolver.resolve(path, core).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
-        let program = super::specialize::specialize(program).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
+        let program = super::specialize::specialize_for_width(program, width).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
         Ok(Self { program, resolver, script_map })
     }
     pub fn check(&self, target: &str) -> Result<SemanticFacts, Diagnostic> {
