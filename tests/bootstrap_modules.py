@@ -11,6 +11,7 @@ import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--compiler', type=Path, required=True, help='self-hosted Core binary')
+parser.add_argument('--format', choices=['c', 'llvm'], default='c')
 parser.add_argument('--compare', type=Path, help='another Core generation for deterministic output')
 parser.add_argument('--work-dir', type=Path, required=True)
 parser.add_argument('--sanitize', action='store_true', help='sanitize generated external programs too')
@@ -25,6 +26,7 @@ cc = shutil.which(args.cc)
 if not cc:
     raise SystemExit(f'C compiler not found: {args.cc}')
 records = []
+emit_flags = ['--emit-llvm'] if args.format == 'llvm' else []
 env = {**os.environ, 'TMPDIR': str(work)}
 
 
@@ -66,16 +68,16 @@ def positive(name, contents, roots=(), expected='', levels=('2',), arguments=())
     entry = folder / 'main.aeth'
     flags = [part for directory in roots for part in ('-I', folder / directory)]
     run(name+'-check', [compiler, entry, *flags, '--check'])
-    generated = folder / 'output.c'
-    run(name+'-emit', [compiler, entry, *flags, '-o', generated])
+    generated = folder / ('output.ll' if args.format == 'llvm' else 'output.c')
+    run(name+'-emit', [compiler, entry, *flags, *emit_flags, '-o', generated])
     if args.compare:
-        compared = folder / 'compared.c'
-        run(name+'-compare-emit', [args.compare.resolve(), entry, *flags, '-o', compared])
+        compared = folder / ('compared.ll' if args.format == 'llvm' else 'compared.c')
+        run(name+'-compare-emit', [args.compare.resolve(), entry, *flags, *emit_flags, '-o', compared])
         record(name+'-generations-identical', generated.read_bytes() == compared.read_bytes(),
                sha256=hashlib.sha256(generated.read_bytes()).hexdigest())
     for level in levels:
         binary = folder / ('program-O'+level)
-        run(name+'-cc-O'+level, [cc, '-std=c11', '-O'+level, *native_flags, generated, '-o', binary])
+        run(name+'-cc-O'+level, [cc, '-O'+level, *native_flags, generated, '-o', binary])
         run(name+'-run-O'+level, [binary, *arguments], stdout=expected)
     return folder
 
@@ -128,6 +130,7 @@ positive('imported-main-private', {
  'library.aeth':'fn main(value:i64)->i64{return value;}pub fn value()->i32{return main(42) as i32;}'})
 
 bad = {
+ 'foreign-main': ({'main.aeth':'use lib;fn main()->i32{return 0;}','lib.aeth':'extern \"C\"{fn main()->i64;}'}, 'main requires a non-foreign'),
  'private-function': ({'main.aeth':'use lib;fn main()->i32{return lib::secret();}', 'lib.aeth':'fn secret()->i32{return 7;}'}, 'unknown or private imported name'),
  'private-type': ({'main.aeth':'use lib;fn main(){let p:*lib::Secret=0 as *lib::Secret;}', 'lib.aeth':'struct Secret{x:i32}'}, 'unknown or private imported name'),
  'private-selected': ({'main.aeth':'use lib::secret;fn main(){}', 'lib.aeth':'fn secret(){}'}, 'unknown or private imported name'),
@@ -153,12 +156,12 @@ for name, (contents, diagnostic) in bad.items():
     output = folder / 'prior.c'
     output.write_text('USER CONTENT\n')
     run(name+'-check-rejected', [compiler, folder / 'main.aeth', '--check'], expected=1, diagnostic=diagnostic)
-    run(name+'-emit-rejected', [compiler, folder / 'main.aeth', '-o', output], expected=1, diagnostic=diagnostic)
+    run(name+'-emit-rejected', [compiler, folder / 'main.aeth', *emit_flags, '-o', output], expected=1, diagnostic=diagnostic)
     record(name+'-output-preserved', output.read_text() == 'USER CONTENT\n')
 
 originals = {str(p): p.read_bytes() for p in project.rglob('*.aeth')}
 imported = project / 'reader.aeth'
-run('protect-imported-source', [compiler, project/'main.aeth', '-o', imported], expected=1,
+run('protect-imported-source', [compiler, project/'main.aeth', *emit_flags, '-o', imported], expected=1,
     diagnostic='output must not replace any module source')
 record('all-imported-source-preserved', all(Path(p).read_bytes()==data for p,data in originals.items()))
 run('missing-root-argument', [compiler, project/'main.aeth', '-I'], expected=1, diagnostic='-I requires a directory')

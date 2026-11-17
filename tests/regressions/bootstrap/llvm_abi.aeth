@@ -1,0 +1,21 @@
+extern "C" {
+ fn printf(format:*u8,...)->i32;
+ fn abi_i8(value:i8)->i8;fn abi_u8(value:u8)->u8;
+ fn abi_i16(value:i16)->i16;fn abi_u16(value:u16)->u16;
+ fn abi_bool(value:bool)->bool;fn abi_f32(value:f32)->f32;
+ fn abi_variadic(tag:i32,...)->i32;
+}
+fn main()->i32 {
+ if abi_i8(-100)!=-99 || abi_u8(250)!=251 {return 1;}
+ if abi_i16(-30000)!=-29999 || abi_u16(60000)!=60001 {return 2;}
+ if abi_bool(true) || !abi_bool(false) {return 3;}
+ let small:f32=1.25;if abi_f32(small)!=1.75 {return 4;}
+ let signed:i8=-100;let unsigned:u16=60000;let truth:bool=true;
+ if abi_variadic(7,signed,unsigned,truth,small,"ok")!=0 {return 5;}
+ let negative:i8=-1;let pointer:*u8=negative as *u8;
+ if (pointer as u64)!=18446744073709551615 {return 6;}
+ let float:f32=300.0;if (float as u8)!=255 || ((-float) as i8)!=-128 {return 7;}
+ let zero:f32=0.0;let nan:f32=zero/zero;
+ if !(nan as bool) || (nan as u64)!=0 || (nan==nan) {return 8;}
+ printf("llvm-abi=ok\n");return 0;
+}

@@ -1,7 +1,8 @@
 # Self-hosting Core compiler
 
 `src_aether/core/` is a complete compiler written in Aether Core: lexer,
-recursive-descent/Pratt parser, name and type checker, and typed C11 emission.
+recursive-descent/Pratt parser, name and type checker, typed C11 emission, and
+direct LLVM IR emission.
 It compiles all of its own source. The Rust compiler remains the full language
 compiler, with LLVM as the primary backend and C as the portable alternative.
 Core does not implement the full Rust compiler's language yet.
@@ -13,7 +14,7 @@ python3 tests/bootstrap_core.py --compiler /path/to/aethc \
   --work-dir /external/work/bootstrap --backend llvm
 ```
 
-Use `--backend c` for a C-only seed. The runner copies the nine source files
+Use `--backend c` for a C-only seed. The runner copies the thirteen source files
 verbatim into its work directory and builds stage1 from the real entry
 `src_aether/core/main.aeth`. Each Aether compiler then finds, opens, lexes and
 parses its own module graph to generate stages2, 3 and 4. No source concatenation,
@@ -80,8 +81,9 @@ references, attributes and other syntax outside this subset. These features
 remain available in the primary compiler. The Core compiler targets the
 existing 64-bit host C ABI; its `usize`/`isize` and libc declarations do not yet
 provide a cross-target data model. This is a real self-host with native module
-loading, not a replacement of the full compiler or an assertion that LLVM code
-generation itself is self-hosted.
+loading and LLVM IR generation, not a replacement of the full language compiler.
+LLVM optimization, native instruction selection and linking still use the host
+LLVM/Clang toolchain.
 
 The compiler owns an arena released on success and failure, limits input to
 32 MiB across the source graph and arena allocations to 512 MiB. Module
@@ -111,3 +113,36 @@ functions and the generated arithmetic helpers at O0, O2 and with sanitizers.
 A positive integer literal explicitly cast to `u64` or a raw pointer accepts
 the full 64-bit unsigned range. Ordinary signed arithmetic before a cast keeps
 its signed division semantics.
+
+The direct LLVM path is selected explicitly:
+
+```sh
+aethc-core project/main.aeth --emit-llvm -o program.ll
+clang -O2 program.ll -lm -o program
+python3 tests/bootstrap_llvm.py --compiler /external/work/bootstrap/stage4 \
+  --work-dir /external/work/bootstrap-llvm
+```
+
+This second runner starts with an already self-hosted Core compiler. That
+compiler builds the new compiler's thirteen-source module graph through C;
+the resulting compiler emits LLVM IR for its complete source. Three consecutive
+LLVM-built generations must reproduce identical `.ll` bytes. The LLVM-built
+compiler must also reproduce the C seed's generated C exactly. The runner
+blocks accidental calls to Rust `aethc`, runs external module projects, and
+executes heap/aggregate, file I/O, short-circuit, numeric, UTF-8, and C ABI
+workloads at O0/O2. Its ASan/UBSan build instruments the C-built compiler while
+it executes the Aether-written LLVM emitter; it does not claim C-front-end
+UBSan instrumentation for arbitrary LLVM IR inputs.
+
+The LLVM emitter uses explicit control flow and typed values: local storage is
+allocated once at function entry, struct values retain their layout, pointer
+indexing uses `getelementptr`, and short-circuit operands have actual conditional
+branches. Integer operations wrap without `nsw`/`nuw`; division/remainder guards
+trap zero and signed MIN/-1. Float casts use LLVM saturating conversion intrinsics, following the
+[LLVM language reference](https://llvm.org/docs/LangRef.html#saturating-floating-point-to-integer-conversions).
+Scalar and pointer C ABI calls include narrow-integer extensions and C varargs
+promotions. Internal aggregate arguments/results are supported. External C
+aggregate-by-value parameters/results are rejected with a source diagnostic
+until target-specific C aggregate ABI lowering is implemented; ordinary pointer
+to struct FFI remains supported. The LLVM path is currently a 64-bit host path,
+with no cross-target ABI claim.

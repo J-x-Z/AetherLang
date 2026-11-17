@@ -1,0 +1,133 @@
+use model::*;
+use runtime::*;
+use llvm_common::*;
+pub fn ll_place(ctx:*BootContext,node:*BootNode)->i32{
+ let id:i32=ll_id(ctx);
+ if node.kind==BN_IDENT{ll_begin(ctx,id);fprintf(ctx.output,"getelementptr i8, ptr %%v%d, i64 0\n",node.decl.id);return id;}
+ if node.kind==BN_UNARY&&node.op==42{return ll_expr(ctx,node.left);}
+ if node.kind==BN_MEMBER{
+  let mut base:i32=0;let mut ty:*BootType=node.left.ty;
+  if ty.kind==BY_PTR{base=ll_expr(ctx,node.left);ty=ty.inner;}else{base=ll_place(ctx,node.left);}
+  ll_begin(ctx,id);ll_text(ctx,"getelementptr ");ll_type(ctx,ty);
+  fprintf(ctx.output,", ptr %%r%d, i32 0, i32 %d\n",base,ll_field_index(ty,node.decl));return id;
+ }
+ if node.kind==BN_INDEX{
+  let pointer:i32=ll_expr(ctx,node.left);let index:i32=ll_expr(ctx,node.right);
+  let wide:i32=ll_cast(ctx,index,node.right.ty,boot_type(ctx,BY_I64));ll_begin(ctx,id);ll_text(ctx,"getelementptr ");ll_type(ctx,node.ty);
+  fprintf(ctx.output,", ptr %%r%d, i64 %%r%d\n",pointer,wide);return id;
+ }
+ boot_error(ctx,node.token,"LLVM expression has no address");return 0;
+}
+pub fn ll_expr(ctx:*BootContext,node:*BootNode)->i32{
+ if ctx.failed||node==(0 as *BootNode){return 0;}
+ let value:i32=ll_expr_inner(ctx,node);node.llvm_value=value;return value;
+}
+fn ll_literal_expr(ctx:*BootContext,node:*BootNode)->i32{
+ let id:i32=ll_id(ctx);ll_begin(ctx,id);ll_text(ctx,"select i1 true, ");ll_type(ctx,node.ty);ll_text(ctx," ");ll_literal(ctx,node,node.ty);
+ ll_text(ctx,", ");ll_type(ctx,node.ty);ll_text(ctx," ");ll_literal(ctx,node,node.ty);ll_text(ctx,"\n");return id;
+}
+fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
+ if node.kind==BN_INT||node.kind==BN_FLOAT||node.kind==BN_BOOL{return ll_literal_expr(ctx,node);}
+ let id:i32=ll_id(ctx);
+ if node.kind==BN_STRING{ll_begin(ctx,id);fprintf(ctx.output,"getelementptr [%llu x i8], ptr @a%d_str%d, i64 0, i64 0\n",node.token.length+1,ctx.c_namespace,node.id);return id;}
+ if node.kind==BN_IDENT{
+  if node.decl.kind==BN_CONST{ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr @a%d_c%d\n",ctx.c_namespace,node.decl.id);return id;}
+  return ll_load(ctx,node.ty,ll_place(ctx,node));
+ }
+ if node.kind==BN_SIZEOF{
+  let address:i32=ll_id(ctx);ll_begin(ctx,address);ll_text(ctx,"getelementptr ");ll_type(ctx,node.aux);ll_text(ctx,", ptr null, i64 1\n");
+  ll_begin(ctx,id);fprintf(ctx.output,"ptrtoint ptr %%r%d to i64\n",address);return id;
+ }
+ if node.kind==BN_MEMBER&&node.left.ty.kind==BY_STRUCT{
+  let value:i32=ll_expr(ctx,node.left);ll_begin(ctx,id);ll_text(ctx,"extractvalue ");ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", %d\n",ll_field_index(node.left.ty,node.decl));return id;
+ }
+ if node.kind==BN_MEMBER||node.kind==BN_INDEX||(node.kind==BN_UNARY&&node.op==42){return ll_load(ctx,node.ty,ll_place(ctx,node));}
+ if node.kind==BN_UNARY&&node.op==38{return ll_place(ctx,node.left);}
+ if node.kind==BN_UNARY{
+  let value:i32=ll_expr(ctx,node.left);ll_begin(ctx,id);
+  if node.op==45{
+   if ll_float(node.ty){ll_text(ctx,"fneg ");ll_value(ctx,node.ty,value);}
+   else{ll_text(ctx,"sub ");ll_type(ctx,node.ty);fprintf(ctx.output," 0, %%r%d",value);}
+  }else{ll_text(ctx,"xor ");ll_value(ctx,node.ty,value);if node.op==33{ll_text(ctx,", true");}else{ll_text(ctx,", -1");}}
+  ll_text(ctx,"\n");return id;
+ }
+ if node.kind==BN_CAST{return ll_cast(ctx,ll_expr(ctx,node.left),node.left.ty,node.ty);}
+ if node.kind==BN_CALL{return ll_call(ctx,node);}
+ if node.kind==BN_BINARY{return ll_binary(ctx,node);}
+ boot_error(ctx,node.token,"unsupported LLVM expression");return 0;
+}
+fn ll_call(ctx:*BootContext,node:*BootNode)->i32{
+ let mut arg:*BootNode=node.params;let mut param:*BootNode=node.decl.params;
+ while arg!=(0 as *BootNode){
+  let value:i32=ll_expr(ctx,arg);
+  if param==(0 as *BootNode){
+   if arg.ty.kind==BY_F32{arg.llvm_value=ll_cast(ctx,value,arg.ty,boot_type(ctx,BY_F64));}
+   else{if arg.ty.kind!=BY_PTR&&!ll_float(arg.ty)&&ll_bits(arg.ty)<32{arg.llvm_value=ll_cast(ctx,value,arg.ty,boot_type(ctx,BY_I32));}}
+  }else{param=param.next;}arg=arg.next;
+ }
+ let id:i32=ll_id(ctx);
+ if node.ty.kind!=BY_VOID{ll_begin(ctx,id);}else{ll_text(ctx,"  ");}
+ ll_text(ctx,"call ");if (node.decl.flags&2)!=0{ll_attr(ctx,node.ty);}ll_type(ctx,node.ty);ll_text(ctx," ");
+ if (node.decl.flags&4)!=0{
+  ll_text(ctx,"(");param=node.decl.params;while param!=(0 as *BootNode){ll_type(ctx,param.ty);ll_text(ctx,", ");param=param.next;}ll_text(ctx,"...) ");
+ }
+ ll_function(ctx,node.decl);ll_text(ctx,"(");arg=node.params;param=node.decl.params;
+ while arg!=(0 as *BootNode){
+  let mut ty:*BootType=arg.ty;
+  if param==(0 as *BootNode){
+   if ty.kind==BY_F32{ty=boot_type(ctx,BY_F64);}else{if ty.kind!=BY_PTR&&!ll_float(ty)&&ll_bits(ty)<32{ty=boot_type(ctx,BY_I32);}}
+  }
+  ll_type(ctx,ty);ll_text(ctx," ");if param!=(0 as *BootNode)&&(node.decl.flags&2)!=0{ll_attr(ctx,ty);}ll_reg(ctx,arg.llvm_value);
+  if param!=(0 as *BootNode){param=param.next;}arg=arg.next;if arg!=(0 as *BootNode){ll_text(ctx,", ");}
+ }
+ ll_text(ctx,")\n");return id;
+}
+fn ll_division_guard(ctx:*BootContext,ty:*BootType,a:i32,b:i32){
+ let zero:i32=ll_id(ctx);ll_begin(ctx,zero);ll_text(ctx,"icmp eq ");ll_value(ctx,ty,b);ll_text(ctx,", 0\n");
+ let mut invalid:i32=zero;
+ if ll_signed(ty){
+  let minimum:i32=ll_id(ctx);ll_begin(ctx,minimum);ll_text(ctx,"icmp eq ");ll_value(ctx,ty,a);ll_text(ctx,", ");ll_integer(ctx,((1 as u64)<<((ll_bits(ty)-1) as u64)) as i64,ty);ll_text(ctx,"\n");
+  let minus:i32=ll_id(ctx);ll_begin(ctx,minus);ll_text(ctx,"icmp eq ");ll_value(ctx,ty,b);ll_text(ctx,", -1\n");
+  let overflow:i32=ll_id(ctx);ll_begin(ctx,overflow);fprintf(ctx.output,"and i1 %%r%d, %%r%d\n",minimum,minus);
+  invalid=ll_id(ctx);ll_begin(ctx,invalid);fprintf(ctx.output,"or i1 %%r%d, %%r%d\n",zero,overflow);
+ }
+ let fail:i32=ll_id(ctx);let next:i32=ll_id(ctx);ll_branch(ctx,invalid,fail,next);ll_label(ctx,fail);
+ ll_text(ctx,"  call void @llvm.trap()\n  unreachable\n");ll_label(ctx,next);
+}
+fn ll_binary(ctx:*BootContext,node:*BootNode)->i32{
+ let a:i32=ll_expr(ctx,node.left);let op:i32=node.op;let ty:*BootType=node.left.ty;
+ let id:i32=ll_id(ctx);
+ if op==BT_AND||op==BT_OR{
+  let before:i32=ctx.llvm_block;let evaluate:i32=ll_id(ctx);let merge:i32=ll_id(ctx);
+  if op==BT_AND{ll_branch(ctx,a,evaluate,merge);}else{ll_branch(ctx,a,merge,evaluate);}
+  ll_label(ctx,evaluate);let right:i32=ll_expr(ctx,node.right);let after:i32=ctx.llvm_block;ll_jump(ctx,merge);ll_label(ctx,merge);
+  ll_begin(ctx,id);fprintf(ctx.output,"phi i1 [ %%r%d, %%b%d ], [ %%r%d, %%b%d ]\n",a,before,right,after);return id;
+ }
+ let mut b:i32=ll_expr(ctx,node.right);
+ if ty.kind==BY_PTR&&(op==43||op==45){
+  b=ll_cast(ctx,b,node.right.ty,boot_type(ctx,BY_I64));
+  if op==45{let negative:i32=ll_id(ctx);ll_begin(ctx,negative);fprintf(ctx.output,"sub i64 0, %%r%d\n",b);b=negative;}
+  ll_begin(ctx,id);ll_text(ctx,"getelementptr ");ll_type(ctx,ty.inner);fprintf(ctx.output,", ptr %%r%d, i64 %%r%d\n",a,b);return id;
+ }
+ let float:bool=ll_float(ty);let signed:bool=ll_signed(ty);
+ if !float&&(op==47||op==37){ll_division_guard(ctx,ty,a,b);}
+ if op==BT_SHL||op==BT_SHR{
+  let masked:i32=ll_id(ctx);ll_begin(ctx,masked);ll_text(ctx,"and ");ll_value(ctx,ty,b);fprintf(ctx.output,", %d\n",ll_bits(ty)-1);b=masked;
+ }
+ let mut operation:*u8=0 as *u8;
+ if op==BT_EQ{if float{operation="fcmp oeq";}else{operation="icmp eq";}}
+ if op==BT_NE{if float{operation="fcmp une";}else{operation="icmp ne";}}
+ if op==60{if float{operation="fcmp olt";}else{if signed{operation="icmp slt";}else{operation="icmp ult";}}}
+ if op==62{if float{operation="fcmp ogt";}else{if signed{operation="icmp sgt";}else{operation="icmp ugt";}}}
+ if op==BT_LE{if float{operation="fcmp ole";}else{if signed{operation="icmp sle";}else{operation="icmp ule";}}}
+ if op==BT_GE{if float{operation="fcmp oge";}else{if signed{operation="icmp sge";}else{operation="icmp uge";}}}
+ if op==43{if float{operation="fadd";}else{operation="add";}}
+ if op==45{if float{operation="fsub";}else{operation="sub";}}
+ if op==42{if float{operation="fmul";}else{operation="mul";}}
+ if op==47{if float{operation="fdiv";}else{if signed{operation="sdiv";}else{operation="udiv";}}}
+ if op==37{if signed{operation="srem";}else{operation="urem";}}
+ if op==38{operation="and";}if op==124{operation="or";}if op==94{operation="xor";}
+ if op==BT_SHL{operation="shl";}if op==BT_SHR{if signed{operation="ashr";}else{operation="lshr";}}
+ if operation==(0 as *u8){boot_error(ctx,node.token,"unsupported LLVM binary operation");return 0;}
+ ll_begin(ctx,id);fprintf(ctx.output,"%s ",operation);ll_value(ctx,ty,a);fprintf(ctx.output,", %%r%d\n",b);return id;
+}

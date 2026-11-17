@@ -3,6 +3,7 @@ use runtime::*;
 use project::*;
 use semantic::boot_check;
 use emitter::boot_emit;
+use emitter_llvm::boot_emit_llvm;
 // File/CLI boundary for the self-hosted Core compiler. The compiler never shells
 // out: its only output is checked C source. The build driver links that source.
 extern "C" {
@@ -17,12 +18,14 @@ fn boot_driver_message(message:*u8)->i32 {
  return 1;
 }
 pub fn boot_driver(argc:i32,argv:**u8)->i32 {
- if argc<2 { return boot_driver_message("usage: aether-core input.aeth [-I directory]... [-o output.c | --check]\0" as *u8); }
+ if argc<2 { return boot_driver_message("usage: aether-core input.aeth [-I directory]... [--emit-llvm] [-o output | --check]\0" as *u8); }
  let mut input:*u8=0 as *u8;let mut output:*u8=0 as *u8;
- let mut check:bool=false;let mut index:i32=1;
+ let mut check:bool=false;let mut llvm:bool=false;let mut index:i32=1;
  while index<argc {
   let argument:*u8=argv[index];
-  if strcmp(argument,"-I")==0 {
+  if strcmp(argument,"--emit-llvm")==0 {
+   if llvm {return boot_driver_message("duplicate --emit-llvm");}llvm=true;
+  }else{if strcmp(argument,"-I")==0 {
    index=index+1;if index>=argc {return boot_driver_message("-I requires a directory");}
   } else { if strcmp(argument,"--check\0" as *u8)==0 {
    if check { return boot_driver_message("duplicate --check\0" as *u8); }
@@ -36,6 +39,7 @@ pub fn boot_driver(argc:i32,argv:**u8)->i32 {
    if input!=(0 as *u8) { return boot_driver_message("expected one input file\0" as *u8); }
    input=argument;
   } }
+  }
   }
   index=index+1;
  }
@@ -74,7 +78,7 @@ pub fn boot_driver(argc:i32,argv:**u8)->i32 {
     context.output=fdopen(descriptor,"wb\0" as *u8);
     if context.output==(0 as *void) { close(descriptor);success=false;boot_driver_message("cannot open output stream\0" as *u8); }
     else {
-     success=boot_emit(context);
+     if llvm{success=boot_emit_llvm(context);}else{success=boot_emit(context);}
      let write_error:i32=ferror(context.output);
      let finish_error:i32=fclose(context.output);
      context.output=0 as *void;

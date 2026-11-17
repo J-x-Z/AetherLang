@@ -379,8 +379,9 @@ fn boot_constant_checked(ctx:*BootContext,node:*BootNode)->bool {
  return true;
 }
 fn boot_check_entry(ctx:*BootContext,item:*BootNode)->bool {
- if item.owner!=ctx.root_module {return true;}
  if strcmp(item.name,"main")!=0 { return true; }
+ if (item.flags&2)!=0 {boot_error(ctx,item.token,"main requires a non-foreign i32 or void signature");return false;}
+ if item.owner!=ctx.root_module {return true;}
  if (item.flags&2)!=0 || (item.flags&4)!=0 || (item.ty.kind!=BY_I32 && item.ty.kind!=BY_VOID) {
   boot_error(ctx,item.token,"main requires a non-foreign i32 or void signature");return false;
  }

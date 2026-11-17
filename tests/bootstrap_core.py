@@ -88,7 +88,7 @@ def run(name, command, expected=0, timeout=120, **options):
     return result
 
 
-modules = ['main', 'model', 'runtime', 'lexer', 'parser', 'semantic', 'emitter', 'project', 'driver']
+modules = ['main', 'model', 'runtime', 'lexer', 'parser', 'semantic', 'emitter', 'project', 'driver', 'llvm_common', 'llvm_expr', 'llvm_stmt', 'emitter_llvm']
 paths = [root / 'src_aether' / 'core' / f'{name}.aeth' for name in modules]
 source_tree = work / 'core-source'
 source_tree.mkdir(exist_ok=True)
@@ -122,7 +122,7 @@ save()
 fixtures = {'recursive_heap': 'heap=49995000 factorial=3628800 fib=6765\n',
             'file_io': 'file-bytes=5\n',
             'effects_numbers': 'effects=123 wrap=4 decimal=12\n',
-            'typed_values': 'typed-values=ok\n', 'foreign_names': ''}
+            'typed_values': 'typed-values=ok\n', 'foreign_names': '', 'llvm_abi': 'llvm-abi=ok\n'}
 fixture_root = root / 'tests' / 'regressions' / 'bootstrap'
 def companion_objects(name):
     companion = fixture_root / f'{name}.c'

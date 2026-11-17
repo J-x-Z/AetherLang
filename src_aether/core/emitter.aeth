@@ -6,7 +6,7 @@ fn boot_c_text(ctx:*BootContext,text:*u8) {fputs(text,ctx.output);}
 fn boot_c_number(ctx:*BootContext,value:i32) {fprintf(ctx.output,"%d",value);}
 // Foreign functions keep their ABI spelling. Put every generated identifier
 // in a prefix absent from those names, including locals that could hide calls.
-fn boot_choose_namespace(ctx:*BootContext)->bool {
+pub fn boot_choose_namespace(ctx:*BootContext)->bool {
  let mut count:i32=0;
  let mut item:*BootNode=ctx.program.body;
  while item!=0 as *BootNode {
