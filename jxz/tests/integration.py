@@ -107,6 +107,150 @@ sys.exit(23)
         self.assertEqual([value for flag, value in pairs if flag == '-I'], modules)
         self.assertEqual([value for flag, value in pairs if flag == '--link-object'], objects)
 
+    def test_lsp_project_graph_definitions_unsaved_edits_and_clean_shutdown(self):
+        shared = self.local_library('deps/shared Ω', 'shared_math', 'pub fn base()->i32{7}')
+        library = self.local_library('deps/library Ω', 'library', dependencies="shared_math={path='../shared Ω'}")
+        (library/'library source').mkdir()
+        (library/'support').mkdir()
+        (library/'support/helper.aeth').write_text('pub fn extra()->i32{2}')
+        library_text = 'use shared_math::base; use helper::extra;\npub fn answer()->i32{base()+extra()}\n'
+        entry = library/'library source/lib.aeth'
+        entry.write_text(library_text)
+        (library/'Jxz.toml').write_text("[package]\nname='library'\n[build]\nsrc='library source'\nmodule_paths=['support']\nlink_objects=['native-not-built.o']\n[dependencies]\nshared_math={path='../shared Ω'}\n")
+        self.manifest()
+        self.build_settings("module_paths=['-modules α']\n[dependencies]\nlibrary={path='deps/library Ω'}")
+        extra = self.source('-modules α/extra.aeth', 'pub fn offset()->i32{1}')
+        text = 'use library::answer; use extra::offset;\nfn main()->i32{answer()+offset()}\n'
+        main = self.source(text=text)
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        def notification(method, params):
+            return dict(jsonrpc='2.0', method=method, params=params)
+        def request(number, method, params):
+            return {**notification(method, params), 'id': number}
+        def opened(path, value):
+            return notification('textDocument/didOpen', {'textDocument': {'uri':path.as_uri(), 'languageId':'aetherlang', 'version':1, 'text':value}})
+        def definition(number, path, line, character):
+            return request(number, 'textDocument/definition', {'textDocument':{'uri':path.as_uri()}, 'position':{'line':line, 'character':character}})
+        main_line = text.splitlines()[1]
+        messages = [
+            request(1, 'initialize', {'rootUri':self.root.as_uri()}),
+            notification('initialized', {}), opened(main, text),
+            definition(2, main, 1, main_line.index('answer')),
+            definition(3, main, 1, main_line.index('offset')),
+            opened(entry, library_text),
+            definition(4, entry, 1, library_text.splitlines()[1].index('base()')),
+            notification('textDocument/didChange', {'textDocument':{'uri':entry.as_uri(), 'version':2},
+                         'contentChanges':[{'text':'pub fn answer()->i32{true}\n'}]}),
+            notification('textDocument/didChange', {'textDocument':{'uri':entry.as_uri(), 'version':3},
+                         'contentChanges':[{'text':'\n\npub fn answer()->i32{99}\n'}]}),
+            definition(5, main, 1, main_line.index('answer')),
+            request(6, 'shutdown', None), notification('exit', None),
+        ]
+        wire = b''
+        for message in messages:
+            body = json.dumps(message, ensure_ascii=False).encode()
+            wire += f'Content-Length: {len(body)}\r\n\r\n'.encode() + body
+        result = subprocess.run([JXZ, 'lsp'], input=wire, cwd=self.root, env=ENV,
+                                capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stderr, b'')
+        replies, data = [], result.stdout
+        while data:
+            header, separator, rest = data.partition(b'\r\n\r\n')
+            self.assertTrue(separator, data)
+            self.assertTrue(header.startswith(b'Content-Length: '), header)
+            count = int(header.removeprefix(b'Content-Length: '))
+            self.assertGreaterEqual(len(rest), count)
+            replies.append(json.loads(rest[:count]))
+            data = rest[count:]
+        by_id = {reply['id']:reply for reply in replies if 'id' in reply}
+        self.assertTrue(by_id[1]['result']['capabilities']['definitionProvider'])
+        for number, path in [(2,entry), (3,extra), (4,shared/'src/lib.aeth'), (5,entry)]:
+            self.assertEqual(by_id[number]['result']['uri'], path.as_uri())
+        self.assertEqual(by_id[5]['result']['range']['start']['line'], 2)
+        diagnostics = [reply['params']['diagnostics'] for reply in replies
+                       if reply.get('method')=='textDocument/publishDiagnostics'
+                       and reply['params']['uri']==entry.as_uri()]
+        self.assertTrue(any(diagnostics))
+        self.assertEqual(diagnostics[-1], [])
+        self.assertIsNone(by_id[6]['result'])
+        self.assertEqual(before, {p.relative_to(self.root):p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+        self.assertFalse((self.root/'target').exists())
+        self.assertFalse(list(self.root.rglob('.jxz-*')))
+        # Analysis does not link: the same graph is valid for LSP before its
+        # native object exists, while build must still diagnose the missing file.
+        failed_build = self.run_jxz('build', expected=1)
+        self.assertIn('native-not-built.o', failed_build.stderr)
+        self.assertFalse((self.root/'target').exists())
+
+    def test_lsp_arguments_exit_code_and_signal_inherit_without_child_wrapper(self):
+        self.manifest()
+        roots = ['-root α', '@root β', *[f'module {i} Ω' for i in range(21)]]
+        self.build_settings('module_paths='+json.dumps(roots,ensure_ascii=False)+"\nlink_objects=['not-linked.o']")
+        capture, environment = self.capturing_compiler()
+        result = self.run_jxz('lsp', expected=23, env=environment)
+        self.assertEqual(result.stdout, '')
+        actual = json.loads(capture.read_text())
+        self.assertEqual(actual, ['lsp', *[argument for path in roots for argument in ('-I', './'+path if path.startswith(('-', '@')) else path)]])
+        self.assertFalse((self.root/'target').exists())
+        stub = self.root/'server stub Ω'
+        ready = self.root/'server-ready.json'
+        stub.write_text('''#!/usr/bin/env python3
+import json, os, signal
+path=os.environ['JXZ_SERVER_READY']
+with open(path+'.tmp','w') as f:
+    json.dump({'pid':os.getpid()},f)
+os.replace(path+'.tmp',path)
+while True: signal.pause()
+''')
+        stub.chmod(0o755)
+        child = subprocess.Popen([JXZ,'lsp'], cwd=self.root,
+                                 env={**ENV,'AETHC':str(stub),'JXZ_SERVER_READY':str(ready)},
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic()+10
+            while not ready.exists() and child.poll() is None and time.monotonic()<deadline:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), 'LSP replacement did not start')
+            self.assertEqual(json.loads(ready.read_text())['pid'], child.pid)
+            child.send_signal(signal.SIGTERM)
+            stdout, stderr = child.communicate(timeout=10)
+            self.assertEqual(child.returncode, -signal.SIGTERM)
+            self.assertEqual(stdout, b'')
+            self.assertEqual(stderr, b'')
+        finally:
+            if child.poll() is None:
+                child.kill(); child.communicate(timeout=10)
+
+    def test_lsp_bad_configuration_and_exec_failures_never_write_stdout_or_target(self):
+        capture, environment = self.capturing_compiler()
+        library = self.local_library('deps/cycle', 'cycle', dependencies="program={path='../..'}")
+        for manifest in [None, '[package]\nname=7',
+                         "[package]\nname='program'\n[dependencies]\nmissing={path='absent'}",
+                         "[package]\nname='program'\n[dependencies]\ncycle={path='deps/cycle'}",
+                         "[package]\nname='program'\n[dependencies]\nonline='1.0'"]:
+            with self.subTest(manifest=manifest):
+                path = self.root/'Jxz.toml'
+                if manifest is None: path.unlink(missing_ok=True)
+                else: path.write_text(manifest)
+                result = self.run_jxz('lsp', expected=1, env=environment)
+                self.assertEqual(result.stdout, '')
+                self.assertTrue(result.stderr)
+                self.assertFalse(capture.exists())
+                self.assertFalse((self.root/'target').exists())
+                self.assertFalse(list(self.root.rglob('.jxz-*')))
+        self.manifest()
+        for command, expected in [('missing-compiler',127), ('not-executable',126)]:
+            path = self.root/command
+            if expected==126: path.write_text('not executable')
+            result = self.run_jxz('lsp',expected=expected,env={'AETHC':str(path)})
+            self.assertEqual(result.stdout,'')
+            self.assertIn('cannot execute language server',result.stderr)
+            self.assertFalse((self.root/'target').exists())
+        result = self.run_jxz('lsp','unexpected',expected=2)
+        self.assertEqual(result.stdout,'')
+        self.assertIn('takes no arguments',result.stderr)
+
     def test_configured_modules_and_native_object_build_run_test(self):
         first = '-modules α ; touch INJECTED'
         second = 'modules β [$HOME]*'

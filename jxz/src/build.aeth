@@ -1,10 +1,11 @@
 // The compiler owns backend selection and linking; JXZ owns project policy.
-use config::{Config, config_load, config_free, package_name_valid};
+use config::{Config, config_load, config_free, package_name_valid, config_error};
 use process::{process_run, environment_tool};
 use path::{path_join, make_directories};
 use output::{Publication, output_lock, output_unlock, output_compiler_inherits, output_recover, publication_prepare, publication_publish, publication_free};
 use posix::ENOENT;
-use dependencies::{dependencies_resolve,dependencies_record,dependencies_remove};
+use vec::{Vec,vec_new,vec_push,vec_free};
+use dependencies::{dependencies_resolve,dependencies_resolve_modules,dependencies_record,dependencies_remove};
 
 extern "C" {
     fn malloc(size: u64) -> *void;
@@ -24,6 +25,8 @@ extern "C" {
     fn ferror(file: *void) -> i32;
     fn strlen(s: *u8) -> u64;
     fn realpath(path: *u8, resolved: *u8) -> *u8;
+    fn execvp(file: *u8, argv: **u8) -> i32;
+    fn strerror(code: i32) -> *u8;
 }
 
 // Option/response-file-looking relative paths need an owned ./ prefix. Other
@@ -37,72 +40,107 @@ fn compiler_path(path: *u8) -> *u8 {
     return path;
 }
 
-fn compiler_args_free(cfg: *Config, args: **u8) {
-    let mut i: u64 = 0;
-    while i < cfg.module_path_count {
-        if compiler_path_needs_prefix(cfg.module_paths[i]) { free(args[7 + 2 * i] as *void); }
-        i = i + 1;
-    }
-    i = 0;
-    while i < cfg.link_object_count {
-        if compiler_path_needs_prefix(cfg.link_objects[i]) { free(args[7 + 2 * (cfg.module_path_count + i)] as *void); }
-        i = i + 1;
-    }
-    free(args as *void);
+// Argument slots borrow configuration or literal strings. Only normalized paths
+// are owned by this container; their cleanup never depends on option positions.
+struct CompilerArgs { values: Vec<*u8>, owned: Vec<*u8> }
+fn compiler_args_new() -> CompilerArgs { return CompilerArgs { values:vec_new(), owned:vec_new() }; }
+fn compiler_args_free(args: *CompilerArgs) {
+    let mut i:u64=0;
+    while i<args.owned.len { free(args.owned.data[i] as *void); i=i+1; }
+    vec_free(&mut args.owned as *Vec<*u8>);
+    vec_free(&mut args.values as *Vec<*u8>);
 }
-
-pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool, lock: *void) -> i32 {
-    let compiler: *u8 = environment_tool("AETHC\0" as *u8, "aethc\0" as *u8);
-    let backend: *u8 = environment_tool("AETHER_BACKEND\0" as *u8, "\0" as *u8);
-    let mut optimization: *u8 = "0\0" as *u8;
-    if release { optimization = "2\0" as *u8; }
-    // Counts are bounded by the 1 MiB manifest; no fixed argv capacity truncates
-    // project dependencies. Zeroing permits cleanup after any path allocation.
-    let capacity: u64 = 11 + 2 * (cfg.module_path_count + cfg.link_object_count + cfg.resolved_modules.len + cfg.resolved_paths.len + cfg.resolved_objects.len);
-    let args: **u8 = malloc(capacity * size_of(*u8) as u64) as **u8;
-    if args == (0 as **u8) { puts("jxz: cannot allocate compiler arguments\0" as *u8); return 1; }
-    let mut i: u64 = 0;
-    while i < capacity { args[i] = 0 as *u8; i = i + 1; }
-    args[0] = compiler; args[1] = "build\0" as *u8;
-    args[2] = "-O\0" as *u8; args[3] = optimization;
-    args[4] = "-o\0" as *u8; args[5] = output;
-    let mut count: u64 = 6;
-    i = 0;
-    while i < cfg.module_path_count {
-        args[count] = "-I\0" as *u8;
-        args[count + 1] = compiler_path(cfg.module_paths[i]);
-        if args[count + 1] == (0 as *u8) { compiler_args_free(cfg, args); return 1; }
-        count = count + 2; i = i + 1;
+fn compiler_arg(args:*CompilerArgs,value:*u8)->bool {
+    return vec_push(&mut args.values as *Vec<*u8>,value);
+}
+fn compiler_option(args:*CompilerArgs,flag:*u8,value:*u8)->bool {
+    return compiler_arg(args,flag) && compiler_arg(args,value);
+}
+fn compiler_path_option(args:*CompilerArgs,flag:*u8,path:*u8)->bool {
+    let value:*u8=compiler_path(path);
+    if value==(0 as *u8) { return false; }
+    if value!=path {
+        if !vec_push(&mut args.owned as *Vec<*u8>,value) { free(value as *void); return false; }
     }
-    i = 0;
-    while i < cfg.link_object_count {
-        args[count] = "--link-object\0" as *u8;
-        args[count + 1] = compiler_path(cfg.link_objects[i]);
-        if args[count + 1] == (0 as *u8) { compiler_args_free(cfg, args); return 1; }
-        count = count + 2; i = i + 1;
+    return compiler_option(args,flag,value);
+}
+fn compiler_begin(args:*CompilerArgs,command:*u8)->bool {
+    return compiler_arg(args,environment_tool("AETHC","aethc")) && compiler_arg(args,command);
+}
+// All source-facing commands consume the exact same module search graph.
+fn compiler_module_arguments(cfg:*Config,args:*CompilerArgs)->bool {
+    let mut i:u64=0;
+    while i<cfg.module_path_count {
+        if !compiler_path_option(args,"-I",cfg.module_paths[i]) { return false; }
+        i=i+1;
     }
     i=0;
     while i<cfg.resolved_modules.len {
-        args[count]="--module"; args[count+1]=cfg.resolved_modules.data[i]; count=count+2; i=i+1;
+        if !compiler_option(args,"--module",cfg.resolved_modules.data[i]) { return false; }
+        i=i+1;
     }
     i=0;
     while i<cfg.resolved_paths.len {
-        args[count]="-I"; args[count+1]=cfg.resolved_paths.data[i]; count=count+2; i=i+1;
+        if !compiler_path_option(args,"-I",cfg.resolved_paths.data[i]) { return false; }
+        i=i+1;
+    }
+    return true;
+}
+fn compiler_link_arguments(cfg:*Config,args:*CompilerArgs)->bool {
+    let mut i:u64=0;
+    while i<cfg.link_object_count {
+        if !compiler_path_option(args,"--link-object",cfg.link_objects[i]) { return false; }
+        i=i+1;
     }
     i=0;
     while i<cfg.resolved_objects.len {
-        args[count]="--link-object"; args[count+1]=cfg.resolved_objects.data[i]; count=count+2; i=i+1;
+        if !compiler_path_option(args,"--link-object",cfg.resolved_objects.data[i]) { return false; }
+        i=i+1;
     }
-    if backend[0] != 0 {
-        args[count] = "--backend\0" as *u8;
-        args[count + 1] = backend;
-        count = count + 2;
-    }
-    args[count] = "--\0" as *u8; args[count + 1] = source;
-    if !output_compiler_inherits(lock, true) { compiler_args_free(cfg, args); return 1; }
-    let mut status: i32 = process_run(args, 0 as *u8);
+    return true;
+}
+
+pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool, lock: *void) -> i32 {
+    let mut args:CompilerArgs=compiler_args_new();
+    let optimization:*u8=if release { "2" } else { "0" };
+    let backend:*u8=environment_tool("AETHER_BACKEND", "");
+    let mut ok:bool=compiler_begin(&mut args as *CompilerArgs,"build")
+        && compiler_option(&mut args as *CompilerArgs,"-O",optimization)
+        && compiler_option(&mut args as *CompilerArgs,"-o",output)
+        && compiler_module_arguments(cfg,&mut args as *CompilerArgs)
+        && compiler_link_arguments(cfg,&mut args as *CompilerArgs);
+    if ok && backend[0]!=0 { ok=compiler_option(&mut args as *CompilerArgs,"--backend",backend); }
+    if ok { ok=compiler_option(&mut args as *CompilerArgs,"--",source) && compiler_arg(&mut args as *CompilerArgs,0 as *u8); }
+    if !ok { config_error("jxz: cannot allocate compiler arguments"); compiler_args_free(&mut args as *CompilerArgs); return 1; }
+    if !output_compiler_inherits(lock, true) { compiler_args_free(&mut args as *CompilerArgs); return 1; }
+    let mut status: i32 = process_run(args.values.data, 0 as *u8);
     if !output_compiler_inherits(lock, false) { status = 1; }
-    compiler_args_free(cfg, args);
+    compiler_args_free(&mut args as *CompilerArgs);
+    return status;
+}
+
+pub fn language_server() -> i32 {
+    let mut cfg:Config=config_load();
+    let mut args:CompilerArgs=compiler_args_new();
+    let mut status:i32=1;
+    if cfg.valid {
+        if dependencies_resolve_modules(&mut cfg as *Config) {
+            let ok:bool=compiler_begin(&mut args as *CompilerArgs,"lsp")
+                && compiler_module_arguments(&mut cfg as *Config,&mut args as *CompilerArgs)
+                && compiler_arg(&mut args as *CompilerArgs,0 as *u8);
+            if ok {
+                // No child/wait wrapper: editor signals and the server exit code
+                // belong to this PID. Successful exec releases all JXZ storage.
+                execvp(args.values.data[0],args.values.data);
+                let code:i32=__errno_get();
+                config_error("jxz: cannot execute language server");
+                config_error(strerror(code));
+                status=if code==ENOENT { 127 } else { 126 };
+            } else { config_error("jxz: cannot allocate language server arguments"); }
+        } else { config_error("jxz: cannot resolve language server project"); }
+    }
+    compiler_args_free(&mut args as *CompilerArgs);
+    config_free(&mut cfg as *Config);
     return status;
 }
 

@@ -1,6 +1,6 @@
 # JXZ local project driver
 
-Local development version: `0.3.0-dev.2` (local path dependencies and transaction recovery).
+Local development version: `0.3.0-dev.3` (project-aware LSP entry point).
 
 JXZ's active implementation is `src/main.aeth` and its imported Aether modules.
 Build it with the upgraded Rust compiler (historical checked-in `.c` files are
@@ -23,6 +23,23 @@ compiler's default backend (LLVM in a build with LLVM enabled). `AETHER_BACKEND`
 can select `llvm` or `c` explicitly. `AETHC` selects the compiler executable and
 `CC` selects its linker/C compiler; neither accepts shell text or flag strings.
 Compiler diagnostics and nonzero exit codes are preserved. `run` returns the program's exit status (or 128 + terminating signal).
+
+### Editor language server
+
+Run `jxz lsp` with the directory containing `Jxz.toml` as the working directory.
+Configure the editor's server command as the absolute JXZ executable, with
+`["lsp"]` as its arguments; `AETHC` selects the compiler as for builds.
+The command loads the same manifest and local dependency graph, forwarding
+`module_paths` and the exact package entries to `aethc lsp`. Cross-package
+definitions and unsaved documents therefore use the project's module mapping.
+Restart the server after changing manifest paths or dependency declarations.
+
+Startup neither builds sources nor creates the target directory, locks, or
+dependency records. Standard output contains only LSP messages; configuration
+and dependency errors go to standard error. Native link flags are not passed to
+the language server, and dependency native objects need not exist yet; their
+manifest fields still undergo normal syntax validation. JXZ replaces itself with the server process, preserving
+its PID, exit status and signal handling. `jxz lsp` accepts no extra arguments.
 
 ```toml
 [package]
@@ -80,7 +97,7 @@ reached through both sides of a diamond. Cycles, different packages with the
 same name, and conflicting local module names are errors. Registry versions,
 dependency aliases and target-specific dependency tables are unsupported.
 
-Build, run and test pass exact library entries to the compiler. Dependencies
+Build, run, test and LSP pass exact library entries to the compiler. Dependencies
 can provide module search directories and native link inputs relative to their
 own project. Search directories apply to the compilation unit. The sorted
 `target/.jxz-dependencies` record describes the most recently resolved local

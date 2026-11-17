@@ -10,8 +10,11 @@ extern "C" {
     fn strncmp(a: *u8, b: *u8, count: u64) -> i32;
     fn strlen(s: *u8) -> u64;
     fn strerror(code: i32) -> *u8;
-    fn puts(s: *u8) -> i32;
+    fn dprintf(fd: i32, format: *u8, ...) -> i32;
 }
+
+// Shared project diagnostics never write to stdout, which may carry LSP frames.
+pub fn config_error(message: *u8) { dprintf(2, "%s\n", message); }
 
 pub struct Dependency { pub name: *u8, pub path: *u8 }
 
@@ -211,17 +214,17 @@ pub fn config_load_at(manifest:*u8) -> Config {
     };
     cfg.storage = match read_path_bytes(manifest, 1048576) {
         Result::Ok(bytes) => bytes,
-        Result::Err(code) => { puts("jxz: cannot read Jxz.toml (1 MiB limit)"); puts(manifest); puts(strerror(code)); return cfg; },
+        Result::Err(code) => { config_error("jxz: cannot read Jxz.toml (1 MiB limit)"); config_error(manifest); config_error(strerror(code)); return cfg; },
     };
     let count: u64 = cfg.storage.len;
     if !vec_push(&mut cfg.storage as *Vec<u8>, 0 as u8) {
-        puts("jxz: cannot allocate manifest terminator");
+        config_error("jxz: cannot allocate manifest terminator");
         config_free(&mut cfg as *Config);
         return cfg;
     }
     let mut scan: u64 = 0;
     while scan < count {
-        if cfg.storage.data[scan] == 0 { puts("jxz: NUL in manifest\0" as *u8); config_free(&cfg as *Config); return cfg; }
+        if cfg.storage.data[scan] == 0 { config_error("jxz: NUL in manifest\0" as *u8); config_free(&cfg as *Config); return cfg; }
         scan = scan + 1;
     }
     if !config_parse(&cfg as *Config) { config_free(&cfg as *Config); }
@@ -265,20 +268,20 @@ fn config_parse(cfg: *Config) -> bool {
         if start[0] == 91 {
             let mut end: *u8 = start + 1;
             while end[0] != 0 && end[0] != 10 && end[0] != 93 { end = end + 1; }
-            if end[0] != 93 { puts("jxz: malformed section\0" as *u8); return false; }
+            if end[0] != 93 { config_error("jxz: malformed section\0" as *u8); return false; }
             next = config_line_tail(end + 1);
-            if next == (0 as *u8) { puts("jxz: malformed section\0" as *u8); return false; }
+            if next == (0 as *u8) { config_error("jxz: malformed section\0" as *u8); return false; }
             end[0] = 0;
             section = 0;
             if strcmp(start + 1, "package\0" as *u8) == 0 { section = 1; }
             if strcmp(start + 1, "build\0" as *u8) == 0 { section = 2; }
             if strcmp(start + 1, "dependencies\0" as *u8) == 0 { section = 3; }
-            if section == 0 { puts("jxz: unsupported manifest table; use [dependencies] name = { path = \"...\" }"); return false; }
+            if section == 0 { config_error("jxz: unsupported manifest table; use [dependencies] name = { path = \"...\" }"); return false; }
         } else if start[0] != 0 && start[0] != 10 && start[0] != 35 {
-            if section == 0 { puts("jxz: top-level manifest keys are not supported\0" as *u8); return false; }
+            if section == 0 { config_error("jxz: top-level manifest keys are not supported\0" as *u8); return false; }
             let mut equal: *u8 = start;
             while equal[0] != 0 && equal[0] != 10 && equal[0] != 61 { equal = equal + 1; }
-            if equal[0] != 61 { puts("jxz: expected key = value\0" as *u8); return false; }
+            if equal[0] != 61 { config_error("jxz: expected key = value\0" as *u8); return false; }
             let raw: *u8 = config_space(equal + 1);
             let mut end: *u8 = equal;
             while end != start {
@@ -291,17 +294,17 @@ fn config_parse(cfg: *Config) -> bool {
                 let mut tail:*u8=0 as *u8;
                 let path:*u8=config_dependency_path(raw,&tail as **u8);
                 if !module_name_valid(start) || path==(0 as *u8) {
-                    puts("jxz: dependencies require an identifier and { path = quoted-local-directory }; online versions are unsupported");
+                    config_error("jxz: dependencies require an identifier and { path = quoted-local-directory }; online versions are unsupported");
                     return false;
                 }
                 let mut i:u64=0;
                 while i<cfg.dependencies.len {
-                    if strcmp(cfg.dependencies.data[i].name,start)==0 { puts("jxz: duplicate dependency name"); return false; }
+                    if strcmp(cfg.dependencies.data[i].name,start)==0 { config_error("jxz: duplicate dependency name"); return false; }
                     i=i+1;
                 }
                 if !vec_push(&mut cfg.dependencies as *Vec<Dependency>,Dependency{name:start,path:path}) { return false; }
                 line=config_line_tail(tail);
-                if line==(0 as *u8) { puts("jxz: trailing dependency garbage"); return false; }
+                if line==(0 as *u8) { config_error("jxz: trailing dependency garbage"); return false; }
                 continue;
             }
             let mut field: i32 = 0;
@@ -318,24 +321,24 @@ fn config_parse(cfg: *Config) -> bool {
             }
             if field == 0 {
                 let metadata: bool = section == 1 && (strcmp(start, "edition\0" as *u8) == 0 || strcmp(start, "description\0" as *u8) == 0 || strcmp(start, "authors\0" as *u8) == 0 || strcmp(start, "license\0" as *u8) == 0 || strcmp(start, "repository\0" as *u8) == 0);
-                if !metadata { puts("jxz: unsupported manifest key\0" as *u8); return false; }
+                if !metadata { config_error("jxz: unsupported manifest key\0" as *u8); return false; }
                 // Existing metadata is ignored, and remains confined to one line.
                 next = raw;
                 while next[0] != 0 && next[0] != 10 { next = next + 1; }
                 if next[0] == 10 { next = next + 1; }
             } else {
-                if (seen & field) != 0 { puts("jxz: duplicate manifest key\0" as *u8); return false; }
+                if (seen & field) != 0 { config_error("jxz: duplicate manifest key\0" as *u8); return false; }
                 seen = seen | field;
                 let mut tail: *u8 = 0 as *u8;
                 if field == 32 || field == 64 {
                     let paths: ConfigPaths = config_paths(raw);
-                    if !paths.valid { puts("jxz: expected an array of nonempty quoted paths\0" as *u8); return false; }
+                    if !paths.valid { config_error("jxz: expected an array of nonempty quoted paths\0" as *u8); return false; }
                     if field == 32 { cfg.module_paths = paths.items; cfg.module_path_count = paths.count; }
                     if field == 64 { cfg.link_objects = paths.items; cfg.link_object_count = paths.count; }
                     tail = paths.tail;
                 } else {
                     let value: *u8 = config_string(raw, &tail as **u8);
-                    if value == (0 as *u8) { puts("jxz: expected a quoted string\0" as *u8); return false; }
+                    if value == (0 as *u8) { config_error("jxz: expected a quoted string\0" as *u8); return false; }
                     if field == 1 { cfg.name = value; }
                     if field == 2 { cfg.version = value; }
                     if field == 4 { cfg.src_dir = value; }
@@ -343,17 +346,17 @@ fn config_parse(cfg: *Config) -> bool {
                     if field == 16 { cfg.main_file = value; }
                 }
                 next = config_line_tail(tail);
-                if next == (0 as *u8) { puts("jxz: trailing manifest value garbage\0" as *u8); return false; }
+                if next == (0 as *u8) { config_error("jxz: trailing manifest value garbage\0" as *u8); return false; }
             }
         }
         line = next;
     }
     if !package_name_valid(cfg.name) || !config_path_valid(cfg.src_dir) || !config_path_valid(cfg.target_dir) {
-        puts("jxz: invalid package name or build path\0" as *u8);
+        config_error("jxz: invalid package name or build path\0" as *u8);
         return false;
     }
     if cfg.main_file != (0 as *u8) {
-        if !config_path_valid(cfg.main_file) { puts("jxz: invalid build.main\0" as *u8); return false; }
+        if !config_path_valid(cfg.main_file) { config_error("jxz: invalid build.main\0" as *u8); return false; }
     }
     cfg.valid = true;
     return true;

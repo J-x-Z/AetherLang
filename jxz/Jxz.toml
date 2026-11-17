@@ -1,6 +1,6 @@
 [package]
 name = "jxz"
-version = "0.1.0"
+version = "0.3.0-dev.3"
 edition = "2026"
 description = "AetherLang Package Manager"
 authors = ["J-x-Z"]
