@@ -1,0 +1,46 @@
+use common::exercise;
+use vec::{Vec, vec_new, vec_reserve, vec_push, vec_get, vec_free};
+use option::{Option, option_is_some};
+extern "C" {
+    fn r01_begin(); fn r01_fail_next(); fn r01_allow();
+    fn r01_calls() -> u64; fn r01_finish() -> i32;
+}
+fn main() -> i32 {
+    r01_begin();
+    let status: i32 = exercise();
+    if status != 0 { return status; }
+    let mut vector: Vec<f32x8> = vec_new();
+    r01_fail_next();
+    if vec_reserve(&vector as *Vec<f32x8>, 2) || vector.data != (0 as *f32x8) || vector.capacity != 0 || vector.len != 0 { return 20; }
+    if !vec_reserve(&vector as *Vec<f32x8>, 2) { return 21; }
+    let data: *f32 = vector.data as *f32;
+    let mut index: u64 = 0;
+    while index < 16 { data[index] = (index + 1) as f32; index = index + 1; }
+    vector.len = 2;
+    let original: *f32x8 = vector.data;
+    r01_fail_next();
+    if vec_reserve(&vector as *Vec<f32x8>, 4) || vector.data != original || vector.capacity != 2 || vector.len != 2 { return 22; }
+    let value: f32x8 = match vec_get(&vector as *Vec<f32x8>, 0) { Option::Some(v) => v, Option::None => { return 23; }, };
+    r01_fail_next();
+    if vec_push(&vector as *Vec<f32x8>, value) || vector.data != original || vector.capacity != 2 || vector.len != 2 { return 24; }
+    index = 0;
+    while index < 16 { if data[index] != (index + 1) as f32 { return 25; } index = index + 1; }
+    if !vec_push(&vector as *Vec<f32x8>, value) { return 26; }
+    vec_free(&vector as *Vec<f32x8>);
+    let mut scalar: Vec<i64> = vec_new();
+    if !vec_push(&scalar as *Vec<i64>, 123) { return 27; }
+    let scalar_data: *i64 = scalar.data;
+    let scalar_capacity: u64 = scalar.capacity;
+    r01_fail_next();
+    if vec_reserve(&scalar as *Vec<i64>, 16) || scalar.data != scalar_data || scalar.capacity != scalar_capacity || scalar.len != 1 || scalar.data[0] != 123 { return 28; }
+    vec_free(&scalar as *Vec<i64>);
+    let calls: u64 = r01_calls();
+    let mut units: Vec<()> = vec_new();
+    r01_fail_next();
+    if !vec_push(&units as *Vec<()>, ()) || !option_is_some(vec_get(&units as *Vec<()>, 0)) { return 29; }
+    if !vec_reserve(&units as *Vec<()>, 10000) || units.len != 1 || units.capacity != 10000 { return 30; }
+    vec_free(&units as *Vec<()>); vec_free(&units as *Vec<()>);
+    if r01_calls() != calls { return 31; }
+    r01_allow();
+    return r01_finish();
+}

@@ -1,0 +1,42 @@
+use vec::{Vec, vec_new, vec_reserve, vec_push, vec_get, vec_set, vec_pop, vec_free};
+use option::Option;
+
+pub fn exercise() -> i32 {
+    let mut vector: Vec<f32x8> = vec_new();
+    if !vec_reserve(&vector as *Vec<f32x8>, 2) { return 1; }
+    if (vector.data as u64) % (align_of(f32x8) as u64) != 0 { return 2; }
+    // Initialize the first vector through its eight scalar lanes, then use
+    // ordinary Vec value copies across repeated growth and set/get/pop.
+    let lanes: *f32 = vector.data as *f32;
+    let mut index: u64 = 0;
+    while index < 8 { lanes[index] = (index + 1) as f32; index = index + 1; }
+    vector.len = 1;
+    let value: f32x8 = match vec_get(&vector as *Vec<f32x8>, 0) {
+        Option::Some(value) => value, Option::None => { vec_free(&vector as *Vec<f32x8>); return 3; },
+    };
+    index = 1;
+    while index < 100 {
+        if !vec_push(&vector as *Vec<f32x8>, value) { vec_free(&vector as *Vec<f32x8>); return 4; }
+        if (vector.data as u64) % (align_of(f32x8) as u64) != 0 { vec_free(&vector as *Vec<f32x8>); return 5; }
+        index = index + 1;
+    }
+    if !vec_set(&vector as *Vec<f32x8>, 50, value) { vec_free(&vector as *Vec<f32x8>); return 6; }
+    index = 0;
+    let data: *f32 = vector.data as *f32;
+    while index < 800 {
+        if data[index] != (index % 8 + 1) as f32 { vec_free(&vector as *Vec<f32x8>); return 7; }
+        index = index + 1;
+    }
+    let last: f32x8 = match vec_pop(&vector as *Vec<f32x8>) {
+        Option::Some(value) => value, Option::None => { vec_free(&vector as *Vec<f32x8>); return 8; },
+    };
+    if ((&last as *f32x8) as *f32)[7] != (8 as f32) || vector.len != 99 { vec_free(&vector as *Vec<f32x8>); return 9; }
+    let original: *f32x8 = vector.data;
+    let capacity: u64 = vector.capacity;
+    if vec_reserve(&vector as *Vec<f32x8>, 18446744073709551615) { vec_free(&vector as *Vec<f32x8>); return 10; }
+    if vector.data != original || vector.capacity != capacity || vector.len != 99 { vec_free(&vector as *Vec<f32x8>); return 11; }
+    vec_free(&vector as *Vec<f32x8>);
+    vec_free(&vector as *Vec<f32x8>);
+    if vector.data != (0 as *f32x8) || vector.len != 0 || vector.capacity != 0 { return 12; }
+    return 0;
+}

@@ -4,8 +4,10 @@
 // vec_free; do not copy a live Vec. Element values have no implicit destructor.
 // get/set copy values; resource-owning elements remain the caller's responsibility.
 extern "C" {
+    fn malloc(size: u64) -> *void;
     fn realloc(pointer: *void, size: u64) -> *void;
     fn free(pointer: *void);
+    fn memcpy(destination: *void, source: *void, size: u64) -> *void;
 }
 use option::Option;
 
@@ -17,6 +19,18 @@ pub struct Vec<T> {
 
 pub fn vec_new<T>() -> Vec<T> {
     Vec { data: 0 as *T, len: 0, capacity: 0 }
+}
+
+// malloc/realloc guarantee fundamental alignment, including u64. Larger
+// alignments use an interior pointer; the original allocation is stored in the
+// preceding pointer-sized header. This keeps Vec's public field layout intact
+// and uses the same portable C allocator/free pair on every target.
+fn vec_release_storage<T>(data: *T) {
+    if size_of(T) == 0 || data == (0 as *T) { return; }
+    if align_of(T) > align_of(u64) {
+        let header: **void = ((data as u64) - size_of(*void) as u64) as **void;
+        free(*header);
+    } else { free(data as *void); }
 }
 
 // Preserve the original buffer, length and capacity if allocation fails.
@@ -33,6 +47,25 @@ pub fn vec_reserve<T>(vector: *Vec<T>, capacity: u64) -> bool {
     }
     let max_bytes: u64 = 9223372036854775807;
     if capacity > max_bytes / element_size { return false; }
+    let alignment: u64 = align_of(T) as u64;
+    if alignment > align_of(u64) as u64 {
+        let header_size: u64 = size_of(*void) as u64;
+        if alignment > max_bytes - header_size { return false; }
+        let overhead: u64 = header_size + alignment - 1;
+        if capacity > (max_bytes - overhead) / element_size { return false; }
+        let allocation: *void = malloc(capacity * element_size + overhead);
+        if allocation == (0 as *void) { return false; }
+        let start: u64 = (allocation as u64) + header_size;
+        let padding: u64 = (alignment - start % alignment) % alignment;
+        let data: *T = (start + padding) as *T;
+        let header: **void = ((data as u64) - header_size) as **void;
+        *header = allocation;
+        if vector.len != 0 { memcpy(data as *void, vector.data as *void, vector.len * element_size); }
+        vec_release_storage(vector.data);
+        vector.data = data;
+        vector.capacity = capacity;
+        return true;
+    }
     let data: *T = realloc(vector.data as *void, capacity * element_size) as *T;
     if data == 0 as *T { return false; }
     vector.data = data;
@@ -76,7 +109,7 @@ pub fn vec_pop<T>(vector: *Vec<T>) -> Option<T> {
 
 // Invalidate after release; calling again on the same Vec is harmless.
 pub fn vec_free<T>(vector: *Vec<T>) {
-    if size_of(T) != 0 { free(vector.data as *void); }
+    vec_release_storage(vector.data);
     vector.data = 0 as *T;
     vector.len = 0;
     vector.capacity = 0;
