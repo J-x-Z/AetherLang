@@ -1,6 +1,48 @@
 # AetherLang 集中升级交付
 
-> 状态更新（2026-11-15）：本文记录2026-11-14快照及当时测试结果。追加多代理审计发现了数值/ABI、名称捕获、效果、分配对齐、JXZ错误处理等未修缺陷，不能将本文的通过记录解释为完整正确性保证。当前执行任务及证据入口见 [MAINLINE_TASKS.md](../MAINLINE_TASKS.md)，交接见 [HANDOFF.md](../HANDOFF.md)。本次仅更新审计与任务状态，没有生成新的编译器发布。
+## 11 月 18 日冻结包与后续实机增量
+
+`c5ed0b6` 的 macOS arm64 安装包包含 C-only 和 LLVM+C 编译器、两版 JXZ、Core 第四代和匹配的 stdlib；整包 manifest SHA-256 为 `a7ab8bf0f038a1d8ddc356fc2cefcbc911f2c736319d5f89c9be26d6217dc2e7`。两版 release 分别通过 116 个自举检查。安装至新前缀后，在独立工作目录完成 JXZ 创建、构建、执行、测试发现和清理。包目录为 `WORK/releases/aetherlang-foundations-20261118`。
+
+同机、同输入、每组七次。与 `c964ccb` 相比，LLVM+C 编译器由 3,834,616 B 增至 4,108,536 B。C/LLVM 生成耗时中位数分别从 15.70/18.56 ms 变为 30.14/30.96 ms；编译器峰值 RSS 从 22,200,320/29,802,496 B 变为 22,691,840/30,031,872 B。两者 O2 程序均从 33,496 B 变为 33,432 B，执行中位数从 11.18/11.22 ms 变为 12.74/12.69 ms。两版采样分时进行，短程序耗时含进程启动与系统调度。保留回退数据和每次样本于 `WORK/final-review-20261118`。长服务 C 和 LLVM 在 2,000 至 100,000 个更新期间分配驻留稳定，分别为 1,720,320 B 和 1,736,704 B，均为 4 个 fd。
+
+后续 `dc6ae97`、`def6d5c`、`6e91161` 增加最小作用域所有权、JXZ 远端获取以及临时文件故障保护。数值转换 out-pointer 与 Linux 临时目录 C 原型由 `0bdfe56`、`c8456f5` 修复。GPU 快照 `4d36291` 通过 CPU、原生 Metal 和 Vulkan 队列执行同一 Aether 程序。Vulkan adapter 的可复现入口为 `scripts/build_vulkan.py --output libaether_vulkan.so`；交叉构建可指定 NDK 的 `--cc`。额外 SDK 的静态/动态库路径由 `--include` 与 `--library` 传入。
+
+| 设备 | 数值与边界验收 | 存储及观测 |
+| --- | --- | --- |
+| Apple M4 | 原生 Metal C/LLVM O0/O2 对照及 ASan/UBSan；MoltenVK 的 11×13×9 跨步乘法全部 99 项吻合 | Metal 按页对齐的 backing 和参数缓冲计费 |
+| NVIDIA RTX 3060 Laptop | C/LLVM 两个 Vulkan 程序都通过 99 项 oracle、上层张量结果与同步/错误检查 | 映射堆 6 GiB，本次 SDK 报可用 6,049,955,840 B。上层测试显式预算峰值 1 MiB；进程峰值 RSS 各为 187,136/185,620 KiB |
+| Fold6 Adreno 750 | Android 29+ NDK 的 C/LLVM 产物通过相同两组程序，数值误差 0，队列完成 4 次提交 | 映射堆 11,654,283,264 B，单缓冲上限 128 MiB；未报告可用余量。上层测试峰值 1 MiB；进程峰值 RSS 各为 34,840/34,884 KiB |
+
+Vulkan 在分配前按驱动返回的 memory requirements 检查预算，命令与描述符的驱动内部占用另计。带 stride 的 99 项测试同时校验未覆盖元素、已经用尽的缓冲预算和越界拒绝。SDK 分配与同步规则依据 [Khronos Vulkan Memory Allocation](https://docs.vulkan.org/spec/latest/chapters/memory.html) 和 [Synchronization](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)。真设备日志位于 `OUT/vulkan-build` 及 `WORK/compute-runtime-20261118`。
+
+## 2026-11-18 本地开发版
+
+本轮沿用 `work/aetherlang-upgrade`，从 `4cb768c` 继续。性能对照为上次冻结的 `c964ccb`。原审计 29 组和 Shell 后补 5 组的复现、提交及验收入口见[主线任务](../MAINLINE_TASKS.md)。
+
+| 领域 | 升级前 | 当前实测能力 |
+| --- | --- | --- |
+| 数值、模块与调用 | f32 算式先按 f64 计算，自定义 add 被误认成指针操作，Self 与模块私有性在后端失真 | 语义、IR、效果与导航共用解析结果。原 f32 判例在两后端 O0/O2/O3 都得到 0。递归 Vec 可插入、读取和释放 |
+| 元组、接口与契约 | 元组仅能解析，缺方法的接口实现也能通过，后置条件未执行 | 非空元组可嵌套、复制、逐字段初始化与返回，并受借用检查约束。函数入口与正常出口都执行契约，包含 `?`；失败触发 trap。返回表达式仅求值一次 |
+| 系统开发 | 窄整数 C 互调、32 位指针整数、Darwin 部署版本及 C void 指针出现跨层差异 | 通过独立 C 调用方、实际 wasm32 执行、Mach-O 对象和可执行文件验证。no_std 纯计算可无系统头文件生成对象；受限 x86_64 中断函数有 iretq 对象证据 |
+| 标准库和资源 | Vec 对齐不足，文件接口丢失长度/errno，旧模块无法用现有前端导入 | Vec 超对齐/失败回滚，限额二进制流和文件读写，显式释放的 arena/stack，严格的小型 TOML 子集、可增长的标量 DAG、OpenBLAS 和原生 Metal 计算均有消费者 |
+| 工具链 | JXZ 在产物和登记之间中断可能损坏状态，测试发现会吞错误，不支持本地依赖 | JXZ 0.3.0-dev.2 持锁恢复、解析本地依赖图、拒绝循环和重名，库修改后重编。安装器按清单校验并原子切换整个版本。CLI、LSP 使用同一包入口解析器 |
+| 自举、诊断 | Core helper 抢占外部名称，u64 大数转换失败，过深表达式能使主编译器异常退出 | 七模块 Core 编译器保留外部符号和完整 u64 转换。深度越界产生有源位置的诊断，LSP 在修正文档后可继续工作 |
+
+### 原生工作负载
+
+- JXZ 的配置、依赖图和事务实现均用 Aether 编写。真实项目覆盖构建、测试、运行、清理、发现权限错误、子进程失败、并发排斥及 SIGKILL 恢复。
+- accumulator 在同一进程处理 2,000 次更新、EOF、输出及日志失败。堆排序、搜索和归约程序输出 `compute 17218136811 46 1048510 33332.833335`。另有 4,000 节点标量 DAG、300 项含 Unicode 的 TOML 文档。
+- Metal 共享缓冲区运行 257 项 f32 仿射变换，Aether 逐项校对并释放资源。输出 `metal registry=4294968333 values=257 first=-255 last=257`。OpenBLAS 验证矩阵乘法、向量运算及双精度点积；LLVM 与 JNI 的消费者链接本机真正的 SDK。
+- Metal 通用计算与 CUDA-Q 各有自己的设备入口。此前 RTX 3060 结果属于历史版本。本轮尚无 Metal 量子模拟、Adreno 实机峰值或跨设备自动调度的验收。
+
+### 使用边界
+
+Core 的词法、解析、检查与 C 生成器用 Aether 编写并逐代自编译，机器码由宿主 C 编译器生成。Rust/LLVM 主编译器仍由 Cargo 构建。捕获闭包会明确报 E2403，tuple 跨 C ABI 按值传递报 E2404。资源结构体仍需按 API 的约定显式交接与释放。下一项语言基础优先处理 owner 的隐式复制与作用域退出清理，覆盖普通返回和 `?`。
+
+复现环境见[交接](../HANDOFF.md)，兼容性变化见[迁移说明](MIGRATION.md)。本地包使用示例见[JXZ](../jxz/README.md)，BLAS 与 Metal 见[数学接口](MATH.md)。Shell 自身的产品固定值由独立项目维护。
+
+## 2026-11-14 交付与 11 月 15 日增量（历史版本）
 
 2026-11-14，仓库 `J-x-Z/AetherLang`，本地分支 `work/aetherlang-upgrade`。原始起点为 `aceff1522790df3edfe5c711db5884350ab1b44a`。全部源码、工具链、缓存、产物和证据在 `/Volumes/WINDOWS/work`，没有推送远端。最终功能源码为 `0709b33`，主编译器源码为 `a017d18`；交付提交和产物 SHA 见外置 `release/manifest.json`。
 

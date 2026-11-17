@@ -2,7 +2,7 @@
 
 ## 本地开发版本
 
-源码在 `/Volumes/WINDOWS/work/AetherLang` 的 `work/aetherlang-upgrade`。最初起点 `aceff15`，本次续做起点 `4cb768c`，本轮最近已验证的工具链提交为 `50dbde6`。用 `git log -1 --oneline` 查看工作树当前提交。完整任务与历史复现见 [主线任务](MAINLINE_TASKS.md)，历次版本见 [升级报告](docs/UPGRADE.md)。
+源码在 `/Volumes/WINDOWS/work/AetherLang` 的 `work/aetherlang-upgrade`。最初起点 `aceff15`，本次续做起点 `4cb768c`，可安装的 macOS 基础冻结为 `c5ed0b6`，异构运行时快照为 `4d36291`。用 `git log -1 --oneline` 查看工作树当前提交。完整任务与历史复现见 [主线任务](MAINLINE_TASKS.md)，历次版本见 [升级报告](docs/UPGRADE.md)。
 
 ## 构建与验收
 
@@ -25,11 +25,11 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 AETHER_CUDAQ_BRIDGE="$WORK/cudaq/libaethe
 
 - `47c4649` 修复 LLVM O2 删除中断帧写入；QEMU x86_64 的软件中断及带错误码的 #GP 在 C/LLVM O0/O2 四组均正确返回。证据在 `$OUT/qemu-final`。
 - `2919a19` 增加 Bytes、UTF-8 与拥有字节键的 Map，`58e87d0` 把 Vec 的真实分配 ABI 带到 wasm32。ABI 修复 `3013c5d` 经过 52 个目标布局命令。JXZ `50dbde6` 提供与 build 共用配置的 stdio LSP。
-- T06 已有真实 fd 复用的错关复现和 opt-in owner 第一段的双后端原生执行。T21 的 CPU/Metal 运行时及 T27 的获取、锁定、缓存正在实施。具体完成状态与长线验收保存在主线文档。
+- T06 显式 owner 和析构已本地提交，证据 `WORK/t06-owned`。JXZ 已可获取、锁定、更新和离线复建，多版本冲突与临时文件故障注入在 `WORK/registry`。T21/T22 的 Aether 队列已在 Apple M4、RTX 3060、Adreno 750 执行，参见升级报告与 `OUT/vulkan-build`。
 
 ## 下一项具体任务
 
-1. 完成 T06 第一段的负例及作用域清理。旧式浅复制复现在 `$WORK/t06-boundary`，定向执行在 `$WORK/t06-owned`。
-2. 为同一冻结源码串行运行默认套件和两个 release 种子的四代自举，安装包与基准使用 `scripts/package.py`、`scripts/benchmark.py` 和 `scripts/measure_service.py`。保存比对双方的哈希。
-3. T18 的 CachyOS 构建账户和旧 LLVM/cache 已实机核实，结果在 `$WORK/linux-mainline-20261118/live-preflight.json`。使用独立源码/产物目录，保留 Shell 已固定的旧包。
-4. 按 T01–T29 的原验收标准继续补齐后段语言和计算工作；当前设备和后端分别记录。阶段包可以独立使用，主线按原清单继续。
+1. T18 继续检查 CachyOS 冻结快照 `4d36291` 的两套 release、自举和包外 JXZ。原生 Clang 23 发现的 strtod、mkdtemp ABI 已分别在 `0bdfe56`、`c8456f5` 修复，120 项宿主 ABI 命令通过。日志在 `WORK/linux-mainline-20261118`。
+2. T24 使用同一 compute 队列和预算在 CPU、Metal、Vulkan 执行 16q，检查振幅、梯度、错误释放。T23 复用队列实现科学算子与工作负载。
+3. T25 实现 const generics。T26 将 Core 自身的模块读取、解析和名称查找放入自举构建链。各自用正反例及真实执行复验。
+4. 基础冻结安装包在 `WORK/releases/aetherlang-foundations-20261118`，七次采样比较在 `WORK/final-review-20261118/comparison.json`。最终按主线保留独立代码复核、Shell 各宿主联验和固定包。
