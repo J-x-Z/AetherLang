@@ -1,5 +1,11 @@
 # AetherLang 工程交接
 
+## 当前开发轮 2026-11-17
+
+分支从 `4cb768c` 续做，已保存至 `290c83e`（另有集成中的改动）。`MAINLINE_TASKS.md` 本轮进度表记录提交与验收。工作环境可从 `/Volumes/WINDOWS/work/aetherlang-upgrade-work/typed-facts-20261117/env.sh` 加载。JXZ/stdio 在 Mac 与 Linux Clang 23 验收，Core 四代自举 116 项通过。B4、Darwin、接口、JXZ 等继续在当前工作树集成，按日志和 Git 差异继续。上一轮完整入口止于安装副本误认，已定向修复，仍须在最终源码重跑。
+
+### 历史快照
+
 2026-11-14升级快照已交付；2026-11-15追加审计发现新的未修问题，当前不能视为稳定发布。仓库 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`，只做本地提交，未推送。原始起点 `aceff1522790df3edfe5c711db5884350ab1b44a`；最终功能源码 `0709b338b2582906f02f12a2558ab16b783ad086`；主编译器源码 `a017d18`。2026-11-14交付由原外置release/manifest.json标识；最新开发版源码为`c964ccb`，新版本包见末尾，当前Git HEAD可用`git rev-parse HEAD`查询。
 
 所有资产在 `/Volumes/WINDOWS/work/aetherlang-upgrade-work`（下称 WORK）。已有源码与历史证据保留；没有清理其他项目或修改全局Rust配置。远端NVIDIA验收任务目录 `/tmp/aetherlang-cudaq-20261114` 已取证并删除，未关闭设备或修改全局SDK。
