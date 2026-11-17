@@ -8,11 +8,15 @@ use crate::frontend::ast::*;
 use crate::frontend::lexer::Lexer;
 use crate::utils::{Span, Error, Result};
 
+#[path = "parser_limits.rs"]
+mod limits;
+
 /// The parser
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     allow_struct_literal: bool,
+    limits: limits::ParseLimits,
 }
 
 impl Parser {
@@ -22,12 +26,13 @@ impl Parser {
             tokens: lexer.tokenize(),
             pos: 0,
             allow_struct_literal: true,
+            limits: limits::ParseLimits::default(),
         }
     }
 
     /// Create a parser from pre-tokenized input
     pub fn from_tokens(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0, allow_struct_literal: true }
+        Self { tokens, pos: 0, allow_struct_literal: true, limits: limits::ParseLimits::default() }
     }
 
     /// Parse generic parameters: <T, U> or <T, const N: usize>
@@ -233,6 +238,13 @@ impl Parser {
 
     /// Parse a top-level item
     fn parse_item(&mut self) -> Result<Item> {
+        self.limits.enter(self.current().span)?;
+        let result = self.parse_item_inner();
+        self.limits.leave();
+        result
+    }
+
+    fn parse_item_inner(&mut self) -> Result<Item> {
         // Both annotation spellings may be mixed without changing their meaning.
         let mut attributes = Vec::new();
         while self.check(&TokenKind::Hash) || self.check(&TokenKind::At) {
@@ -602,6 +614,13 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Result<Type> {
+        self.limits.enter(self.current().span)?;
+        let result = self.parse_type_inner();
+        self.limits.leave();
+        result
+    }
+
+    fn parse_type_inner(&mut self) -> Result<Type> {
         let start = self.current().span;
 
         // Ownership modifiers: own T, ref T, mut T, shared T
@@ -749,6 +768,14 @@ impl Parser {
     }
 
     fn parse_block(&mut self) -> Result<Block> {
+        self.limits.enter(self.current().span)?;
+        let result = self.parse_block_inner();
+        self.limits.leave();
+        if let Ok(value) = &result { self.limits.block(value)?; }
+        result
+    }
+
+    fn parse_block_inner(&mut self) -> Result<Block> {
         let start = self.current().span;
         self.expect(TokenKind::LBrace)?;
 
@@ -860,6 +887,14 @@ impl Parser {
 
     /// Parse expression with binding power (Pratt parsing)
     fn parse_expr_bp(&mut self, min_bp: u8) -> Result<Expr> {
+        self.limits.enter(self.current().span)?;
+        let result = self.parse_expr_bp_inner(min_bp);
+        self.limits.leave();
+        if let Ok(value) = &result { self.limits.expression(value)?; }
+        result
+    }
+
+    fn parse_expr_bp_inner(&mut self, min_bp: u8) -> Result<Expr> {
         let mut left = self.parse_primary()?;
 
         loop {
@@ -873,6 +908,7 @@ impl Parser {
                 }
                 self.advance(); // consume (
                 left = self.parse_call_rest(left)?;
+                self.limits.expression(&left)?;
                 continue;
             }
 
@@ -884,6 +920,7 @@ impl Parser {
                 let end = self.parse_expr_bp(bp + 1)?;
                 let span = left.span().merge(&end.span());
                 left = Expr::Range { start: Some(Box::new(left)), end: Some(Box::new(end)), span };
+                self.limits.expression(&left)?;
                 continue;
             }
 
@@ -906,6 +943,7 @@ impl Parser {
                     ty,
                     span,
                 };
+                self.limits.expression(&left)?;
                 continue;
             }
 
@@ -931,6 +969,7 @@ impl Parser {
                 right: Box::new(right),
                 span,
             };
+            self.limits.expression(&left)?;
         }
 
         Ok(left)
@@ -978,6 +1017,35 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Result<Expr> {
+        self.limits.enter(self.current().span)?;
+        let result = self.parse_primary_inner();
+        self.limits.leave();
+        if let Ok(value) = &result { self.limits.expression(value)?; }
+        result
+    }
+
+    // Keep recursive prefix parsing outside the large atom match. In debug
+    // builds that match has a sizeable frame even when just parsing a '-'.
+    fn parse_primary_inner(&mut self) -> Result<Expr> {
+        if !matches!(self.current_kind(), TokenKind::Minus | TokenKind::Tilde | TokenKind::Not | TokenKind::Star | TokenKind::And) {
+            return self.parse_atom();
+        }
+        let token = self.advance();
+        let mutable = token.kind == TokenKind::And && self.consume(&TokenKind::Mut);
+        let inner = self.parse_primary()?;
+        let span = token.span.merge(&inner.span());
+        let expr = match token.kind {
+            TokenKind::Star => Expr::Deref { expr: Box::new(inner), span },
+            TokenKind::And => Expr::Ref { expr: Box::new(inner), mutable, span },
+            kind => Expr::Unary {
+                op: match kind { TokenKind::Minus => UnOp::Neg, TokenKind::Tilde => UnOp::BitNot, _ => UnOp::Not },
+                expr: Box::new(inner), span,
+            },
+        };
+        self.parse_postfix(expr)
+    }
+
+    fn parse_atom(&mut self) -> Result<Expr> {
         let token = self.current().clone();
 
         let expr = match &token.kind {
@@ -1134,49 +1202,6 @@ impl Parser {
                     iter: Box::new(iter),
                     span: token.span.merge(&body.span),
                     body,
-                }
-            }
-
-            // Unary operators
-            TokenKind::Minus => {
-                self.advance();
-                let expr = self.parse_primary()?;
-                Expr::Unary {
-                    op: UnOp::Neg,
-                    span: token.span.merge(&expr.span()),
-                    expr: Box::new(expr),
-                }
-            }
-            TokenKind::Tilde => {
-                self.advance();
-                let expr = self.parse_primary()?;
-                Expr::Unary { op: UnOp::BitNot, span: token.span.merge(&expr.span()), expr: Box::new(expr) }
-            }
-            TokenKind::Not => {
-                self.advance();
-                let expr = self.parse_primary()?;
-                Expr::Unary {
-                    op: UnOp::Not,
-                    span: token.span.merge(&expr.span()),
-                    expr: Box::new(expr),
-                }
-            }
-            TokenKind::Star => {
-                self.advance();
-                let expr = self.parse_primary()?;
-                Expr::Deref {
-                    span: token.span.merge(&expr.span()),
-                    expr: Box::new(expr),
-                }
-            }
-            TokenKind::And => {
-                self.advance();
-                let mutable = self.consume(&TokenKind::Mut);
-                let expr = self.parse_primary()?;
-                Expr::Ref {
-                    mutable,
-                    span: token.span.merge(&expr.span()),
-                    expr: Box::new(expr),
                 }
             }
 
@@ -1401,6 +1426,7 @@ impl Parser {
     }
 
     fn parse_postfix(&mut self, mut expr: Expr) -> Result<Expr> {
+        self.limits.expression(&expr)?;
         loop {
             if self.consume(&TokenKind::LParen) {
                 expr = self.parse_call_rest(expr)?;
@@ -1448,11 +1474,20 @@ impl Parser {
             } else {
                 break;
             }
+            self.limits.expression(&expr)?;
         }
         Ok(expr)
     }
 
     fn parse_if_expr(&mut self) -> Result<Expr> {
+        self.limits.enter(self.current().span)?;
+        let result = self.parse_if_expr_inner();
+        self.limits.leave();
+        if let Ok(value) = &result { self.limits.expression(value)?; }
+        result
+    }
+
+    fn parse_if_expr_inner(&mut self) -> Result<Expr> {
         let start = self.current().span;
         self.expect(TokenKind::If)?;
 
@@ -1525,6 +1560,13 @@ impl Parser {
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern> {
+        self.limits.enter(self.current().span)?;
+        let result = self.parse_pattern_inner();
+        self.limits.leave();
+        result
+    }
+
+    fn parse_pattern_inner(&mut self) -> Result<Pattern> {
         let token = self.current().clone();
 
         match &token.kind {
@@ -1964,6 +2006,13 @@ impl Parser {
 
     /// Parse module declaration: mod name { items } or mod name;
     fn parse_mod(&mut self) -> Result<ModuleDef> {
+        self.limits.enter(self.current().span)?;
+        let result = self.parse_mod_inner();
+        self.limits.leave();
+        result
+    }
+
+    fn parse_mod_inner(&mut self) -> Result<ModuleDef> {
         let start = self.current().span;
         self.expect(TokenKind::Mod)?;
         

@@ -2,9 +2,13 @@ use super::token::{Token, TokenKind, Span};
 use super::lexer::Lexer;
 use super::ast::*;
 
+#[path = "parser_limits.rs"]
+mod limits;
+
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    limits: limits::ParseLimits,
 }
 
 impl Parser {
@@ -24,6 +28,7 @@ impl Parser {
         Self {
             tokens,
             pos: 0,
+            limits: limits::ParseLimits::default(),
         }
     }
 
@@ -98,6 +103,13 @@ impl Parser {
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
+        self.limits.enter(self.peek().span)?;
+        let result = self.parse_stmt_inner();
+        self.limits.leave();
+        result
+    }
+
+    fn parse_stmt_inner(&mut self) -> Result<Stmt, String> {
         match self.peek().kind {
             TokenKind::Def | TokenKind::Comptime => self.parse_function_def(),
             TokenKind::If => self.parse_if(),
@@ -195,6 +207,13 @@ impl Parser {
     }
     
     fn parse_type_hint(&mut self) -> Result<TypeHint, String> {
+        self.limits.enter(self.peek().span)?;
+        let result = self.parse_type_hint_inner();
+        self.limits.leave();
+        result
+    }
+
+    fn parse_type_hint_inner(&mut self) -> Result<TypeHint, String> {
         let t = self.peek().clone();
         let name = match t.kind {
             TokenKind::Identifier(s) => { self.advance(); s },
@@ -216,6 +235,13 @@ impl Parser {
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
+        self.limits.enter(self.peek().span)?;
+        let result = self.parse_block_inner();
+        self.limits.leave();
+        result
+    }
+
+    fn parse_block_inner(&mut self) -> Result<Vec<Stmt>, String> {
         self.consume(TokenKind::Indent, "Expected indented block")?;
         let mut stmts = Vec::new();
         while self.peek().kind != TokenKind::Dedent && self.peek().kind != TokenKind::Eof {
@@ -253,6 +279,13 @@ impl Parser {
     }
 
     fn parse_if_tail(&mut self) -> Result<Option<Vec<Stmt>>, String> {
+        self.limits.enter(self.peek().span)?;
+        let result = self.parse_if_tail_inner();
+        self.limits.leave();
+        result
+    }
+
+    fn parse_if_tail_inner(&mut self) -> Result<Option<Vec<Stmt>>, String> {
         if self.match_kind(TokenKind::Else) {
             self.consume(TokenKind::Colon, "Expected ':'")?;
             self.consume(TokenKind::Newline, "Expected newline")?;
@@ -345,6 +378,14 @@ impl Parser {
     fn parse_expr(&mut self) -> Result<Expr, String> { self.parse_binary(0) }
 
     fn parse_binary(&mut self, minimum: u8) -> Result<Expr, String> {
+        self.limits.enter(self.peek().span)?;
+        let result = self.parse_binary_inner(minimum);
+        self.limits.leave();
+        if let Ok(value) = &result { self.limits.expression(value)?; }
+        result
+    }
+
+    fn parse_binary_inner(&mut self, minimum: u8) -> Result<Expr, String> {
         let mut left = self.parse_unary()?;
         loop {
             let (precedence, op) = match self.peek().kind {
@@ -359,19 +400,31 @@ impl Parser {
             if precedence < minimum { break; }
             self.advance();
             let right = self.parse_binary(precedence + 1)?;
-            let span = left.span_owned();
+            let mut span = left.span_owned();
+            span.end = right.span().end;
             left = Expr::Binary { left: Box::new(left), op, right: Box::new(right), span };
+            self.limits.expression(&left)?;
         }
         Ok(left)
     }
 
     fn parse_unary(&mut self) -> Result<Expr, String> {
+        self.limits.enter(self.peek().span)?;
+        let result = self.parse_unary_inner();
+        self.limits.leave();
+        if let Ok(value) = &result { self.limits.expression(value)?; }
+        result
+    }
+
+    fn parse_unary_inner(&mut self) -> Result<Expr, String> {
         let token = self.peek().clone();
         let op = match token.kind { TokenKind::Minus => Some(UnaryOp::Neg), TokenKind::Not => Some(UnaryOp::Not), _ => None };
         if let Some(op) = op {
             self.advance();
             let expr = if matches!(op, UnaryOp::Not) { self.parse_binary(3)? } else { self.parse_unary()? };
-            return Ok(Expr::Unary { op, expr: Box::new(expr), span: token.span });
+            let mut span = token.span;
+            span.end = expr.span().end;
+            return Ok(Expr::Unary { op, expr: Box::new(expr), span });
         }
         self.parse_call()
     }
@@ -391,29 +444,34 @@ impl Parser {
                     }
                 }
                 self.consume(TokenKind::RParen, "Expected ')'")?;
-                expr = Expr::Call { 
-                    func: Box::new(expr.clone()), 
-                    args, 
-                    span: expr.span_owned() 
-                };
+                let mut span = expr.span_owned();
+                span.end = self.tokens[self.pos - 1].span.end;
+                expr = Expr::Call { func: Box::new(expr), args, span };
             } else if self.match_kind(TokenKind::Dot) {
                 let name = match self.peek().kind.clone() {
                     TokenKind::Identifier(s) => { self.advance(); s },
                     _ => return Err("Expected field name".to_string()),
                 };
-                expr = Expr::FieldAccess {
-                    target: Box::new(expr.clone()),
-                    field: name,
-                    span: expr.span_owned()
-                };
+                let mut span = expr.span_owned();
+                span.end = self.tokens[self.pos - 1].span.end;
+                expr = Expr::FieldAccess { target: Box::new(expr), field: name, span };
             } else {
                 break;
             }
+            self.limits.expression(&expr)?;
         }
         Ok(expr)
     }
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
+        self.limits.enter(self.peek().span)?;
+        let result = self.parse_primary_inner();
+        self.limits.leave();
+        if let Ok(value) = &result { self.limits.expression(value)?; }
+        result
+    }
+
+    fn parse_primary_inner(&mut self) -> Result<Expr, String> {
         let t = self.peek().clone();
         match t.kind {
             TokenKind::Identifier(s) => {
