@@ -1,0 +1,11 @@
+use path::{path_join_checked,make_directories_result};
+use result::Result;
+use posix::EINVAL;
+extern "C"{fn free(p:*void);fn strcmp(a:*u8,b:*u8)->i32;}
+fn main(argc:i32,argv:**u8)->i32{
+    if argc!=2{return 125;}
+    match path_join_checked(0 as *u8,"path"){Result::Err(n)=>{if n!=EINVAL{return 126;}},Result::Ok(_)=>{return 127;},}
+    let value:*u8=match path_join_checked("dir","file"){Result::Ok(p)=>p,Result::Err(_)=>{return 128;},};
+    let ok:bool=strcmp(value,"dir/file")==0;free(value as *void);if !ok{return 129;}
+    match make_directories_result(argv[1]){Result::Ok(_)=>0,Result::Err(n)=>n,}
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native foundation and targeted I/O failures; no Cargo invocation or downloads."""
 import argparse
+import errno
 import json
 import os
 from pathlib import Path
@@ -52,6 +53,7 @@ class RuntimeFoundation(unittest.TestCase):
             raise AssertionError(result.stderr)
         for backend in ARGS.backends:
             for name, source in [('foundation', ROOT / 'tests/regressions/runtime/foundation.aeth'),
+                                 ('directories', ROOT / 'tests/regressions/runtime/directories.aeth'),
                                  ('byte_stream', ROOT / 'tests/regressions/runtime/byte_stream.aeth'),
                                  ('file_errors', ROOT / 'tests/regressions/runtime/file_errors.aeth'),
                                  ('accumulator', ROOT / 'examples/upgrade/accumulator.aeth')]:
@@ -92,6 +94,31 @@ class RuntimeFoundation(unittest.TestCase):
                     else:
                         self.assertFalse(target.exists())
                     RECORDS.append(dict(test='bounded-binary-stream', backend=backend, bytes=count, exit=result.returncode))
+
+    def test_recursive_directory_errors_and_search_permissions(self):
+        file = self.work / 'regular'
+        file.write_bytes(b'original')
+        locked = self.work / 'locked'
+        searchable = self.work / 'searchable'
+        locked.mkdir()
+        searchable.mkdir()
+        (searchable/'existing').mkdir()
+        locked.chmod(0o500)
+        searchable.chmod(0o300)
+        try:
+            for backend in ARGS.backends:
+                for arg, code in [('', errno.EINVAL),('/', 0),(str(self.work)+'/multi//a/b/', 0),
+                                  (str(file), errno.ENOTDIR),(str(file/'child'), errno.ENOTDIR)]:
+                    self.record(backend,'mkdir-result',command([BINARIES['directories', backend], arg]),code)
+                if os.geteuid() != 0:
+                    self.record(backend,'mkdir-denied',command([BINARIES['directories', backend], locked/'child']),errno.EACCES)
+                    self.record(backend,'mkdir-searchable',command([BINARIES['directories', backend], searchable/'existing'/backend]),0)
+                    self.assertTrue((searchable/'existing'/backend).is_dir())
+            self.assertEqual(file.read_bytes(), b'original')
+            self.assertTrue((self.work/'multi/a/b').is_dir())
+        finally:
+            locked.chmod(0o700)
+            searchable.chmod(0o700)
 
     def test_file_write_checks_buffered_close_errors(self):
         for backend in ARGS.backends:

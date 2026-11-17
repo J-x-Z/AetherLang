@@ -1,7 +1,8 @@
 // The compiler owns backend selection and linking; JXZ owns project policy.
 use config::{Config, config_load, config_free, package_name_valid, config_error};
 use process::{process_run, environment_tool};
-use path::{path_join, make_directories};
+use path::{path_join, make_directories_result};
+use result::Result;
 use output::{Publication, output_lock, output_unlock, output_compiler_inherits, output_recover, publication_prepare, publication_publish, publication_free};
 use posix::ENOENT;
 use vec::{Vec,vec_new,vec_push,vec_free};
@@ -146,7 +147,10 @@ pub fn language_server() -> i32 {
 
 pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
     if !dependencies_resolve(cfg) { return 1; }
-    if !make_directories(cfg.target_dir) { return 1; }
+    match make_directories_result(cfg.target_dir) {
+        Result::Ok(_) => {},
+        Result::Err(e) => { config_error(strerror(e)); return 1; },
+    }
     let lock: *void = output_lock(cfg.target_dir);
     if lock == (0 as *void) { return 1; }
     if !dependencies_record(cfg,cfg.target_dir) { output_unlock(lock); return 1; }
