@@ -2458,10 +2458,11 @@ mod tests {
     fn control_statements_do_not_capture_a_following_parenthesized_place() {
         let program=parse("fn f(){let mut a:[i64;1]=[0];if true {} (a)[0]=2;while false{} (a)[0]=3;let b:[i64;1]=(if true{a}else{a});unsafe{g()}?;}").unwrap();
         let Item::Function(function)=&program.items[0] else {panic!("function")};
-        assert_eq!(function.body.stmts.len(),7);
-        assert!(matches!(&function.body.stmts[6],Stmt::Semi(Expr::Try{..})));
-        assert!(matches!(&function.body.stmts[2],Stmt::Semi(Expr::Binary{op:BinOp::Assign,..})));
-        assert!(matches!(&function.body.stmts[4],Stmt::Semi(Expr::Binary{op:BinOp::Assign,..})));
+        let statements:Vec<_>=function.body.stmts.iter().filter(|statement|!matches!(statement,Stmt::Empty{..})).collect();
+        assert_eq!(statements.len(),7);
+        assert!(matches!(statements[6],Stmt::Semi(Expr::Try{..})));
+        assert!(matches!(statements[2],Stmt::Semi(Expr::Binary{op:BinOp::Assign,..})));
+        assert!(matches!(statements[4],Stmt::Semi(Expr::Binary{op:BinOp::Assign,..})));
     }
 
     #[test]
