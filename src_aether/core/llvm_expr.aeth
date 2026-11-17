@@ -34,6 +34,14 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
   if node.decl.kind==BN_CONST{ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr @a%d_c%d\n",ctx.c_namespace,node.decl.id);return id;}
   return ll_load(ctx,node.ty,ll_place(ctx,node));
  }
+ if node.kind==BN_STRUCT_VALUE{
+  let mut field:*BootNode=node.params;let mut value:i32=0;
+  if field==(0 as *BootNode){ll_begin(ctx,id);ll_text(ctx,"select i1 true, ");ll_type(ctx,node.ty);ll_text(ctx," zeroinitializer, ");ll_type(ctx,node.ty);ll_text(ctx," zeroinitializer\n");return id;}
+  while field!=(0 as *BootNode){
+   let element:i32=ll_expr(ctx,field.left);let next:i32=ll_id(ctx);ll_begin(ctx,next);ll_text(ctx,"insertvalue ");ll_type(ctx,node.ty);ll_text(ctx," ");
+   if value==0{ll_text(ctx,"poison");}else{ll_reg(ctx,value);}ll_text(ctx,", ");ll_value(ctx,field.ty,element);fprintf(ctx.output,", %d\n",ll_field_index(node.ty,field.decl));value=next;field=field.next;
+  }return value;
+ }
  if node.kind==BN_SIZEOF{
   let address:i32=ll_id(ctx);ll_begin(ctx,address);ll_text(ctx,"getelementptr ");ll_type(ctx,node.aux);ll_text(ctx,", ptr null, i64 1\n");
   ll_begin(ctx,id);fprintf(ctx.output,"ptrtoint ptr %%r%d to i64\n",address);return id;

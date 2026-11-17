@@ -156,6 +156,14 @@ run('sanitized-emit-self',[w/'sanitized',entry,'--emit-llvm','-o',w/'sanitized.l
 equal('sanitized-llvm-identical',w/'sanitized.ll',w/'stage2.ll')
 run('sanitized-module-emission',[sys.executable,root/'tests/bootstrap_modules.py','--compiler',w/'sanitized',
                                 '--format','llvm','--work-dir',w/'modules-sanitized','--cc',cc],env=sanenv)
+run('existing-production-consumers',[sys.executable,root/'tests/bootstrap_production.py','--compiler',stages[4],
+                                      '--work-dir',w/'production'])
+for backend in ['c','llvm']:
+    suffix='ll' if backend=='llvm' else 'c'
+    output=w/('sanitized-standard.'+suffix)
+    run('sanitized-standard-'+backend,[w/'sanitized',root/'tests/regressions/bootstrap/standard_cli.aeth',
+                                      '-I',root/'stdlib',*(['--emit-llvm'] if backend=='llvm' else []),'-o',output],env=sanenv)
+    equal('sanitized-standard-identical-'+backend,output,w/'production'/('standard_cli.'+suffix))
 metadata['artifacts']={file.name:dict(bytes=file.stat().st_size,sha256=hashlib.sha256(file.read_bytes()).hexdigest())
                       for file in [*stages.values(),w/'stage2.ll',w/'stage3.ll',w/'stage4.ll']}
 metadata['complete']=True

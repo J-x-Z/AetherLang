@@ -34,10 +34,11 @@ clang -std=c11 -O2 program.c -lm -o program
 
 Imports must precede declarations. Supported forms are `use library;`,
 `use library as alias;`, `use library::item;`, `use library::item as alias;`,
-and `use library::*;`. Named imports permit `library::function()`,
+and `use library::*;`. Flat groups such as
+`use library::{first, second as alias};` are supported. Named imports permit `library::function()`,
 `library::CONSTANT`, and `*library::Type`; selected and wildcard imports bring
 public declarations into the file's scope. A wildcard also binds its module
-name. Grouped imports and re-exports are not yet supported.
+name. Nested import trees and re-exports are not yet supported.
 
 Each module has private functions, constants and nominal struct types; `pub`
 exports a declaration, while `extern "C"` declarations expose their ABI name.
@@ -59,7 +60,12 @@ types, constants, lexical locals, casts, fields, indexing, `size_of`, arithmetic
 conditionals, loops, returns, and raw-address operations. All locals require an
 initializer. Non-void functions must explicitly return on every reachable path.
 Only `main()` or `main(argc:i32, argv:**u8)` is an entry point, returning void/i32.
-Struct values can be copied and returned; recursive layouts require pointers.
+Semicolons are optional at the same token boundaries as the primary parser. A
+final expression without a semicolon supplies a non-void function value,
+including final blocks and `if` branches; a semicolon discards that value.
+Struct values can be constructed, copied and returned; recursive layouts require
+pointers. Initializers must supply every field exactly once, may use shorthand
+names, and evaluate fields in source order regardless of declaration order.
 Integer operations wrap by width except division/remainder by zero and signed
 MIN/-1, which trap. Operand and argument evaluation is left-to-right, Boolean
 operators short-circuit, and float-to-integer casts saturate (NaN becomes zero).
@@ -146,3 +152,27 @@ aggregate-by-value parameters/results are rejected with a source diagnostic
 until target-specific C aggregate ABI lowering is implemented; ordinary pointer
 to struct FFI remains supported. The LLVM path is currently a 64-bit host path,
 with no cross-target ABI claim.
+
+Existing application/standard-library validation is separate from compiler
+fixtures:
+
+```sh
+python3 tests/bootstrap_production.py --compiler /external/work/bootstrap-llvm/stage4 \
+  --work-dir /external/work/bootstrap-production
+```
+
+This runner compiles the unchanged `examples/upgrade/accumulator.aeth` and its
+real `stdlib/parse_int.aeth` dependency through both self-hosted emitters at
+O0/O2. It verifies the live request/response loop, journal bytes, input limits,
+and the established stdout/write/flush/close failure oracle. A second consumer
+imports the unchanged `stdlib/args.aeth` and `stdlib/string.aeth`, exercising
+owned buffers, argv boundaries, grouped aliases and aggregate values. There is
+no application reimplementation in Python or C; C is used only for the existing
+fault-injection shim and native code compilation.
+
+The runner separately records `jxz-capability.json`; an unsupported JXZ check
+is not a passing native-JXZ claim. The current active JXZ graph uses features
+still absent from Core, including generic Vec/Result types, payload enums,
+match/error propagation, arrays, type aliases and intrinsics. Those are further
+front-end/backend migrations; this checkpoint does not rename Core into the
+full production compiler or mark full self-hosting complete.

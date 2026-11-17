@@ -153,6 +153,25 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   if node.decl==(0 as *BootNode) { boot_error(ctx,node.token,"unknown value name");return 0 as *BootType; }
   node.ty=node.decl.ty;return node.ty;
  }
+ if kind==BN_STRUCT_VALUE {
+  if !boot_type_valid(ctx,node.ty,node.token,false) || node.ty.kind!=BY_STRUCT {boot_error(ctx,node.token,"struct initializer requires a struct type");return 0 as *BootType;}
+  let mut argument:*BootNode=node.params;
+  while argument!=(0 as *BootNode){
+   let mut field:*BootNode=node.ty.fields;
+   while field!=(0 as *BootNode)&&strcmp(field.name,argument.name)!=0{field=field.next;}
+   if field==(0 as *BootNode){boot_error(ctx,argument.token,"unknown struct initializer field");return 0 as *BootType;}
+   let mut prior:*BootNode=node.params;while prior!=argument{if strcmp(prior.name,argument.name)==0{boot_error(ctx,argument.token,"duplicate struct initializer field");return 0 as *BootType;}prior=prior.next;}
+   argument.decl=field;argument.ty=field.ty;
+   let actual:*BootType=boot_check_expr(ctx,argument.left,field.ty);
+   if ctx.failed||!boot_expect(ctx,argument,actual,field.ty){return 0 as *BootType;}argument=argument.next;
+  }
+  let mut field:*BootNode=node.ty.fields;
+  while field!=(0 as *BootNode){
+   let mut found:bool=false;argument=node.params;while argument!=(0 as *BootNode){if argument.decl==field{found=true;}argument=argument.next;}
+   if !found{boot_error(ctx,node.token,"missing struct initializer field");return 0 as *BootType;}field=field.next;
+  }
+  return node.ty;
+ }
  if kind==BN_SIZEOF {
   if !boot_type_valid(ctx,node.aux,node.token,false) { return 0 as *BootType; }
   node.ty=boot_type(ctx,BY_I64);return node.ty;

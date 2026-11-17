@@ -130,6 +130,13 @@ positive('imported-main-private', {
  'library.aeth':'fn main(value:i64)->i64{return value;}pub fn value()->i32{return main(42) as i32;}'})
 
 bad = {
+ 'group-separator': ({'main.aeth':'use lib::{a b};fn main(){}','lib.aeth':'pub fn a(){}pub fn b(){}'}, "expected ',' or '}'"),
+ 'struct-duplicate': ({'main.aeth':'struct S{x:i32}fn main(){let x:S=S{x:1,x:2};}'}, 'duplicate struct initializer field'),
+ 'struct-missing': ({'main.aeth':'struct S{x:i32,y:i32}fn main(){let x:S=S{x:1};}'}, 'missing struct initializer field'),
+ 'struct-unknown': ({'main.aeth':'struct S{x:i32}fn main(){let x:S=S{y:1};}'}, 'unknown struct initializer field'),
+ 'struct-wrong-type': ({'main.aeth':'struct S{x:i32}fn main(){let x:S=S{x:true};}'}, 'type mismatch'),
+ 'tail-semicolon-discards': ({'main.aeth':'fn value()->i32{42;}fn main()->i32{return 0;}'}, 'function may finish without returning'),
+ 'tail-if-semicolon-discards': ({'main.aeth':'fn value(flag:bool)->i32{if flag{1}else{2};}fn main()->i32{return 0;}'}, 'function may finish without returning'),
  'foreign-main': ({'main.aeth':'use lib;fn main()->i32{return 0;}','lib.aeth':'extern \"C\"{fn main()->i64;}'}, 'main requires a non-foreign'),
  'private-function': ({'main.aeth':'use lib;fn main()->i32{return lib::secret();}', 'lib.aeth':'fn secret()->i32{return 7;}'}, 'unknown or private imported name'),
  'private-type': ({'main.aeth':'use lib;fn main(){let p:*lib::Secret=0 as *lib::Secret;}', 'lib.aeth':'struct Secret{x:i32}'}, 'unknown or private imported name'),

@@ -117,6 +117,12 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
  if node.kind==BN_BOOL {boot_c_decl(ctx,node);if node.value==0{boot_c_text(ctx,"false");}else{boot_c_text(ctx,"true");}boot_c_text(ctx,";\n");return;}
  if node.kind==BN_STRING {boot_c_decl(ctx,node);boot_c_string(ctx,node.token);boot_c_text(ctx,";\n");return;}
  if node.kind==BN_IDENT {boot_c_decl(ctx,node);boot_c_binding(ctx,node.decl);boot_c_text(ctx,";\n");return;}
+ if node.kind==BN_STRUCT_VALUE {
+  let mut field:*BootNode=node.params;while field!=0 as *BootNode{boot_emit_expr(ctx,field.left);field=field.next;}
+  boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_temp(ctx,node);boot_c_text(ctx,";\n");field=node.params;
+  while field!=0 as *BootNode{boot_c_temp(ctx,node);boot_c_text(ctx,".");boot_c_field(ctx,field.decl);boot_c_text(ctx," = ");boot_c_temp(ctx,field.left);boot_c_text(ctx,";\n");field=field.next;}
+  return;
+ }
  if node.kind==BN_SIZEOF {boot_c_decl(ctx,node);boot_c_text(ctx,"(int64_t)sizeof(");boot_c_type(ctx,node.aux);boot_c_text(ctx,");\n");return;}
  if node.kind==BN_MEMBER&&node.left.ty.kind==BY_STRUCT {
   boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);boot_c_temp(ctx,node.left);boot_c_text(ctx,".");boot_c_field(ctx,node.decl);boot_c_text(ctx,";\n");return;

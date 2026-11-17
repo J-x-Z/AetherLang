@@ -80,30 +80,38 @@ fn boot_project_load(ctx:*BootContext,path:*u8,depth:i32,token:*BootToken)->*Boo
  if !boot_project_read(ctx,module,token) {return 0 as *BootModule;}
  boot_project_context(ctx,module);
  if !boot_lex(ctx) {return 0 as *BootModule;}module.tokens=ctx.tokens;
- let mut cursor:*BootToken=module.tokens;let mut tail:*BootImport=0 as *BootImport;
+ let mut cursor:*BootToken=module.tokens;
  while boot_project_word(cursor,"use") {
   let original:*BootToken=cursor;cursor=cursor.next;
-  if !boot_project_name(ctx,cursor) {return 0 as *BootModule;}
-  let name:*u8=cursor.text;let mut alias:*u8=name;let mut symbol:*u8=0 as *u8;let mut wildcard:bool=false;cursor=cursor.next;
-  if cursor.kind==58 {
-   cursor=cursor.next;if cursor.kind!=58 {boot_error(ctx,cursor,"expected :: in import");return 0 as *BootModule;}cursor=cursor.next;
-   if cursor.kind==42 {wildcard=true;cursor=cursor.next;}
-   else {if !boot_project_name(ctx,cursor) {return 0 as *BootModule;}symbol=cursor.text;alias=symbol;cursor=cursor.next;}
+  if !boot_project_name(ctx,cursor){return 0 as *BootModule;}
+  let name:*u8=cursor.text;cursor=cursor.next;
+  let mut selected:bool=false;let mut grouped:bool=false;
+  if cursor.kind==58{
+   selected=true;cursor=cursor.next;if cursor.kind!=58{boot_error(ctx,cursor,"expected :: in import");return 0 as *BootModule;}cursor=cursor.next;
+   if cursor.kind==123{grouped=true;cursor=cursor.next;}
   }
-  if boot_project_word(cursor,"as") {
-   if wildcard {boot_error(ctx,cursor,"wildcard import cannot have an alias");return 0 as *BootModule;}
-   cursor=cursor.next;if !boot_project_name(ctx,cursor) {return 0 as *BootModule;}alias=cursor.text;cursor=cursor.next;
-  }
-  if cursor.kind!=59 {boot_error(ctx,cursor,"import requires ';'");return 0 as *BootModule;}cursor=cursor.next;
-  let mut previous:*BootImport=module.imports;
-  while previous!=(0 as *BootImport) {if strcmp(previous.alias,alias)==0 {boot_error(ctx,original,"duplicate import binding");return 0 as *BootModule;}previous=previous.next;}
-  let target_path:*u8=boot_project_find(ctx,module,name,original);if target_path==(0 as *u8) {return 0 as *BootModule;}
-  let target:*BootModule=boot_project_load(ctx,target_path,depth+1,original);if target==(0 as *BootModule) {return target;}
+  let target_path:*u8=boot_project_find(ctx,module,name,original);if target_path==(0 as *u8){return 0 as *BootModule;}
+  let target:*BootModule=boot_project_load(ctx,target_path,depth+1,original);if target==(0 as *BootModule){return target;}
   boot_project_context(ctx,module);ctx.cursor=original;
-  if symbol!=(0 as *u8) && !boot_exported(boot_module_item(target,symbol)) {boot_error(ctx,original,"unknown or private imported name");return 0 as *BootModule;}
-  let import:*BootImport=boot_alloc(ctx,size_of(BootImport) as u64) as *BootImport;if import==(0 as *BootImport) {return 0 as *BootModule;}
-  import.alias=alias;import.symbol=symbol;import.target=target;import.wildcard=wildcard;import.token=original;
-  if tail==(0 as *BootImport) {module.imports=import;}else{tail.next=import;}tail=import;
+  let mut complete:bool=false;
+  while !complete{
+   if grouped&&cursor.kind==125{cursor=cursor.next;break;}
+   let mut alias:*u8=name;let mut symbol:*u8=0 as *u8;let mut wildcard:bool=false;
+   if selected{
+    if cursor.kind==42{wildcard=true;cursor=cursor.next;}
+    else{if !boot_project_name(ctx,cursor){return 0 as *BootModule;}symbol=cursor.text;alias=symbol;cursor=cursor.next;}
+   }
+   if boot_project_word(cursor,"as"){
+    if wildcard{boot_error(ctx,cursor,"wildcard import cannot have an alias");return 0 as *BootModule;}
+    cursor=cursor.next;if !boot_project_name(ctx,cursor){return 0 as *BootModule;}alias=cursor.text;cursor=cursor.next;
+   }
+   if !boot_project_import(ctx,module,target,alias,symbol,wildcard,original){return 0 as *BootModule;}
+   if !grouped{complete=true;}else{
+    if cursor.kind==44{cursor=cursor.next;}
+    else{if cursor.kind==125{cursor=cursor.next;complete=true;}else{boot_error(ctx,cursor,"expected ',' or '}' after grouped import");return 0 as *BootModule;}}
+   }
+  }
+  if cursor.kind==59{cursor=cursor.next;}
  }
  ctx.tokens=cursor;ctx.cursor=cursor;
  if !boot_parse(ctx) {return 0 as *BootModule;}module.items=ctx.program.body;module.state=2;return module;
@@ -131,4 +139,13 @@ pub fn boot_project_output(ctx:*BootContext,path:*u8)->bool {
  free(canonical as *void);
  if same {boot_error(ctx,0 as *BootToken,"output must not replace any module source");return false;}
  return true;
+}
+
+fn boot_project_import(ctx:*BootContext,module:*BootModule,target:*BootModule,alias:*u8,symbol:*u8,wildcard:bool,token:*BootToken)->bool{
+ let mut previous:*BootImport=module.imports;let mut tail:*BootImport=0 as *BootImport;
+ while previous!=(0 as *BootImport){if strcmp(previous.alias,alias)==0{boot_error(ctx,token,"duplicate import binding");return false;}tail=previous;previous=previous.next;}
+ if symbol!=(0 as *u8)&&!boot_exported(boot_module_item(target,symbol)){boot_error(ctx,token,"unknown or private imported name");return false;}
+ let import:*BootImport=boot_alloc(ctx,size_of(BootImport) as u64) as *BootImport;if import==(0 as *BootImport){return false;}
+ import.alias=alias;import.symbol=symbol;import.target=target;import.wildcard=wildcard;import.token=token;
+ if tail==(0 as *BootImport){module.imports=import;}else{tail.next=import;}return true;
 }
