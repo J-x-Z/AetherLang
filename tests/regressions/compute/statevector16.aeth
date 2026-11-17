@@ -1,0 +1,75 @@
+// One circuit, three Pauli expectations, parameter shift and a classical update.
+use compute::*;
+use circuit16::fill_16q;
+use quantum::*;
+use quantum_compute::*;
+use result::Result;
+extern "C" {
+    fn strcmp(a:*u8,b:*u8)->i32;
+    fn printf(fmt:*u8,...)->i32;
+    fn cos(theta:f64)->f64;
+    fn sin(theta:f64)->f64;
+    fn fabs(x:f64)->f64;
+}
+fn ok(test:bool,code:i32)->Result<(),ComputeError> {
+    if !test {return Result::Err(compute_error(code,0));}
+    Result::Ok(())
+}
+fn checked<T>(r:Result<T,i32>)->Result<T,ComputeError> {
+    match r {Result::Ok(v)=>Result::Ok(v),Result::Err(code)=>Result::Err(compute_error(200+code,0))}
+}
+fn circuit_test(queue:*ComputeQueue,circuit:*Circuit)->Result<(),ComputeError> {
+    let theta:f64=0.41;
+    ok(fill_16q(circuit,theta),101)?;
+    let stats:ComputeQueueStats=compute_queue_stats(queue);
+    // A queue that can hold the state but not its workspace must roll back.
+    let mut small:*ComputeQueue=compute_queue_new(COMPUTE_CPU,524288)?;
+    let failure:Result<*ComputeQuantumState,ComputeError>=quantum_compute(small,circuit);
+    let rejected:bool=match failure {
+        Result::Err(e)=>e.code==COMPUTE_BUDGET,
+        Result::Ok(p)=>{let mut leaked:*ComputeQuantumState=p;quantum_compute_free(&mut leaked as **ComputeQuantumState);false}
+    };
+    let remaining:u64=compute_queue_stats(small).used_bytes;
+    compute_queue_close(&mut small as **ComputeQueue);ok(rejected && remaining==0,111)?;
+    let mut accelerated:*ComputeQuantumState=quantum_compute(queue,circuit)?;
+    let oracle:*QuantumState=checked(quantum_simulate(circuit,16))?;
+    let mut max_error:f64=0.0;let mut norm:f64=0.0;let mut i:u64=0;
+    while i<oracle.length {
+        let a:Complex64=quantum_compute_amplitude(accelerated,i)?;
+        let e:f64=fabs(a.re-oracle.amplitudes[i].re)+fabs(a.im-oracle.amplitudes[i].im);
+        if e>max_error {max_error=e;}
+        norm+=a.re*a.re+a.im*a.im;i+=1;
+    }
+    let mut expectations:f64=0.0;
+    for axis in 0..3 {
+        expectations+=fabs(quantum_compute_expect(accelerated,0,axis as i32)?-checked(quantum_expect(oracle,0,axis as i32))?);
+    }
+    quantum_state_free(oracle);quantum_compute_free(&mut accelerated as **ComputeQuantumState);
+    ok(max_error<0.000002 && fabs(norm-1.0)<0.000002 && expectations<0.000004,112)?;
+    let grad:f64=quantum_compute_gradient(queue,circuit,0,9,0)?;
+    ok(fabs(grad+sin(theta))<0.000004,113)?;
+    let new_angle:f64=theta-0.5*grad;
+    ok(quantum_set_angle(circuit,0,new_angle)==0,114)?;
+    accelerated=quantum_compute(queue,circuit)?;
+    let energy:f64=quantum_compute_expect(accelerated,9,0)?;
+    quantum_compute_free(&mut accelerated as **ComputeQuantumState);
+    ok(energy<cos(theta) && fabs(energy-cos(new_angle))<0.000004,115)?;
+    let end:ComputeQueueStats=compute_queue_stats(queue);
+    ok(end.used_bytes==stats.used_bytes && end.submitted==end.observed_completed && end.submitted==42,116)?;
+    printf("quantum backend=%d qubits=16 amplitudes=65536 max_l1=%.9g norm=%.9g gradient=%.9g energy=%.9g submissions=%llu peak=%llu remaining=%llu\n",
+       end.backend,max_error,norm,grad,energy,end.submitted,end.peak_bytes,end.used_bytes);
+    Result::Ok(())
+}
+fn main(argc:i32,argv:**u8)->i32 {
+    if argc<2 {return 2;}
+    let backend:i32=if strcmp(argv[1],"cpu")==0 {COMPUTE_CPU}
+        else if strcmp(argv[1],"metal")==0 {COMPUTE_METAL}
+        else if strcmp(argv[1],"vulkan")==0 {COMPUTE_VULKAN}else{0};
+    if backend==0 || (backend!=COMPUTE_CPU && argc!=3) {return 2;}
+    let path:*u8=if argc==3 {argv[2]}else{0 as *u8};
+    let mut queue:*ComputeQueue=match compute_queue_with_provider(backend,8388608,path) {Result::Ok(q)=>q,Result::Err(_)=>{return 3;}};
+    let circuit:*Circuit=match quantum_new(16) {Result::Ok(c)=>c,Result::Err(_)=>{compute_queue_close(&mut queue as **ComputeQueue);return 4;}};
+    let result:Result<(),ComputeError>=circuit_test(queue,circuit);
+    quantum_free(circuit);compute_queue_close(&mut queue as **ComputeQueue);
+    match result {Result::Ok(_)=>0,Result::Err(e)=>{printf("failure %d backend=%d native=%lld\n",e.code,e.backend,e.native);1}}
+}

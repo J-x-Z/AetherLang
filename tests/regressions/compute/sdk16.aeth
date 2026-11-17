@@ -1,0 +1,43 @@
+use quantum::*;
+use compute::*;
+use circuit16::fill_16q;
+use quantum_compute::*;
+use quantum_cudaq_compute::quantum_compute_cudaq;
+use result::Result;
+extern "C" {fn printf(fmt:*u8,...)->i32;fn fabs(x:f64)->f64;fn sin(x:f64)->f64;}
+fn sample(q:*ComputeQueue,c:*Circuit,placement:i32)->Result<*ComputeQuantumState,ComputeError>{
+    let mut msg:[u8;512]=[0;512];quantum_compute_cudaq(q,c,placement,&mut msg[0] as *u8,512)
+}
+fn compare(q:*ComputeQueue,c:*Circuit,gpu:i32)->Result<(),ComputeError>{
+    let theta:f64=0.41;
+    if !fill_16q(c,theta) {return Result::Err(compute_error(101,0));}
+    let mut sdk:*ComputeQuantumState=sample(q,c,gpu)?;
+    let reference:*QuantumState=match quantum_simulate(c,16) {Result::Ok(s)=>s,Result::Err(_)=>{quantum_compute_free(&mut sdk as **ComputeQuantumState);return Result::Err(compute_error(102,0));}};
+    let mut worst:f64=0.0;let mut i:u64=0;
+    while i<reference.length {
+        let a:Complex64=quantum_compute_amplitude(sdk,i)?;
+        let delta:f64=fabs(a.re-reference.amplitudes[i].re)+fabs(a.im-reference.amplitudes[i].im);
+        if delta>worst {worst=delta;}i+=1;
+    }
+    quantum_compute_free(&mut sdk as **ComputeQuantumState);quantum_state_free(reference);
+    let mut values:[f64;3]=[0.0;3];let mut gradient:f64=0.0;
+    for step in 0..3 {
+        let angle:f64=if step==0 {theta+1.5707963267948966}else if step==1 {theta-1.5707963267948966}else{theta-0.5*gradient};
+        if quantum_set_angle(c,0,angle)!=0 {return Result::Err(compute_error(103,0));}
+        sdk=sample(q,c,gpu)?;values[step]=quantum_compute_expect(sdk,9,0)?;
+        quantum_compute_free(&mut sdk as **ComputeQuantumState);
+        if step==1 {gradient=(values[0]-values[1])*0.5;}
+    }
+    let memory:ComputeQueueStats=compute_queue_stats(q);
+    if !(worst<0.000002 && fabs(gradient+sin(theta))<0.000004 && fabs(values[2]-0.82004617)<0.000004 && memory.used_bytes==0) {
+        return Result::Err(compute_error(104,0));
+    }
+    printf("cudaq on_gpu=%d qubits=16 amplitudes=65536 max_l1=%.9g gradient=%.9g energy=%.9g peak=%llu remaining=%llu\n",gpu,worst,gradient,values[2],memory.peak_bytes,memory.used_bytes);
+    Result::Ok(())
+}
+fn main(argc:i32,argv:**u8)->i32 {
+    let gpu:i32=if argc==2 {1}else{0};let mut q:*ComputeQueue=match compute_queue_new(COMPUTE_CPU,8388608){Result::Ok(q)=>q,Result::Err(_)=>{return 2;}};
+    let c:*Circuit=match quantum_new(16){Result::Ok(c)=>c,Result::Err(_)=>{compute_queue_close(&mut q as **ComputeQueue);return 3;}};
+    let r:Result<(),ComputeError>=compare(q,c,gpu);quantum_free(c);compute_queue_close(&mut q as **ComputeQueue);
+    match r {Result::Ok(_)=>0,Result::Err(e)=>{printf("failure %d native=%lld\n",e.code,e.native);1}}
+}

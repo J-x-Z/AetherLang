@@ -357,7 +357,9 @@ static int32_t status(void *ctx, void *event, int64_t *native) {
 
 static int32_t wait_event(void *ctx, void *event, int64_t *native) {
     Device *d = ctx; Event *e = event;
-    return event_state(vkWaitForFences(d->device, 1, &e->fence, VK_TRUE, UINT64_MAX), native);
+    VkResult result;
+    do { result = vkWaitForFences(d->device, 1, &e->fence, VK_TRUE, UINT64_MAX); } while (result == VK_TIMEOUT);
+    return event_state(result, native);
 }
 
 const AetherGpuProviderV1 *aether_gpu_provider_v1(void) {

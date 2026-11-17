@@ -40,6 +40,7 @@ typedef struct {
     void *(*submit_gemm)(void *ctx, void *a, void *b, void *c, const AetherGemm *params,
                          uint64_t remaining, uint64_t *charge, int32_t *code, int64_t *native);
     int32_t (*event_status)(void *ctx, void *event, int64_t *native);
+    // Wait blocks until COMPLETE or FAILED; only status may report PENDING.
     int32_t (*event_wait)(void *ctx, void *event, int64_t *native);
     void (*event_free)(void *ctx, void *event);
 } AetherGpuProviderV1;

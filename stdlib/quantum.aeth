@@ -172,6 +172,30 @@ fn q_mul(a:Complex64,b:Complex64)->Complex64 {
     q_complex(a.re*b.re-a.im*b.im,a.re*b.im+a.im*b.re)
 }
 fn q_add(a:Complex64,b:Complex64)->Complex64 {q_complex(a.re+b.re,a.im+b.im)}
+// Row-major 2×2 action on an active amplitude pair of a validated gate.
+// For SWAP the pair differs in both target and control bits.
+pub fn quantum_gate_matrix(gate:QuantumGate)->[Complex64;4] {
+    let mut a:Complex64=q_complex(1.0,0.0);
+    let mut b:Complex64=q_complex(0.0,0.0);
+    let mut c:Complex64=q_complex(0.0,0.0);
+    let mut d:Complex64=q_complex(1.0,0.0);
+    if gate.kind==Q_H {
+        let s:f64=0.7071067811865475244;
+        a=q_complex(s,0.0);b=a;c=a;d=q_complex(-s,0.0);
+    } else if gate.kind==Q_X || gate.kind==Q_CX || gate.kind==Q_SWAP {
+        a=q_complex(0.0,0.0);d=a;b=q_complex(1.0,0.0);c=b;
+    } else if gate.kind==Q_Y {
+        a=q_complex(0.0,0.0);d=a;b=q_complex(0.0,-1.0);c=q_complex(0.0,1.0);
+    } else if gate.kind==Q_Z || gate.kind==Q_CZ {
+        d=q_complex(-1.0,0.0);
+    } else {
+        let co:f64=cos(gate.angle/2.0);let si:f64=sin(gate.angle/2.0);
+        if gate.kind==Q_RX {a=q_complex(co,0.0);d=a;b=q_complex(0.0,-si);c=b;}
+        else if gate.kind==Q_RY {a=q_complex(co,0.0);d=a;b=q_complex(-si,0.0);c=q_complex(si,0.0);}
+        else {a=q_complex(co,-si);d=q_complex(co,si);}
+    }
+    return [a,b,c,d];
+}
 fn q_apply(state:*QuantumState,gate:QuantumGate) {
     let target:u64=(1 as u64)<<(gate.target as u64);
     let control:u64=(1 as u64)<<(gate.control as u64);
@@ -187,31 +211,13 @@ fn q_apply(state:*QuantumState,gate:QuantumGate) {
         }
         return;
     }
-    let mut a:Complex64=q_complex(1.0,0.0);
-    let mut b:Complex64=q_complex(0.0,0.0);
-    let mut c:Complex64=q_complex(0.0,0.0);
-    let mut d:Complex64=q_complex(1.0,0.0);
-    if gate.kind==Q_H {
-        let s:f64=0.7071067811865475244;
-        a=q_complex(s,0.0);b=a;c=a;d=q_complex(-s,0.0);
-    } else if gate.kind==Q_X || gate.kind==Q_CX {
-        a=q_complex(0.0,0.0);d=a;b=q_complex(1.0,0.0);c=b;
-    } else if gate.kind==Q_Y {
-        a=q_complex(0.0,0.0);d=a;b=q_complex(0.0,-1.0);c=q_complex(0.0,1.0);
-    } else if gate.kind==Q_Z || gate.kind==Q_CZ {
-        d=q_complex(-1.0,0.0);
-    } else {
-        let co:f64=cos(gate.angle/2.0);let si:f64=sin(gate.angle/2.0);
-        if gate.kind==Q_RX {a=q_complex(co,0.0);d=a;b=q_complex(0.0,-si);c=b;}
-        else if gate.kind==Q_RY {a=q_complex(co,0.0);d=a;b=q_complex(-si,0.0);c=q_complex(si,0.0);}
-        else {a=q_complex(co,-si);d=q_complex(co,si);}
-    }
+    let matrix:[Complex64;4]=quantum_gate_matrix(gate);
     let mut i:u64=0;
     while i<state.length {
         if (i&target)==0 && (gate.kind<Q_CX || (i&control)!=0) {
             let j:u64=i|target;let x:Complex64=state.amplitudes[i];let y:Complex64=state.amplitudes[j];
-            state.amplitudes[i]=q_add(q_mul(a,x),q_mul(b,y));
-            state.amplitudes[j]=q_add(q_mul(c,x),q_mul(d,y));
+            state.amplitudes[i]=q_add(q_mul(matrix[0],x),q_mul(matrix[1],y));
+            state.amplitudes[j]=q_add(q_mul(matrix[2],x),q_mul(matrix[3],y));
         }
         i=i+1;
     }

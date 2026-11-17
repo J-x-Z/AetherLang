@@ -1,0 +1,15 @@
+use quantum::*;
+
+pub fn fill_16q(circuit:*Circuit,theta:f64)->bool {
+    if quantum_gate(circuit,Q_RY,9,0,theta)!=0 {return false;}
+    if quantum_gate(circuit,Q_H,0,0,0.0)!=0 {return false;}
+    if quantum_gate(circuit,Q_RX,15,0,0.37)!=0 {return false;}
+    if quantum_gate(circuit,Q_CX,0,15,0.0)!=0 {return false;}
+    if quantum_gate(circuit,Q_CZ,15,0,0.0)!=0 {return false;}
+    if quantum_gate(circuit,Q_RZ,0,0,-0.21)!=0 {return false;}
+    if quantum_gate(circuit,Q_SWAP,3,15,0.0)!=0 {return false;}
+    if quantum_gate(circuit,Q_Y,1,0,0.0)!=0 {return false;}
+    if quantum_gate(circuit,Q_X,2,0,0.0)!=0 {return false;}
+    if quantum_gate(circuit,Q_Z,1,0,0.0)!=0 {return false;}
+    true
+}

@@ -17,4 +17,14 @@ for fixture in ['cudaq', 'cudaq_budget']:
   for level in [0,2]:
    binary=w/f'{fixture}-{backend}-{level}';run('build SDK '+fixture,[c,source,'--backend',backend,f'-O{level}','--link-object',bridge,'-o',binary])
    r=run('run SDK '+fixture,[binary]+(['gpu'] if a.gpu else []));assert f'on_gpu={int(a.gpu)}' in r.stdout
+# The SDK adapter and native device providers consume exactly the same circuit.
+repo=Path(__file__).resolve().parents[1]
+loader=w/'loader.o'
+run('SDK queue loader',[os.environ.get('CC','clang'),'-std=c11','-O2','-c',repo/'runtime/compute/loader.c','-o',loader])
+link=['-l','dl'] if os.uname().sysname=='Linux' else []
+for backend in a.backends:
+ binary=w/f'sdk16-{backend}'
+ run('build SDK 16q',[c,repo/'tests/regressions/compute/sdk16.aeth','--sysroot',repo,'--backend',backend,'-O2','--link-object',bridge,'--link-object',loader,*link,'-o',binary])
+ r=run('run SDK 16q',[binary]+(['gpu'] if a.gpu else []))
+ assert f'on_gpu={int(a.gpu)} qubits=16 amplitudes=65536' in r.stdout and r.stdout.endswith('remaining=0\n')
 print(f'{len(records)} native SDK checks passed')

@@ -1,0 +1,28 @@
+// Optional CUDA-Q SDK execution. The queue admits both the SDK host return
+// buffer and the common f32 result. SDK-internal allocations are separate.
+// expected_gpu must match the SDK's actual placement before output is accepted.
+use quantum::{Circuit,Complex64,QuantumGate,quantum_validate};
+use compute::*;
+use quantum_compute::{ComputeQuantumState,quantum_compute_from_complex64};
+use result::Result;
+extern "C" {
+    fn aether_cudaq_abi_version()->u32;
+    fn aether_cudaq_state(qubits:u32,gates:*QuantumGate,count:u64,output:*Complex64,capacity:u64,
+                        error:*u8,error_capacity:u64,on_gpu:*i32)->i32;
+}
+pub fn quantum_compute_cudaq(queue:*ComputeQueue,circuit:*Circuit,expected_gpu:i32,error:*u8,error_len:u64)->Result<*ComputeQuantumState,ComputeError> {
+    if queue==0 as *ComputeQueue || !quantum_validate(circuit) || circuit.qubits>24 || (expected_gpu!=0 && expected_gpu!=1) {
+        return Result::Err(compute_error(COMPUTE_ARGUMENT,0));
+    }
+    let backend:i32=compute_queue_stats(queue).backend;
+    if aether_cudaq_abi_version()!=1 {return Result::Err(compute_error(COMPUTE_DEVICE,backend));}
+    let n:u64=(1 as u64)<<(circuit.qubits as u64);
+    let mut staging:*ComputeScratch=compute_scratch_new(queue,n*(size_of(Complex64) as u64))?;
+    let data:*Complex64=compute_scratch_data(staging) as *Complex64;let mut actual:i32=-1;
+    let status:i32=aether_cudaq_state(circuit.qubits,circuit.gates.data,circuit.gates.len,data,n,error,error_len,&mut actual as *i32);
+    let result:Result<*ComputeQuantumState,ComputeError>=if status!=0 {
+        Result::Err(ComputeError{code:COMPUTE_EXECUTION,backend:backend,native:status as i64})
+    }else if actual!=expected_gpu {Result::Err(compute_error(COMPUTE_DEVICE,backend))}
+    else {quantum_compute_from_complex64(queue,circuit.qubits,data,n)};
+    compute_scratch_free(&mut staging as **ComputeScratch);result
+}

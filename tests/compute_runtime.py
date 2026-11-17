@@ -114,7 +114,20 @@ if not args.no_sanitize:
         # instrumentation belongs to its separate build evidence.
         execution(sanitized,device,provider,sanitized_env)
 
-paths=[compiler,source,fault_source,repo/'tests/regressions/compute/fault_provider.c',repo/'stdlib/compute.aeth',repo/'stdlib/compute_types.aeth',repo/'runtime/compute/loader.c',repo/'runtime/compute/provider.h']
+# Sixteen-qubit program shares the same queue, loader and provider. Its
+# Aether oracle checks all amplitudes, Pauli values, gradients and cleanup.
+statevector=repo/'tests/regressions/compute/statevector16.aeth'
+for backend in args.backends:
+    binary=work/f'statevector16-{backend}'
+    run(f'{backend}/build statevector16',[compiler,statevector,'--sysroot',repo,'--backend',backend,'-O2','--link-object',loader,*link,'-o',binary])
+    modes=[('cpu',[])]
+    if provider: modes.append((device,[provider]))
+    for mode,libraries in modes:
+        execution_result=run(f'{backend}/statevector16/{mode}',[binary,mode,*libraries])
+        assert 'qubits=16 amplitudes=65536' in execution_result.stdout
+        assert 'submissions=42' in execution_result.stdout and execution_result.stdout.endswith('remaining=0\n')
+
+paths=[compiler,source,statevector,statevector.with_name("circuit16.aeth"),repo/"stdlib/quantum_compute.aeth",repo/"stdlib/quantum.aeth",fault_source,repo/'tests/regressions/compute/fault_provider.c',repo/'stdlib/compute.aeth',repo/'stdlib/compute_types.aeth',repo/'runtime/compute/loader.c',repo/'runtime/compute/provider.h']
 if args.metal: paths += [repo/'runtime/metal/provider.m',repo/'runtime/metal/bridge.m',repo/'runtime/metal/bridge.h']
 if provider: paths.append(provider)
 (work/'hashes.json').write_text(json.dumps({str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},indent=2))

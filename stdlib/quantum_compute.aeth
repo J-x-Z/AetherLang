@@ -1,0 +1,166 @@
+// Batched state-vector simulation on a caller-selected compute queue.
+// Qubit zero is the low bit. Each complex amplitude contains two f32 lanes.
+// Aether schedules and gathers pairs; the selected device applies the gates.
+use quantum::{Circuit,QuantumGate,Complex64,quantum_validate,quantum_gate_matrix,Q_CX,Q_SWAP,Q_RX,Q_RZ};
+use compute::*;
+use result::Result;
+extern "C" { fn malloc(size:usize)->*void; fn free(ptr:*void); }
+
+pub struct ComputeQuantumState {
+    pub qubits:u32, pub length:u64, backing:*ComputeScratch
+}
+struct GateWorkspace {
+    packed:*ComputeScratch, input:*ComputeBuffer, output:*ComputeBuffer,
+    matrix:*ComputeBuffer, event:*ComputeEvent
+}
+
+pub fn quantum_compute_free(owner:**ComputeQuantumState) {
+    if owner==0 as **ComputeQuantumState || *owner==0 as *ComputeQuantumState {return;}
+    let state:*ComputeQuantumState=*owner;*owner=0 as *ComputeQuantumState;
+    compute_scratch_free(&mut state.backing as **ComputeScratch);free(state as *void);
+}
+pub fn quantum_compute_amplitude(state:*ComputeQuantumState,index:u64)->Result<Complex64,ComputeError> {
+    if state==0 as *ComputeQuantumState || index>=state.length {return Result::Err(compute_error(COMPUTE_BOUNDS,0));}
+    let data:*f32=compute_scratch_data(state.backing) as *f32;
+    Result::Ok(Complex64{re:data[index*2] as f64,im:data[index*2+1] as f64})
+}
+pub fn quantum_compute_expect(state:*ComputeQuantumState,qubit:u32,axis:i32)->Result<f64,ComputeError> {
+    if state==0 as *ComputeQuantumState || qubit>=state.qubits || axis<0 || axis>2 {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let mask:u64=(1 as u64)<<(qubit as u64);
+    let data:*f32=compute_scratch_data(state.backing) as *f32;
+    let mut value:f64=0.0;let mut i:u64=0;
+    while i<state.length {
+        if (i&mask)==0 {
+            let j:u64=i|mask;
+            let ar:f64=data[2*i] as f64;let ai:f64=data[2*i+1] as f64;
+            let br:f64=data[2*j] as f64;let bi:f64=data[2*j+1] as f64;
+            if axis==0 {value+=ar*ar+ai*ai-br*br-bi*bi;}
+            else if axis==1 {value+=2.0*(ar*br+ai*bi);}
+            else {value+=2.0*(ar*bi-ai*br);}
+        }
+        i+=1;
+    }
+    Result::Ok(value)
+}
+fn insert_zero(index:u64,mask:u64)->u64 {
+    (index&(mask-1))|((index&(~(mask-1)))<<1)
+}
+fn pair_first(row:u64,target:u64,control:u64)->u64 {
+    if control==0 {return insert_zero(row,target);}
+    if target<control {return insert_zero(insert_zero(row,target),control)|control;}
+    insert_zero(insert_zero(row,control),target)|control
+}
+fn apply_batches(queue:*ComputeQueue,state:*ComputeQuantumState,gate:QuantumGate,ws:*GateWorkspace)->Result<(),ComputeError> {
+    let target:u64=(1 as u64)<<(gate.target as u64);
+    let control:u64=if gate.kind>=Q_CX {(1 as u64)<<(gate.control as u64)}else{0};
+    let difference:u64=if gate.kind==Q_SWAP {target|control}else{target};
+    let rows:u64=if control!=0 {state.length/4}else{state.length/2};
+    let batch:u64=if rows>32768 {32768}else{rows};
+    let shape:[u64;2]=[batch,4];let square:[u64;2]=[4,4];
+    ws.packed=compute_scratch_new(queue,batch*16)?;
+    ws.input=compute_buffer_new(queue,COMPUTE_F32,2,&shape[0] as *u64)?;
+    ws.output=compute_buffer_new(queue,COMPUTE_F32,2,&shape[0] as *u64)?;
+    ws.matrix=compute_buffer_new(queue,COMPUTE_F32,2,&square[0] as *u64)?;
+    let unitary:[Complex64;4]=quantum_gate_matrix(gate);
+    let mut matrix:[f32;16]=[0.0;16];
+    // A row of four real lanes multiplies on the left; embed each
+    // complex coefficient as the transposed real 2×2 block.
+    for to in 0..2 {for from in 0..2 {
+        let z:Complex64=unitary[to*2+from];let k:i64=from*8+to*2;
+        matrix[k]=z.re as f32;matrix[k+1]=z.im as f32;
+        matrix[k+4]=(-z.im) as f32;matrix[k+5]=z.re as f32;
+    }}
+    compute_upload(ws.matrix,&matrix[0] as *f32,16)?;
+    let data:*f32=compute_scratch_data(state.backing) as *f32;
+    let packed:*f32=compute_scratch_data(ws.packed) as *f32;
+    let mut start:u64=0;
+    // Both sizes are powers of two, so the last batch has a full shape.
+    while start<rows {
+        let mut row:u64=0;
+        while row<batch {
+            let i:u64=pair_first(start+row,target,control);let j:u64=i^difference;
+            packed[4*row]=data[2*i];packed[4*row+1]=data[2*i+1];
+            packed[4*row+2]=data[2*j];packed[4*row+3]=data[2*j+1];row+=1;
+        }
+        compute_upload(ws.input,packed,batch*4)?;
+        ws.event=compute_gemm(queue,ws.input,ws.matrix,ws.output)?;
+        compute_event_free(&mut ws.event as **ComputeEvent)?;
+        compute_download(packed,ws.output,batch*4)?;
+        row=0;
+        while row<batch {
+            let i:u64=pair_first(start+row,target,control);let j:u64=i^difference;
+            data[2*i]=packed[4*row];data[2*i+1]=packed[4*row+1];
+            data[2*j]=packed[4*row+2];data[2*j+1]=packed[4*row+3];row+=1;
+        }
+        start+=batch;
+    }
+    Result::Ok(())
+}
+fn apply(queue:*ComputeQueue,state:*ComputeQuantumState,gate:QuantumGate)->Result<(),ComputeError> {
+    let mut ws:GateWorkspace=GateWorkspace{packed:0 as *ComputeScratch,input:0 as *ComputeBuffer,
+        output:0 as *ComputeBuffer,matrix:0 as *ComputeBuffer,event:0 as *ComputeEvent};
+    let result:Result<(),ComputeError>=apply_batches(queue,state,gate,&mut ws as *GateWorkspace);
+    compute_buffer_free(&mut ws.matrix as **ComputeBuffer);compute_buffer_free(&mut ws.output as **ComputeBuffer);
+    compute_buffer_free(&mut ws.input as **ComputeBuffer);compute_scratch_free(&mut ws.packed as **ComputeScratch);
+    result
+}
+pub fn quantum_compute_zero(queue:*ComputeQueue,qubits:u32)->Result<*ComputeQuantumState,ComputeError> {
+    if queue==0 as *ComputeQueue || qubits==0 || qubits>24 {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let n:u64=(1 as u64)<<(qubits as u64);
+    let mut backing:*ComputeScratch=compute_scratch_new(queue,n*8)?;
+    let mut state:*ComputeQuantumState=malloc(size_of(ComputeQuantumState)) as *ComputeQuantumState;
+    if state==0 as *ComputeQuantumState {
+        compute_scratch_free(&mut backing as **ComputeScratch);
+        return Result::Err(compute_error(COMPUTE_ALLOCATION,compute_queue_stats(queue).backend));
+    }
+    *state=ComputeQuantumState{qubits:qubits,length:n,backing:backing};
+    let data:*f32=compute_scratch_data(backing) as *f32;
+    let mut i:u64=0;while i<n*2 {data[i]=0.0;i+=1;}data[0]=1.0;
+    Result::Ok(state)
+}
+// Import a completed external backend's host amplitudes into a budgeted state.
+pub fn quantum_compute_from_complex64(queue:*ComputeQueue,qubits:u32,input:*Complex64,count:u64)->Result<*ComputeQuantumState,ComputeError> {
+    if input==0 as *Complex64 || qubits==0 || qubits>24 || count!=((1 as u64)<<(qubits as u64)) {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let state:*ComputeQuantumState=quantum_compute_zero(queue,qubits)?;
+    let data:*f32=compute_scratch_data(state.backing) as *f32;let mut i:u64=0;
+    while i<count {data[2*i]=input[i].re as f32;data[2*i+1]=input[i].im as f32;i+=1;}
+    Result::Ok(state)
+}
+fn simulate_shift(queue:*ComputeQueue,circuit:*Circuit,index:u64,shift:f64)->Result<*ComputeQuantumState,ComputeError> {
+    if queue==0 as *ComputeQueue || !quantum_validate(circuit) {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    if circuit.qubits>24 {return Result::Err(compute_error(COMPUTE_BOUNDS,compute_queue_stats(queue).backend));}
+    let mut state:*ComputeQuantumState=quantum_compute_zero(queue,circuit.qubits)?;
+    let mut i:u64=0;
+    while i<circuit.gates.len {
+        let mut gate:QuantumGate=circuit.gates.data[i];
+        match apply(queue,state,gate) {
+            Result::Err(e)=>{quantum_compute_free(&mut state as **ComputeQuantumState);return Result::Err(e);},
+            Result::Ok(_)=>{}
+        }
+        if i==index {
+            gate.angle=shift;
+            match apply(queue,state,gate) {
+                Result::Err(e)=>{quantum_compute_free(&mut state as **ComputeQuantumState);return Result::Err(e);},
+                Result::Ok(_)=>{}
+            }
+        }
+        i+=1;
+    }
+    Result::Ok(state)
+}
+pub fn quantum_compute(queue:*ComputeQueue,circuit:*Circuit)->Result<*ComputeQuantumState,ComputeError> {
+    simulate_shift(queue,circuit,18446744073709551615,0.0)
+}
+fn shifted_expect(queue:*ComputeQueue,circuit:*Circuit,index:u64,shift:f64,qubit:u32,axis:i32)->Result<f64,ComputeError> {
+    let mut state:*ComputeQuantumState=simulate_shift(queue,circuit,index,shift)?;
+    let value:Result<f64,ComputeError>=quantum_compute_expect(state,qubit,axis);
+    quantum_compute_free(&mut state as **ComputeQuantumState);value
+}
+pub fn quantum_compute_gradient(queue:*ComputeQueue,circuit:*Circuit,index:u64,qubit:u32,axis:i32)->Result<f64,ComputeError> {
+    if !quantum_validate(circuit) || index>=circuit.gates.len || qubit>=circuit.qubits || axis<0 || axis>2 {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let gate:QuantumGate=circuit.gates.data[index];
+    if gate.kind<Q_RX || gate.kind>Q_RZ {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let high:f64=shifted_expect(queue,circuit,index,1.5707963267948966192,qubit,axis)?;
+    let low:f64=shifted_expect(queue,circuit,index,-1.5707963267948966192,qubit,axis)?;
+    Result::Ok((high-low)*0.5)
+}

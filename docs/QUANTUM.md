@@ -138,3 +138,11 @@ python3 tests/quantum_values.py --compiler /path/to/aethc \
 python3 tests/cudaq_runtime.py --compiler /path/to/aethc \
   --bridge /external/work/libaether_cudaq.dylib --work-dir /external/work/cudaq-test
 ```
+
+## Shared compute queue
+
+`quantum_compute(queue,circuit)` supports the ten Circuit gates on the F32 CPU, Metal and Vulkan GEMM providers. Amplitudes use two f32 lanes; observables accumulate in f64. Aether packs disjoint amplitude pairs and encodes the complex gate into a real 4×4 operator. It waits for the device event before scattering the completed amplitudes. Controlled and swap gates select only active pairs. Batches contain at most 32,768 pairs. Admission charges host state, packing and native buffers to the same queue; driver metadata and SDK-internal workspace remain outside the specified budget. Use `quantum_compute_free` to release the result. Scope is a single serialized queue with explicit provider selection.
+
+`quantum_compute_gradient` uses parameter shift with separate rotations, including when a large finite angle would round away an added shift. `quantum_compute_cudaq` accepts an explicit SDK placement requirement, returns the same readable state, and propagates SDK failures and placement mismatches. Its host f64 return and f32 conversion storage both count against the queue. SDK verification requires the optional CUDA-Q bridge.
+
+`tests/compute_runtime.py` runs the 16q all-gate workload, checks every amplitude against the f64 reference, all three Pauli axes, analytic gradient, a classical optimizer update, rollback and zero remaining bytes. Use `--metal` or `--device vulkan --provider /absolute/path/libaether_vulkan.so` to require a real GPU. `tests/cudaq_runtime.py` checks the same circuit through the SDK and verifies the reported state placement.
