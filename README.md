@@ -6,6 +6,22 @@ layout and foreign interfaces. Both compile through the same checked pipeline.
 The maintained compiler is written in Rust. LLVM is the primary native backend;
 a C backend provides a portable fallback and an independent semantic comparison.
 
+### Install a local release
+
+A release directory contains a matched compiler, JXZ, standard library and
+`manifest.json`. With Python 3 on macOS or Linux, install or switch versions
+at a dedicated prefix:
+
+```sh
+sh install.sh --package "$PACKAGE" --prefix "$PREFIX" --manifest-sha256 "$MANIFEST_SHA256"
+export PATH="$PREFIX/bin:$PATH"
+```
+
+Each installation checks every listed file and the host platform before switching
+`bin` atomically. Reinstall the prior package to roll back. The old installer
+downloaded the historical `0.1.0-alpha` files individually. This local workflow
+takes the release directory and its receipt explicitly.
+
 ## Build and run
 
 Use Rust 1.100.0, a native C compiler/linker, and LLVM 21 for the primary backend.
