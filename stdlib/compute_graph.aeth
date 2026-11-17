@@ -1,0 +1,131 @@
+// Bounded, typed F32 operator DAG. Inputs are matrices; batched inputs receive
+// one matrix per mapped sample. Scalar 1x1 nodes broadcast in add/multiply.
+// Linear nodes are matrix products. Interpretation/native JIT require a CPU
+// queue: GPU buffers must be explicitly copied across queues, never fallback.
+use compute::*;
+use result::Result;
+extern "C" {fn malloc(n:usize)->*void;fn free(p:*void);fn tanhf(x:f32)->f32;}
+const GRAPH_INPUT:i32=0;
+const GRAPH_CONSTANT:i32=1;
+const GRAPH_ADD:i32=2;
+const GRAPH_MULTIPLY:i32=3;
+const GRAPH_RELU:i32=4;
+const GRAPH_TANH:i32=5;
+const GRAPH_LINEAR:i32=6;
+pub struct GraphNode{pub kind:i32,pub rows:u64,pub cols:u64,pub left:u64,pub right:u64,pub input:u64,pub batched:bool,pub scalar:f32,pub offset:u64}
+pub struct ComputeGraph{nodes:[GraphNode;64],length:u64,inputs:u64,workspace:u64,output:u64}
+pub struct GraphExecution{pub scratch:*ComputeScratch,pub inputs:[*f32;8],pub workspace:*f32,pub output:*f32,pub samples:u64,pub result:*ComputeBuffer}
+fn invalid()->ComputeError{compute_error(COMPUTE_ARGUMENT,0)}
+pub fn compute_graph_new()->Result<*ComputeGraph,ComputeError>{
+ let graph:*ComputeGraph=malloc(size_of(ComputeGraph)) as *ComputeGraph;
+ if graph==0 as *ComputeGraph{return Result::Err(compute_error(COMPUTE_ALLOCATION,0));}
+ graph.length=0;graph.inputs=0;graph.workspace=0;graph.output=18446744073709551615;Result::Ok(graph)
+}
+pub fn compute_graph_clone(graph:*ComputeGraph)->Result<*ComputeGraph,ComputeError>{
+ if graph==0 as *ComputeGraph{return Result::Err(invalid());}
+ let copy:*ComputeGraph=compute_graph_new()?;copy.length=graph.length;copy.inputs=graph.inputs;copy.workspace=graph.workspace;copy.output=graph.output;
+ let mut i:u64=0;while i<graph.length{copy.nodes[i]=graph.nodes[i];i+=1;}Result::Ok(copy)
+}
+pub fn compute_graph_free(owner:**ComputeGraph){if owner!=0 as **ComputeGraph&&*owner!=0 as *ComputeGraph{free(*owner as *void);*owner=0 as *ComputeGraph;}}
+pub fn compute_graph_length(graph:*ComputeGraph)->u64{graph.length}
+pub fn compute_graph_inputs(graph:*ComputeGraph)->u64{graph.inputs}
+pub fn compute_graph_workspace(graph:*ComputeGraph)->u64{graph.workspace}
+pub fn compute_graph_output(graph:*ComputeGraph)->u64{graph.output}
+pub fn compute_graph_node(graph:*ComputeGraph,index:u64)->Result<GraphNode,ComputeError>{if graph==0 as *ComputeGraph||index>=graph.length{return Result::Err(invalid());}Result::Ok(graph.nodes[index])}
+fn insert(graph:*ComputeGraph,node:GraphNode)->Result<u64,ComputeError>{
+ if graph==0 as *ComputeGraph||graph.length>=64||node.rows==0||node.cols==0||node.rows>65536/node.cols{return Result::Err(invalid());}
+ let mut value:GraphNode=node;let count:u64=value.rows*value.cols;
+ if value.kind!=GRAPH_INPUT{if count>4096||graph.workspace>4096-count{return Result::Err(compute_error(COMPUTE_BUDGET,0));}value.offset=graph.workspace;graph.workspace+=count;}
+ let id:u64=graph.length;graph.nodes[id]=value;graph.length+=1;graph.output=id;Result::Ok(id)
+}
+pub fn compute_graph_input(graph:*ComputeGraph,rows:u64,cols:u64,batched:bool)->Result<u64,ComputeError>{
+ if graph==0 as *ComputeGraph||graph.inputs>=8{return Result::Err(invalid());}
+ let id:u64=insert(graph,GraphNode{kind:GRAPH_INPUT,rows:rows,cols:cols,left:0,right:0,input:graph.inputs,batched:batched,scalar:0.0,offset:0})?;
+ graph.inputs+=1;Result::Ok(id)
+}
+pub fn compute_graph_scalar(graph:*ComputeGraph,value:f32)->Result<u64,ComputeError>{
+ if value!=value||value>3.4028234663852886e38||value< -3.4028234663852886e38{return Result::Err(invalid());}
+ insert(graph,GraphNode{kind:GRAPH_CONSTANT,rows:1,cols:1,left:0,right:0,input:0,batched:false,scalar:value,offset:0})
+}
+pub fn compute_graph_binary(graph:*ComputeGraph,kind:i32,left:u64,right:u64)->Result<u64,ComputeError>{
+ let a:GraphNode=compute_graph_node(graph,left)?;let b:GraphNode=compute_graph_node(graph,right)?;
+ if kind!=GRAPH_ADD&&kind!=GRAPH_MULTIPLY{return Result::Err(invalid());}
+ let scalar_a:bool=a.rows==1&&a.cols==1;let scalar_b:bool=b.rows==1&&b.cols==1;
+ if !scalar_a&&!scalar_b&&(a.rows!=b.rows||a.cols!=b.cols){return Result::Err(compute_error(COMPUTE_SHAPE,0));}
+ insert(graph,GraphNode{kind:kind,rows:if scalar_a{b.rows}else{a.rows},cols:if scalar_a{b.cols}else{a.cols},left:left,right:right,input:0,batched:false,scalar:0.0,offset:0})
+}
+pub fn compute_graph_unary(graph:*ComputeGraph,kind:i32,source:u64)->Result<u64,ComputeError>{
+ let value:GraphNode=compute_graph_node(graph,source)?;if kind!=GRAPH_RELU&&kind!=GRAPH_TANH{return Result::Err(invalid());}
+ insert(graph,GraphNode{kind:kind,rows:value.rows,cols:value.cols,left:source,right:0,input:0,batched:false,scalar:0.0,offset:0})
+}
+pub fn compute_graph_linear(graph:*ComputeGraph,left:u64,right:u64)->Result<u64,ComputeError>{
+ let a:GraphNode=compute_graph_node(graph,left)?;let b:GraphNode=compute_graph_node(graph,right)?;
+ if a.cols!=b.rows{return Result::Err(compute_error(COMPUTE_SHAPE,0));}
+ insert(graph,GraphNode{kind:GRAPH_LINEAR,rows:a.rows,cols:b.cols,left:left,right:right,input:0,batched:false,scalar:0.0,offset:0})
+}
+pub fn compute_graph_set_output(graph:*ComputeGraph,node:u64)->Result<(),ComputeError>{compute_graph_node(graph,node)?;graph.output=node;Result::Ok(())}
+pub fn compute_graph_prepare(graph:*ComputeGraph,queue:*ComputeQueue,inputs:**ComputeBuffer,count:u64,samples:u64)->Result<*GraphExecution,ComputeError>{
+ if graph==0 as *ComputeGraph||graph.output>=graph.length||count!=graph.inputs||(count>0&&inputs==0 as **ComputeBuffer)||samples==0{return Result::Err(invalid());}
+ if queue==0 as *ComputeQueue{return Result::Err(invalid());}
+ if compute_queue_stats(queue).backend!=COMPUTE_CPU{return Result::Err(compute_error(COMPUTE_DEVICE,compute_queue_stats(queue).backend));}
+ let output:GraphNode=graph.nodes[graph.output];let width:u64=output.rows*output.cols;let limit:u64=compute_max_bytes()/4;
+ if samples>limit/width{return Result::Err(compute_error(COMPUTE_OVERFLOW,0));}
+ let mut total:u64=samples*width;if graph.workspace>limit-total{return Result::Err(compute_error(COMPUTE_OVERFLOW,0));}total+=graph.workspace;
+ let mut i:u64=0;while i<graph.length{let node:GraphNode=graph.nodes[i];if node.kind==GRAPH_INPUT{
+  if inputs[node.input]==0 as *ComputeBuffer{return Result::Err(invalid());}
+  let shape:ComputeLayout=compute_buffer_layout(inputs[node.input]);let per_sample:u64=node.rows*node.cols;
+  let n:u64=if node.batched{samples}else{1};if n>limit/per_sample||n*per_sample>limit-total{return Result::Err(compute_error(COMPUTE_OVERFLOW,0));}
+  let mut valid:bool=false;
+  if !node.batched||samples==1{valid=shape.rank==2&&shape.shape[0]==node.rows&&shape.shape[1]==node.cols;}
+  if node.batched&&node.rows==1&&shape.rank==2&&shape.shape[0]==samples&&shape.shape[1]==node.cols{valid=true;}
+  if node.batched&&shape.rank==3&&shape.shape[0]==samples&&shape.shape[1]==node.rows&&shape.shape[2]==node.cols{valid=true;}
+  if !valid{return Result::Err(compute_error(COMPUTE_SHAPE,0));}total+=n*per_sample;
+ }i+=1;}
+ let mut scratch:*ComputeScratch=compute_scratch_new(queue,total*4)?;
+ let mut execution:*GraphExecution=malloc(size_of(GraphExecution)) as *GraphExecution;
+ if execution==0 as *GraphExecution{compute_scratch_free(&mut scratch as **ComputeScratch);return Result::Err(compute_error(COMPUTE_ALLOCATION,0));}
+ let data:*f32=compute_scratch_data(scratch) as *f32;
+ *execution=GraphExecution{scratch:scratch,inputs:[0 as *f32;8],workspace:data,output:data+graph.workspace,samples:samples,result:0 as *ComputeBuffer};
+ let mut offset:u64=graph.workspace+samples*width;i=0;
+ while i<graph.length{let node:GraphNode=graph.nodes[i];if node.kind==GRAPH_INPUT{
+  let elements:u64=node.rows*node.cols*if node.batched{samples}else{1};execution.inputs[node.input]=data+offset;
+  match compute_download(data+offset,inputs[node.input],elements){Result::Ok(_)=>{},Result::Err(e)=>{compute_graph_discard(&mut execution as **GraphExecution);return Result::Err(e);}}
+  offset+=elements;
+ }i+=1;}
+ let shape:[u64;3]=if output.rows==1{[samples,output.cols,1]}else{[samples,output.rows,output.cols]};
+ match compute_buffer_new(queue,COMPUTE_F32,if output.rows==1{2}else{3},&shape[0] as *u64){Result::Ok(value)=>{execution.result=value;},Result::Err(e)=>{compute_graph_discard(&mut execution as **GraphExecution);return Result::Err(e);}}
+ Result::Ok(execution)
+}
+pub fn compute_graph_discard(owner:**GraphExecution){
+ if owner==0 as **GraphExecution||*owner==0 as *GraphExecution{return;}
+ let value:*GraphExecution=*owner;*owner=0 as *GraphExecution;compute_buffer_free(&mut value.result as **ComputeBuffer);compute_scratch_free(&mut value.scratch as **ComputeScratch);free(value as *void);
+}
+pub fn compute_graph_complete(owner:**GraphExecution)->Result<*ComputeBuffer,ComputeError>{
+ let execution:*GraphExecution=*owner;let result:Result<(),ComputeError>=compute_upload(execution.result,execution.output,compute_buffer_layout(execution.result).count);
+ match result{Result::Err(e)=>{compute_graph_discard(owner);Result::Err(e)},Result::Ok(_)=>{let value:*ComputeBuffer=execution.result;execution.result=0 as *ComputeBuffer;compute_graph_discard(owner);Result::Ok(value)}}
+}
+fn node_data(graph:*ComputeGraph,execution:*GraphExecution,id:u64,sample:u64)->*f32{
+ let node:GraphNode=graph.nodes[id];if node.kind==GRAPH_INPUT{return execution.inputs[node.input]+if node.batched{sample*node.rows*node.cols}else{0 as u64};}execution.workspace+node.offset
+}
+pub fn compute_graph_run(graph:*ComputeGraph,queue:*ComputeQueue,inputs:**ComputeBuffer,count:u64,samples:u64)->Result<*ComputeBuffer,ComputeError>{
+ let mut execution:*GraphExecution=compute_graph_prepare(graph,queue,inputs,count,samples)?;
+ let mut sample:u64=0;while sample<samples{let mut index:u64=0;while index<graph.length{
+  let node:GraphNode=graph.nodes[index];let out:*f32=execution.workspace+node.offset;let mut i:u64=0;
+  if node.kind==GRAPH_CONSTANT{out[0]=node.scalar;}
+  else if node.kind!=GRAPH_INPUT{
+   let a:*f32=node_data(graph,execution,node.left,sample);let left:GraphNode=graph.nodes[node.left];
+   let b:*f32=if node.kind==GRAPH_ADD||node.kind==GRAPH_MULTIPLY||node.kind==GRAPH_LINEAR{node_data(graph,execution,node.right,sample)}else{0 as *f32};
+   while i<node.rows*node.cols{
+    if node.kind==GRAPH_LINEAR{let mut sum:f32=0.0;let mut k:u64=0;while k<left.cols{sum+=a[(i/node.cols)*left.cols+k]*b[k*node.cols+i%node.cols];k+=1;}out[i]=sum;}
+    else if node.kind==GRAPH_RELU{out[i]=if a[i]<0.0{0.0}else{a[i]};}
+    else if node.kind==GRAPH_TANH{out[i]=tanhf(a[i]);}
+    else{let right:GraphNode=graph.nodes[node.right];let x:f32=a[if left.rows*left.cols==1{0 as u64}else{i}];let y:f32=b[if right.rows*right.cols==1{0 as u64}else{i}];out[i]=if node.kind==GRAPH_ADD{x+y}else{x*y};}
+    i+=1;
+   }
+  }
+  index+=1;
+ }
+ let output:GraphNode=graph.nodes[graph.output];let src:*f32=node_data(graph,execution,graph.output,sample);let mut i:u64=0;while i<output.rows*output.cols{execution.output[sample*output.rows*output.cols+i]=src[i];i+=1;}sample+=1;
+ }
+ compute_graph_complete(&mut execution as **GraphExecution)
+}

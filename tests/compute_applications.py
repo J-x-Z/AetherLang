@@ -74,7 +74,7 @@ if a.metal:
     device='metal';provider=w/'metal.dylib'
     run('real Metal provider',['clang','-O2','-fobjc-arc','-dynamiclib',r/'runtime/metal/provider.m',r/'runtime/metal/bridge.m','-framework','Metal','-framework','Foundation','-o',provider])
 link=[] if sys.platform=='darwin' else ['-l','dl','-l','m']
-run('check applications',[c,'check',source])
+run('check applications',[c,'check',source,'--sysroot',r])
 measurements=[]
 def execution(binary,mode,library=None,environment=env):
     text=run(f'{binary.name}/{mode}',[binary,mode,*([library] if library else [])],environment)
@@ -83,17 +83,17 @@ def execution(binary,mode,library=None,environment=env):
 for backend in a.backends:
     for opt in (0,2):
         binary=w/f'applications-{backend}-O{opt}'
-        run(f'{backend}/O{opt}/build',[c,source,'--backend',backend,f'-O{opt}','--link-object',loader,*link,'-o',binary])
+        run(f'{backend}/O{opt}/build',[c,source,'--sysroot',r,'--backend',backend,f'-O{opt}','--link-object',loader,*link,'-o',binary])
         execution(binary,'cpu')
         if provider:execution(binary,device,provider)
 if not a.no_sanitize:
     csource=w/'sanitized.c';binary=w/'sanitized'
-    run('emit sanitizer C',[c,source,'--emit-c','-o',csource])
+    run('emit sanitizer C',[c,source,'--sysroot',r,'--emit-c','-o',csource])
     run('ASan UBSan build',[cc,'-std=c11','-O0','-gline-tables-only','-fno-omit-frame-pointer','-fsanitize=address,undefined',csource,r/'runtime/compute/loader.c',*link,'-o',binary])
     sanitizer={**env,'ASAN_OPTIONS':'halt_on_error=1:exitcode=86','UBSAN_OPTIONS':'halt_on_error=1:exitcode=87'}
     execution(binary,'cpu',environment=sanitizer)
     if provider:execution(binary,device,provider,sanitizer)
-paths=[c,source,r/'stdlib/compute.aeth',r/'stdlib/compute_types.aeth',r/'stdlib/compute_ops.aeth',r/'stdlib/compute_sparse.aeth',r/'stdlib/compute_quant.aeth',r/'runtime/compute/provider.h',r/'runtime/compute/loader.c']
+paths=[c,source,'--sysroot',r,r/'stdlib/compute.aeth',r/'stdlib/compute_types.aeth',r/'stdlib/compute_ops.aeth',r/'stdlib/compute_sparse.aeth',r/'stdlib/compute_quant.aeth',r/'runtime/compute/provider.h',r/'runtime/compute/loader.c']
 if provider:paths.append(provider)
 (w/'hashes.json').write_text(json.dumps({str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in paths},indent=2))
 print(f'{len(results)} application checks passed; GPU: {device if provider else "not requested"}; evidence: {w/"results.json"}')

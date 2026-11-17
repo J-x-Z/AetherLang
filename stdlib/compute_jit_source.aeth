@@ -1,0 +1,46 @@
+// Deterministic Aether source encoding of the typed graph. Scalar constants are
+// emitted by IEEE bits through memcpy, avoiding locale and decimal round trips.
+use compute::*;
+use compute_graph::*;
+use result::Result;
+extern "C" {fn fopen(path:*u8,mode:*u8)->*void;fn fclose(file:*void)->i32;fn fprintf(file:*void,format:*u8,...)->i32;fn memcpy(out:*void,source:*void,n:usize)->*void;}
+fn emit(file:*void,text:*u8)->bool{fprintf(file,"%s",text)>=0}
+pub fn compute_jit_source(graph:*ComputeGraph,samples:u64,path:*u8)->bool{
+ let file:*void=fopen(path,"wb");if file==0 as *void{return false;}
+ let mut ok:bool=emit(file,"// AETHER-GRAPH-1 dtype=f32\nextern \"C\" {fn tanhf(x:f32)->f32;fn memcpy(out:*void,source:*void,n:usize)->*void;}\n#[no_mangle] fn aether_jit_kernel(inputs:**f32,workspace:*f32,output:*f32)->i32{\nlet mut sample:u64=0;\n");
+ ok=ok&&fprintf(file,"while sample<%llu {\n",samples)>=0;
+ let mut id:u64=0;while ok&&id<compute_graph_length(graph){
+  let node:GraphNode=match compute_graph_node(graph,id){Result::Ok(v)=>v,Result::Err(_)=>{ok=false;break;}};
+  let width:u64=node.rows*node.cols;
+  if node.kind==GRAPH_INPUT{ok=fprintf(file,"let p%llu:*f32=inputs[%llu]+sample*%llu;\n",id,node.input,if node.batched{width}else{0 as u64})>=0;}
+  else{
+   ok=fprintf(file,"let p%llu:*f32=workspace+%llu;\n",id,node.offset)>=0;
+   if node.kind==GRAPH_CONSTANT{
+    let mut bits:u32=0;memcpy((&mut bits as *u32) as *void,(&node.scalar as *f32) as *void,4);
+    ok=ok&&fprintf(file,"let bits%llu:u32=%u;memcpy(p%llu as *void,(&bits%llu as *u32) as *void,4);\n",id,bits,id,id)>=0;
+   }else{
+    let left:GraphNode=match compute_graph_node(graph,node.left){Result::Ok(v)=>v,Result::Err(_)=>{ok=false;break;}};
+    ok=ok&&fprintf(file,"let mut i%llu:u64=0;while i%llu<%llu {\n",id,id,width)>=0;
+    if node.kind==GRAPH_LINEAR{
+     ok=ok&&fprintf(file,"let mut sum:f32=0.0;let mut k:u64=0;while k<%llu {sum+=p%llu[(i%llu/%llu)*%llu+k]*p%llu[k*%llu+i%llu%% %llu];k+=1;}p%llu[i%llu]=sum;\n",left.cols,node.left,id,node.cols,left.cols,node.right,node.cols,id,node.cols,id,id)>=0;
+    }else if node.kind==GRAPH_RELU{ok=ok&&fprintf(file,"p%llu[i%llu]=if p%llu[i%llu]<0.0 {0.0}else{p%llu[i%llu]};\n",id,id,node.left,id,node.left,id)>=0;}
+    else if node.kind==GRAPH_TANH{ok=ok&&fprintf(file,"p%llu[i%llu]=tanhf(p%llu[i%llu]);\n",id,id,node.left,id)>=0;}
+    else{
+     let right:GraphNode=match compute_graph_node(graph,node.right){Result::Ok(v)=>v,Result::Err(_)=>{ok=false;break;}};
+     ok=ok&&fprintf(file,"p%llu[i%llu]=p%llu[",id,id,node.left)>=0;
+     if left.rows*left.cols==1{ok=ok&&emit(file,"0");}else{ok=ok&&fprintf(file,"i%llu",id)>=0;}
+     ok=ok&&emit(file,if node.kind==GRAPH_ADD{"]+p"}else{"]*p"})&&fprintf(file,"%llu[",node.right)>=0;
+     if right.rows*right.cols==1{ok=ok&&emit(file,"0");}else{ok=ok&&fprintf(file,"i%llu",id)>=0;}
+     ok=ok&&emit(file,"];\n");
+    }
+    ok=ok&&fprintf(file,"i%llu+=1;}\n",id)>=0;
+   }
+  }
+  id+=1;
+ }
+ if ok{
+  let output:GraphNode=match compute_graph_node(graph,compute_graph_output(graph)){Result::Ok(v)=>v,Result::Err(_)=>{fclose(file);return false;}};
+  ok=fprintf(file,"let mut j:u64=0;while j<%llu {output[sample*%llu+j]=p%llu[j];j+=1;}sample+=1;}return 0;}\n",output.rows*output.cols,output.rows*output.cols,compute_graph_output(graph))>=0;
+ }
+ if fclose(file)!=0{ok=false;}ok
+}

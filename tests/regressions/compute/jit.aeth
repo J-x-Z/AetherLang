@@ -1,0 +1,38 @@
+use compute::*;
+use compute_graph::*;
+use compute_jit::*;
+use result::Result;
+extern "C"{fn printf(format:*u8,...)->i32;fn strcmp(a:*u8,b:*u8)->i32;fn atoi(text:*u8)->i32;}
+struct Resources{queue:*ComputeQueue,graph:*ComputeGraph,jit:[*ComputeJit;2],buffers:[*ComputeBuffer;6]}
+fn require(ok:bool,code:i32)->Result<(),ComputeError>{if ok{Result::Ok(())}else{Result::Err(compute_error(1000+code,0))}}
+fn exercise(r:*Resources,options:JitOptions,expected_hit:bool,factor:f32,samples:u64)->Result<(),ComputeError>{
+ r.queue=compute_queue_new(COMPUTE_CPU,1048576)?;r.graph=compute_graph_new()?;
+ let x:u64=compute_graph_input(r.graph,1,3,true)?;let weights:u64=compute_graph_input(r.graph,3,2,false)?;let bias:u64=compute_graph_input(r.graph,1,2,false)?;
+ let linear:u64=compute_graph_linear(r.graph,x,weights)?;let shifted:u64=compute_graph_binary(r.graph,GRAPH_ADD,linear,bias)?;
+ let scale:u64=compute_graph_scalar(r.graph,factor)?;let scaled:u64=compute_graph_binary(r.graph,GRAPH_MULTIPLY,shifted,scale)?;
+ let activated:u64=compute_graph_unary(r.graph,GRAPH_TANH,scaled)?;compute_graph_binary(r.graph,GRAPH_MULTIPLY,activated,activated)?;
+ let xs:[u64;2]=[samples,3];let ws:[u64;2]=[3,2];let bs:[u64;2]=[1,2];
+ let xd:[f32;12]=[-1.0,0.25,0.5,0.0,0.75,-0.5,1.0,0.5,-0.25,-0.5,-0.25,0.75];let wd:[f32;6]=[0.5,-0.25,0.75,0.125,-0.5,0.625];let bd:[f32;2]=[0.125,-0.25];
+ r.buffers[0]=compute_buffer_new(r.queue,COMPUTE_F32,2,&xs[0] as *u64)?;r.buffers[1]=compute_buffer_new(r.queue,COMPUTE_F32,2,&ws[0] as *u64)?;r.buffers[2]=compute_buffer_new(r.queue,COMPUTE_F32,2,&bs[0] as *u64)?;
+ compute_upload(r.buffers[0],&xd[0] as *f32,samples*3)?;compute_upload(r.buffers[1],&wd[0] as *f32,6)?;compute_upload(r.buffers[2],&bd[0] as *f32,2)?;
+ r.buffers[3]=compute_graph_run(r.graph,r.queue,&r.buffers[0] as **ComputeBuffer,3,samples)?;
+ r.jit[0]=compute_jit_compile(r.graph,samples,options)?;require(compute_jit_cache_hit(r.jit[0])==expected_hit,1)?;
+ r.jit[1]=compute_jit_compile(r.graph,samples,options)?;require(compute_jit_cache_hit(r.jit[1]),2)?;require(strcmp(compute_jit_identity(r.jit[0]),compute_jit_identity(r.jit[1]))==0,3)?;
+ // The compiled plan owns an immutable snapshot of graph semantics.
+ compute_graph_scalar(r.graph,99.0)?;
+ r.buffers[4]=compute_jit_run(r.jit[0],r.queue,&r.buffers[0] as **ComputeBuffer,3)?;
+ let mut reference:[f32;8]=[0.0;8];let mut actual:[f32;8]=[0.0;8];compute_download(&mut reference[0] as *f32,r.buffers[3],samples*2)?;compute_download(&mut actual[0] as *f32,r.buffers[4],samples*2)?;
+ printf("jit values");for i in 0..samples*2{let mut difference:f32=reference[i]-actual[i];if difference<0.0{difference= -difference;}require(difference<0.000001,4)?;printf(" %.9f",actual[i] as f64);}printf("\n");
+ match compute_jit_run(r.jit[0],r.queue,&r.buffers[0] as **ComputeBuffer,2){Result::Ok(_)=>{return require(false,5);},Result::Err(e)=>{require(e.code==COMPUTE_ARGUMENT,5)?;}}
+ printf("jit key=%s cache_hit=%d\n",compute_jit_identity(r.jit[0]),if expected_hit{1 as i32}else{0 as i32});
+ for i in 0..6{compute_buffer_free(&mut r.buffers[i] as **ComputeBuffer);}require(compute_queue_stats(r.queue).used_bytes==0,6)?;
+ Result::Ok(())
+}
+fn main(argc:i32,argv:**u8)->i32{
+ if argc!=7{return 2;}let level:i32=atoi(argv[5]);
+ let options:JitOptions=JitOptions{cache:argv[3],compiler:argv[1],cc:argv[2],target:"native",backend:argv[4],optimization:level as u64};
+ let mut r:Resources=Resources{queue:0 as *ComputeQueue,graph:0 as *ComputeGraph,jit:[0 as *ComputeJit;2],buffers:[0 as *ComputeBuffer;6]};
+ let answer:Result<(),ComputeError>=exercise(&mut r as *Resources,options,strcmp(argv[6],"warm")==0,if strcmp(argv[6],"changed")==0{0.75}else{0.5},if strcmp(argv[6],"short")==0{2}else{4});
+ for i in 0..6{compute_buffer_free(&mut r.buffers[i] as **ComputeBuffer);}for i in 0..2{compute_jit_free(&mut r.jit[i] as **ComputeJit);}compute_graph_free(&mut r.graph as **ComputeGraph);compute_queue_close(&mut r.queue as **ComputeQueue);
+ match answer{Result::Ok(_)=>0,Result::Err(e)=>{printf("jit error=%d native=%lld\n",e.code,e.native);1}}
+}

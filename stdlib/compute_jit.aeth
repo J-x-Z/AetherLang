@@ -1,0 +1,118 @@
+// Native-host JIT of a bounded F32 graph. Generated code is Aether, compiled by
+// an explicit aethc and C linker via argv, never a shell. An explicit owned cache
+// is serialized; compiler/source/target/options hashes identify each artifact.
+// Cache contents are executable code: use a private, trusted directory.
+use compute::*;
+use compute_graph::*;
+use compute_jit_source::compute_jit_source;
+use process::{Command,Child,command_new,process_spawn,child_wait,process_status_code,environment_get};
+use sha256::{Sha256,sha256_new,sha256_update,sha256_digest};
+use path::path_join;
+use result::Result;
+extern "C" {
+ fn malloc(n:usize)->*void;fn free(p:*void);fn strlen(s:*u8)->usize;fn strcmp(a:*u8,b:*u8)->i32;fn memcmp(a:*void,b:*void,n:usize)->i32;fn memcpy(a:*void,b:*void,n:usize)->*void;
+ fn realpath(path:*u8,out:*u8)->*u8;fn mkdtemp(pattern:*u8)->*u8;fn remove(path:*u8)->i32;fn rmdir(path:*u8)->i32;fn rename(a:*u8,b:*u8)->i32;
+ fn fopen(path:*u8,mode:*u8)->*void;fn fclose(file:*void)->i32;fn fread(data:*void,size:usize,count:usize,file:*void)->usize;fn ferror(file:*void)->i32;fn fprintf(file:*void,format:*u8,...)->i32;
+ fn aether_jit_kind(path:*u8)->i32;fn aether_jit_cache_lock(path:*u8)->*void;fn aether_jit_cache_unlock(handle:*void);fn aether_jit_cache_room(handle:*void)->i32;
+ fn aether_jit_load(path:*u8)->*void;fn aether_jit_unload(handle:*void);fn aether_jit_invoke(handle:*void,inputs:**f32,workspace:*f32,output:*f32)->i32;
+ fn aether_jit_host(output:*u8,capacity:u64)->i32;fn aether_jit_darwin()->i32;
+}
+const COMPUTE_COMPILE:i32=13;
+const COMPUTE_CACHE:i32=14;
+pub struct JitOptions{pub cache:*u8,pub compiler:*u8,pub cc:*u8,pub target:*u8,pub backend:*u8,pub optimization:u64}
+pub struct ComputeJit{graph:*ComputeGraph,library:*void,samples:u64,identity:[u8;65],cache_hit:bool}
+struct Build{paths:[*u8;13],lock:*void,staged:bool}
+fn error(code:i32)->ComputeError{compute_error(code,COMPUTE_CPU)}
+fn hash_file(path:*u8,limit:u64)->Result<[u8;32],ComputeError>{
+ if aether_jit_kind(path)!=1{return Result::Err(error(COMPUTE_CACHE));}
+ let file:*void=fopen(path,"rb");if file==0 as *void{return Result::Err(error(COMPUTE_CACHE));}
+ let mut state:Sha256=sha256_new();let mut chunk:[u8;8192]=[0;8192];let mut total:u64=0;let mut ok:bool=true;
+ loop{let count:u64=fread((&mut chunk[0] as *u8) as *void,1,8192,file) as u64;if count>limit-total{ok=false;break;}
+  if !sha256_update(&mut state as *Sha256,&chunk[0] as *u8,count){ok=false;break;}total+=count;
+  if count<8192{if ferror(file)!=0{ok=false;}break;}
+ }
+ if fclose(file)!=0{ok=false;}if !ok{return Result::Err(error(COMPUTE_CACHE));}Result::Ok(sha256_digest(state))
+}
+fn hex(bytes:[u8;32])->[u8;65]{let mut out:[u8;65]=[0;65];let alphabet:*u8="0123456789abcdef";for i in 0..32{out[i*2]=alphabet[(bytes[i]>>4) as u64];out[i*2+1]=alphabet[(bytes[i]&15) as u64];}out}
+fn hash_number(state:*Sha256,number:u64){let mut bytes:[u8;8]=[0;8];for i in 0..8{bytes[i]=(number>>(i as u64*8)) as u8;}sha256_update(state,&bytes[0] as *u8,8);}
+fn hash_text(state:*Sha256,text:*u8){let n:u64=if text==0 as *u8{0}else{strlen(text) as u64};hash_number(state,n);if n>0{sha256_update(state,text,n);}}
+fn run(argv:**u8)->bool{let mut command:Command=command_new(argv);let mut child:Child=match process_spawn(&mut command as *Command){Result::Ok(value)=>value,Result::Err(_)=>{return false;}};match child_wait(&mut child as *Child){Result::Ok(status)=>process_status_code(status)==0,Result::Err(_)=>false}}
+fn cleanup(build:*Build){
+ if build.staged{
+  for i in 4..8{if build.paths[i]!=0 as *u8&&aether_jit_kind(build.paths[i])==1{remove(build.paths[i]);}}
+  if build.paths[3]!=0 as *u8{rmdir(build.paths[3]);}
+ }
+ for i in 0..13{free(build.paths[i] as *void);}
+ if build.lock!=0 as *void{aether_jit_cache_unlock(build.lock);}
+}
+fn cache_valid(build:*Build,key:[u8;65],source_hash:[u8;65])->bool{
+ if aether_jit_kind(build.paths[8])!=2||aether_jit_kind(build.paths[11])!=1{return false;}
+ let source:[u8;65]=match hash_file(build.paths[10],262144){Result::Ok(value)=>hex(value),Result::Err(_)=>{return false;}};
+ if memcmp((&source[0] as *u8) as *void,(&source_hash[0] as *u8) as *void,64)!=0{return false;}
+ let library:[u8;65]=match hash_file(build.paths[9],8388608){Result::Ok(value)=>hex(value),Result::Err(_)=>{return false;}};
+ let file:*void=fopen(build.paths[11],"rb");if file==0 as *void{return false;}
+ let mut bytes:[u8;196]=[0;196];let n:u64=fread((&mut bytes[0] as *u8) as *void,1,196,file) as u64;let good:bool=ferror(file)==0;let closed:i32=fclose(file);
+ if n!=195||!good||closed!=0||bytes[64]!=10||bytes[129]!=10||bytes[194]!=10{return false;}
+ memcmp((&bytes[0] as *u8) as *void,(&key[0] as *u8) as *void,64)==0&&memcmp((&bytes[65] as *u8) as *void,(&source_hash[0] as *u8) as *void,64)==0&&memcmp((&bytes[130] as *u8) as *void,(&library[0] as *u8) as *void,64)==0
+}
+pub fn compute_jit_compile(graph:*ComputeGraph,samples:u64,options:JitOptions)->Result<*ComputeJit,ComputeError>{
+ if graph==0 as *ComputeGraph||samples==0||samples>1048576||compute_graph_output(graph)>=compute_graph_length(graph)
+  ||options.cache==0 as *u8||options.compiler==0 as *u8||options.cc==0 as *u8||options.target==0 as *u8||options.backend==0 as *u8||options.optimization>3{return Result::Err(error(COMPUTE_ARGUMENT));}
+ if (strcmp(options.backend,"c")!=0&&strcmp(options.backend,"llvm")!=0)||strlen(options.target)==0||strlen(options.target)>256{return Result::Err(error(COMPUTE_ARGUMENT));}
+ let mut snapshot:*ComputeGraph=compute_graph_clone(graph)?;
+ let mut build:Build=Build{paths:[0 as *u8;13],lock:0 as *void,staged:false};
+ let result:Result<*ComputeJit,ComputeError>=compile_inner(snapshot,samples,options,&mut build as *Build);cleanup(&mut build as *Build);
+ match result{Result::Ok(value)=>Result::Ok(value),Result::Err(e)=>{compute_graph_free(&mut snapshot as **ComputeGraph);Result::Err(e)}}
+}
+fn compile_inner(graph:*ComputeGraph,samples:u64,options:JitOptions,build:*Build)->Result<*ComputeJit,ComputeError>{
+ build.paths[0]=realpath(options.compiler,0 as *u8);build.paths[1]=realpath(options.cc,0 as *u8);
+ if build.paths[0]==0 as *u8||build.paths[1]==0 as *u8{return Result::Err(error(COMPUTE_ARGUMENT));}
+ let compiler_hash:[u8;32]=hash_file(build.paths[0],268435456)?;let linker_hash:[u8;32]=hash_file(build.paths[1],268435456)?;
+ build.lock=aether_jit_cache_lock(options.cache);if build.lock==0 as *void{return Result::Err(error(COMPUTE_CACHE));}
+ build.paths[2]=realpath(options.cache,0 as *u8);if build.paths[2]==0 as *u8{return Result::Err(error(COMPUTE_CACHE));}
+ build.paths[3]=path_join(build.paths[2],".stage-XXXXXX");if build.paths[3]==0 as *u8{return Result::Err(error(COMPUTE_ALLOCATION));}
+ if mkdtemp(build.paths[3])==0 as *u8{return Result::Err(error(COMPUTE_CACHE));}build.staged=true;
+ build.paths[4]=path_join(build.paths[3],"source.aeth");build.paths[5]=path_join(build.paths[3],"kernel.o");build.paths[6]=path_join(build.paths[3],"kernel.so");build.paths[7]=path_join(build.paths[3],"manifest");
+ for i in 4..8{if build.paths[i]==0 as *u8{return Result::Err(error(COMPUTE_ALLOCATION));}}
+ if !compute_jit_source(graph,samples,build.paths[4]){return Result::Err(error(COMPUTE_COMPILE));}
+ let source_hash:[u8;32]=hash_file(build.paths[4],262144)?;let mut state:Sha256=sha256_new();
+ hash_text(&mut state as *Sha256,"AETHER-GRAPH-JIT-1");sha256_update(&mut state as *Sha256,&source_hash[0] as *u8,32);sha256_update(&mut state as *Sha256,&compiler_hash[0] as *u8,32);sha256_update(&mut state as *Sha256,&linker_hash[0] as *u8,32);
+ hash_text(&mut state as *Sha256,options.target);hash_text(&mut state as *Sha256,options.backend);hash_number(&mut state as *Sha256,options.optimization);
+ let mut host:[u8;512]=[0;512];if aether_jit_host(&mut host[0] as *u8,512)!=0{return Result::Err(error(COMPUTE_COMPILE));}hash_text(&mut state as *Sha256,&host[0] as *u8);
+ hash_text(&mut state as *Sha256,environment_get("SDKROOT"));hash_text(&mut state as *Sha256,environment_get("MACOSX_DEPLOYMENT_TARGET"));hash_text(&mut state as *Sha256,environment_get("DEVELOPER_DIR"));
+ let key:[u8;65]=hex(sha256_digest(state));let source_hex:[u8;65]=hex(source_hash);
+ build.paths[8]=path_join(build.paths[2],&key[0] as *u8);if build.paths[8]==0 as *u8{return Result::Err(error(COMPUTE_ALLOCATION));}
+ build.paths[9]=path_join(build.paths[8],"kernel.so");build.paths[10]=path_join(build.paths[8],"source.aeth");build.paths[11]=path_join(build.paths[8],"manifest");
+ for i in 9..12{if build.paths[i]==0 as *u8{return Result::Err(error(COMPUTE_ALLOCATION));}}
+ let hit:bool=cache_valid(build,key,source_hex);
+ if !hit{
+  if aether_jit_cache_room(build.lock)==0{return Result::Err(error(COMPUTE_BUDGET));}
+  let present:i32=aether_jit_kind(build.paths[8]);if present<0||present==1||present==3{return Result::Err(error(COMPUTE_CACHE));}
+  if present==2{
+   build.paths[12]=path_join(build.paths[2],".invalid-XXXXXX");if build.paths[12]==0 as *u8{return Result::Err(error(COMPUTE_ALLOCATION));}
+   if mkdtemp(build.paths[12])==0 as *u8||rmdir(build.paths[12])!=0||rename(build.paths[8],build.paths[12])!=0{return Result::Err(error(COMPUTE_CACHE));}
+  }
+  let opt:*u8=if options.optimization==0{"-O0"}else if options.optimization==1{"-O1"}else if options.optimization==2{"-O2"}else{"-O3"};
+  let compiler:[*u8;14]=[build.paths[0],build.paths[4],"--emit-obj","--backend",options.backend,opt,"--target",options.target,"--cc",build.paths[1],"--quiet","-o",build.paths[5],0 as *u8];
+  if !run(&compiler[0] as **u8){return Result::Err(error(COMPUTE_COMPILE));}
+  let linker:[*u8;7]=[build.paths[1],if aether_jit_darwin()==1{"-dynamiclib"}else{"-shared"},build.paths[5],"-lm","-o",build.paths[6],0 as *u8];
+  if !run(&linker[0] as **u8){return Result::Err(error(COMPUTE_COMPILE));}
+  let library_hash:[u8;65]=hex(hash_file(build.paths[6],8388608)?);
+  let manifest:*void=fopen(build.paths[7],"wb");if manifest==0 as *void{return Result::Err(error(COMPUTE_CACHE));}
+  let written:bool=fprintf(manifest,"%s\n%s\n%s\n",&key[0] as *u8,&source_hex[0] as *u8,&library_hash[0] as *u8)>=0;let closed:i32=fclose(manifest);
+  if !written||closed!=0||remove(build.paths[5])!=0||rename(build.paths[3],build.paths[8])!=0{return Result::Err(error(COMPUTE_CACHE));}build.staged=false;
+ }
+ let library:*void=aether_jit_load(build.paths[9]);if library==0 as *void{return Result::Err(error(COMPUTE_COMPILE));}
+ let program:*ComputeJit=malloc(size_of(ComputeJit)) as *ComputeJit;
+ if program==0 as *ComputeJit{aether_jit_unload(library);return Result::Err(error(COMPUTE_ALLOCATION));}
+ *program=ComputeJit{graph:graph,library:library,samples:samples,identity:key,cache_hit:hit};Result::Ok(program)
+}
+pub fn compute_jit_free(owner:**ComputeJit){if owner!=0 as **ComputeJit&&*owner!=0 as *ComputeJit{let program:*ComputeJit=*owner;*owner=0 as *ComputeJit;compute_graph_free(&mut program.graph as **ComputeGraph);aether_jit_unload(program.library);free(program as *void);}}
+pub fn compute_jit_cache_hit(program:*ComputeJit)->bool{program.cache_hit}
+pub fn compute_jit_identity(program:*ComputeJit)->*u8{&program.identity[0] as *u8}
+pub fn compute_jit_run(program:*ComputeJit,queue:*ComputeQueue,inputs:**ComputeBuffer,count:u64)->Result<*ComputeBuffer,ComputeError>{
+ if program==0 as *ComputeJit{return Result::Err(error(COMPUTE_ARGUMENT));}
+ let mut execution:*GraphExecution=compute_graph_prepare(program.graph,queue,inputs,count,program.samples)?;
+ if aether_jit_invoke(program.library,&execution.inputs[0] as **f32,execution.workspace,execution.output)!=0{compute_graph_discard(&mut execution as **GraphExecution);return Result::Err(error(COMPUTE_EXECUTION));}
+ compute_graph_complete(&mut execution as **GraphExecution)
+}

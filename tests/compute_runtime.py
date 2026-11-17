@@ -48,7 +48,7 @@ if args.metal:
     device = 'metal'
     run('real Metal provider', ['clang','-O2','-fobjc-arc','-dynamiclib',repo/'runtime/metal/provider.m',repo/'runtime/metal/bridge.m',
                                '-framework','Metal','-framework','Foundation','-o',provider])
-run('checked operator program',[compiler,'check',source])
+run('checked operator program',[compiler,'check',source,'--sysroot',repo])
 link = [] if sys.platform=='darwin' else ['-l','dl']
 output = re.compile(r'compute backend=(\d+) device=(\d+) values=10 error=([0-9.]+) used=(\d+) peak=(\d+) completed=(\d+)\n')
 def execution(binary, mode, library=None, environment=env):
@@ -66,7 +66,7 @@ binaries=[]
 for backend in args.backends:
     for level in (0,2):
         binary = work/f'compute-{backend}-O{level}'
-        run(f'{backend}/O{level}/build',[compiler,source,'--backend',backend,f'-O{level}','--link-object',loader,*link,'-o',binary])
+        run(f'{backend}/O{level}/build',[compiler,source,'--sysroot',repo,'--backend',backend,f'-O{level}','--link-object',loader,*link,'-o',binary])
         binaries.append(binary)
         execution(binary,'cpu')
         if provider:
@@ -80,7 +80,7 @@ shared = ['-dynamiclib'] if sys.platform=='darwin' else ['-shared','-fPIC']
 run('failure injection provider',[cc,'-std=c11','-O2',*shared,repo/'tests/regressions/compute/fault_provider.c','-o',fault_provider])
 for backend in args.backends:
     binary=work/f'compute-failure-{backend}'
-    run(f'{backend}/failure/build',[compiler,fault_source,'--backend',backend,'-O2','--link-object',loader,*link,'-o',binary])
+    run(f'{backend}/failure/build',[compiler,fault_source,'--sysroot',repo,'--backend',backend,'-O2','--link-object',loader,*link,'-o',binary])
     result=run(f'{backend}/injected failure recovery',[binary,fault_provider])
     assert result.stdout=='compute injected failure recovered\n' and not result.stderr
 
@@ -92,14 +92,14 @@ if provider:
 if not args.no_sanitize:
     csource = work/'compute-sanitized.c'
     sanitized = work/'compute-sanitized'
-    run('emit sanitizer C',[compiler,source,'--emit-c','-o',csource])
+    run('emit sanitizer C',[compiler,source,'--sysroot',repo,'--emit-c','-o',csource])
     run('ASan UBSan build',[cc,'-std=c11','-O0','-gline-tables-only','-fno-omit-frame-pointer','-fsanitize=address,undefined',
                             csource,repo/'runtime/compute/loader.c',*link,'-o',sanitized])
     sanitized_env = {**env,'ASAN_OPTIONS':'halt_on_error=1:exitcode=86','UBSAN_OPTIONS':'halt_on_error=1:exitcode=87'}
     execution(sanitized,'cpu',environment=sanitized_env)
     failure_c=work/'compute-failure-sanitized.c'
     failure_binary=work/'compute-failure-sanitized'
-    run('emit failure sanitizer C',[compiler,fault_source,'--emit-c','-o',failure_c])
+    run('emit failure sanitizer C',[compiler,fault_source,'--sysroot',repo,'--emit-c','-o',failure_c])
     run('failure ASan UBSan build',[cc,'-std=c11','-O0','-gline-tables-only','-fno-omit-frame-pointer','-fsanitize=address,undefined',
                                  failure_c,repo/'runtime/compute/loader.c',*link,'-o',failure_binary])
     run('sanitized injected failure recovery',[failure_binary,fault_provider],environment=sanitized_env)
@@ -127,7 +127,7 @@ for backend in args.backends:
         assert 'qubits=16 amplitudes=65536' in execution_result.stdout
         assert 'submissions=42' in execution_result.stdout and execution_result.stdout.endswith('remaining=0\n')
 
-paths=[compiler,source,statevector,statevector.with_name("circuit16.aeth"),repo/"stdlib/quantum_compute.aeth",repo/"stdlib/quantum.aeth",fault_source,repo/'tests/regressions/compute/fault_provider.c',repo/'stdlib/compute.aeth',repo/'stdlib/compute_types.aeth',repo/'runtime/compute/loader.c',repo/'runtime/compute/provider.h']
+paths=[compiler,source,'--sysroot',repo,statevector,statevector.with_name("circuit16.aeth"),repo/"stdlib/quantum_compute.aeth",repo/"stdlib/quantum.aeth",fault_source,repo/'tests/regressions/compute/fault_provider.c',repo/'stdlib/compute.aeth',repo/'stdlib/compute_types.aeth',repo/'runtime/compute/loader.c',repo/'runtime/compute/provider.h']
 if args.metal: paths += [repo/'runtime/metal/provider.m',repo/'runtime/metal/bridge.m',repo/'runtime/metal/bridge.h']
 if provider: paths.append(provider)
 (work/'hashes.json').write_text(json.dumps({str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},indent=2))
