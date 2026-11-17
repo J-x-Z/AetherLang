@@ -177,6 +177,8 @@ extern "C" {
 }
 
 // ==================== Target Machine ====================
+// The five all-target initializers require runtime/llvm/target_init.c, compiled
+// against the same LLVM SDK as the linked library (see docs/GUIDE.md).
 
 extern "C" {
     fn LLVMInitializeAllTargetInfos();
@@ -185,6 +187,7 @@ extern "C" {
     fn LLVMInitializeAllAsmPrinters();
     fn LLVMInitializeAllAsmParsers();
     
+    fn LLVMDisposeMessage(message: *u8);
     fn LLVMGetDefaultTargetTriple() -> *u8;
     fn LLVMGetTargetFromTriple(triple: *u8, target: **void, error: **u8) -> i32;
     fn LLVMCreateTargetMachine(t: *void, triple: *u8, cpu: *u8, features: *u8, level: i32, reloc: i32, model: i32) -> *void;

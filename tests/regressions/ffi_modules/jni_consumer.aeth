@@ -1,0 +1,12 @@
+use jni::{jni_version_1_8, jni_ok, jni_err, jni_eversion, JavaVMInitArgs,
+          JNI_GetDefaultJavaVMInitArgs, JNI_GetCreatedJavaVMs};
+fn main() -> i32 {
+    if jni_version_1_8() != 0x10008 || jni_ok() != 0 || jni_err() != -1 || jni_eversion() != -3 {return 1;}
+    let mut args: JavaVMInitArgs = JavaVMInitArgs {
+        version: jni_version_1_8(), nOptions: 0, options: 0 as *void, ignoreUnrecognized: 0
+    };
+    if JNI_GetDefaultJavaVMInitArgs(&mut args as *JavaVMInitArgs as *void) != jni_ok() {return 2;}
+    let mut count:i32 = -1;
+    if JNI_GetCreatedJavaVMs(0 as *void, 0, &mut count as *i32) != jni_ok() || count != 0 {return 3;}
+    return 0;
+}

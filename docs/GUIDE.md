@@ -203,3 +203,22 @@ A: `requires` 是编译器/AI 可理解的契约，可以被静态分析或自�
 
 **Q: 什么时候用 `shared` vs `ref`?**
 A: `ref` 是临时借用，函数结束后失效；`shared` 是引用计数，可以长期持有。
+
+### Linking an LLVM or JNI consumer
+
+Import a binding from `llvm` or `jni` and pass its native shared library with
+`--link-object`. The five `LLVMInitializeAll…` functions are inline functions
+in LLVM's C header. When calling them, build the supplied adapter against the
+same LLVM 21 installation and include its object in the link.
+
+```sh
+clang -I"$LLVM_SYS_211_PREFIX/include" -c runtime/llvm/target_init.c -o "$TMPDIR/target-init.o"
+"$AETHC" build tests/regressions/ffi_modules/llvm_targets.aeth \
+  --link-object "$TMPDIR/target-init.o" \
+  --link-object "$("$LLVM_SYS_211_PREFIX/bin/llvm-config" --link-shared --libfiles)" -o "$TMPDIR/llvm-targets"
+```
+
+The JNI module exports its documented version and status helpers. The native
+consumer queries JVM initialization arguments and the number of running VMs
+through the installed JDK. Set `JAVA_HOME` to select a JDK, then run
+`tests/ffi_modules.py --compiler "$AETHC" --work-dir "$TMPDIR/ffi"` with Python 3.

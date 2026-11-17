@@ -952,17 +952,6 @@ impl CCodeGen {
                 self.writeln(&format!("typedef {} {} __attribute__((vector_size({})));",self.ir_type_to_c(&element),name,element.size_bytes()*lanes));
             }
         }
-        // LLVM-C headers (if module uses LLVM functions)
-        let uses_llvm = module.externs.iter().any(|e| e.name.starts_with("LLVM"));
-        if uses_llvm {
-            self.writeln("#include <llvm-c/Core.h>");
-            self.writeln("#include <llvm-c/Analysis.h>");
-            self.writeln("#include <llvm-c/BitWriter.h>");
-            self.writeln("#include <llvm-c/Target.h>");
-            self.writeln("#include <llvm-c/TargetMachine.h>");
-        }
-
-        // Skip SIMD headers for other platforms
         self.writeln("");
 
         
@@ -1156,7 +1145,7 @@ impl CCodeGen {
         ];
         let mut declared = HashSet::new();
         for ext in &module.externs {
-            if HEADER_FUNCTIONS.contains(&ext.name.as_str()) || (uses_llvm && ext.name.starts_with("LLVM")) || !declared.insert(ext.name.clone()) { continue; }
+            if HEADER_FUNCTIONS.contains(&ext.name.as_str()) || !declared.insert(ext.name.clone()) { continue; }
             let mut params: Vec<_> = ext.params.iter().map(|(_, ty)| self.ir_type_to_c(ty)).collect();
             if ext.variadic { params.push("...".into()); }
             if params.is_empty() { params.push("void".into()); }

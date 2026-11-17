@@ -1,0 +1,21 @@
+use llvm::{LLVMInitializeAllTargetInfos, LLVMInitializeAllTargets, LLVMInitializeAllTargetMCs,
+           LLVMInitializeAllAsmPrinters, LLVMInitializeAllAsmParsers, LLVMGetTargetFromTriple,
+           LLVMGetDefaultTargetTriple, LLVMDisposeMessage, LLVMContextCreate, LLVMContextDispose};
+fn main() -> i32 {
+    LLVMInitializeAllTargetInfos();
+    LLVMInitializeAllTargets();
+    LLVMInitializeAllTargetMCs();
+    LLVMInitializeAllAsmPrinters();
+    LLVMInitializeAllAsmParsers();
+    let ctx: *void = LLVMContextCreate();
+    if ctx == 0 as *void {return 1;}
+    LLVMContextDispose(ctx);
+    let triple: *u8 = LLVMGetDefaultTargetTriple();
+    let mut target: *void = 0 as *void;
+    let mut error: *u8 = 0 as *u8;
+    let status: i32 = LLVMGetTargetFromTriple(triple, &mut target as **void, &mut error as **u8);
+    LLVMDisposeMessage(triple);
+    if error != 0 as *u8 {LLVMDisposeMessage(error);}
+    if status != 0 || target == 0 as *void {return 2;}
+    return 0;
+}
