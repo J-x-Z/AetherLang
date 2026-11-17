@@ -1,0 +1,25 @@
+// Importing this module registers scope cleanup for own Vec<T>.
+// Raw Vec<T> retains its explicit allocation/free contract.
+use vec::{Vec,vec_new,vec_push,vec_get,vec_free};
+use option::Option;
+
+pub fn owned_vec_new<T>() -> own Vec<T> {
+    let raw: Vec<T> = vec_new();
+    unsafe { raw as own Vec<T> }
+}
+
+@drop
+fn release_owned_vec<T>(value: own Vec<T>) {
+    let mut raw: Vec<T> = unsafe { value as Vec<T> };
+    vec_free(&mut raw as *Vec<T>);
+}
+
+pub fn owned_vec_push<T>(value: &mut own Vec<T>, item: T) -> bool {
+    unsafe { vec_push(value as *Vec<T>, item) }
+}
+
+pub fn owned_vec_get<T>(value: &own Vec<T>, index: u64) -> Option<T> {
+    unsafe { vec_get(value as *Vec<T>, index) }
+}
+
+pub fn owned_vec_len<T>(value: &own Vec<T>) -> u64 { value.len }

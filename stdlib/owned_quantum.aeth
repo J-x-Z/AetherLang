@@ -1,0 +1,26 @@
+use quantum::{QuantumPool,QuantumLease,quantum_pool_state,quantum_lease_free,quantum_probability};
+use result::Result;
+
+pub struct LeaseHandle { lease: *QuantumLease }
+
+pub fn owned_lease_new() -> own LeaseHandle {
+    unsafe { LeaseHandle { lease: 0 as *QuantumLease } as own LeaseHandle }
+}
+
+@drop
+fn release_lease_handle(value: own LeaseHandle) {
+    unsafe { quantum_lease_free(value.lease); }
+}
+
+pub fn owned_lease_acquire(value: &mut own LeaseHandle, pool: *QuantumPool, qubits: u32) -> Result<(),i32> {
+    let next: *QuantumLease = quantum_pool_state(pool,qubits)?;
+    unsafe { quantum_lease_free(value.lease); value.lease=next; }
+    Result::Ok(())
+}
+
+pub fn owned_lease_probability(value: &own LeaseHandle, index: u64) -> Result<f64,i32> {
+    unsafe {
+        if value.lease == 0 as *QuantumLease { return Result::Err(1); }
+        quantum_probability(value.lease.state,index)
+    }
+}

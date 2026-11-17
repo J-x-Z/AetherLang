@@ -1,0 +1,52 @@
+use vec::Vec;
+use option::Option;
+use result::Result;
+use quantum::{QuantumPool,quantum_pool_new,quantum_pool_close};
+use owned_vec::{owned_vec_new,owned_vec_push,owned_vec_get,owned_vec_len};
+use owned_tensor::{TensorHandle,owned_tensor_new,owned_tensor_zeros,owned_tensor_get,owned_tensor_set};
+use owned_quantum::{LeaseHandle,owned_lease_new,owned_lease_acquire,owned_lease_probability};
+
+struct Ticket<const N:usize> { id:i32 }
+static mut ticket_sum:usize=0;
+@drop fn return_ticket<const N:usize>(ticket:own Ticket<N>) { ticket_sum+=N; }
+fn issue_ticket()->own Ticket<3> { unsafe { Ticket{id:9} as own Ticket<3> } }
+
+// The same cleanup registrations must apply to inferred specializations, early
+// exits through ?, and owners returned by another function.
+fn relocate(v:own Vec<i32>)->own Vec<i32> { v }
+fn batch(pool:*QuantumPool, fail:bool)->Result<i32,i32> {
+    let mut first:own Vec<i32> = owned_vec_new();
+    let mut second:own Vec<u64> = owned_vec_new();
+    if !owned_vec_push(&mut first,17) || !owned_vec_push(&mut second,4294967311 as u64) {return Result::Err(51);}
+    let moved:own Vec<i32> = relocate(first);
+    if owned_vec_len(&moved)!=1 || owned_vec_len(&second)!=1 {return Result::Err(52);}
+    match owned_vec_get(&moved,0) {Option::Some(n)=>{if n!=17 {return Result::Err(53);}},Option::None=>{return Result::Err(54);},}
+    match owned_vec_get(&second,0) {Option::Some(n)=>{if n!=4294967311 as u64 {return Result::Err(55);}},Option::None=>{return Result::Err(56);},}
+    let mut tensor:own TensorHandle=owned_tensor_new();
+    let mut lease:own LeaseHandle=owned_lease_new();
+    let shape:[u64;2]=[3,2];
+    owned_tensor_zeros(&mut tensor,2,&shape[0] as *u64)?;
+    owned_tensor_set(&mut tensor,3,7.25)?;
+    match owned_tensor_zeros(&mut tensor,5,0 as *u64) {Result::Ok(_)=>{return Result::Err(57);},Result::Err(_)=>{},}
+    if owned_tensor_get(&tensor,3)?!=7.25 {return Result::Err(58);}
+    owned_lease_acquire(&mut lease,pool,6)?;
+    let original:u64=pool.used_bytes;
+    if original!=1024 || pool.live_states!=1 {return Result::Err(59);}
+    match owned_lease_acquire(&mut lease,pool,6) {Result::Ok(_)=>{return Result::Err(60);},Result::Err(e)=>{if e!=3 {return Result::Err(61);}},}
+    if pool.used_bytes!=original || owned_lease_probability(&lease,0)?!=1.0 {return Result::Err(62);}
+    if fail {owned_lease_acquire(&mut lease,pool,7)?;}
+    Result::Ok(17)
+}
+fn main()->i32 {
+    let pool:*QuantumPool=match quantum_pool_new(1024,6,1){Result::Ok(p)=>p,Result::Err(_)=>{return 1;},};
+    let mut i:i32=0;
+    while i<128 {
+        let fail:bool=i%2==1;
+        match batch(pool,fail){Result::Ok(n)=>{if fail || n!=17 {return 2;}},Result::Err(e)=>{if !fail || e!=3 {return e;}},}
+        if pool.used_bytes!=0 || pool.live_states!=0 || pool.refs!=1 {return 3;}
+        i=i+1;
+    }
+    {let ticket:own Ticket<3>=issue_ticket(); if ticket.id!=9 {return 4;}}
+    if ticket_sum!=3 {return 5;}
+    quantum_pool_close(pool);0
+}

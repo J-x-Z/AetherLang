@@ -1,0 +1,28 @@
+use tensor::{Tensor,tensor_zeros,tensor_free,tensor_get,tensor_set};
+use result::Result;
+
+pub struct TensorHandle { data: *Tensor }
+
+pub fn owned_tensor_new() -> own TensorHandle {
+    unsafe { TensorHandle { data: 0 as *Tensor } as own TensorHandle }
+}
+
+@drop
+fn release_tensor_handle(value: own TensorHandle) {
+    unsafe { tensor_free(value.data); }
+}
+
+// Replaces the handle only after a successful allocation.
+pub fn owned_tensor_zeros(value: &mut own TensorHandle, rank: u64, shape: *u64) -> Result<(), i32> {
+    let next: *Tensor = tensor_zeros(rank,shape)?;
+    unsafe { tensor_free(value.data); value.data=next; }
+    Result::Ok(())
+}
+
+pub fn owned_tensor_get(value: &own TensorHandle, index: u64) -> Result<f64,i32> {
+    unsafe { tensor_get(value.data,index) }
+}
+
+pub fn owned_tensor_set(value: &mut own TensorHandle, index: u64, x: f64) -> Result<(),i32> {
+    unsafe { tensor_set(value.data,index,x) }
+}

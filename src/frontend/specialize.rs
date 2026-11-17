@@ -9,6 +9,8 @@ use std::collections::{HashMap, HashSet};
 
 #[path = "specialize_constants.rs"]
 mod constants;
+#[path = "specialize_drop.rs"]
+mod drop_templates;
 use constants::*;
 use crate::types::PointerWidth;
 
@@ -33,6 +35,7 @@ struct Specializer {
     aliases: HashMap<String, TypeAliasDef>,
     signatures: HashMap<String, Signature>,
     origins: HashMap<String, (String, Vec<InstanceArg>)>,
+    generic_destructors: HashMap<String, String>,
     instances: HashMap<String, String>,
     function_bindings: HashMap<String, Bindings>,
     names: HashSet<String>,
@@ -55,6 +58,7 @@ impl Specializer {
             aliases: HashMap::new(),
             signatures: HashMap::new(),
             origins: HashMap::new(),
+            generic_destructors: HashMap::new(),
             instances: HashMap::new(),
             function_bindings: HashMap::new(),
             names: HashSet::new(),
@@ -79,9 +83,6 @@ impl Specializer {
                     Some(&d.name)
                 }
                 Item::Function(d) => {
-                    if (!d.type_params.is_empty() || !d.generic_params.is_empty()) && d.annotations.iter().any(|a| a.name.name == "drop") {
-                        return Err(Error::semantic_expected("E2405", "concrete function for @drop registration", d.name.span));
-                    }
                     if (!d.type_params.is_empty() || !d.generic_params.is_empty()) && d.annotations.iter().any(|a| a.name.name == "no_mangle") {
                         return Err(Error::semantic_expected("E2202", "non-generic function for a fixed #[no_mangle] C ABI symbol", d.name.span));
                     }
@@ -119,6 +120,7 @@ impl Specializer {
         }
         // Parameter declarations are validated even when a template is unused.
         let aliases = this.aliases.iter().filter(|(_,a)| a.type_params.is_empty()).map(|(name,a)| (name.clone(),a.ty.clone())).collect();
+        this.collect_generic_destructors(program, &aliases)?;
         for generic in this.functions.values().map(|d| &d.generic_params)
             .chain(this.structs.values().map(|d| &d.generic_params))
             .chain(this.enums.values().map(|d| &d.generic_params)) {
@@ -435,11 +437,11 @@ impl Specializer {
                 inner,
                 ownership,
                 span,
-            } => Type::Owned {
-                inner: Box::new(self.ty(inner, bindings)?),
-                ownership: *ownership,
-                span: *span,
-            },
+            } => {
+                let inner = self.ty(inner, bindings)?;
+                if *ownership == Ownership::Own { self.instantiate_destructor(&inner, *span)?; }
+                Type::Owned { inner: Box::new(inner), ownership: *ownership, span: *span }
+            }
             Type::Volatile(t, s) => Type::Volatile(Box::new(self.ty(t, bindings)?), *s),
             _ => ty.clone(),
         })
@@ -740,7 +742,10 @@ impl Specializer {
             }
             Expr::Cast { expr, ty, .. } => {
                 *ty = self.ty(ty, &self.bindings.clone())?;
-                self.expr(expr, None)?;
+                // Adoption only accepts this exact nominal payload. Forward its
+                // type, including const arguments, to struct-literal inference.
+                let payload = match &*ty { Type::Owned { inner, .. } => Some(inner.as_ref()), _ => None };
+                self.expr(expr, payload)?;
                 Ok(Some(ty.clone()))
             }
             Expr::Unary { expr, .. } => self.expr(expr, expected),

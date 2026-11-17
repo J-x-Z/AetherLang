@@ -1,5 +1,5 @@
 //! Explicit affine records. `own T` changes source ownership, not runtime layout.
-//! This first stage deliberately has no implicit destructor or nested owners.
+//! Registered destructors run on normal scope exits. Raw payload access is explicit.
 use super::*;
 
 fn unsupported(message: impl Into<String>, span: Span) -> Error {
@@ -49,28 +49,24 @@ impl SemanticAnalyzer {
     }
 
     fn owner_payload_has_borrow(&self, ty: &ResolvedType, seen: &mut HashSet<String>) -> bool {
+        self.owner_payload_contains(ty, seen, |t| matches!(t, ResolvedType::Owned(_) | ResolvedType::Reference { .. }))
+    }
+
+    pub(super) fn owner_field_has_pointer(&self, ty: &ResolvedType) -> bool {
+        self.owner_payload_contains(ty, &mut HashSet::new(), |t| matches!(t, ResolvedType::Pointer(_)))
+    }
+
+    fn owner_payload_contains(&self, ty: &ResolvedType, seen: &mut HashSet<String>, test: fn(&ResolvedType) -> bool) -> bool {
+        if test(ty) { return true; }
         match ty {
-            ResolvedType::Owned(_) | ResolvedType::Reference { .. } => true,
-            ResolvedType::Struct { name, fields } if seen.insert(name.clone()) => self
-                .owner_fields(name, fields)
-                .iter()
-                .any(|(_, t)| self.owner_payload_has_borrow(t, seen)),
-            ResolvedType::Enum { name } if seen.insert(name.clone()) => {
-                self.facts.enum_variants.get(name).is_some_and(|variants| {
-                    variants.iter().any(|(_, fields)| {
-                        fields
-                            .iter()
-                            .any(|t| self.owner_payload_has_borrow(t, seen))
-                    })
-                })
-            }
-            ResolvedType::Array { elem, .. } | ResolvedType::Volatile(elem) => {
-                self.owner_payload_has_borrow(elem, seen)
-            }
-            ResolvedType::Tuple(elements) => elements
-                .iter()
-                .any(|t| self.owner_payload_has_borrow(t, seen)),
-            // Raw pointers retain their explicit manual-lifetime contract.
+            ResolvedType::Struct { name, fields } if seen.insert(name.clone()) =>
+                self.owner_fields(name, fields).iter().any(|(_, t)| self.owner_payload_contains(t, seen, test)),
+            ResolvedType::Enum { name } if seen.insert(name.clone()) =>
+                self.facts.enum_variants.get(name).is_some_and(|variants|
+                    variants.iter().any(|(_, fields)| fields.iter().any(|t| self.owner_payload_contains(t, seen, test)))),
+            ResolvedType::Array { elem, .. } | ResolvedType::Volatile(elem) =>
+                self.owner_payload_contains(elem, seen, test),
+            ResolvedType::Tuple(elements) => elements.iter().any(|t| self.owner_payload_contains(t, seen, test)),
             _ => false,
         }
     }

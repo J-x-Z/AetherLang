@@ -62,11 +62,11 @@ impl SemanticAnalyzer {
     /// The pre-semantics specializer uses the same checked evaluator and target
     /// integer widths as ordinary constants. Only integer/bool generic values
     /// are admitted; the returned AST preserves their canonical declared type.
-    pub(crate) fn specialization_parameter(width: PointerWidth, aliases: &HashMap<String,Type>, ty: &Type) -> Result<()> {
+    pub(crate) fn specialization_parameter(width: PointerWidth, aliases: &HashMap<String,Type>, ty: &Type) -> Result<ResolvedType> {
         let mut analyzer = Self::for_pointer_width(width);
         analyzer.type_aliases = aliases.clone();
         let resolved = analyzer.resolve_type(ty)?;
-        if Self::is_integer(&resolved) || resolved == ResolvedType::BOOL { Ok(()) }
+        if Self::is_integer(&resolved) || resolved == ResolvedType::BOOL { Ok(resolved) }
         else { Err(Error::semantic_expected("E2501", "integer or bool const generic parameter", ty.span())) }
     }
 

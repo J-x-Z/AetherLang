@@ -1419,6 +1419,13 @@ impl SemanticAnalyzer {
                     
                     // Reference to Pointer (same inner type or compatible)
                     (ResolvedType::Reference { inner, .. }, ResolvedType::Pointer(ptr_inner)) => {
+                        if let ResolvedType::Owned(payload) = inner.unqualified() {
+                            if self.unsafe_depth == 0 {
+                                return Err(Error::semantic_expected("E2405", "unsafe block to expose an owned resource as a raw pointer", *span));
+                            }
+                            return if Self::types_identical(payload, ptr_inner) { Ok(target_ty) }
+                                else { Err(Error::semantic_expected("E2405", "pointer to the exact payload type of the borrowed owner", *span)) };
+                        }
                         Self::types_identical(inner.unqualified(), ptr_inner.unqualified())
                     },
                     
@@ -1789,6 +1796,7 @@ impl SemanticAnalyzer {
                         _ => break,
                     }
                 }
+                let owned_payload = matches!(base.unqualified(), ResolvedType::Owned(_));
                 if let ResolvedType::Owned(inner) = base.unqualified() { base = (**inner).clone(); }
                 let volatile = matches!(base, ResolvedType::Volatile(_));
                 if let ResolvedType::Tuple(elements) = base.unqualified() {
@@ -1802,6 +1810,9 @@ impl SemanticAnalyzer {
                 let fields = match self.symbols.scopes[0].symbols.get(name) { Some(Symbol { kind: SymbolKind::Struct { fields, .. }, .. }) => fields, _ => fields };
                 let ty = fields.iter().find(|(name, _)| *name == field.name).map(|(_, ty)| ty.clone())
                     .ok_or_else(|| Error::UnknownField { field: field.name.clone(), span: field.span })?;
+                if owned_payload && self.unsafe_depth == 0 && self.owner_field_has_pointer(&ty) {
+                    return Err(Error::semantic_expected("E2405", "unsafe block to expose an owned resource's raw pointer field", field.span));
+                }
                 Ok(self.refresh_nominal_type(if volatile { ResolvedType::Volatile(Box::new(ty)) } else { ty }))
             }
             _ => self.check_expr(expr),
