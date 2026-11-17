@@ -13,6 +13,8 @@ extern "C" {
     fn puts(s: *u8) -> i32;
 }
 
+pub struct Dependency { pub name: *u8, pub path: *u8 }
+
 pub struct Config {
     pub name: *u8,
     pub version: *u8,
@@ -23,6 +25,12 @@ pub struct Config {
     pub module_path_count: u64,
     pub link_objects: **u8,
     pub link_object_count: u64,
+    pub dependencies: Vec<Dependency>,
+    // Resolution owns these strings; parsed manifest strings still borrow storage.
+    pub resolved_modules: Vec<*u8>,
+    pub resolved_paths: Vec<*u8>,
+    pub resolved_objects: Vec<*u8>,
+    pub dependency_record: Vec<u8>,
     pub storage: Vec<u8>,
     pub valid: bool,
 }
@@ -137,7 +145,7 @@ fn config_paths(text: *u8) -> ConfigPaths {
     return result;
 }
 
-fn config_path_valid(path: *u8) -> bool {
+pub fn config_path_valid(path: *u8) -> bool {
     if path == (0 as *u8) { return false; }
     if path[0] == 0 { return false; }
     let mut i: u64 = 0;
@@ -161,6 +169,12 @@ pub fn package_name_valid(name: *u8) -> bool {
     return true;
 }
 
+fn free_owned_paths(paths: *Vec<*u8>) {
+    let mut i:u64=0;
+    while i<paths.len { free(paths.data[i] as *void); i=i+1; }
+    vec_free(paths);
+}
+
 pub fn config_free(cfg: *Config) {
     free(cfg.module_paths as *void);
     free(cfg.link_objects as *void);
@@ -168,11 +182,18 @@ pub fn config_free(cfg: *Config) {
     cfg.module_path_count = 0;
     cfg.link_objects = 0 as **u8;
     cfg.link_object_count = 0;
+    vec_free(&mut cfg.dependencies as *Vec<Dependency>);
+    free_owned_paths(&mut cfg.resolved_modules as *Vec<*u8>);
+    free_owned_paths(&mut cfg.resolved_paths as *Vec<*u8>);
+    free_owned_paths(&mut cfg.resolved_objects as *Vec<*u8>);
+    vec_free(&mut cfg.dependency_record as *Vec<u8>);
     vec_free(&mut cfg.storage as *Vec<u8>);
     cfg.valid = false;
 }
 
-pub fn config_load() -> Config {
+pub fn config_load() -> Config { return config_load_at("Jxz.toml"); }
+
+pub fn config_load_at(manifest:*u8) -> Config {
     let mut cfg: Config = Config {
         name: 0 as *u8,
         version: "0.1.0\0" as *u8,
@@ -183,12 +204,14 @@ pub fn config_load() -> Config {
         module_path_count: 0,
         link_objects: 0 as **u8,
         link_object_count: 0,
+        dependencies: vec_new(), resolved_modules: vec_new(), resolved_paths: vec_new(),
+        resolved_objects: vec_new(), dependency_record: vec_new(),
         storage: vec_new(),
         valid: false,
     };
-    cfg.storage = match read_path_bytes("Jxz.toml", 1048576) {
+    cfg.storage = match read_path_bytes(manifest, 1048576) {
         Result::Ok(bytes) => bytes,
-        Result::Err(code) => { puts("jxz: cannot read Jxz.toml (1 MiB limit)"); puts(strerror(code)); return cfg; },
+        Result::Err(code) => { puts("jxz: cannot read Jxz.toml (1 MiB limit)"); puts(manifest); puts(strerror(code)); return cfg; },
     };
     let count: u64 = cfg.storage.len;
     if !vec_push(&mut cfg.storage as *Vec<u8>, 0 as u8) {
@@ -203,6 +226,33 @@ pub fn config_load() -> Config {
     }
     if !config_parse(&cfg as *Config) { config_free(&cfg as *Config); }
     return cfg;
+}
+
+// Import names are language identifiers, not arbitrary executable names.
+pub fn module_name_valid(name:*u8)->bool {
+    if name==(0 as *u8) || name[0]==0 { return false; }
+    let mut i:u64=0;
+    while name[i]!=0 {
+        let c:u8=name[i];
+        if !(c==95 || (c>=65 && c<=90) || (c>=97 && c<=122) || (i>0 && c>=48 && c<=57)) { return false; }
+        i=i+1;
+    }
+    return i<=255;
+}
+fn config_dependency_path(text:*u8,tail:**u8)->*u8 {
+    if text[0]!=123 { return 0 as *u8; }
+    let mut cursor:*u8=config_space(text+1);
+    if strncmp(cursor,"path",4)!=0 { return 0 as *u8; }
+    cursor=config_space(cursor+4);
+    if cursor[0]!=61 { return 0 as *u8; }
+    cursor=config_space(cursor+1);
+    let path:*u8=config_string(cursor,tail);
+    if !config_path_valid(path) { return 0 as *u8; }
+    cursor=config_space(*tail);
+    if cursor[0]==44 { cursor=config_space(cursor+1); }
+    if cursor[0]!=125 { return 0 as *u8; }
+    *tail=cursor+1;
+    return path;
 }
 
 fn config_parse(cfg: *Config) -> bool {
@@ -223,10 +273,9 @@ fn config_parse(cfg: *Config) -> bool {
             if strcmp(start + 1, "package\0" as *u8) == 0 { section = 1; }
             if strcmp(start + 1, "build\0" as *u8) == 0 { section = 2; }
             if strcmp(start + 1, "dependencies\0" as *u8) == 0 { section = 3; }
-            if section == 0 { puts("jxz: unsupported manifest table (dependency tables are not implemented)\0" as *u8); return false; }
+            if section == 0 { puts("jxz: unsupported manifest table; use [dependencies] name = { path = \"...\" }"); return false; }
         } else if start[0] != 0 && start[0] != 10 && start[0] != 35 {
             if section == 0 { puts("jxz: top-level manifest keys are not supported\0" as *u8); return false; }
-            if section == 3 { puts("jxz: dependency resolution is not implemented\0" as *u8); return false; }
             let mut equal: *u8 = start;
             while equal[0] != 0 && equal[0] != 10 && equal[0] != 61 { equal = equal + 1; }
             if equal[0] != 61 { puts("jxz: expected key = value\0" as *u8); return false; }
@@ -238,6 +287,23 @@ fn config_parse(cfg: *Config) -> bool {
                 end = prior;
             }
             end[0] = 0;
+            if section == 3 {
+                let mut tail:*u8=0 as *u8;
+                let path:*u8=config_dependency_path(raw,&tail as **u8);
+                if !module_name_valid(start) || path==(0 as *u8) {
+                    puts("jxz: dependencies require an identifier and { path = quoted-local-directory }; online versions are unsupported");
+                    return false;
+                }
+                let mut i:u64=0;
+                while i<cfg.dependencies.len {
+                    if strcmp(cfg.dependencies.data[i].name,start)==0 { puts("jxz: duplicate dependency name"); return false; }
+                    i=i+1;
+                }
+                if !vec_push(&mut cfg.dependencies as *Vec<Dependency>,Dependency{name:start,path:path}) { return false; }
+                line=config_line_tail(tail);
+                if line==(0 as *u8) { puts("jxz: trailing dependency garbage"); return false; }
+                continue;
+            }
             let mut field: i32 = 0;
             if section == 1 {
                 if strcmp(start, "name\0" as *u8) == 0 { field = 1; }

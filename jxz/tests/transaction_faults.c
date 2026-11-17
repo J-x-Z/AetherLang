@@ -50,6 +50,9 @@ int REPLACE(fclose)(FILE *file) {
     return result;
 }
 int REPLACE(rename)(const char *old, const char *next) {
+    if (ends(old, "/.jxz-dependencies.tmp/record") && mode("kill-before-dependency-record")) {
+        kill(getpid(), SIGKILL); _exit(99);
+    }
     int publishing_record = ends(old, "/.jxz-build/records") && ends(next, "/.jxz-outputs");
     int publishing_binary = ends(old, "/.jxz-build/program");
     if (publishing_record && mode("kill-before-record")) { kill(getpid(), SIGKILL); _exit(99); }
@@ -72,6 +75,9 @@ int REPLACE(symlink)(const char *target, const char *path) {
         kill(getpid(), SIGKILL); _exit(99);
     }
     int result = REAL(symlink, int (*)(const char *, const char *))(target, path);
+    if (result == 0 && ends(path, "/.jxz-dependencies-owner") && mode("kill-after-dependency-owner")) {
+        kill(getpid(), SIGKILL); _exit(99);
+    }
     if (result == 0 && ends(path, "/.jxz-build/owner") && mode("kill-after-owner")) {
         kill(getpid(), SIGKILL); _exit(99);
     }

@@ -1,6 +1,6 @@
 # JXZ local project driver
 
-Local development version: `0.3.0-dev.1` (module and native link inputs).
+Local development version: `0.3.0-dev.2` (local path dependencies and transaction recovery).
 
 JXZ's active implementation is `src/main.aeth` and its imported Aether modules.
 Build it with the upgraded Rust compiler (historical checked-in `.c` files are
@@ -66,12 +66,27 @@ remains with the project; this setting does not introduce arbitrary build hooks.
 `build` and the build phase of `run` preserve compiler exit codes. `test` retains
 its existing aggregate status: 1 if any compilation or test program fails.
 
-This is a deliberately limited project schema, not a full
-TOML implementation. Known duplicate keys, invalid paths, malformed quoted
-values, unknown tables/keys and dependency declarations fail. The only accepted
-tables are `[package]`, `[build]`, and an empty `[dependencies]`; dotted, quoted,
-inline, target-specific and array dependency tables are explicitly unsupported. Package names must be a single
-filename (at most 255 bytes) and may not start with the reserved `.jxz-` prefix.
+### Local path dependencies
+
+```toml
+[dependencies]
+geometry = { path = "../geometry" }
+```
+
+The dependency key must match the library's `[package] name`. Its entry is
+`<build.src>/lib.aeth` (default `src/lib.aeth`). Paths are relative to the
+declaring package. Each canonical package is loaded once, including a library
+reached through both sides of a diamond. Cycles, different packages with the
+same name, and conflicting local module names are errors. Registry versions,
+dependency aliases and target-specific dependency tables are unsupported.
+
+Build, run and test pass exact library entries to the compiler. Dependencies
+can provide module search directories and native link inputs relative to their
+own project. Search directories apply to the compilation unit. The sorted
+`target/.jxz-dependencies` record describes the most recently resolved local
+graph. Compilation reads the actual sources on every build. Clean removes the
+project's owned outputs. Package names are single filenames of at most 255
+bytes. JXZ reserves the `.jxz-` prefix for its records.
 
 Tests are `tests/**/test_*.aeth` programs; zero means pass, compile/link/runtime
 failure means fail. Paths are discovered as NUL-delimited records, so spaces and
@@ -81,7 +96,7 @@ it never recursively deletes the target directory or removes source `.c` files.
 
 This implementation currently requires a 64-bit POSIX host with `find` and the
 linker required by `aethc`. macOS is exercised by the integration suite; Windows is not supported
-by this POSIX process layer. Registry and dependency commands return an explicit
+by this POSIX process layer. Online registry and dependency-edit commands return an explicit
 error; the older experimental source files remain for later development.
 
 Migration: `build` now defaults to debug (`-O0`); pass `--release` for `-O2`.

@@ -4,6 +4,7 @@ use process::{process_run, environment_tool};
 use path::{path_join, make_directories};
 use output::{Publication, output_lock, output_unlock, output_compiler_inherits, output_recover, publication_prepare, publication_publish, publication_free};
 use posix::ENOENT;
+use dependencies::{dependencies_resolve,dependencies_record,dependencies_remove};
 
 extern "C" {
     fn malloc(size: u64) -> *void;
@@ -57,7 +58,7 @@ pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool, loc
     if release { optimization = "2\0" as *u8; }
     // Counts are bounded by the 1 MiB manifest; no fixed argv capacity truncates
     // project dependencies. Zeroing permits cleanup after any path allocation.
-    let capacity: u64 = 11 + 2 * (cfg.module_path_count + cfg.link_object_count);
+    let capacity: u64 = 11 + 2 * (cfg.module_path_count + cfg.link_object_count + cfg.resolved_modules.len + cfg.resolved_paths.len + cfg.resolved_objects.len);
     let args: **u8 = malloc(capacity * size_of(*u8) as u64) as **u8;
     if args == (0 as **u8) { puts("jxz: cannot allocate compiler arguments\0" as *u8); return 1; }
     let mut i: u64 = 0;
@@ -80,6 +81,18 @@ pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool, loc
         if args[count + 1] == (0 as *u8) { compiler_args_free(cfg, args); return 1; }
         count = count + 2; i = i + 1;
     }
+    i=0;
+    while i<cfg.resolved_modules.len {
+        args[count]="--module"; args[count+1]=cfg.resolved_modules.data[i]; count=count+2; i=i+1;
+    }
+    i=0;
+    while i<cfg.resolved_paths.len {
+        args[count]="-I"; args[count+1]=cfg.resolved_paths.data[i]; count=count+2; i=i+1;
+    }
+    i=0;
+    while i<cfg.resolved_objects.len {
+        args[count]="--link-object"; args[count+1]=cfg.resolved_objects.data[i]; count=count+2; i=i+1;
+    }
     if backend[0] != 0 {
         args[count] = "--backend\0" as *u8;
         args[count + 1] = backend;
@@ -94,9 +107,11 @@ pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool, loc
 }
 
 pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
+    if !dependencies_resolve(cfg) { return 1; }
     if !make_directories(cfg.target_dir) { return 1; }
     let lock: *void = output_lock(cfg.target_dir);
     if lock == (0 as *void) { return 1; }
+    if !dependencies_record(cfg,cfg.target_dir) { output_unlock(lock); return 1; }
     let output: *u8 = path_join(cfg.target_dir, cfg.name);
     let mut source: *u8 = cfg.main_file;
     let mut owns_source: bool = false;
@@ -223,7 +238,7 @@ pub fn clean_project() -> i32 {
         }
         let lock: *void = output_lock(cfg.target_dir);
         if lock == (0 as *void) { config_free(&cfg as *Config); return 1; }
-        if !output_recover(cfg.target_dir) { output_unlock(lock); config_free(&cfg as *Config); return 1; }
+        if !output_recover(cfg.target_dir) || !dependencies_remove(cfg.target_dir) { output_unlock(lock); config_free(&cfg as *Config); return 1; }
         status = 0;
         if !clean_owned_record(cfg.target_dir, ".jxz-outputs\0" as *u8, false) { status = 1; }
         if !clean_owned_record(cfg.target_dir, ".jxz-output-name\0" as *u8, true) { status = 1; }

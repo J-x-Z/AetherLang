@@ -22,7 +22,7 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
         print_help(); return 0;
     }
     if strcmp(command, "version\0" as *u8) == 0 || strcmp(command, "--version\0" as *u8) == 0 {
-        puts("jxz 0.3.0-dev.1\0" as *u8); return 0;
+        puts("jxz 0.3.0-dev.2\0" as *u8); return 0;
     }
     if strcmp(command, "init\0" as *u8) == 0 {
         if argc > 3 { print_help(); return 2; }

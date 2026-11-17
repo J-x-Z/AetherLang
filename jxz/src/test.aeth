@@ -4,6 +4,7 @@ use config::{Config, config_load, config_free};
 use process::{process_run};
 use path::{path_join, make_directories};
 use posix::ENOENT;
+use dependencies::{dependencies_resolve,dependencies_record};
 use build::{compile_source};
 use output::{output_lock, output_unlock, output_recover, output_compiler_inherits};
 extern "C" {
@@ -78,6 +79,7 @@ pub fn run_tests() -> i32 {
     let mut cfg: Config = config_load();
     let mut status: i32 = 1;
     if cfg.valid {
+        if !dependencies_resolve(&mut cfg as *Config) { config_free(&mut cfg as *Config); return 1; }
         let directory: *void = opendir("tests\0" as *u8);
         if directory == (0 as *void) {
             let missing: bool = __errno_get() == ENOENT;
@@ -95,6 +97,7 @@ pub fn run_tests() -> i32 {
             let lock: *void = output_lock(cfg.target_dir);
             if lock == (0 as *void) { config_free(&cfg as *Config); return 1; }
             if !output_recover(cfg.target_dir) { output_unlock(lock); config_free(&cfg as *Config); return 1; }
+            if !dependencies_record(&mut cfg as *Config,cfg.target_dir) { output_unlock(lock); config_free(&mut cfg as *Config); return 1; }
             let list: *u8 = path_join(cfg.target_dir, ".jxz-test-list\0" as *u8);
             let output: *u8 = path_join(cfg.target_dir, ".jxz-test\0" as *u8);
             let mut executable: *u8 = output;

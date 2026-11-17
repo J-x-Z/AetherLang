@@ -46,13 +46,13 @@ pub fn output_compiler_inherits(handle: *void, inherit: bool) -> bool {
 
 // Inspect the directory entry as well as its target: an unowned dangling
 // symlink must not be mistaken for a free output pathname.
-fn presence(path: *u8) -> i32 {
+pub fn presence(path: *u8) -> i32 {
     let mut byte: u8 = 0;
     if readlink(path, &byte as *u8, 1) >= 0 { return 1; }
     if access(path, 0) == 0 { return 1; }
     return if __errno_get() == ENOENT { 0 } else { -1 };
 }
-fn remove_owned(path: *u8) -> bool {
+pub fn remove_owned(path: *u8) -> bool {
     if remove(path) == 0 { return true; }
     return __errno_get() == ENOENT;
 }
@@ -94,7 +94,7 @@ fn cleanup(transaction: *Publication) -> bool {
     while index < 8 { if !remove_owned(entries[index]) { return false; } index = index + 1; }
     return rmdir(transaction.stage) == 0;
 }
-fn marker_valid(path: *u8, expected: *u8) -> bool {
+pub fn marker_valid(path: *u8, expected: *u8) -> bool {
     let mut text: [u8; 65] = [0; 65];
     let length: i64 = readlink(path, &text[0] as *u8, 64);
     if length <= 0 || length >= 64 { return false; }

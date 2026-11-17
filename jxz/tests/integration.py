@@ -376,6 +376,239 @@ fn main(argc: i32, argv: **u8) -> i32 {
         finally:
             hidden.chmod(0o755)
 
+    def local_library(self, directory, name, body='pub fn value()->i32{3}', dependencies='', build=''):
+        directory = self.root / directory
+        (directory / 'src').mkdir(parents=True, exist_ok=True)
+        (directory / 'src/lib.aeth').write_text(body)
+        (directory / 'Jxz.toml').write_text(f"[package]\nname='{name}'\nversion='0.1.0'\n[build]\nsrc='src'\n{build}\n[dependencies]\n{dependencies}\n")
+        return directory
+
+    def test_local_path_dependencies_diamond_rebuild_and_clean(self):
+        common = self.local_library('deps/common Ω', 'common', 'mod part;pub fn value()->i32{part::number()}')
+        (common / 'src/part.aeth').write_text('pub fn number()->i32{3}')
+        (self.root / 'deps/common-alias').symlink_to('common Ω')
+        self.local_library('deps/left', 'left', 'use common::value;pub fn number()->i32{value()+10}', "common={path='../common Ω'}")
+        self.local_library('deps/right', 'right', 'use common::value;pub fn number()->i32{value()+20}', "common={path='../common-alias'}")
+        self.manifest()
+        self.build_settings("[dependencies]\nright = { path = 'deps/right' }\nleft = { path = 'deps/left', }")
+        self.source(text='use left::number;use right;fn main()->i32{number()+right::number()}')
+        self.source('tests/test_dependencies.aeth', 'use left;use right;fn main()->i32{if left::number()+right::number()==36{0}else{1}}')
+        self.run_jxz('run', expected=36)
+        record = self.root / 'target/.jxz-dependencies'
+        before = record.read_bytes()
+        rows = before.decode().splitlines()
+        self.assertEqual(rows[0], 'JXZ-PATH-DEPS-1')
+        self.assertEqual([line.split('\t')[0] for line in rows[1:]], ['common', 'left', 'right'])
+        self.assertIn(str((common/'src/lib.aeth').resolve()), rows[1])
+        self.assertNotIn('common-alias', before.decode())
+        self.run_jxz('test')
+        self.manifest()
+        self.build_settings("[dependencies]\nleft={path='./deps/left'}\nright={path='deps/right'}")
+        self.run_jxz('build')
+        self.assertEqual(record.read_bytes(), before)
+        # Only dependency source changes: the application's source is identical.
+        (common / 'src/part.aeth').write_text('pub fn number()->i32{4}')
+        self.run_jxz('run', expected=38)
+        self.assertEqual(record.read_bytes(), before)
+        # Cleaning must not need to resolve a dependency or delete its sources.
+        moved = common.with_name('common moved')
+        common.rename(moved)
+        self.run_jxz('clean')
+        self.assertFalse((self.root / 'target/program').exists())
+        self.assertFalse(record.exists())
+        self.assertEqual((moved/'src/part.aeth').read_text(), 'pub fn number()->i32{4}')
+        self.assertTrue((self.root/'deps/left/Jxz.toml').is_file())
+
+    def test_local_path_dependencies_custom_src_and_native_objects(self):
+        library = self.local_library('local lib Ω', 'native_lib')
+        (library/'library source').mkdir()
+        (library/'helpers').mkdir()
+        (library/'native objects').mkdir()
+        (library/'helpers/helper.aeth').write_text('pub fn extra()->i32{7}')
+        (library/'library source/lib.aeth').write_text('use helper::extra;extern "C"{fn native_number()->i32;}pub fn value()->i32{native_number()+extra()}')
+        (library/'Jxz.toml').write_text("[package]\nname='native_lib'\n[build]\nsrc='library source'\nmodule_paths=['helpers']\nlink_objects=['native objects/number.o']\n")
+        c = library/'native objects/number.c'
+        c.write_text('int native_number(void){return 42;}')
+        obj = c.with_suffix('.o')
+        result = subprocess.run([os.environ.get('CC','clang'),'-c',c,'-o',obj],capture_output=True,text=True,timeout=30,env=ENV)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.manifest()
+        # The same canonical native object is present at root and dependency.
+        self.build_settings("link_objects=['local lib Ω/native objects/number.o']\n[dependencies]\nnative_lib={path='local lib Ω'}")
+        self.source(text='use native_lib::value;fn main()->i32{value()-49}')
+        self.run_jxz('run')
+        self.run_jxz('clean')
+        self.assertTrue(obj.is_file())
+        self.assertTrue((library/'Jxz.toml').is_file())
+
+    def test_local_path_dependencies_grow_and_sort_owned_graph(self):
+        for index in range(12):
+            name = f'node_{index}'
+            dependency = '' if index==11 else f"node_{index+1}={{path='../node_{index+1}'}}"
+            # Each package exports the same name without recursive name capture.
+            body = 'pub fn value()->i32{1}' if index==11 else f'use node_{index+1};pub fn value()->i32{{node_{index+1}::value()+1}}'
+            self.local_library('deps/'+name,name,body,dependency)
+        self.manifest()
+        self.build_settings("[dependencies]\nnode_0={path='deps/node_0'}")
+        self.source(text='use node_0::value;fn main()->i32{value()-12}')
+        self.run_jxz('run')
+        names = [line.split('\t')[0] for line in (self.root/'target/.jxz-dependencies').read_text().splitlines()[1:]]
+        self.assertEqual(names,sorted(f'node_{i}' for i in range(12)))
+        self.run_jxz('clean')
+        self.assertTrue((self.root/'deps/node_11/src/lib.aeth').exists())
+
+    def test_local_path_dependencies_reject_invalid_graphs_before_compiler(self):
+        self.source()
+        a = self.local_library('deps/a', 'a')
+        b = self.local_library('deps/b', 'b')
+        common1 = self.local_library('deps/common1', 'common')
+        common2 = self.local_library('deps/common2', 'common')
+        no_entry = self.local_library('deps/no_entry', 'no_entry')
+        (no_entry/'src/lib.aeth').unlink()
+        (self.root/'deps/no_manifest').mkdir()
+        cases = [
+            ("missing={path='absent'}", 'cannot resolve dependency'),
+            ("alias={path='deps/a'}", 'must equal'),
+            ("a={path='deps/a'}\na={path='deps/a'}", 'duplicate dependency'),
+            ("bad-name={path='deps/a'}", 'identifier'),
+            ("a={path='deps/a',version='1'}", 'online versions'),
+            ("a='1.0'", 'online versions'),
+            ("a={git='https://example.invalid/repo'}", 'online versions'),
+            ("a={path='deps/a'}", 'dependency cycle'),
+            ("a={path='deps/a'}\nb={path='deps/b'}", 'different packages'),
+            ("a={path='deps/a'}", 'dependency cycle'),
+            ("no_entry={path='deps/no_entry'}", 'needs build.src/lib.aeth'),
+            ("no_manifest={path='deps/no_manifest'}", 'cannot read Jxz.toml'),
+        ]
+        capture, environment = self.capturing_compiler()
+        for index, (declaration, diagnostic) in enumerate(cases):
+            with self.subTest(declaration=declaration,index=index):
+                (a/'Jxz.toml').write_text("[package]\nname='a'\n[dependencies]\n" + ("program={path='../..'}" if index==7 else "common={path='../common1'}" if index==8 else "b={path='../b'}" if index==9 else ''))
+                (b/'Jxz.toml').write_text("[package]\nname='b'\n[dependencies]\n" + ("common={path='../common2'}" if index==8 else "a={path='../a'}" if index==9 else ''))
+                self.manifest()
+                self.build_settings('[dependencies]\n'+declaration)
+                result = self.run_jxz('build', expected=1, env=environment)
+                self.assertIn(diagnostic,result.stdout+result.stderr)
+                self.assertFalse(capture.exists())
+                self.assertFalse((self.root/'target').exists())
+
+    def test_local_path_dependency_record_recovers_kill_and_preserves_unknown_paths(self):
+        library = self.local_library('lib','dependency')
+        self.manifest()
+        self.build_settings("[dependencies]\ndependency={path='lib'}")
+        self.source(text='use dependency::value;fn main()->i32{value()}')
+        self.run_jxz('build')
+        output = self.root/'target/program'
+        before = output.read_bytes()
+        (library/'src/lib.aeth').write_text('pub fn value()->i32{4}')
+        self.run_jxz('build',expected=-signal.SIGKILL,env=transaction_fault('kill-before-dependency-record'))
+        stage = self.root/'target/.jxz-dependencies.tmp'
+        self.assertTrue((stage/'owner').is_symlink())
+        self.assertTrue((stage/'record').is_file())
+        self.assertEqual(output.read_bytes(),before)
+        self.run_jxz('run',expected=4)
+        self.assertFalse(stage.exists())
+        unrelated = self.root/'unrelated'
+        unrelated.mkdir()
+        (unrelated/'keep').write_text('USER DATA')
+        stage.symlink_to(unrelated,target_is_directory=True)
+        for command in ('build','clean'):
+            self.run_jxz(command,expected=1)
+            self.assertTrue(stage.is_symlink())
+            self.assertEqual((unrelated/'keep').read_text(),'USER DATA')
+        stage.unlink()
+        # The former unowned file layout is not mistaken for a recoverable stage.
+        stage.write_text('USER FILE')
+        self.run_jxz('build',expected=1)
+        self.run_jxz('clean',expected=1)
+        self.assertEqual(stage.read_text(),'USER FILE')
+        stage.unlink()
+        stage.mkdir()
+        (stage/'keep').write_text('USER CONTENTS')
+        self.run_jxz('build',expected=1)
+        self.assertEqual((stage/'keep').read_text(),'USER CONTENTS')
+        (stage/'keep').unlink()
+        # An empty pre-marker directory is safely recoverable.
+        self.run_jxz('build')
+        self.assertFalse(stage.exists())
+        self.run_jxz('build',expected=-signal.SIGKILL,env=transaction_fault('kill-before-dependency-record'))
+        self.run_jxz('clean')
+        self.assertFalse(stage.exists())
+        self.assertFalse(output.exists())
+        self.assertTrue((library/'src/lib.aeth').is_file())
+
+    def test_dependency_final_record_ownership_protects_all_three_entrypoints(self):
+        self.local_library('lib','dependency')
+        self.source()
+        target = self.root/'target'
+        target.mkdir()
+        record = target/'.jxz-dependencies'
+        owner = target/'.jxz-dependencies-owner'
+        user = self.root/'user-data'
+        user.write_text('KEEP USER DATA')
+        for kind in ('file','empty-directory','directory','link','dangling-link','owner-file','owner-directory','owner-link','owned-directory','owned-link'):
+            with self.subTest(kind=kind):
+                if kind=='file': record.write_text('KEEP RECORD FILE')
+                if kind in ('empty-directory','directory','owned-directory'):
+                    record.mkdir()
+                    if kind=='directory': (record/'keep').write_text('KEEP CONTENTS')
+                if kind in ('link','owned-link'): record.symlink_to(user)
+                if kind=='dangling-link': record.symlink_to('missing-user-target')
+                if kind=='owner-file': owner.write_text('KEEP OWNER FILE')
+                if kind=='owner-directory': owner.mkdir()
+                if kind=='owner-link': owner.symlink_to('UNKNOWN-OWNER')
+                if kind.startswith('owned-'): owner.symlink_to('JXZ-PATH-DEPS-RECORD-1')
+                for mode in ('without-dependencies','with-dependencies','clean'):
+                    self.manifest()
+                    if mode=='with-dependencies': self.build_settings("[dependencies]\ndependency={path='lib'}")
+                    self.run_jxz('clean' if mode=='clean' else 'build',expected=1)
+                    self.assertEqual(user.read_text(),'KEEP USER DATA')
+                    if kind=='file': self.assertEqual(record.read_text(),'KEEP RECORD FILE')
+                    if kind in ('empty-directory','directory','owned-directory'): self.assertTrue(record.is_dir())
+                    if kind=='directory': self.assertEqual((record/'keep').read_text(),'KEEP CONTENTS')
+                    if kind in ('link','dangling-link','owned-link'): self.assertTrue(record.is_symlink())
+                    if kind=='owner-file': self.assertEqual(owner.read_text(),'KEEP OWNER FILE')
+                    if kind=='owner-directory': self.assertTrue(owner.is_dir())
+                    if kind in ('owner-link','owned-directory','owned-link'): self.assertTrue(owner.is_symlink())
+                if record.is_symlink() or record.is_file(): record.unlink()
+                elif record.exists():
+                    if (record/'keep').exists(): (record/'keep').unlink()
+                    record.rmdir()
+                if owner.is_symlink() or owner.is_file(): owner.unlink()
+                elif owner.exists(): owner.rmdir()
+        # Registration is atomic even if killed before the first record exists.
+        self.manifest()
+        self.build_settings("[dependencies]\ndependency={path='lib'}")
+        self.run_jxz('build',expected=-signal.SIGKILL,env=transaction_fault('kill-after-dependency-owner'))
+        self.assertTrue(owner.is_symlink())
+        self.assertFalse(record.exists())
+        self.run_jxz('build')
+        self.assertTrue(record.is_file())
+        self.run_jxz('clean')
+        self.assertFalse(owner.is_symlink())
+        self.assertFalse(record.exists())
+        # A normal dependency-free build removes only its previously owned record.
+        self.run_jxz('build')
+        self.assertTrue(owner.is_symlink())
+        self.manifest()
+        self.run_jxz('build')
+        self.assertFalse(record.exists())
+        self.assertFalse(owner.is_symlink())
+        self.run_jxz('clean')
+
+    def test_local_path_dependencies_reject_module_collisions(self):
+        self.local_library('lib', 'dependency')
+        self.manifest()
+        self.build_settings("[dependencies]\ndependency={path='lib'}")
+        self.source(text='use dependency::value;fn main()->i32{value()}')
+        self.source('src/dependency.aeth','pub fn value()->i32{19}')
+        self.run_jxz('build',expected=1)
+        self.assertFalse((self.root/'target/program').exists())
+        (self.root/'src/dependency.aeth').unlink()
+        self.source(text='mod dependency {pub fn value()->i32{19}}fn main()->i32{dependency::value()}')
+        self.run_jxz('build',expected=1)
+        self.assertFalse((self.root/'target/program').exists())
+
     def test_all_dependency_manifest_forms_are_rejected(self):
         self.source()
         declarations = [

@@ -1,0 +1,260 @@
+// Local path dependency graph. Manifests own parsed strings; the final Config
+// owns copied canonical compiler arguments after this temporary graph is freed.
+use config::{Config,Dependency,config_load_at,config_free,config_path_valid,module_name_valid};
+use path::path_join;
+use vec::{Vec,vec_new,vec_push,vec_free};
+use posix::ENOENT;
+use output::{remove_owned,marker_valid,presence};
+extern "C" {
+    fn realpath(path:*u8,out:*u8)->*u8;
+    fn malloc(size:u64)->*void; fn free(ptr:*void);
+    fn strlen(text:*u8)->u64; fn strcmp(a:*u8,b:*u8)->i32;
+    fn memcpy(out:*void,input:*void,count:u64)->*void;
+    fn puts(text:*u8)->i32; fn perror(text:*u8);
+    fn fopen(path:*u8,mode:*u8)->*void; fn fclose(file:*void)->i32;
+    fn fwrite(data:*void,size:u64,count:u64,file:*void)->u64;
+    fn rename(old:*u8,new:*u8)->i32; fn remove(path:*u8)->i32; fn unlink(path:*u8)->i32;
+    fn mkdir(path:*u8,mode:u32)->i32; fn rmdir(path:*u8)->i32;
+    fn access(path:*u8,mode:i32)->i32;
+    fn readlink(path:*u8,buffer:*u8,size:u64)->i64;
+    fn symlink(target:*u8,path:*u8)->i32;
+}
+struct Package { directory:*u8, entry:*u8, cfg:Config, state:i32 }
+struct Graph { packages:Vec<Package>, root:*u8, root_name:*u8, bytes:u64 }
+fn copy(text:*u8)->*u8 {
+    let size:u64=strlen(text)+1;
+    let out:*u8=malloc(size) as *u8;
+    if out!=(0 as *u8) { memcpy(out as *void,text as *void,size); }
+    return out;
+}
+fn combined(directory:*u8,path:*u8)->*u8 {
+    if path[0]==47 { return copy(path); }
+    return path_join(directory,path);
+}
+fn canonical(directory:*u8,path:*u8)->*u8 {
+    let joined:*u8=combined(directory,path);
+    if joined==(0 as *u8) { return joined; }
+    let result:*u8=realpath(joined,0 as *u8);
+    if result==(0 as *u8) { perror(joined); }
+    free(joined as *void);
+    if !config_path_valid(result) { free(result as *void); return 0 as *u8; }
+    return result;
+}
+fn graph_free(graph:*Graph) {
+    let mut i:u64=0;
+    while i<graph.packages.len {
+        free(graph.packages.data[i].directory as *void);
+        free(graph.packages.data[i].entry as *void);
+        config_free(&mut graph.packages.data[i].cfg as *Config);
+        i=i+1;
+    }
+    vec_free(&mut graph.packages as *Vec<Package>);
+    free(graph.root as *void);
+}
+fn visit(graph:*Graph,parent:*u8,dependency:Dependency,depth:u64)->bool {
+    if depth>64 { puts("jxz: dependency graph exceeds 64 levels or 1024 packages"); return false; }
+    let directory:*u8=canonical(parent,dependency.path);
+    if directory==(0 as *u8) { puts("jxz: cannot resolve dependency directory"); return false; }
+    if strcmp(directory,graph.root)==0 { puts("jxz: dependency cycle reaches the root project"); free(directory as *void); return false; }
+    let mut i:u64=0;
+    while i<graph.packages.len {
+        let package:Package=graph.packages.data[i];
+        if strcmp(directory,package.directory)==0 {
+            free(directory as *void);
+            if strcmp(dependency.name,package.cfg.name)!=0 { puts("jxz: dependency key must equal package.name; aliases are unsupported"); return false; }
+            if package.state==1 { puts("jxz: dependency cycle"); puts(package.cfg.name); return false; }
+            return true;
+        }
+        if strcmp(dependency.name,package.cfg.name)==0 { puts("jxz: dependency name resolves to different packages"); puts(dependency.name); free(directory as *void); return false; }
+        i=i+1;
+    }
+    if graph.packages.len>=1024 { puts("jxz: dependency graph exceeds 1024 packages"); free(directory as *void); return false; }
+    if strcmp(dependency.name,graph.root_name)==0 { puts("jxz: dependency name conflicts with root package"); free(directory as *void); return false; }
+    let manifest:*u8=path_join(directory,"Jxz.toml");
+    if manifest==(0 as *u8) { free(directory as *void); return false; }
+    let mut cfg:Config=config_load_at(manifest);
+    free(manifest as *void);
+    if !cfg.valid { config_free(&mut cfg as *Config); free(directory as *void); return false; }
+    if !module_name_valid(cfg.name) || strcmp(cfg.name,dependency.name)!=0 {
+        puts("jxz: dependency key must equal identifier package.name"); config_free(&mut cfg as *Config); free(directory as *void); return false;
+    }
+    graph.bytes=graph.bytes+cfg.storage.len;
+    if graph.bytes>16777216 { puts("jxz: dependency manifests exceed 16 MiB total"); config_free(&mut cfg as *Config); free(directory as *void); return false; }
+    let src:*u8=combined(directory,cfg.src_dir);
+    let mut entry:*u8=0 as *u8;
+    if src!=(0 as *u8) { entry=canonical(src,"lib.aeth"); free(src as *void); }
+    if entry==(0 as *u8) { puts("jxz: dependency needs build.src/lib.aeth"); config_free(&mut cfg as *Config); free(directory as *void); return false; }
+    let index:u64=graph.packages.len;
+    if !vec_push(&mut graph.packages as *Vec<Package>,Package{directory:directory,entry:entry,cfg:cfg,state:1}) {
+        config_free(&mut cfg as *Config); free(directory as *void); free(entry as *void); return false;
+    }
+    i=0;
+    while i<graph.packages.data[index].cfg.dependencies.len {
+        let child:Dependency=graph.packages.data[index].cfg.dependencies.data[i];
+        if !visit(graph,directory,child,depth+1) { return false; }
+        i=i+1;
+    }
+    graph.packages.data[index].state=2;
+    return true;
+}
+fn append_text(bytes:*Vec<u8>,text:*u8)->bool {
+    let mut i:u64=0;
+    while text[i]!=0 { if !vec_push(bytes,text[i]) { return false; } i=i+1; }
+    return true;
+}
+fn append_field(bytes:*Vec<u8>,text:*u8,separator:u8)->bool {
+    return append_text(bytes,text) && vec_push(bytes,separator);
+}
+fn add_unique(paths:*Vec<*u8>,owned:*u8)->bool {
+    if owned==(0 as *u8) { return false; }
+    let mut i:u64=0;
+    while i<paths.len {
+        if strcmp(paths.data[i],owned)==0 { free(owned as *void); return true; }
+        i=i+1;
+    }
+    if !vec_push(paths,owned) { free(owned as *void); return false; }
+    return true;
+}
+fn append_paths(paths:*Vec<*u8>,directory:*u8,values:**u8,count:u64,root:*u8,root_values:**u8,root_count:u64)->bool {
+    let mut i:u64=0;
+    while i<count {
+        let path:*u8=canonical(directory,values[i]);
+        if path==(0 as *u8) { return false; }
+        let mut j:u64=0; let mut duplicate:bool=false;
+        while j<root_count {
+            let root_path:*u8=canonical(root,root_values[j]);
+            if root_path==(0 as *u8) { free(path as *void); return false; }
+            if strcmp(path,root_path)==0 { duplicate=true; }
+            free(root_path as *void); j=j+1;
+        }
+        if duplicate { free(path as *void); }
+        else if !add_unique(paths,path) { return false; }
+        i=i+1;
+    }
+    return true;
+}
+fn export_graph(graph:*Graph,cfg:*Config)->bool {
+    // Name ordering makes arguments and records independent of traversal order.
+    let mut i:u64=1;
+    while i<graph.packages.len {
+        let value:Package=graph.packages.data[i]; let mut j:u64=i;
+        while j>0 && strcmp(graph.packages.data[j-1].cfg.name,value.cfg.name)>0 {
+            graph.packages.data[j]=graph.packages.data[j-1]; j=j-1;
+        }
+        graph.packages.data[j]=value; i=i+1;
+    }
+    if !append_text(&mut cfg.dependency_record as *Vec<u8>,"JXZ-PATH-DEPS-1\n") { return false; }
+    i=0;
+    while i<graph.packages.len {
+        let package:Package=graph.packages.data[i];
+        let a:u64=strlen(package.cfg.name); let b:u64=strlen(package.entry);
+        let mapping:*u8=malloc(a+b+2) as *u8;
+        if mapping==(0 as *u8) { return false; }
+        memcpy(mapping as *void,package.cfg.name as *void,a); mapping[a]=61;
+        memcpy((mapping+a+1) as *void,package.entry as *void,b+1);
+        if !vec_push(&mut cfg.resolved_modules as *Vec<*u8>,mapping) { free(mapping as *void); return false; }
+        if !append_field(&mut cfg.dependency_record as *Vec<u8>,package.cfg.name,9)
+            || !append_field(&mut cfg.dependency_record as *Vec<u8>,package.directory,9)
+            || !append_field(&mut cfg.dependency_record as *Vec<u8>,package.entry,10) { return false; }
+        if !append_paths(&mut cfg.resolved_paths as *Vec<*u8>,package.directory,package.cfg.module_paths,package.cfg.module_path_count,graph.root,cfg.module_paths,cfg.module_path_count)
+            || !append_paths(&mut cfg.resolved_objects as *Vec<*u8>,package.directory,package.cfg.link_objects,package.cfg.link_object_count,graph.root,cfg.link_objects,cfg.link_object_count) { return false; }
+        i=i+1;
+    }
+    return true;
+}
+pub fn dependencies_resolve(cfg:*Config)->bool {
+    if cfg.dependencies.len==0 { return true; }
+    let mut graph:Graph=Graph{packages:vec_new(),root:realpath(".",0 as *u8),root_name:cfg.name,bytes:cfg.storage.len};
+    if graph.root==(0 as *u8) { return false; }
+    let mut ok:bool=true; let mut i:u64=0;
+    while i<cfg.dependencies.len {
+        if !visit(&mut graph as *Graph,graph.root,cfg.dependencies.data[i],1) { ok=false; break; }
+        i=i+1;
+    }
+    if ok { ok=export_graph(&mut graph as *Graph,cfg); }
+    graph_free(&mut graph as *Graph);
+    return ok;
+}
+fn clear_stage(stage:*u8,owner:*u8,file:*u8)->bool {
+    let mut first:u8=0;
+    // Never traverse an unexpected symlink or recursively remove user data.
+    if readlink(stage,&mut first as *u8,1)>=0 { return false; }
+    if access(stage,0)!=0 { return __errno_get()==ENOENT; }
+    if !marker_valid(owner,"JXZ-PATH-DEPS-1") {
+        // A crash before the atomic owner marker leaves an empty directory.
+        // rmdir preserves nonempty directories and unexpected ordinary files.
+        return rmdir(stage)==0;
+    }
+    return remove_owned(file) && remove_owned(owner) && rmdir(stage)==0;
+}
+pub fn dependencies_cleanup(directory:*u8)->bool {
+    let stage:*u8=path_join(directory,".jxz-dependencies.tmp");
+    let mut owner:*u8=0 as *u8; let mut file:*u8=0 as *u8;
+    if stage!=(0 as *u8) { owner=path_join(stage,"owner"); file=path_join(stage,"record"); }
+    let mut ok:bool=stage!=(0 as *u8) && owner!=(0 as *u8) && file!=(0 as *u8);
+    if ok { ok=clear_stage(stage,owner,file); }
+    if !ok { puts("jxz: unrecognized dependency staging path; preserving its contents"); }
+    free(stage as *void); free(owner as *void); free(file as *void);
+    return ok;
+}
+// Final records need their own ownership identity, independent of the stage.
+// An interrupted first publication may leave a valid owner with no record.
+fn record_authorize(path:*u8,owner:*u8,create:bool)->bool {
+    let record_state:i32=presence(path); let owner_state:i32=presence(owner);
+    if record_state<0 || owner_state<0 { return false; }
+    let mut byte:u8=0;
+    if record_state==1 && readlink(path,&mut byte as *u8,1)>=0 {
+        puts("jxz: refusing a symbolic dependency record; preserving it"); return false;
+    }
+    if owner_state==1 {
+        if marker_valid(owner,"JXZ-PATH-DEPS-RECORD-1") { return true; }
+        puts("jxz: unrecognized dependency record owner; preserving it"); return false;
+    }
+    if record_state==1 { puts("jxz: unowned dependency record path; preserving it"); return false; }
+    return !create || symlink("JXZ-PATH-DEPS-RECORD-1",owner)==0;
+}
+fn unlink_owned(path:*u8)->bool { return unlink(path)==0 || __errno_get()==ENOENT; }
+pub fn dependencies_remove(directory:*u8)->bool {
+    let path:*u8=path_join(directory,".jxz-dependencies");
+    let owner:*u8=path_join(directory,".jxz-dependencies-owner");
+    let mut ok:bool=path!=(0 as *u8) && owner!=(0 as *u8);
+    if ok { ok=record_authorize(path,owner,false); }
+    if ok { ok=dependencies_cleanup(directory); }
+    // unlink cannot remove a directory substituted at either pathname.
+    if ok { ok=unlink_owned(path) && unlink_owned(owner); }
+    free(path as *void); free(owner as *void);
+    return ok;
+}
+// This is the last resolved local graph, not a content cache or a promise that
+// source files cannot change. Every build/test invokes the compiler again.
+pub fn dependencies_record(cfg:*Config,directory:*u8)->bool {
+    if cfg.dependencies.len==0 { return dependencies_remove(directory); }
+    if !dependencies_cleanup(directory) { return false; }
+    let path:*u8=path_join(directory,".jxz-dependencies");
+    let identity:*u8=path_join(directory,".jxz-dependencies-owner");
+    let stage:*u8=path_join(directory,".jxz-dependencies.tmp");
+    let mut owner:*u8=0 as *u8; let mut temporary:*u8=0 as *u8;
+    if stage!=(0 as *u8) { owner=path_join(stage,"owner"); temporary=path_join(stage,"record"); }
+    if path==(0 as *u8) || identity==(0 as *u8) || owner==(0 as *u8) || temporary==(0 as *u8) {
+        free(path as *void); free(identity as *void); free(stage as *void); free(owner as *void); free(temporary as *void); return false;
+    }
+    let mut ok:bool=record_authorize(path,identity,true);
+    if ok {
+        if mkdir(stage,448)!=0 { ok=false; }
+        else {
+            if symlink("JXZ-PATH-DEPS-1",owner)!=0 { ok=false; }
+            else {
+                let file:*void=fopen(temporary,"wx");
+                if file==(0 as *void) { ok=false; }
+                else {
+                    ok=fwrite(cfg.dependency_record.data as *void,1,cfg.dependency_record.len,file)==cfg.dependency_record.len;
+                    if fclose(file)!=0 { ok=false; }
+                    if ok && rename(temporary,path)!=0 { ok=false; }
+                }
+            }
+            if !clear_stage(stage,owner,temporary) { ok=false; }
+        }
+    }
+    free(path as *void); free(identity as *void); free(stage as *void); free(owner as *void); free(temporary as *void);
+    return ok;
+}
