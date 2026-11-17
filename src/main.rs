@@ -10,12 +10,14 @@ mod ai_ir;
 mod feedback;
 mod lsp;
 mod script;
+mod driver_output;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::{fs, path::{Path, PathBuf}, process::{self, Command}, sync::atomic::{AtomicU64, Ordering}};
 use frontend::{resolve::Resolver, session::{Session, Diagnostic}};
 use middle::{ir_gen::IRGenerator, optimize::Optimizer, ir_printer::print_ir};
 use backend::CCodeGen;
+use driver_output::{write, OutputFile};
 #[cfg(feature = "llvm")]
 use backend::codegen::CodeGen;
 
@@ -56,6 +58,9 @@ struct Cli {
     /// Additional module search directory (repeatable)
     #[arg(short = 'I', long = "module-path", global = true)]
     module_paths: Vec<PathBuf>,
+    /// Installation prefix containing stdlib/ or lib/aetherlang/stdlib/
+    #[arg(long, global = true)]
+    sysroot: Option<PathBuf>,
     /// C compiler/linker executable; defaults to CC, then clang/gcc/cc
     #[arg(long, global = true)]
     cc: Option<PathBuf>,
@@ -103,13 +108,13 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
     let (input, check) = match &cli.command {
         Some(Commands::Build { input }) => (input, false),
         Some(Commands::Check { input }) => (input, true),
-        Some(Commands::Lsp) => return lsp::serve(search_paths(cli)).map_err(Diagnostic::from),
+        Some(Commands::Lsp) => return lsp::serve(search_paths(cli)?).map_err(Diagnostic::from),
         Some(Commands::Symbols { input }) => (input, true),
         Some(Commands::Version) => { println!("aethc {}", env!("CARGO_PKG_VERSION")); return Ok(()); }
         None => (cli.input.as_ref().ok_or("no input file; use aethc build <FILE> or aethc check <FILE>")?, false),
     };
     let source = fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
-    let session = Session::parse(input, source, search_paths(cli), Default::default())?;
+    let session = Session::parse(input, source, search_paths(cli)?, Default::default())?;
     let facts = session.check()?;
     if matches!(cli.command, Some(Commands::Symbols { .. })) {
         println!("{}", serde_json::to_string(&frontend::symbols::SymbolIndex::new(&session)).expect("serializable symbols"));
@@ -172,11 +177,40 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
     Ok(())
 }
 
-fn search_paths(cli: &Cli) -> Vec<PathBuf> {
+fn search_paths(cli: &Cli) -> Result<Vec<PathBuf>, String> {
     let mut paths = cli.module_paths.clone();
     if let Some(env) = std::env::var_os("AETHER_PATH") { paths.extend(std::env::split_paths(&env)); }
-    paths.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib"));
-    paths
+    let library_at = |prefix: &Path| {
+        [prefix.join("stdlib"), prefix.join("lib/aetherlang/stdlib")]
+            .into_iter().find(|path| path.is_dir())
+    };
+    if let Some(prefix) = &cli.sysroot {
+        let library = library_at(prefix).ok_or_else(|| format!(
+            "sysroot {} has no stdlib/ or lib/aetherlang/stdlib/ directory", prefix.display()))?;
+        paths.push(library);
+        return Ok(paths);
+    }
+    let executable = std::env::current_exe().map_err(|e| format!("locating compiler installation: {e}"))?;
+    if let Some(directory) = executable.parent() {
+        let installed = library_at(directory).or_else(|| {
+            if directory.file_name().is_some_and(|name| name == "bin") {
+                directory.parent().and_then(library_at)
+            } else { None }
+        });
+        if let Some(library) = installed {
+            paths.push(library);
+            return Ok(paths);
+        }
+    }
+    // Only binaries in their actual Cargo build tree may use developer sources.
+    // A relocated installation must never silently borrow a different checkout.
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let build_root = option_env!("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| manifest.join("target"));
+    let build_root = if build_root.is_absolute() { build_root } else { manifest.join(build_root) };
+    if let Ok(build_root) = fs::canonicalize(build_root) {
+        if executable.starts_with(build_root) { paths.push(manifest.join("stdlib")); }
+    }
+    Ok(paths)
 }
 
 fn protect_sources(resolver: &Resolver, output: &Path) -> Result<(), String> {
@@ -202,10 +236,6 @@ fn protect_sources(resolver: &Resolver, output: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    fs::write(path, bytes).map_err(|e| format!("writing {}: {e}", path.display()))
-}
-
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 struct Temporary { path: PathBuf }
 impl Temporary {
@@ -228,6 +258,7 @@ impl Temporary {
 impl Drop for Temporary { fn drop(&mut self) { let _ = fs::remove_file(&self.path); } }
 
 fn native_compile(cli: &Cli, input: &Path, output: &Path, object: bool) -> Result<(), String> {
+    let staged = OutputFile::new(output)?;
     let compilers = if let Some(cc) = cli.cc.clone().or_else(|| std::env::var_os("CC").map(PathBuf::from)) { vec![cc] }
         else { ["clang", "gcc", "cc"].iter().map(PathBuf::from).collect() };
     for compiler in &compilers {
@@ -235,14 +266,14 @@ fn native_compile(cli: &Cli, input: &Path, output: &Path, object: bool) -> Resul
         command.arg(format!("-O{}", cli.opt_level));
         if cli.target != "native" { command.arg(format!("--target={}", cli.target)); }
         if object { command.arg("-c"); }
-        command.arg(input).arg("-o").arg(output);
+        command.arg(input).arg("-o").arg(&staged.path);
         if !object {
             command.args(&cli.link_object);
             for library in &cli.link_library { command.arg(format!("-l{}", library)); }
         }
         if let Some(script) = &cli.linker_script { command.arg("-T").arg(script).arg("-nostdlib"); }
         match command.output() {
-            Ok(result) if result.status.success() => return Ok(()),
+            Ok(result) if result.status.success() => return staged.publish(output),
             Ok(result) => return Err(format!("{} failed ({}):\n{}{}", compiler.display(), result.status,
                 String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
