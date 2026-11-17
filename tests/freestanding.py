@@ -15,6 +15,8 @@ parser=argparse.ArgumentParser()
 parser.add_argument('--compiler',type=Path,required=True)
 parser.add_argument('--work-dir',type=Path,required=True)
 parser.add_argument('--backends',nargs='+',default=['c','llvm'])
+parser.add_argument('--qemu', action='store_true', default=os.environ.get('AETHER_TEST_QEMU') == '1',
+                    help='boot and exercise both interrupt forms under qemu-system-x86_64')
 args=parser.parse_args()
 compiler=args.compiler.resolve();work=args.work_dir.resolve();work.mkdir(parents=True,exist_ok=True)
 root=Path(__file__).resolve().parents[1];fixtures=root/'tests/regressions/freestanding'
@@ -69,6 +71,10 @@ int64_t custom_add(int64_t a,int64_t b){return a+b;}
 int main(void){struct Pair p={20,1};return sum(10)!=55 || copied_sum(&p)!=22 || p.a!=20 || external_abs()!=7 || convert(3.9)!=3 || convert(1e100)!=INT64_MAX || nan_result()!=0;}
 ''')
 try:
+    if args.qemu:
+        qemu, linker, objcopy = tool('qemu-system-x86_64'), tool('ld.lld'), tool('llvm-objcopy')
+        boot = work / 'interrupt-boot.o'
+        run([clang, '--target=x86_64-unknown-none', '-c', fixtures / 'interrupt_boot.S', '-o', boot])
     # Compile generated C with only the compiler's freestanding headers available.
     c_source=work/'compute.c'
     run([compiler,fixtures/'compute.aeth','--emit-c','-o',c_source])
@@ -105,6 +111,15 @@ try:
             assert interrupt_stack_delta(disassembly,'tick')==0,disassembly
             assert interrupt_stack_delta(disassembly,'exception')==8,disassembly
             assert not run([nm,'--undefined-only',obj]).stdout.strip()
+            if args.qemu:
+                elf, image = obj.with_suffix('.elf'), obj.with_suffix('.bin')
+                run([linker, '-T', root / 'examples/kernel.ld', boot, obj, '-o', elf])
+                run([objcopy, '-O', 'binary', elf, image])
+                # Guest reports success only after the software interrupt and real
+                # #GP return to the expected instruction with the original stack.
+                run([qemu, '-machine', 'pc,accel=tcg', '-m', '32M', '-nodefaults',
+                     '-display', 'none', '-no-reboot', '-device',
+                     'isa-debug-exit,iobase=0xf4,iosize=4', '-kernel', image], status=33)
         if backend=='llvm':
             ir=work/'interrupt.ll'
             run([compiler,fixtures/'interrupt.aeth','--backend','llvm','--target','x86_64-unknown-none','--emit-llvm','-o',ir])
@@ -146,5 +161,7 @@ try:
             result=run([compiler,action,source,'--target',target,'--error-format','json','--emit-obj','-o',work/f'{name}.o'],status=1)
             diagnostic=json.loads(result.stderr);assert diagnostic['code']=='E2402',diagnostic
 finally:
-    (work/'results.json').write_text(json.dumps(dict(compiler=str(compiler),compiler_sha256=hashlib.sha256(compiler.read_bytes()).hexdigest(),records=records,scope='freestanding host execution; interrupt/naked object verification only, no hardware interrupt execution'),indent=2))
+    (work/'results.json').write_text(json.dumps(dict(compiler=str(compiler),compiler_sha256=hashlib.sha256(compiler.read_bytes()).hexdigest(),records=records,qemu=args.qemu, scope='freestanding host execution and object checks; optional x86_64 TCG interrupt execution'),indent=2))
 print('Freestanding compute, explicit externs, x86_64 interrupt ABI, x86_64/aarch64 naked objects and diagnostics passed')
+if args.qemu:
+    print('QEMU x86_64 interrupt and hardware-error-code returns passed at O0 and O2')

@@ -301,6 +301,9 @@ impl LLVMCodeGen {
                 
                 // Generate terminator
                 if let Some(ref term) = block.terminator {
+                    if let Some(barrier) = crate::backend::system_attributes::interrupt_epilogue(func, term) {
+                        self.generate_instruction(&barrier)?;
+                    }
                     self.generate_terminator(term)?;
                 } else {
                     // Add implicit unreachable for blocks without terminator

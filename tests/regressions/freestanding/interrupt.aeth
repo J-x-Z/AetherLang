@@ -2,17 +2,23 @@
 #![no_main]
 @repr(C)
 struct Frame {ip:u64,cs:u64,flags:u64,sp:u64,ss:u64}
-static mut TICKS:u64=0;
+#[no_mangle] static mut ticks_seen:u64=0;
+#[no_mangle] static mut error_seen:u64=0;
+#[no_mangle] static mut fault_ip:u64=0;
+#[no_mangle]
 @interrupt
 pub fn tick(frame:*Frame) {
     unsafe {
-        __atomic_fetch_add_u64(&mut TICKS as *u64,1);
+        __atomic_fetch_add_u64(&mut ticks_seen as *u64,1);
         frame.ip=frame.ip+1;
     }
 }
+#[no_mangle]
 @interrupt
 pub fn exception(frame:*Frame,error:u64) {
     unsafe {
+        error_seen=error;
+        fault_ip=frame.ip;
         if error==0 {frame.flags=frame.flags|1;}
         else {frame.ip=frame.ip+error;}
     }

@@ -535,6 +535,9 @@ impl CCodeGen {
 
             // Terminator (with phi assignments for correct SSA semantics)
             if let Some(ref term) = block.terminator {
+                if let Some(barrier) = crate::backend::system_attributes::interrupt_epilogue(func, term) {
+                    self.generate_instruction(&barrier)?;
+                }
                 self.generate_terminator_with_phis(term, i, func)?;
             }
         }

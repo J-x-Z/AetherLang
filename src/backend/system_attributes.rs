@@ -4,6 +4,23 @@ use crate::{
     utils::{Error, Result},
 };
 
+/// IRET reads the interrupted context from the incoming stack frame. The LLVM
+/// x86_intrcc and Clang ABIs represent that storage as a byval argument, whose
+/// writes would otherwise look dead on return. Expose the original address to
+/// a compiler memory barrier. No machine instruction or library call is needed.
+pub fn interrupt_epilogue(function: &IRFunction, terminator: &Terminator) -> Option<Instruction> {
+    if !function.interrupt || !matches!(terminator, Terminator::Return { .. }) {
+        return None;
+    }
+    Some(Instruction::InlineAsm {
+        template: String::new(),
+        operands: vec![
+            IRAsmOperand { kind: IRAsmOperandKind::Input, constraint: "r".into(), input: Some(Value::Parameter(0)), output: None },
+            IRAsmOperand { kind: IRAsmOperandKind::Clobber, constraint: "memory".into(), input: None, output: None },
+        ],
+    })
+}
+
 pub fn validate(module: &IRModule, target: &str) -> Result<()> {
     let arch = if target == "native" {
         std::env::consts::ARCH
