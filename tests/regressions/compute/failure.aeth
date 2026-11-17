@@ -1,0 +1,42 @@
+use compute::*;
+use result::Result;
+extern "C" {fn puts(s:*u8)->i32;}
+struct Resources {q:*ComputeQueue,b:[*ComputeBuffer;4],e:*ComputeEvent}
+fn require(ok:bool)->Result<(),ComputeError>{if ok {Result::Ok(())}else{Result::Err(compute_error(1000,0))}}
+fn failed<T>(value:Result<T,ComputeError>)->bool{match value{Result::Ok(_)=>false,Result::Err(e)=>e.code==COMPUTE_EXECUTION}}
+fn exercise(r:*Resources,path:*u8)->Result<(),ComputeError>{
+    r.q=compute_queue_with_provider(COMPUTE_METAL,4096,path)?;
+    let square:[u64;2]=[2,2];let row:[u64;2]=[1,2];
+    r.b[0]=compute_buffer_new(r.q,COMPUTE_F32,2,&row[0] as *u64)?;
+    r.b[1]=compute_buffer_new(r.q,COMPUTE_F32,2,&square[0] as *u64)?;
+    r.b[2]=compute_buffer_new(r.q,COMPUTE_F32,2,&square[0] as *u64)?;
+    let mut view:ComputeLayout=compute_buffer_layout(r.b[2]);view.shape[0]=1;view.count=2;
+    r.b[3]=compute_buffer_view(r.b[2],view)?;
+    r.e=compute_gemm(r.q,r.b[0],r.b[1],r.b[3])?;
+    match compute_event_wait(r.e){Result::Ok(_)=>{return require(false);},Result::Err(e)=>{require(e.code==COMPUTE_EXECUTION && e.native==77)?;}}
+    require(failed(compute_event_free(&mut r.e as **ComputeEvent)))?;
+    require(r.e==0 as *ComputeEvent)?;
+    let values:[f32;4]=[1.0;4];let mut actual:[f32;4]=[0.0;4];
+    require(failed(compute_download(&mut actual[0] as *f32,r.b[2],4)))?;
+    compute_upload(r.b[3],&values[0] as *f32,2)?;
+    require(failed(compute_download(&mut actual[0] as *f32,r.b[2],4)))?;
+    require(failed(compute_gemm(r.q,r.b[0],r.b[1],r.b[3])))?;
+    // Full upload repairs all failed bytes; a later subview operation is safe.
+    compute_upload(r.b[2],&values[0] as *f32,4)?;
+    r.e=compute_gemm(r.q,r.b[0],r.b[1],r.b[3])?;
+    compute_event_free(&mut r.e as **ComputeEvent)?;
+    compute_download(&mut actual[0] as *f32,r.b[2],4)?;
+    require(actual[0]==9.0 && actual[1]==9.0 && actual[2]==1.0 && actual[3]==1.0)?;
+    let stats:ComputeQueueStats=compute_queue_stats(r.q);require(stats.submitted==2 && stats.failed==1 && stats.observed_completed==2)?;
+    // Final buffer leases release the already closed provider exactly once.
+    compute_queue_close(&mut r.q as **ComputeQueue);Result::Ok(())
+}
+fn main(argc:i32,argv:**u8)->i32{
+    if argc!=2{return 2;}
+    let mut r:Resources=Resources{q:0 as *ComputeQueue,b:[0 as *ComputeBuffer;4],e:0 as *ComputeEvent};
+    let answer:Result<(),ComputeError>=exercise(&mut r as *Resources,argv[1]);
+    compute_event_free(&mut r.e as **ComputeEvent);
+    for i in 0..4{compute_buffer_free(&mut r.b[i] as **ComputeBuffer);}
+    compute_queue_close(&mut r.q as **ComputeQueue);
+    match answer{Result::Ok(_)=>{puts("compute injected failure recovered");0},Result::Err(_)=>1}
+}

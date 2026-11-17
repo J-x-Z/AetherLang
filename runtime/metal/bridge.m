@@ -65,4 +65,10 @@ void aether_mtl_end_encoding(void *encoder) { [OBJ(MTLComputeCommandEncoder, enc
 void aether_mtl_commit(void *command) { [OBJ(MTLCommandBuffer, command) commit]; }
 void aether_mtl_wait_until_completed(void *command) { [OBJ(MTLCommandBuffer, command) waitUntilCompleted]; }
 bool aether_mtl_completed(void *command) { return OBJ(MTLCommandBuffer, command).status == MTLCommandBufferStatusCompleted; }
+int32_t aether_mtl_command_status(void *command) {
+    return command ? (int32_t)OBJ(MTLCommandBuffer, command).status : -1;
+}
+int64_t aether_mtl_command_error(void *command) {
+    return command ? (int64_t)OBJ(MTLCommandBuffer, command).error.code : 0;
+}
 uint64_t aether_mtl_registry_id(void *device) { return OBJ(MTLDevice, device).registryID; }

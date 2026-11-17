@@ -1,0 +1,166 @@
+use compute::*;
+use result::Result;
+use tensor::{Tensor,tensor_from_data,tensor_transpose,tensor_slice,tensor_matmul,tensor_get,tensor_free};
+extern "C" { fn strcmp(a:*u8,b:*u8)->i32; fn printf(format:*u8,...)->i32; }
+struct Resources { queues:[*ComputeQueue;2],buffers:[*ComputeBuffer;16],events:[*ComputeEvent;2],tensors:[*Tensor;5] }
+fn require(ok:bool,code:i32)->Result<(),ComputeError> {
+    if !ok { return Result::Err(ComputeError{code:1000+code,backend:0,native:0}); } Result::Ok(())
+}
+fn rejects<T>(result:Result<T,ComputeError>,code:i32)->bool {
+    match result { Result::Ok(_) => false,Result::Err(error)=>error.code==code }
+}
+fn reference(result:Result<*Tensor,i32>)->Result<*Tensor,ComputeError> {
+    match result { Result::Ok(value)=>Result::Ok(value),Result::Err(code)=>Result::Err(ComputeError{code:2000+code,backend:0,native:0}) }
+}
+fn exercise(resources:*Resources,backend:i32,provider:*u8)->Result<(),ComputeError> {
+    let limit:u64=1048576;
+    resources.queues[0]=compute_queue_new(COMPUTE_CPU,limit)?;
+    resources.queues[1]=compute_queue_with_provider(backend,limit,provider)?;
+    let cpu:*ComputeQueue=resources.queues[0];let device:*ComputeQueue=resources.queues[1];
+    let a_shape:[u64;2]=[3,5];let b_shape:[u64;2]=[3,4];let c_shape:[u64;2]=[5,2];
+    let mut a_data:[f32;15]=[0.0;15];let mut b_data:[f32;12]=[0.0;12];
+    let mut a64:[f64;15]=[0.0;15];let mut b64:[f64;12]=[0.0;12];
+    for i in 0..15 { a_data[i]=(i as f32-7.0)*0.125;a64[i]=a_data[i] as f64; }
+    for i in 0..12 { b_data[i]=(i as f32-3.0)*0.25;b64[i]=b_data[i] as f64; }
+    resources.buffers[0]=compute_buffer_new(cpu,COMPUTE_F32,2,&a_shape[0] as *u64)?;
+    resources.buffers[1]=compute_buffer_new(cpu,COMPUTE_F32,2,&b_shape[0] as *u64)?;
+    compute_upload(resources.buffers[0],&a_data[0] as *f32,15)?;
+    compute_upload(resources.buffers[1],&b_data[0] as *f32,12)?;
+    resources.buffers[2]=compute_transpose(resources.buffers[0])?;
+    let mut slice:ComputeLayout=compute_buffer_layout(resources.buffers[1]);
+    slice.shape[1]=2;slice.count=6;slice.offset=1;
+    resources.buffers[3]=compute_buffer_view(resources.buffers[1],slice)?;
+    resources.buffers[4]=compute_buffer_new(cpu,COMPUTE_F32,2,&c_shape[0] as *u64)?;
+    resources.events[0]=compute_gemm(cpu,resources.buffers[2],resources.buffers[3],resources.buffers[4])?;
+    require(compute_event_poll(resources.events[0])?==COMPUTE_COMPLETE,1)?;
+    compute_event_free(&mut resources.events[0] as **ComputeEvent)?;
+    let mut cpu_values:[f32;10]=[0.0;10];compute_download(&mut cpu_values[0] as *f32,resources.buffers[4],10)?;
+
+    resources.tensors[0]=reference(tensor_from_data(2,&a_shape[0] as *u64,&a64[0] as *f64))?;
+    resources.tensors[1]=reference(tensor_transpose(resources.tensors[0]))?;
+    resources.tensors[2]=reference(tensor_from_data(2,&b_shape[0] as *u64,&b64[0] as *f64))?;
+    resources.tensors[3]=reference(tensor_slice(resources.tensors[2],1,1,3,1))?;
+    resources.tensors[4]=reference(tensor_matmul(resources.tensors[1],resources.tensors[3]))?;
+
+    resources.buffers[5]=compute_buffer_new(device,COMPUTE_F32,2,&a_shape[0] as *u64)?;
+    resources.buffers[6]=compute_buffer_new(device,COMPUTE_F32,2,&b_shape[0] as *u64)?;
+    compute_copy(resources.buffers[5],resources.buffers[0])?;compute_copy(resources.buffers[6],resources.buffers[1])?;
+    resources.buffers[7]=compute_transpose(resources.buffers[5])?;
+    resources.buffers[8]=compute_buffer_view(resources.buffers[6],slice)?;
+    resources.buffers[9]=compute_buffer_new(device,COMPUTE_F32,2,&c_shape[0] as *u64)?;
+    if backend!=COMPUTE_CPU {
+        let caps:ComputeDeviceCaps=compute_device_caps(device);
+        require(caps.name[0]!=0 && caps.device_id==compute_device_id(device) && caps.max_buffer_bytes>0,20)?;
+    }
+    let square:[u64;2]=[2,2];
+    resources.buffers[11]=compute_buffer_new(device,COMPUTE_F32,2,&square[0] as *u64)?;
+    resources.buffers[12]=compute_buffer_new(device,COMPUTE_F32,2,&square[0] as *u64)?;
+    require(rejects(compute_gemm(device,resources.buffers[11],resources.buffers[12],resources.buffers[11]),COMPUTE_ALIAS),21)?;
+    compute_buffer_free(&mut resources.buffers[11] as **ComputeBuffer);compute_buffer_free(&mut resources.buffers[12] as **ComputeBuffer);
+    // Empty reduction writes valid zeroes; an empty output never dispatches or
+    // accesses an element. Both still have normal owning event lifetimes.
+    for empty in 0..2 {
+        let x:[u64;2]=if empty==0 {[2,0]}else{[0,2]};
+        let y:[u64;2]=if empty==0 {[0,3]}else{[2,3]};
+        let z:[u64;2]=if empty==0 {[2,3]}else{[0,3]};
+        resources.buffers[11]=compute_buffer_new(device,COMPUTE_F32,2,&x[0] as *u64)?;
+        resources.buffers[12]=compute_buffer_new(device,COMPUTE_F32,2,&y[0] as *u64)?;
+        resources.buffers[13]=compute_buffer_new(device,COMPUTE_F32,2,&z[0] as *u64)?;
+        resources.events[1]=compute_gemm(device,resources.buffers[11],resources.buffers[12],resources.buffers[13])?;
+        compute_event_wait(resources.events[1])?;
+        if empty==0 {
+            let mut zeroes:[f32;6]=[1.0;6];compute_download(&mut zeroes[0] as *f32,resources.buffers[13],6)?;
+            for j in 0..6 {require(zeroes[j]==0.0,22)?;}
+        } else { compute_download(0 as *f32,resources.buffers[13],0)?; }
+        compute_event_free(&mut resources.events[1] as **ComputeEvent)?;
+        for j in 11..14 {compute_buffer_free(&mut resources.buffers[j] as **ComputeBuffer);}
+    }
+    let before:ComputeQueueStats=compute_queue_stats(device);
+    let huge:[u64;1]=[1048576];
+    require(rejects(compute_buffer_new(device,COMPUTE_F32,1,&huge[0] as *u64),COMPUTE_BUDGET),2)?;
+    require(compute_queue_stats(device).used_bytes==before.used_bytes,3)?;
+    require(rejects(compute_buffer_new(device,99,2,&a_shape[0] as *u64),COMPUTE_DTYPE),4)?;
+    let overflow:[u64;2]=[18446744073709551615,2];
+    require(rejects(compute_buffer_new(device,COMPUTE_F32,2,&overflow[0] as *u64),COMPUTE_OVERFLOW),5)?;
+    let mut invalid:ComputeLayout=compute_buffer_layout(resources.buffers[7]);invalid.strides[0]=18446744073709551615;
+    require(rejects(compute_buffer_view(resources.buffers[7],invalid),COMPUTE_BOUNDS),6)?;
+    require(rejects(compute_gemm(device,resources.buffers[5],resources.buffers[8],resources.buffers[9]),COMPUTE_SHAPE),7)?;
+    if backend!=COMPUTE_CPU {
+        // Consume the remaining allocation budget. Metal charges an actual
+        // parameter buffer and must roll back; Vulkan's push constants need no
+        // charged scratch buffer and the same dispatch remains valid.
+        let fill:[u64;1]=[(limit-before.used_bytes)/4];
+        resources.buffers[10]=compute_buffer_new(device,COMPUTE_F32,1,&fill[0] as *u64)?;
+        if backend==COMPUTE_METAL {
+            require(rejects(compute_gemm(device,resources.buffers[7],resources.buffers[8],resources.buffers[9]),COMPUTE_BUDGET),8)?;
+            require(compute_queue_stats(device).submitted==before.submitted,9)?;
+        } else {
+            resources.events[1]=compute_gemm(device,resources.buffers[7],resources.buffers[8],resources.buffers[9])?;
+            compute_event_free(&mut resources.events[1] as **ComputeEvent)?;
+            require(compute_queue_stats(device).submitted==before.submitted+1,9)?;
+        }
+        compute_buffer_free(&mut resources.buffers[10] as **ComputeBuffer);
+        require(compute_queue_stats(device).used_bytes==before.used_bytes,10)?;
+    }
+    let expected_submissions:u64=if backend==COMPUTE_VULKAN {4}else{3};
+    resources.events[1]=compute_gemm(device,resources.buffers[7],resources.buffers[8],resources.buffers[9])?;
+    require(compute_event_sequence(resources.events[1])==expected_submissions,11)?;
+    let mut actual:[f32;10]=[0.0;10];
+    if backend!=COMPUTE_CPU {
+        require(rejects(compute_download(&mut actual[0] as *f32,resources.buffers[9],10),COMPUTE_BUSY),12)?;
+        require(rejects(compute_upload(resources.buffers[5],&a_data[0] as *f32,15),COMPUTE_BUSY),13)?;
+    }
+    // The event retains backing allocations after all input handles disappear.
+    for i in 5..9 { compute_buffer_free(&mut resources.buffers[i] as **ComputeBuffer); }
+    compute_queue_close(&mut resources.queues[1] as **ComputeQueue);
+    require(compute_queue_stats(device).closed,14)?;
+    require(rejects(compute_buffer_new(device,COMPUTE_F32,2,&a_shape[0] as *u64),COMPUTE_CLOSED),15)?;
+    compute_event_wait(resources.events[1])?;
+    require(compute_event_poll(resources.events[1])?==COMPUTE_COMPLETE,16)?;
+    compute_download(&mut actual[0] as *f32,resources.buffers[9],10)?;
+    compute_event_free(&mut resources.events[1] as **ComputeEvent)?;
+    let mut max_error:f64=0.0;
+    for i in 0..10 {
+        let oracle:f64=match tensor_get(resources.tensors[4],i as u64) { Result::Ok(value)=>value,Result::Err(_)=>{return Result::Err(compute_error(2010,backend));} };
+        let mut error:f64=(actual[i] as f64)-oracle;if error<0.0 {error=-error;}
+        if error>max_error {max_error=error;}
+        require(error<=0.00001 && actual[i]==cpu_values[i],17)?;
+    }
+    // Explicit download/cross-queue copy observes only completed GPU writes.
+    compute_copy(resources.buffers[4],resources.buffers[9])?;
+    compute_download(&mut actual[0] as *f32,resources.buffers[4],10)?;
+    for i in 0..10 {require(actual[i]==cpu_values[i],18)?;}
+    let stats:ComputeQueueStats=compute_queue_stats(device);
+    require(stats.submitted==expected_submissions && stats.observed_completed==expected_submissions && stats.failed==0,19)?;
+    printf("compute backend=%d device=%llu values=10 error=%.8f used=%llu peak=%llu completed=%llu\n",backend,compute_device_id(device),max_error,stats.used_bytes,stats.peak_bytes,stats.observed_completed);
+    compute_buffer_free(&mut resources.buffers[9] as **ComputeBuffer);
+    Result::Ok(())
+}
+fn cleanup(resources:*Resources)->bool {
+    let mut ok:bool=true;
+    for i in 0..2 {match compute_event_free(&mut resources.events[i] as **ComputeEvent) {Result::Ok(_)=>{},Result::Err(_)=>{ok=false;}};}
+    for i in 0..16 {compute_buffer_free(&mut resources.buffers[i] as **ComputeBuffer);}
+    for i in 0..5 {tensor_free(resources.tensors[i]);}
+    for i in 0..2 {
+        if resources.queues[i]!=0 as *ComputeQueue {if compute_queue_stats(resources.queues[i]).used_bytes!=0 {ok=false;}}
+        compute_queue_close(&mut resources.queues[i] as **ComputeQueue);
+        compute_queue_close(&mut resources.queues[i] as **ComputeQueue);
+    }
+    ok
+}
+fn main(argc:i32,argv:**u8)->i32 {
+    let mut backend:i32=COMPUTE_CPU;let mut path:*u8=0 as *u8;
+    if argc>1 {
+        if strcmp(argv[1],"metal")==0 {backend=COMPUTE_METAL;}
+        else if strcmp(argv[1],"vulkan")==0 {backend=COMPUTE_VULKAN;}
+        else if strcmp(argv[1],"cpu")!=0 {return 2;}
+    }
+    if backend!=COMPUTE_CPU {if argc!=3 {return 2;}path=argv[2];}
+    let mut resources:Resources=Resources{queues:[0 as *ComputeQueue;2],buffers:[0 as *ComputeBuffer;16],events:[0 as *ComputeEvent;2],tensors:[0 as *Tensor;5]};
+    let result:Result<(),ComputeError>=exercise(&mut resources as *Resources,backend,path);
+    let freed:bool=cleanup(&mut resources as *Resources);
+    match result {
+        Result::Ok(_)=>if freed {0}else{3},
+        Result::Err(error)=>{printf("compute error=%d backend=%d native=%lld\n",error.code,error.backend,error.native);1},
+    }
+}

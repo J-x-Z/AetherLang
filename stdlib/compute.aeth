@@ -1,0 +1,315 @@
+// Unified f32 dense operators. Calls on a queue and its buffers are serialized
+// by the caller. All providers share shape, stride, ownership and budget rules.
+// A successful constructor/view/event returns one owner; pointer copies borrow.
+// close/free take an owner's address and clear it. Views and in-flight commands
+// retain storage, so closing a queue or freeing an input handle is safe.
+// Budget: actual buffer lengths and dispatch parameter buffers, excluding handle
+// metadata, shader/driver allocations and SDK caches. No implicit CPU fallback.
+// Link the portable runtime/compute loader; GPU SDKs are loaded only through
+// an explicit provider path. CPU queues neither load a provider nor need an SDK.
+pub use compute_types::*;
+use result::Result;
+extern "C" {
+    fn malloc(size:usize)->*void; fn free(pointer:*void);
+    fn aether_gpu_open(backend:i32,path:*u8,code:*i32,native:*i64)->*void;
+    fn aether_gpu_close(context:*void);
+    fn aether_gpu_device_id(context:*void)->u64;
+    fn aether_gpu_caps(context:*void,caps:*ComputeDeviceCaps);
+    fn aether_gpu_buffer_new(context:*void,bytes:u64,remaining:u64,charge:*u64,code:*i32,native:*i64)->*void;
+    fn aether_gpu_buffer_contents(context:*void,buffer:*void)->*void;
+    fn aether_gpu_buffer_free(context:*void,buffer:*void);
+    fn aether_gpu_submit_gemm(context:*void,a:*void,b:*void,c:*void,parameters:*GemmParameters,
+        remaining:u64,charge:*u64,code:*i32,native:*i64)->*void;
+    fn aether_gpu_event_status(context:*void,event:*void,native:*i64)->i32;
+    fn aether_gpu_event_wait(context:*void,event:*void,native:*i64)->i32;
+    fn aether_gpu_event_free(context:*void,event:*void);
+}
+const COMPUTE_DEFAULT_BUDGET:u64=8589934592;
+
+pub struct ComputeQueue {
+    backend:i32, limit:u64, used:u64, peak:u64, refs:u64, closed:bool,
+    submitted:u64, completed:u64, failed:u64,
+    provider:*void,
+}
+struct ComputeStorage {
+    queue:*ComputeQueue, data:*f32, native:*void, elements:u64, charge:u64,
+    refs:u64, busy:u64, failed:bool,
+}
+pub struct ComputeBuffer { storage:*ComputeStorage, layout:ComputeLayout }
+pub struct ComputeEvent {
+    queue:*ComputeQueue, command:*void, charge:u64,
+    first:*ComputeStorage, second:*ComputeStorage, output:*ComputeStorage,
+    state:i32, native_error:i64, sequence:u64,
+}
+pub struct ComputeQueueStats {
+    pub backend:i32, pub byte_limit:u64, pub used_bytes:u64, pub peak_bytes:u64,
+    pub submitted:u64, pub observed_completed:u64, pub failed:u64, pub closed:bool,
+}
+@repr(C) struct GemmParameters {
+    m:u64,n:u64,k:u64,ao:u64,ar:u64,ac:u64,bo:u64,br:u64,bc:u64,co:u64,cr:u64,cc:u64,
+}
+fn release_queue(queue:*ComputeQueue) {
+    queue.refs-=1;
+    if queue.refs==0 {
+        if queue.provider!=0 as *void { aether_gpu_close(queue.provider); }
+        free(queue as *void);
+    }
+}
+fn can_charge(queue:*ComputeQueue,bytes:u64)->bool {
+    queue.used<=queue.limit && bytes<=queue.limit-queue.used
+}
+fn charge(queue:*ComputeQueue,bytes:u64) {
+    queue.used+=bytes;
+    if queue.used>queue.peak { queue.peak=queue.used; }
+}
+pub fn compute_queue_new(backend:i32,byte_limit:u64)->Result<*ComputeQueue,ComputeError> {
+    compute_queue_with_provider(backend,byte_limit,0 as *u8)
+}
+pub fn compute_queue_with_provider(backend:i32,byte_limit:u64,path:*u8)->Result<*ComputeQueue,ComputeError> {
+    if backend!=COMPUTE_CPU && backend!=COMPUTE_METAL && backend!=COMPUTE_VULKAN { return Result::Err(compute_error(COMPUTE_DEVICE,backend)); }
+    if byte_limit==0 || byte_limit>compute_max_bytes() { return Result::Err(compute_error(COMPUTE_BUDGET,backend)); }
+    let queue:*ComputeQueue=malloc(size_of(ComputeQueue)) as *ComputeQueue;
+    if queue==0 as *ComputeQueue { return Result::Err(compute_error(COMPUTE_ALLOCATION,backend)); }
+    let mut provider:*void=0 as *void;
+    if backend!=COMPUTE_CPU {
+        let mut code:i32=0;let mut native:i64=0;
+        provider=aether_gpu_open(backend,path,&mut code as *i32,&mut native as *i64);
+        if provider==0 as *void {
+            free(queue as *void);
+            return Result::Err(ComputeError{code:if code==0 {COMPUTE_DEVICE}else{code},backend:backend,native:native});
+        }
+    }
+    *queue=ComputeQueue{backend:backend,limit:byte_limit,used:0,peak:0,refs:1,closed:false,
+        submitted:0,completed:0,failed:0,provider:provider};
+    Result::Ok(queue)
+}
+pub fn compute_queue_close(owner:**ComputeQueue) {
+    if owner==0 as **ComputeQueue || *owner==0 as *ComputeQueue { return; }
+    let queue:*ComputeQueue=*owner;*owner=0 as *ComputeQueue;
+    queue.closed=true;release_queue(queue);
+}
+// A borrowed queue remains valid while any buffer or event retains it.
+pub fn compute_queue_stats(queue:*ComputeQueue)->ComputeQueueStats {
+    ComputeQueueStats{backend:queue.backend,byte_limit:queue.limit,used_bytes:queue.used,peak_bytes:queue.peak,
+        submitted:queue.submitted,observed_completed:queue.completed,failed:queue.failed,closed:queue.closed}
+}
+pub fn compute_device_id(queue:*ComputeQueue)->u64 {
+    if queue.provider!=0 as *void { return aether_gpu_device_id(queue.provider); } 0
+}
+pub fn compute_device_caps(queue:*ComputeQueue)->ComputeDeviceCaps {
+    let mut caps:ComputeDeviceCaps=ComputeDeviceCaps{device_id:0,heap_bytes:0,max_buffer_bytes:0,available_bytes:0,
+        vendor_id:0,fp64:0,unified_memory:0,queue_family:0,name:[0;256]};
+    if queue.provider!=0 as *void { aether_gpu_caps(queue.provider,&mut caps as *ComputeDeviceCaps); }
+    caps
+}
+fn release_storage(storage:*ComputeStorage) {
+    storage.refs-=1;
+    if storage.refs==0 {
+        let queue:*ComputeQueue=storage.queue;
+        if queue.backend==COMPUTE_CPU { free(storage.data as *void); }
+        else { aether_gpu_buffer_free(queue.provider,storage.native); }
+        queue.used-=storage.charge;free(storage as *void);release_queue(queue);
+    }
+}
+pub fn compute_buffer_new(queue:*ComputeQueue,dtype:i32,rank:u64,shape:*u64)->Result<*ComputeBuffer,ComputeError> {
+    if queue==0 as *ComputeQueue { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    if queue.closed { return Result::Err(compute_error(COMPUTE_CLOSED,queue.backend)); }
+    let layout:ComputeLayout=compute_layout(dtype,rank,shape)?;
+    let bytes:u64=if layout.count==0 { 4 } else { layout.count*4 };
+    if !can_charge(queue,bytes) { return Result::Err(compute_error(COMPUTE_BUDGET,queue.backend)); }
+    if queue.refs==9223372036854775807 { return Result::Err(compute_error(COMPUTE_OVERFLOW,queue.backend)); }
+    let storage:*ComputeStorage=malloc(size_of(ComputeStorage)) as *ComputeStorage;
+    let buffer:*ComputeBuffer=malloc(size_of(ComputeBuffer)) as *ComputeBuffer;
+    if storage==0 as *ComputeStorage || buffer==0 as *ComputeBuffer {
+        free(storage as *void);free(buffer as *void);return Result::Err(compute_error(COMPUTE_ALLOCATION,queue.backend));
+    }
+    let mut native:*void=0 as *void;let mut data:*f32=0 as *f32;
+    let mut charged:u64=bytes;let mut code:i32=0;let mut native_error:i64=0;
+    if queue.backend==COMPUTE_CPU { data=malloc(bytes as usize) as *f32; }
+    else {
+        native=aether_gpu_buffer_new(queue.provider,bytes,queue.limit-queue.used,&mut charged as *u64,&mut code as *i32,&mut native_error as *i64);
+        if native!=0 as *void { data=aether_gpu_buffer_contents(queue.provider,native) as *f32; }
+    }
+    if data==0 as *f32 || charged<bytes || !can_charge(queue,charged) {
+        if native!=0 as *void { aether_gpu_buffer_free(queue.provider,native); }
+        else { free(data as *void); }
+        free(storage as *void);free(buffer as *void);
+        return Result::Err(ComputeError{code:if code==0 {COMPUTE_ALLOCATION}else{code},backend:queue.backend,native:native_error});
+    }
+    let mut i:u64=0;while i<layout.count { data[i]=0.0;i+=1; }
+    *storage=ComputeStorage{queue:queue,data:data,native:native,elements:layout.count,charge:charged,refs:1,busy:0,failed:false};
+    *buffer=ComputeBuffer{storage:storage,layout:layout};
+    queue.refs+=1;charge(queue,charged);Result::Ok(buffer)
+}
+pub fn compute_buffer_free(owner:**ComputeBuffer) {
+    if owner==0 as **ComputeBuffer || *owner==0 as *ComputeBuffer { return; }
+    let buffer:*ComputeBuffer=*owner;*owner=0 as *ComputeBuffer;
+    release_storage(buffer.storage);free(buffer as *void);
+}
+pub fn compute_buffer_layout(buffer:*ComputeBuffer)->ComputeLayout { buffer.layout }
+pub fn compute_buffer_view(buffer:*ComputeBuffer,layout:ComputeLayout)->Result<*ComputeBuffer,ComputeError> {
+    if buffer==0 as *ComputeBuffer { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    let storage:*ComputeStorage=buffer.storage;
+    if !compute_layout_in_storage(layout,storage.elements) { return Result::Err(compute_error(COMPUTE_BOUNDS,storage.queue.backend)); }
+    if storage.refs==9223372036854775807 { return Result::Err(compute_error(COMPUTE_OVERFLOW,storage.queue.backend)); }
+    let result:*ComputeBuffer=malloc(size_of(ComputeBuffer)) as *ComputeBuffer;
+    if result==0 as *ComputeBuffer { return Result::Err(compute_error(COMPUTE_ALLOCATION,storage.queue.backend)); }
+    *result=ComputeBuffer{storage:storage,layout:layout};storage.refs+=1;Result::Ok(result)
+}
+pub fn compute_transpose(buffer:*ComputeBuffer)->Result<*ComputeBuffer,ComputeError> {
+    if buffer==0 as *ComputeBuffer { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    let mut layout:ComputeLayout=buffer.layout;
+    if layout.rank!=2 { return Result::Err(compute_error(COMPUTE_SHAPE,buffer.storage.queue.backend)); }
+    let dimension:u64=layout.shape[0];layout.shape[0]=layout.shape[1];layout.shape[1]=dimension;
+    let stride:u64=layout.strides[0];layout.strides[0]=layout.strides[1];layout.strides[1]=stride;
+    compute_buffer_view(buffer,layout)
+}
+fn readable(buffer:*ComputeBuffer)->Result<(),ComputeError> {
+    if buffer==0 as *ComputeBuffer { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    let storage:*ComputeStorage=buffer.storage;
+    if storage.busy!=0 { return Result::Err(compute_error(COMPUTE_BUSY,storage.queue.backend)); }
+    if storage.failed { return Result::Err(compute_error(COMPUTE_EXECUTION,storage.queue.backend)); }
+    Result::Ok(())
+}
+pub fn compute_upload(buffer:*ComputeBuffer,source:*f32,count:u64)->Result<(),ComputeError> {
+    if buffer==0 as *ComputeBuffer { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    let storage:*ComputeStorage=buffer.storage;
+    if count!=buffer.layout.count || (count>0 && source==0 as *f32) { return Result::Err(compute_error(COMPUTE_BOUNDS,storage.queue.backend)); }
+    if storage.busy!=0 { return Result::Err(compute_error(COMPUTE_BUSY,storage.queue.backend)); }
+    let mut i:u64=0;while i<count { storage.data[compute_physical(buffer.layout,i)]=source[i];i+=1; }
+    if buffer.layout.offset==0 && count==storage.elements && compute_contiguous(buffer.layout) { storage.failed=false; }
+    Result::Ok(())
+}
+pub fn compute_download(destination:*f32,buffer:*ComputeBuffer,count:u64)->Result<(),ComputeError> {
+    readable(buffer)?;
+    if count!=buffer.layout.count || (count>0 && destination==0 as *f32) { return Result::Err(compute_error(COMPUTE_BOUNDS,buffer.storage.queue.backend)); }
+    let mut i:u64=0;while i<count { destination[i]=buffer.storage.data[compute_physical(buffer.layout,i)];i+=1; }
+    Result::Ok(())
+}
+// Explicit transfer between coherent mapped storage. A provider must synchronize
+// its device writes before reporting terminal completion.
+pub fn compute_copy(destination:*ComputeBuffer,source:*ComputeBuffer)->Result<(),ComputeError> {
+    readable(source)?;
+    if destination==0 as *ComputeBuffer { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    let target:*ComputeStorage=destination.storage;
+    if target.busy!=0 { return Result::Err(compute_error(COMPUTE_BUSY,target.queue.backend)); }
+    if destination.layout.dtype!=source.layout.dtype || destination.layout.rank!=source.layout.rank { return Result::Err(compute_error(COMPUTE_SHAPE,target.queue.backend)); }
+    let mut axis:u64=0;
+    while axis<destination.layout.rank { if destination.layout.shape[axis]!=source.layout.shape[axis] { return Result::Err(compute_error(COMPUTE_SHAPE,target.queue.backend)); } axis+=1; }
+    if destination==source { return Result::Ok(()); }
+    if target==source.storage { return Result::Err(compute_error(COMPUTE_ALIAS,target.queue.backend)); }
+    let mut i:u64=0;while i<destination.layout.count {
+        target.data[compute_physical(destination.layout,i)]=source.storage.data[compute_physical(source.layout,i)];i+=1;
+    }
+    if destination.layout.offset==0 && destination.layout.count==target.elements && compute_contiguous(destination.layout) { target.failed=false; }
+    Result::Ok(())
+}
+fn finish(event:*ComputeEvent,failed:bool,native:i64) {
+    if event.state!=COMPUTE_PENDING { return; }
+    event.state=if failed { COMPUTE_FAILED } else { COMPUTE_COMPLETE };
+    event.native_error=native;
+    event.first.busy-=1;event.second.busy-=1;event.output.busy-=1;
+    event.output.failed=failed;
+    event.queue.completed+=1;
+    if failed { event.queue.failed+=1; }
+}
+pub fn compute_event_poll(event:*ComputeEvent)->Result<i32,ComputeError> {
+    if event==0 as *ComputeEvent { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    if event.state==COMPUTE_PENDING && event.command!=0 as *void {
+        let mut native:i64=0;
+        let status:i32=aether_gpu_event_status(event.queue.provider,event.command,&mut native as *i64);
+        if status==COMPUTE_COMPLETE { finish(event,false,0); }
+        else if status!=COMPUTE_PENDING { finish(event,true,native); }
+    }
+    if event.state==COMPUTE_FAILED { return Result::Err(ComputeError{code:COMPUTE_EXECUTION,backend:event.queue.backend,native:event.native_error}); }
+    Result::Ok(event.state)
+}
+pub fn compute_event_wait(event:*ComputeEvent)->Result<(),ComputeError> {
+    if event==0 as *ComputeEvent { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    if event.state==COMPUTE_PENDING && event.command!=0 as *void {
+        let mut native:i64=0;
+        let state:i32=aether_gpu_event_wait(event.queue.provider,event.command,&mut native as *i64);
+        if state==COMPUTE_COMPLETE { finish(event,false,0); }
+        else if state!=COMPUTE_PENDING { finish(event,true,native); }
+    }
+    let state:i32=compute_event_poll(event)?;
+    if state!=COMPUTE_COMPLETE { return Result::Err(compute_error(COMPUTE_EXECUTION,event.queue.backend)); }
+    Result::Ok(())
+}
+pub fn compute_event_sequence(event:*ComputeEvent)->u64 { event.sequence }
+pub fn compute_event_free(owner:**ComputeEvent)->Result<(),ComputeError> {
+    if owner==0 as **ComputeEvent || *owner==0 as *ComputeEvent { return Result::Ok(()); }
+    let event:*ComputeEvent=*owner;
+    let status:Result<(),ComputeError>=compute_event_wait(event);
+    // Completion or an actual device error is terminal; resources are no longer
+    // in use by the command. Keep the native failure available to the caller.
+    if event.state==COMPUTE_PENDING { return status; }
+    *owner=0 as *ComputeEvent;
+    let queue:*ComputeQueue=event.queue;
+    if event.command!=0 as *void { aether_gpu_event_free(queue.provider,event.command); }
+    queue.used-=event.charge;
+    release_storage(event.first);release_storage(event.second);release_storage(event.output);
+    free(event as *void);release_queue(queue);status
+}
+fn gemm_cpu(a:*ComputeBuffer,b:*ComputeBuffer,c:*ComputeBuffer) {
+    let mut row:u64=0;
+    while row<a.layout.shape[0] {
+        let mut col:u64=0;
+        while col<b.layout.shape[1] {
+            let mut sum:f32=0.0;let mut k:u64=0;
+            while k<a.layout.shape[1] {
+                sum+=a.storage.data[a.layout.offset+row*a.layout.strides[0]+k*a.layout.strides[1]]*
+                     b.storage.data[b.layout.offset+k*b.layout.strides[0]+col*b.layout.strides[1]];
+                k+=1;
+            }
+            c.storage.data[c.layout.offset+row*c.layout.strides[0]+col*c.layout.strides[1]]=sum;col+=1;
+        }
+        row+=1;
+    }
+}
+pub fn compute_gemm(queue:*ComputeQueue,a:*ComputeBuffer,b:*ComputeBuffer,c:*ComputeBuffer)->Result<*ComputeEvent,ComputeError> {
+    if queue==0 as *ComputeQueue || a==0 as *ComputeBuffer || b==0 as *ComputeBuffer || c==0 as *ComputeBuffer { return Result::Err(compute_error(COMPUTE_ARGUMENT,0)); }
+    if queue.closed { return Result::Err(compute_error(COMPUTE_CLOSED,queue.backend)); }
+    if a.storage.queue!=queue || b.storage.queue!=queue || c.storage.queue!=queue { return Result::Err(compute_error(COMPUTE_DEVICE,queue.backend)); }
+    readable(a)?;readable(b)?;
+    if c.storage.busy!=0 { return Result::Err(compute_error(COMPUTE_BUSY,queue.backend)); }
+    if a.layout.rank!=2 || b.layout.rank!=2 || c.layout.rank!=2 || a.layout.shape[1]!=b.layout.shape[0]
+        || c.layout.shape[0]!=a.layout.shape[0] || c.layout.shape[1]!=b.layout.shape[1] { return Result::Err(compute_error(COMPUTE_SHAPE,queue.backend)); }
+    if !compute_layout_in_storage(a.layout,a.storage.elements) || !compute_layout_in_storage(b.layout,b.storage.elements)
+        || !compute_layout_in_storage(c.layout,c.storage.elements) || !compute_contiguous(c.layout) { return Result::Err(compute_error(COMPUTE_BOUNDS,queue.backend)); }
+    // A failed command poisons its entire backing storage conservatively.
+    // Recomputing only a subview must not make untouched failed bytes readable.
+    if c.storage.failed && (c.layout.offset!=0 || c.layout.count!=c.storage.elements) {
+        return Result::Err(compute_error(COMPUTE_EXECUTION,queue.backend));
+    }
+    if c.storage==a.storage || c.storage==b.storage { return Result::Err(compute_error(COMPUTE_ALIAS,queue.backend)); }
+    if queue.submitted==18446744073709551615 || queue.refs==9223372036854775807
+        || a.storage.refs>9223372036854775805 || b.storage.refs>9223372036854775805 || c.storage.refs==9223372036854775807 { return Result::Err(compute_error(COMPUTE_OVERFLOW,queue.backend)); }
+    let gpu:bool=queue.backend!=COMPUTE_CPU && c.layout.count>0;
+    let event:*ComputeEvent=malloc(size_of(ComputeEvent)) as *ComputeEvent;
+    if event==0 as *ComputeEvent { return Result::Err(compute_error(COMPUTE_ALLOCATION,queue.backend)); }
+    let mut command:*void=0 as *void;let mut bytes:u64=0;
+    if gpu {
+        let parameters:GemmParameters=GemmParameters{m:a.layout.shape[0],n:b.layout.shape[1],k:a.layout.shape[1],
+            ao:a.layout.offset,ar:a.layout.strides[0],ac:a.layout.strides[1],
+            bo:b.layout.offset,br:b.layout.strides[0],bc:b.layout.strides[1],
+            co:c.layout.offset,cr:c.layout.strides[0],cc:c.layout.strides[1]};
+        let mut code:i32=0;let mut native:i64=0;
+        command=aether_gpu_submit_gemm(queue.provider,a.storage.native,b.storage.native,c.storage.native,&parameters as *GemmParameters,
+            queue.limit-queue.used,&mut bytes as *u64,&mut code as *i32,&mut native as *i64);
+        if command==0 as *void {
+            free(event as *void);
+            return Result::Err(ComputeError{code:if code==0 {COMPUTE_EXECUTION}else{code},backend:queue.backend,native:native});
+        }
+        if !can_charge(queue,bytes) {
+            aether_gpu_event_wait(queue.provider,command,&mut native as *i64);aether_gpu_event_free(queue.provider,command);free(event as *void);
+            return Result::Err(compute_error(COMPUTE_DEVICE,queue.backend));
+        }
+    }
+    *event=ComputeEvent{queue:queue,command:command,charge:bytes,first:a.storage,second:b.storage,output:c.storage,
+        state:COMPUTE_PENDING,native_error:0,sequence:queue.submitted+1};
+    a.storage.refs+=1;b.storage.refs+=1;c.storage.refs+=1;
+    a.storage.busy+=1;b.storage.busy+=1;c.storage.busy+=1;queue.refs+=1;queue.submitted+=1;charge(queue,bytes);
+    if !gpu { gemm_cpu(a,b,c);finish(event,false,0); }
+    Result::Ok(event)
+}

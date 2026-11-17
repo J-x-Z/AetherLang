@@ -27,6 +27,8 @@ extern "C" {
     fn aether_mtl_device() -> MTLDevice;
     fn aether_mtl_release(handle: *void);
     fn aether_mtl_completed(command: MTLCommandBuffer) -> bool;
+    fn aether_mtl_command_status(command: MTLCommandBuffer) -> i32;
+    fn aether_mtl_command_error(command: MTLCommandBuffer) -> i64;
     fn aether_mtl_registry_id(device: MTLDevice) -> u64;
     fn aether_mtl_dispatch_1d(encoder: MTLComputeCommandEncoder, pipeline: MTLComputePipelineState, count: u32) -> bool;
 }

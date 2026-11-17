@@ -1,0 +1,87 @@
+// Shared operator metadata. Strides and offsets count elements, never bytes.
+// These rules are independent of CPU/Metal/CUDA/Vulkan resource handles.
+use result::Result;
+const COMPUTE_CPU:i32=1;
+const COMPUTE_METAL:i32=2;
+const COMPUTE_VULKAN:i32=3;
+const COMPUTE_F32:i32=1;
+const COMPUTE_ARGUMENT:i32=1;
+const COMPUTE_DTYPE:i32=2;
+const COMPUTE_SHAPE:i32=3;
+const COMPUTE_OVERFLOW:i32=4;
+const COMPUTE_BOUNDS:i32=5;
+const COMPUTE_BUDGET:i32=6;
+const COMPUTE_ALLOCATION:i32=7;
+const COMPUTE_CLOSED:i32=8;
+const COMPUTE_BUSY:i32=9;
+const COMPUTE_DEVICE:i32=10;
+const COMPUTE_EXECUTION:i32=11;
+const COMPUTE_ALIAS:i32=12;
+const COMPUTE_PENDING:i32=1;
+const COMPUTE_COMPLETE:i32=2;
+const COMPUTE_FAILED:i32=3;
+
+@repr(C) pub struct ComputeDeviceCaps {
+    pub device_id:u64, pub heap_bytes:u64, pub max_buffer_bytes:u64, pub available_bytes:u64,
+    pub vendor_id:u32, pub fp64:u32, pub unified_memory:u32, pub queue_family:u32, pub name:[u8;256],
+}
+
+pub struct ComputeError { pub code:i32, pub backend:i32, pub native:i64 }
+pub struct ComputeLayout {
+    pub dtype:i32, pub rank:u64, pub shape:[u64;4], pub strides:[u64;4],
+    pub offset:u64, pub count:u64,
+}
+pub fn compute_error(code:i32,backend:i32)->ComputeError {
+    ComputeError{code:code,backend:backend,native:0}
+}
+pub fn compute_max_bytes()->u64 { (((-1 as isize) as usize)>>1) as u64 }
+pub fn compute_layout(dtype:i32,rank:u64,shape:*u64)->Result<ComputeLayout,ComputeError> {
+    if dtype!=COMPUTE_F32 { return Result::Err(compute_error(COMPUTE_DTYPE,0)); }
+    if rank>4 || (rank>0 && shape==0 as *u64) { return Result::Err(compute_error(COMPUTE_SHAPE,0)); }
+    let mut value:ComputeLayout=ComputeLayout{dtype:dtype,rank:rank,shape:[1;4],strides:[0;4],offset:0,count:1};
+    let limit:u64=compute_max_bytes()/4;
+    let mut axis:u64=rank;
+    while axis>0 {
+        axis-=1;
+        let extent:u64=shape[axis];
+        if extent>limit || (extent!=0 && value.count>limit/extent) { return Result::Err(compute_error(COMPUTE_OVERFLOW,0)); }
+        value.shape[axis]=extent;value.strides[axis]=value.count;value.count*=extent;
+    }
+    Result::Ok(value)
+}
+// Validate a descriptor against the actual allocation, including every stride
+// multiplication. Empty views may point one past storage, but never access it.
+pub fn compute_layout_in_storage(layout:ComputeLayout,elements:u64)->bool {
+    if layout.dtype!=COMPUTE_F32 || layout.rank>4 || layout.offset>elements { return false; }
+    let limit:u64=compute_max_bytes()/4;
+    if elements>limit || layout.offset>limit { return false; }
+    let mut count:u64=1;let mut axis:u64=0;let mut last:u64=layout.offset;
+    while axis<layout.rank {
+        let extent:u64=layout.shape[axis];
+        if extent>limit || layout.strides[axis]>limit || (extent!=0 && count>limit/extent) { return false; }
+        count*=extent;
+        if extent>0 {
+            let steps:u64=extent-1;
+            if steps!=0 && layout.strides[axis]>(limit-last)/steps { return false; }
+            last+=steps*layout.strides[axis];
+        }
+        axis+=1;
+    }
+    if count!=layout.count { return false; }
+    count==0 || last<elements
+}
+pub fn compute_contiguous(layout:ComputeLayout)->bool {
+    let mut stride:u64=1;let mut axis:u64=layout.rank;
+    while axis>0 {
+        axis-=1;
+        if layout.shape[axis]>1 && layout.strides[axis]!=stride { return false; }
+        stride*=layout.shape[axis];
+    }
+    true
+}
+// Internal iterator: the layout must already be validated and index<count.
+pub fn compute_physical(layout:ComputeLayout,index:u64)->u64 {
+    let mut remaining:u64=index;let mut result:u64=layout.offset;let mut axis:u64=layout.rank;
+    while axis>0 { axis-=1;result+=(remaining%layout.shape[axis])*layout.strides[axis];remaining/=layout.shape[axis]; }
+    result
+}
