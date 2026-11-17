@@ -30,6 +30,8 @@ mod places;
 mod interfaces;
 #[path = "semantic_contracts.rs"]
 mod contracts;
+#[path = "semantic_tuples.rs"]
+mod tuples;
 #[path = "semantic_enums.rs"]
 mod enums;
 #[path = "semantic_memory.rs"]
@@ -566,6 +568,7 @@ impl SemanticAnalyzer {
 
         // Call identities and receiver adjustments are now known; effects use
         // those same facts instead of guessing from a method suffix.
+        self.check_tuple_abi_boundaries(program)?;
         self.check_system_attributes(program)?;
         self.infer_effects(program)?;
         self.check_contract_effects(program)?;
@@ -1551,7 +1554,9 @@ impl SemanticAnalyzer {
                                 }
                             } else {
                                 // Variadic arguments still need semantic checking.
-                                diverges |= self.check_expr(arg)? == ResolvedType::NEVER;
+                                let argument = self.check_expr(arg)?;
+                                self.check_tuple_abi_type(&argument, arg.span())?;
+                                diverges |= argument == ResolvedType::NEVER;
                             }
                         }
 
@@ -1668,7 +1673,7 @@ impl SemanticAnalyzer {
                 let types: Vec<ResolvedType> = elements.iter()
                     .map(|e| self.check_expr(e))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(if types.is_empty(){ResolvedType::UNIT}else{ResolvedType::Tuple(types)})
+                Ok(if types.contains(&ResolvedType::NEVER) { ResolvedType::NEVER } else if types.is_empty() { ResolvedType::UNIT } else { ResolvedType::Tuple(types) })
             }
 
             Expr::Ref { mutable, expr, span } => {
@@ -1845,54 +1850,10 @@ impl SemanticAnalyzer {
                 Ok(if diverges {ResolvedType::NEVER}else{ResolvedType::UNIT})
             },
             
-            Expr::Closure { params, ret_type, body, .. } => {
-                // Enter a new scope for closure parameters
-                self.symbols.enter_scope();
-                
-                // Add parameters to scope
-                let mut param_types = Vec::new();
-                for param in params {
-                    let ty = if let Some(t) = &param.ty {
-                        self.resolve_type(t)?
-                    } else {
-                        // Infer type from usage (for now, default to i64)
-                        ResolvedType::Primitive(PrimitiveType::I64)
-                    };
-                    param_types.push(ty.clone());
-                    self.symbols.define(Symbol {
-                        name: param.name.name.clone(),
-                        kind: SymbolKind::Variable,
-                        ty,
-                        span: param.name.span,
-                        mutable: false,
-                    })?;
-                }
-                
-                // Closures form their own return and loop-control boundary.
-                let declared = ret_type.as_ref().map(|ty| self.resolve_type(ty)).transpose()?;
-                let outer_return = self.current_return.replace(declared.clone().unwrap_or(ResolvedType::Unknown));
-                let outer_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
-                let outer_loop_breaks = std::mem::take(&mut self.loop_breaks);
-                let body_result = if let Some(expected) = &declared {
-                    self.check_expected_expr(body, expected)
-                } else { self.check_expr(body) };
-                let inferred_return = self.current_return.take().unwrap_or(ResolvedType::Unknown);
-                self.current_return = outer_return;
-                self.loop_depth = outer_loop_depth;
-                self.loop_breaks = outer_loop_breaks;
-                let body_ty = body_result?;
-                let ret_ty = declared.unwrap_or_else(|| {
-                    if body_ty == ResolvedType::NEVER && inferred_return != ResolvedType::Unknown { inferred_return }
-                    else { body_ty }
-                });
-
-                self.symbols.exit_scope();
-                
-                Ok(ResolvedType::Function {
-                    params: param_types,
-                    ret: Box::new(ret_ty),
-                })
-            }
+            Expr::Closure { span, .. } => Err(Error::Semantic {
+                code: "E2403", span: *span,
+                message: "closures are not implemented; use a named function with explicit parameters".into(),
+            })
         }
     }
 
@@ -2215,6 +2176,12 @@ impl SemanticAnalyzer {
                     }
                 }
                 let volatile = matches!(base, ResolvedType::Volatile(_));
+                if let ResolvedType::Tuple(elements) = base.unqualified() {
+                    let ty = field.name.parse::<usize>().ok().and_then(|index| elements.get(index)).cloned()
+                        .ok_or_else(|| Error::Semantic { code: "E2102", span: field.span,
+                            message: format!("tuple field '{}' is out of range; tuple has {} elements", field.name, elements.len()) })?;
+                    return Ok(self.refresh_nominal_type(if volatile { ResolvedType::Volatile(Box::new(ty)) } else { ty }));
+                }
                 let ResolvedType::Struct { name, fields } = base.unqualified() else { return Err(Error::NotAStruct { span: *span }); };
                 if self.facts.unions.contains(name) && self.unsafe_depth == 0 { return Err(Error::semantic_expected("E2401","unsafe block for union field access", *span)); }
                 let fields = match self.symbols.scopes[0].symbols.get(name) { Some(Symbol { kind: SymbolKind::Struct { fields, .. }, .. }) => fields, _ => fields };
@@ -2427,15 +2394,10 @@ impl SemanticAnalyzer {
                     })
                 }
             }
-            Type::Function { params, ret, .. } => {
-                let param_types: Vec<ResolvedType> = params.iter()
-                    .map(|t| self.resolve_type(t))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(ResolvedType::Function {
-                    params: param_types,
-                    ret: Box::new(self.resolve_type(ret)?),
-                })
-            }
+            Type::Function { span, .. } => Err(Error::Semantic {
+                code: "E2403", span: *span,
+                message: "function value types and closures are not implemented; use a direct named call".into(),
+            }),
             Type::Unit(_) => Ok(ResolvedType::unit()),
             Type::Never(_) => Ok(ResolvedType::never()),
             Type::Infer(span) => Err(Error::Expected("concrete type annotation; placeholder '_' inference is not implemented".into(), *span)),

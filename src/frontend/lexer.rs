@@ -17,6 +17,8 @@ pub struct Lexer {
     start: usize,
     /// File ID for span tracking
     file_id: usize,
+    /// A digit after a projection dot is a tuple index, never a float.
+    after_dot: bool,
 }
 
 impl Lexer {
@@ -28,6 +30,7 @@ impl Lexer {
             pos: 0,
             start: 0,
             file_id,
+            after_dot: false,
         }
     }
     
@@ -171,7 +174,7 @@ impl Lexer {
         }
         
         // Check for decimal point
-        if self.peek() == Some('.') && self.peek_next().map_or(false, |c| c.is_ascii_digit()) {
+        if !self.after_dot && self.peek() == Some('.') && self.peek_next().map_or(false, |c| c.is_ascii_digit()) {
             is_float = true;
             self.advance(); // consume '.'
             
@@ -185,7 +188,7 @@ impl Lexer {
         }
         
         // Check for exponent
-        if matches!(self.peek(), Some('e') | Some('E')) {
+        if !self.after_dot && matches!(self.peek(), Some('e') | Some('E')) {
             is_float = true;
             self.advance();
             
@@ -323,6 +326,12 @@ impl Lexer {
     
     /// Get the next token
     pub fn next_token(&mut self) -> Token {
+        let token = self.next_token_inner();
+        self.after_dot = token.kind == TokenKind::Dot;
+        token
+    }
+
+    fn next_token_inner(&mut self) -> Token {
         if let Some(error) = self.skip_whitespace() { return error; }
         self.start = self.pos;
         
@@ -508,6 +517,13 @@ impl Lexer {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tuple_projections_do_not_lex_as_floats() {
+        use super::*;
+        let tokens = Lexer::new("pair.0.1 + 0.1 + pair.1.0", 0).tokenize();
+        let kinds: Vec<_> = tokens.into_iter().map(|token| token.kind).collect();
+        assert_eq!(kinds, vec![TokenKind::Ident("pair".into()), TokenKind::Dot, TokenKind::IntLit(0), TokenKind::Dot, TokenKind::IntLit(1), TokenKind::Plus, TokenKind::FloatLit(0.1), TokenKind::Plus, TokenKind::Ident("pair".into()), TokenKind::Dot, TokenKind::IntLit(1), TokenKind::Dot, TokenKind::IntLit(0), TokenKind::Eof]);
+    }
     use super::*;
     
     #[test]

@@ -265,6 +265,9 @@ impl SemanticAnalyzer {
 
 impl SemanticAnalyzer {
     fn initializer_fields(&self, ty: &ResolvedType, span: Span) -> Result<Vec<(String, ResolvedType)>> {
+        if let ResolvedType::Tuple(elements) = ty {
+            return Ok(elements.iter().enumerate().map(|(i, ty)| (i.to_string(), ty.clone())).collect());
+        }
         let ResolvedType::Struct { name, .. } = ty else { return Err(Self::constant_error("aggregate initializer needs a nominal type", span)); };
         match self.symbols.lookup(name).map(|symbol| &symbol.kind) {
             Some(SymbolKind::Struct { fields, .. }) => Ok(fields.clone()),
@@ -291,6 +294,11 @@ impl SemanticAnalyzer {
         Ok(match ty {
             ResolvedType::Primitive(_) | ResolvedType::Pointer(_) => true,
             ResolvedType::Array { elem, .. } => self.zero_initialized_type(elem, span)?,
+            ResolvedType::Tuple(elements) => {
+                let mut valid = true;
+                for element in elements { valid &= self.zero_initialized_type(element, span)?; }
+                valid
+            }
             ResolvedType::Struct { name, .. } if self.facts.unions.contains(name) => true,
             ResolvedType::Struct { .. } => {
                 let mut valid = true;
@@ -331,6 +339,13 @@ impl SemanticAnalyzer {
     fn evaluate_initializer(&mut self, expr: &Expr, expected: &ResolvedType) -> Result<TypedInitializer> {
         let value = match expr {
             Expr::Tuple { elements, .. } if elements.is_empty() => InitializerValue::Zero,
+            Expr::Tuple { elements, span } => {
+                let ResolvedType::Tuple(types) = expected else { return Err(Self::constant_error("tuple initializer type", *span)); };
+                if elements.len() != types.len() { return Err(Self::constant_error("tuple initializer length", *span)); }
+                InitializerValue::Aggregate(elements.iter().zip(types).enumerate()
+                    .map(|(i, (value, ty))| self.evaluate_initializer(value, ty).map(|value| (i, value)))
+                    .collect::<Result<_>>()?)
+            }
             Expr::Array { elements, span } => {
                 let ResolvedType::Array { elem, size } = expected else { return Err(Self::constant_error("array initializer type", *span)); };
                 if elements.len() != *size { return Err(Self::constant_error("array initializer length", *span)); }

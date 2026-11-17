@@ -931,26 +931,10 @@ impl Specializer {
                 }
                 Ok(Some(Type::Unit(span)))
             }
-            Expr::Closure {
-                params,
-                ret_type,
-                body,
-                ..
-            } => {
-                let saved = self.locals.clone();
-                for p in params.iter_mut() {
-                    if let Some(t) = &mut p.ty {
-                        *t = self.ty(t, &self.bindings.clone())?;
-                        self.locals.insert(p.name.name.clone(), t.clone());
-                    }
-                }
-                if let Some(t) = ret_type {
-                    *t = self.ty(t, &self.bindings.clone())?;
-                }
-                self.expr(body, ret_type.as_ref())?;
-                self.locals = saved;
-                Ok(None)
-            }
+            Expr::Closure { span, .. } => Err(Error::Semantic {
+                code: "E2403", span: *span,
+                message: "closures are not implemented; use a named function with explicit parameters".into(),
+            }),
         }
     }
 
@@ -1176,6 +1160,11 @@ impl Specializer {
     }
 
     fn field_type(&self, source: &Type, field: &str) -> Option<Type> {
+        match source {
+            Type::Tuple(elements, _) => return elements.get(field.parse::<usize>().ok()?).cloned(),
+            Type::Pointer(inner, _) | Type::Volatile(inner, _) | Type::Ref { inner, .. } => return self.field_type(inner, field),
+            _ => {}
+        }
         let name = nominal_name(source)?;
         self.structs
             .get(name)?

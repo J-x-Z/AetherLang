@@ -776,6 +776,10 @@ impl Parser {
             return Ok(Type::Named(ty_name, start.merge(&self.tokens[self.pos.saturating_sub(1)].span)));
         }
 
+        if self.check(&TokenKind::Fn) {
+            return Err(Error::Semantic { code: "E2403", span: self.current().span,
+                message: "function value types and closures are not implemented; use a direct named call".into() });
+        }
         Err(Error::ExpectedType { span: self.current().span })
     }
 
@@ -1142,7 +1146,7 @@ impl Parser {
                 self.advance();
                 if self.check(&TokenKind::RParen) {
                     self.advance();
-                    return Ok(Expr::Tuple {
+                    return self.parse_postfix(Expr::Tuple {
                         elements: Vec::new(),
                         span: token.span.merge(&self.tokens[self.pos.saturating_sub(1)].span),
                     });
@@ -1161,7 +1165,7 @@ impl Parser {
                         }
                     }
                     self.expect(TokenKind::RParen)?;
-                    return Ok(Expr::Tuple {
+                    return self.parse_postfix(Expr::Tuple {
                         elements,
                         span: token.span.merge(&self.tokens[self.pos.saturating_sub(1)].span),
                     });
@@ -1443,6 +1447,13 @@ impl Parser {
             if self.consume(&TokenKind::LParen) {
                 expr = self.parse_call_rest(expr)?;
             } else if self.consume(&TokenKind::Dot) {
+                if let TokenKind::IntLit(index) = self.current_kind() {
+                    let field = Ident { name: index.to_string(), span: self.current().span };
+                    self.advance();
+                    expr = Expr::Field { span: expr.span().merge(&field.span), expr: Box::new(expr), field };
+                    self.limits.expression(&expr)?;
+                    continue;
+                }
                 let field = self.parse_ident()?;
                 if self.consume(&TokenKind::LParen) {
                     // Method call

@@ -580,6 +580,9 @@ impl<'a> Flow<'a> {
             ResolvedType::Array { elem, size } => (0..*size).all(|index| {
                 self.initialized(&init.at(&[Projection::Index(Some(index as i64))]), elem)
             }),
+            ResolvedType::Tuple(elements) => elements.iter().enumerate().all(|(index, ty)| {
+                self.initialized(&init.at(&[Projection::Index(Some(index as i64))]), ty)
+            }),
             _ => init.default && init.children.values().all(|child| child.default),
         }
     }
@@ -981,6 +984,23 @@ impl<'a> Flow<'a> {
         for outer in &self.protected_live {
             identities.extend(outer.iter().copied());
         }
+        // A binding remains live when a live reference points into it, even
+        // if its source name never appears again (e.g. `outer: &&Tuple`).
+        // Follow declaration identities to a finite fixed point before
+        // dropping loan provenance; textual liveness alone loses origins.
+        let mut pending: Vec<_> = identities.iter().copied().collect();
+        while let Some(id) = pending.pop() {
+            if let Some(slot) = self.state.slots.get(&id) {
+                for reference in &slot.value.references {
+                    if let Root::Local(target) = reference.target.root {
+                        if identities.insert(target) { pending.push(target); }
+                    }
+                    for ancestor in &reference.ancestors {
+                        if identities.insert(*ancestor) { pending.push(*ancestor); }
+                    }
+                }
+            }
+        }
         for (id, slot) in &mut self.state.slots {
             if !identities.contains(id) {
                 slot.value.references.clear();
@@ -1207,7 +1227,9 @@ impl<'a> Flow<'a> {
                     let value = self.read(&base, false, expr.span())?;
                     base = self.indirect(value, expr.span())?;
                 }
-                let field = Projection::Field(field.name.clone());
+                let field = if matches!(base.ty.unqualified(), ResolvedType::Tuple(_)) {
+                    Projection::Index(field.name.parse::<i64>().ok())
+                } else { Projection::Field(field.name.clone()) };
                 base.ty = self.child_type(&base.ty, &field);
                 base.place.path.push(field.clone());
                 for alternative in &mut base.alternatives {
@@ -1320,6 +1342,30 @@ impl<'a> Flow<'a> {
         }
         Ok(())
     }
+    /// A projection of an aggregate temporary reads a value, not borrowed
+    /// storage. Preserve the existing place path for locals and references.
+    fn projection_type(&self, expression: &Expr) -> Option<&ResolvedType> {
+        let key = (self.function_key.clone(), expression.span());
+        self.analyzer.facts.expr_types.get(&key)
+            .or_else(|| self.analyzer.facts.places.get(&key).map(|place| &place.ty))
+    }
+
+    fn has_storage(&self, expression: &Expr) -> bool {
+        match expression {
+            Expr::Ident(_) | Expr::Deref { .. } => true,
+            Expr::Field { expr, .. } | Expr::Index { expr, .. } => {
+                self.has_storage(expr) || self.projection_type(expr)
+                    .is_some_and(|ty| matches!(ty.unqualified(), ResolvedType::Pointer(_) | ResolvedType::Reference { .. }))
+            }
+            _ => false,
+        }
+    }
+
+    fn value_aggregate(&self, expression: &Expr) -> bool {
+        !self.has_storage(expression) && self.projection_type(expression)
+            .is_some_and(|ty| matches!(ty.unqualified(), ResolvedType::Tuple(_) | ResolvedType::Struct { .. } | ResolvedType::Array { .. }))
+    }
+
     fn expr(
         &mut self,
         expression: &Expr,
@@ -1336,6 +1382,25 @@ impl<'a> Flow<'a> {
                     .map(|symbol| symbol.ty.clone())
                     .unwrap_or(ResolvedType::Unknown),
             ),
+            Expr::Field { expr, field, .. } if self.value_aggregate(expr) => {
+                let Some(base) = self.expr(expr, consume, live)? else { return Ok(None); };
+                let projection = if matches!(base.ty.unqualified(), ResolvedType::Tuple(_)) {
+                    Projection::Index(field.name.parse::<i64>().ok())
+                } else { Projection::Field(field.name.clone()) };
+                let ty = self.child_type(&base.ty, &projection);
+                self.project_value(&base, &[projection], ty)
+            }
+            Expr::Index { expr, index, .. } if self.value_aggregate(expr) => {
+                let Some(base) = self.expr(expr, consume, live)? else { return Ok(None); };
+                let temporaries = self.temporary_loans.len();
+                self.hold_temporary(&base, expr.span())?;
+                let index_value = self.expr(index, false, live)?;
+                self.temporary_loans.truncate(temporaries);
+                if index_value.is_none() { return Ok(None); }
+                let projection = Projection::Index(if let Expr::Literal(Literal::Int(index, _)) = &**index { i64::try_from(*index).ok() } else { None });
+                let ty = self.child_type(&base.ty, &projection);
+                self.project_value(&base, &[projection], ty)
+            }
             Expr::Ident(_) | Expr::Deref { .. } | Expr::Field { .. } | Expr::Index { .. } => {
                 let Some(address) = self.address(expression, live)? else {
                     return Ok(None);

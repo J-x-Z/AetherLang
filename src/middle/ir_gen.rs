@@ -26,6 +26,8 @@ mod simd;
 mod methods;
 #[path = "ir_contracts.rs"]
 mod contracts;
+#[path = "ir_tuple.rs"]
+mod tuples;
 
 /// IR Generator
 pub struct IRGenerator {
@@ -55,6 +57,8 @@ pub struct IRGenerator {
     function_parameters: HashMap<String, Vec<IRType>>,
     global_types: HashMap<String, IRType>,
     return_contracts: contracts::ReturnContracts,
+    /// Layout cache is populated by immutable type conversion as well as values.
+    tuple_layouts: std::cell::RefCell<std::collections::BTreeMap<String, Vec<IRType>>>,
 }
 
 impl IRGenerator {
@@ -76,6 +80,7 @@ impl IRGenerator {
             function_parameters: HashMap::new(),
             global_types: HashMap::new(),
             return_contracts: contracts::ReturnContracts::default(),
+            tuple_layouts: std::cell::RefCell::new(std::collections::BTreeMap::new()),
         }
     }
 
@@ -87,6 +92,7 @@ impl IRGenerator {
 
     /// Generate IR for a program
     pub fn generate(&mut self, program: &Program) -> Result<IRModule> {
+        self.register_resolved_tuple_layouts()?;
         if let Some(facts) = self.semantic_facts.clone() {
             for (name, ty) in facts.aliases {
                 self.resolved_aliases.insert(name, Self::resolved_type_to_ir(&ty)?);
@@ -134,6 +140,7 @@ impl IRGenerator {
             if !matches!(item, Item::Struct(_) | Item::Union(_) | Item::Static(_) | Item::Enum(_) | Item::Extern(_)) { self.generate_item(item)?; }
         }
         self.coalesce_defined_externs()?;
+        self.finish_tuple_layouts()?;
         self.order_struct_layouts()?;
         Ok(self.module.clone())
     }
@@ -993,8 +1000,10 @@ impl IRGenerator {
             Expr::Match { expr, arms, .. } => self.generate_match_value(expr, arms),
 
             Expr::Array { elements, .. } => self.generate_array(elements, None),
-            Expr::Tuple { elements, .. } if elements.is_empty() => Ok(Value::Unit),
-            Expr::Tuple { .. } => Err(crate::utils::Error::CodeGen("tuple values are not implemented".into())),
+            Expr::Tuple { elements, .. } => {
+                let expected = self.checked_expr_type(expr).map(Self::resolved_type_to_ir).transpose()?;
+                self.generate_tuple(elements, expected.as_ref())
+            }
 
             Expr::MethodCall { expr: receiver, args, span, .. } => self.generate_method_call(receiver, args, *span),
             Expr::Ref { expr: inner, .. } => {
@@ -1072,6 +1081,9 @@ impl IRGenerator {
     }
 
     fn generate_expr_expected(&mut self, expr: &Expr, expected: Option<&IRType>) -> Result<Value> {
+        if let Expr::Tuple { elements, .. } = expr {
+            if expected.is_some() { return self.generate_tuple(elements, expected); }
+        }
         if let (Expr::Array { elements, .. }, Some(IRType::Array(element, size))) = (expr, expected) {
             if elements.len() != *size { return Err(crate::utils::Error::CodeGen("array length mismatch".into())); }
             return self.generate_array(elements, Some((**element).clone()));
@@ -1192,8 +1204,11 @@ impl IRGenerator {
                     IRType::Struct(name) => name,
                     _ => return Err(crate::utils::Error::CodeGen("field access requires a struct".into())),
                 };
-                let (index, ty) = self.struct_defs.get(&name)
-                    .and_then(|fields| fields.iter().enumerate().find(|(_, (n, _))| *n == field.name))
+                let tuple_fields = self.tuple_fields(&name);
+                let fields = tuple_fields.as_ref().or_else(|| self.struct_defs.get(&name));
+                let requested = if tuple_fields.is_some() { format!("_{}", field.name) } else { field.name.clone() };
+                let (index, ty) = fields
+                    .and_then(|fields| fields.iter().enumerate().find(|(_, (n, _))| *n == requested))
                     .map(|(index, (_, ty))| (index, ty.clone()))
                     .ok_or_else(|| crate::utils::Error::UnknownField { span: field.span, field: field.name.clone() })?;
                 let ty = if volatile { IRType::Volatile(Box::new(ty)) } else { ty };
@@ -1511,6 +1526,7 @@ impl IRGenerator {
             ResolvedType::Vector(inner, lanes) => IRType::Vector(Box::new(Self::resolved_type_to_ir(inner)?), *lanes),
             ResolvedType::Function { params, ret } => IRType::Function { params: params.iter().map(Self::resolved_type_to_ir).collect::<Result<_>>()?, ret: Box::new(Self::resolved_type_to_ir(ret)?) },
             ResolvedType::Tuple(elements) if elements.is_empty() => IRType::Unit,
+            ResolvedType::Tuple(elements) => Self::tuple_ir_type(&elements.iter().map(Self::resolved_type_to_ir).collect::<Result<Vec<_>>>()?),
             _ => return Err(crate::utils::Error::CodeGen(format!("lowering resolved type {:?} is not implemented", ty))),
         })
     }
@@ -1595,7 +1611,7 @@ impl IRGenerator {
                 if elements.is_empty() {
                     IRType::Unit // Unit tuple ()
                 } else {
-                    IRType::Void // TODO: proper tuple support
+                    self.record_tuple_layout(elements.iter().map(|ty| self.ast_type_to_ir(ty)).collect())
                 }
             }
             AstType::Unit(_) => IRType::Unit,
@@ -1722,13 +1738,16 @@ mod tests {
 
     #[test]
     fn tuple_values_are_not_lowered_to_unit() {
-        let error = generate("fn f() { (1, 2); }").unwrap_err();
-        assert!(error.to_string().contains("tuple values"));
+        let module = generate("fn f() -> (i64, i64) { (1, 2) }").unwrap();
+        let function = module.functions.iter().find(|function| function.name == "f").unwrap();
+        let IRType::Struct(name) = &function.ret_type else { panic!("tuple lost its aggregate type") };
+        let layout = module.structs.iter().find(|layout| layout.name == *name).unwrap();
+        assert_eq!(layout.fields, vec![("_0".into(), IRType::I64), ("_1".into(), IRType::I64)]);
     }
 
     #[test]
     fn closures_are_not_silently_emitted_without_capture_or_call_support() {
-        // The parser currently rejects closure syntax; guard the separate AST
+        // Semantic analysis rejects closure values; guard the separate AST
         // lowering entry as well so programmatically created ASTs cannot revive
         // the old placeholder closure implementation.
         let span = crate::utils::Span::dummy();
