@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -203,6 +204,30 @@ class RegistryTests(unittest.TestCase):
         error=self.invoke('fetch',expected=1).stderr;self.assertIn('conflicting exact versions',error)
         self.assertEqual(self.lock(),locked)
         self.invoke('update',expected=1);self.assertEqual(self.lock(),locked)
+
+    def test_failed_temporary_acquisition_preserves_user_paths(self):
+        self.package('common');self.package('common','2.0.0');self.project_manifest("common='1.0.0'")
+        library=self.folder/('temp-failure.dylib' if sys.platform=='darwin' else 'temp-failure.so')
+        command=[os.environ.get('CC','clang'),*(['-dynamiclib'] if sys.platform=='darwin' else ['-shared','-fPIC']),
+                 str(Path(__file__).with_name('registry_temp_failure.c')),'-o',str(library),
+                 *([] if sys.platform=='darwin' else ['-ldl'])]
+        built=subprocess.run(command,env=self.env,capture_output=True,text=True,timeout=30)
+        record(self._testMethodName+'/fault-library',command,built,0)
+        self.assertEqual(built.returncode,0,built.stderr)
+        key='DYLD_INSERT_LIBRARIES' if sys.platform=='darwin' else 'LD_PRELOAD'
+        lock_template=self.project/'.jxz-lock-XXXXXX';lock_template.write_bytes(b'user lock template\n')
+        self.invoke('fetch',expected=1,env={key:str(library),'JXZ_REGISTRY_TEMP_FAULT':'lock'})
+        self.assertEqual(lock_template.read_bytes(),b'user lock template\n')
+        self.assertFalse((self.project/'Jxz.lock').exists())
+        index_template=self.cache/'.jxz-index-XXXXXX';index_template.write_bytes(b'user index template\n')
+        self.project_manifest("common='2.0.0'")
+        self.invoke('fetch',expected=1,env={key:str(library),'JXZ_REGISTRY_TEMP_FAULT':'index'})
+        self.assertEqual(index_template.read_bytes(),b'user index template\n')
+        self.assertEqual(lock_template.read_bytes(),b'user lock template\n')
+        self.assertFalse((self.project/'Jxz.lock').exists())
+        self.invoke('fetch')
+        self.assertEqual(index_template.read_bytes(),b'user index template\n')
+        self.assertEqual(lock_template.read_bytes(),b'user lock template\n')
 
     def test_old_curl_fails_before_download(self):
         self.package('common');self.project_manifest("common='1.0.0'")
