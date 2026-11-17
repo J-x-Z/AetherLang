@@ -1,16 +1,16 @@
 //! Stdio LSP using the same resolver, checker, source maps and symbol index as CLI.
 use std::{collections::{BTreeMap, HashMap, HashSet}, io::{self, BufRead, Write}, path::{Path,PathBuf}};
 use serde_json::{json,Value};
-use crate::frontend::{resolve::Resolver, session::{Diagnostic,Location,Session}, symbols::SymbolIndex};
+use crate::frontend::{resolve::{ModuleSearch,Resolver}, session::{Diagnostic,Location,Session}, symbols::SymbolIndex};
 
 struct Document { text: String, version: i64 }
-struct Server { indexes: BTreeMap<PathBuf,SymbolIndex>, target: String, documents: BTreeMap<PathBuf,Document>, paths: Vec<PathBuf>, published: HashSet<String>, shutdown: bool }
+struct Server { indexes: BTreeMap<PathBuf,SymbolIndex>, target: String, documents: BTreeMap<PathBuf,Document>, search: ModuleSearch, published: HashSet<String>, shutdown: bool }
 
-pub fn serve(paths: Vec<PathBuf>, target: String) -> Result<(),String> {
+pub fn serve(search: ModuleSearch, target: String) -> Result<(),String> {
     crate::types::PointerWidth::for_target(&target)?;
     let stdin=io::stdin();let stdout=io::stdout();
     let mut input=stdin.lock();let mut output=stdout.lock();
-    let mut server=Server {indexes:BTreeMap::new(),target,documents:BTreeMap::new(),paths,published:HashSet::new(),shutdown:false};
+    let mut server=Server {indexes:BTreeMap::new(),target,documents:BTreeMap::new(),search,published:HashSet::new(),shutdown:false};
     while let Some(message)=read_message(&mut input)? {
         if message.get("method").and_then(Value::as_str)==Some("exit") { return if server.shutdown {Ok(())}else{Err("LSP exited without shutdown".into())}; }
         for reply in server.handle(message) {write_message(&mut output,&reply)?;}
@@ -64,7 +64,7 @@ fn byte_at(text:&str,pos:&Value)->usize{
 impl Server {
     fn session(&self,path:&Path)->Result<Session,Diagnostic>{
         let source=match self.documents.get(path){Some(doc)=>doc.text.clone(),None=>std::fs::read_to_string(path).map_err(|e|Diagnostic::message("E9001",e.to_string()))?};
-        Session::parse(path,source,self.paths.clone(),self.documents.iter().map(|(p,d)|(p.clone(),d.text.clone())).collect::<HashMap<_,_>>())
+        Session::parse(path,source,self.search.clone(),self.documents.iter().map(|(p,d)|(p.clone(),d.text.clone())).collect::<HashMap<_,_>>())
     }
     fn diagnostics(&mut self)->Vec<Value>{
         self.indexes.clear();
@@ -94,7 +94,7 @@ impl Server {
         if self.shutdown{return error(-32600,"server has shut down");}
         match method {
             "initialize"=>{
-                if let Some(path)=params["rootUri"].as_str().and_then(path_from_uri){self.paths.push(path);}
+                if let Some(path)=params["rootUri"].as_str().and_then(path_from_uri){self.search.paths.push(path);}
                 reply(json!({"capabilities":{"positionEncoding":"utf-16","textDocumentSync":{"openClose":true,"change":1},"hoverProvider":true,"definitionProvider":true,"referencesProvider":true,"documentSymbolProvider":true,"completionProvider":{"triggerCharacters":[":","."]}},"serverInfo":{"name":"aethc","version":env!("CARGO_PKG_VERSION")}}))
             }
             "initialized"|"$/cancelRequest"|"$/setTrace"=>vec![],

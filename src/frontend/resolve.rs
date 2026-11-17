@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use super::ast::*;
-use super::{lexer::Lexer, parser::Parser};
+use super::{lexer::Lexer, parser::Parser, token::TokenKind};
 use crate::utils::{Error, Result, Span};
 
 #[derive(Clone)]
@@ -20,9 +20,45 @@ struct Exports {
     modules: HashMap<String, Exports>,
 }
 
+/// Shared command-line/editor lookup. Exact bindings do not make their source
+/// directories global search roots for unrelated modules.
+#[derive(Clone, Default)]
+pub struct ModuleSearch {
+    pub paths: Vec<PathBuf>,
+    exact_modules: HashMap<String, PathBuf>,
+}
+
+impl ModuleSearch {
+    pub fn new(paths: Vec<PathBuf>) -> Self { Self { paths, exact_modules: HashMap::new() } }
+
+    pub fn add_module(&mut self, specification: &str) -> std::result::Result<(), String> {
+        let (name, filename) = specification.split_once('=')
+            .ok_or_else(|| format!("invalid --module '{specification}'; expected NAME=FILE"))?;
+        let tokens = Lexer::new(name, 0).tokenize();
+        if tokens.len() != 2 || !matches!(&tokens[0].kind, TokenKind::Ident(identifier) if identifier == name)
+            || tokens[0].span.start != 0 || tokens[0].span.end != name.len()
+            || !matches!(tokens[1].kind, TokenKind::Eof) {
+            return Err(format!("invalid module name '{name}'; expected one language identifier"));
+        }
+        if self.exact_modules.contains_key(name) { return Err(format!("duplicate explicit module '{name}'")); }
+        if filename.is_empty() { return Err(format!("explicit module '{name}' requires a source file")); }
+        let file = Path::new(filename);
+        if file.extension().is_none_or(|extension| extension != "aeth") {
+            return Err(format!("explicit module '{name}' requires an exact .aeth source file"));
+        }
+        let path = std::fs::canonicalize(file)
+            .map_err(|error| format!("explicit module '{name}': {}: {error}", file.display()))?;
+        if !path.is_file() || path.extension().is_none_or(|extension| extension != "aeth") {
+            return Err(format!("explicit module '{name}' requires an exact .aeth source file: {}", path.display()));
+        }
+        self.exact_modules.insert(name.into(), path);
+        Ok(())
+    }
+}
+
 pub struct Resolver {
     pub sources: Vec<SourceFile>,
-    search_paths: Vec<PathBuf>,
+    search: ModuleSearch,
     loaded: HashMap<PathBuf, Exports>,
     loading: Vec<PathBuf>,
     items: Vec<Item>,
@@ -33,8 +69,8 @@ pub struct Resolver {
 }
 
 impl Resolver {
-    pub fn new(search_paths: Vec<PathBuf>) -> Self {
-        Self { sources: vec![], search_paths, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, module_owners: HashMap::new(), entrypoint_enabled: true, overlays: HashMap::new() }
+    pub fn new(search: ModuleSearch) -> Self {
+        Self { sources: vec![], search, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, module_owners: HashMap::new(), entrypoint_enabled: true, overlays: HashMap::new() }
     }
 
     pub fn with_overlays(mut self, overlays: HashMap<PathBuf, String>) -> Self {
@@ -96,7 +132,16 @@ impl Resolver {
     }
 
     fn find(&self, dir: &Path, name: &str) -> Result<PathBuf> {
-        for base in std::iter::once(dir).chain(self.search_paths.iter().map(PathBuf::as_path)) {
+        if let Some(mapped) = self.search.exact_modules.get(name) {
+            for local in [dir.join(format!("{name}.aeth")), dir.join(name).join("mod.aeth")] {
+                let canonical = Self::source_path(&local);
+                if (local.is_file() || self.overlays.contains_key(&canonical)) && &canonical != mapped {
+                    return Err(Error::ModuleError(format!("explicit module '{name}' ({}) conflicts with local module {}", mapped.display(), canonical.display())));
+                }
+            }
+            return Ok(mapped.clone());
+        }
+        for base in std::iter::once(dir).chain(self.search.paths.iter().map(PathBuf::as_path)) {
             for candidate in [base.join(format!("{name}.aeth")), base.join(name).join("mod.aeth")] {
                 if candidate.is_file() || self.overlays.contains_key(&Self::source_path(&candidate)) { return Ok(candidate); }
             }
@@ -143,6 +188,9 @@ impl Resolver {
         for item in &items {
             if let Item::Module(module) = item {
                 let child = if let Some(body) = &module.items {
+                    if self.search.exact_modules.contains_key(&module.name.name) {
+                        return Err(Error::ModuleError(format!("explicit module '{}' conflicts with inline module in {}", module.name.name, path.display())));
+                    }
                     self.expand(body.clone(), path, false)?
                 } else {
                     self.load(self.find(dir, &module.name.name)?)?

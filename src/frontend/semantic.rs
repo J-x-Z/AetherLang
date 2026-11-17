@@ -9,7 +9,6 @@
 
 use std::collections::{HashMap, HashSet};
 use crate::frontend::ast::*;
-use crate::frontend::module::ModuleLoader;
 use crate::types::*;
 use crate::types::type_system::ConstBinOp;
 use crate::utils::{Span, Error, Result};
@@ -161,220 +160,6 @@ impl Default for SymbolTable {
     }
 }
 
-// ==================== Module System ====================
-
-use std::path::PathBuf;
-
-/// Module search paths for resolving use statements
-pub struct ModuleResolver {
-    /// Paths to search for modules
-    search_paths: Vec<PathBuf>,
-    /// Cached module symbols by module name
-    cached_modules: HashMap<String, Vec<Symbol>>,
-    /// Module loader for parsing modules
-    loader: ModuleLoader,
-}
-
-impl ModuleResolver {
-    pub fn new() -> Self {
-        Self {
-            search_paths: vec![
-                PathBuf::from("."),
-                PathBuf::from("src_aether"),
-                PathBuf::from("stdlib"),
-            ],
-            cached_modules: HashMap::new(),
-            loader: ModuleLoader::new(),
-        }
-    }
-    
-    /// Find module file by name
-    pub fn find_module(&self, name: &str) -> Option<PathBuf> {
-        self.loader.find_module_file(name)
-    }
-    
-    /// Load a module and return its public items as symbols
-    pub fn load_module_symbols(&mut self, module_name: &str, span: Span) -> Result<Vec<(String, Symbol)>> {
-        // Check cache first
-        if let Some(cached) = self.cached_modules.get(module_name) {
-            return Ok(cached.iter().map(|s| (s.name.clone(), s.clone())).collect());
-        }
-        
-        // Load and parse the module
-        let parsed = self.loader.load_module(module_name)?;
-        
-        // Clone the items to avoid borrow conflict
-        let items: Vec<Item> = parsed.items.clone();
-        
-        // Convert public items to symbols
-        let mut symbols = Vec::new();
-        for item in &items {
-            if Self::is_item_public(&item) {
-                if let Some(symbol) = self.item_to_symbol(&item, span) {
-                    symbols.push(symbol);
-                }
-            }
-
-            // Also extract associated functions from impl blocks
-            if let Item::Impl(impl_block) = item {
-                let type_name = impl_block.target.name.clone();
-
-                for method in &impl_block.methods {
-                    if method.is_pub {
-                        let params: Vec<ResolvedType> = method.params.iter()
-                            .map(|p| self.ast_type_to_resolved(&p.ty))
-                            .collect();
-                        let ret = method.ret_type.as_ref()
-                            .map(|t| self.ast_type_to_resolved(t))
-                            .unwrap_or(ResolvedType::unit());
-
-                        // Register as Type::method (e.g., IRGenerator::new)
-                        let qualified_name = format!("{}::{}", type_name, method.name.name);
-                        symbols.push(Symbol {
-                            name: qualified_name,
-                            kind: SymbolKind::Function {
-                                params: params.clone(),
-                                ret: ret.clone(),
-                                type_params: vec![],
-                                const_params: vec![],
-                                effects: EffectSet::default()
-                            },
-                            ty: ResolvedType::Function { params, ret: Box::new(ret) },
-                            span,
-                            mutable: false,
-                        });
-                    }
-                }
-            }
-        }
-        
-        // Cache the symbols
-        self.cached_modules.insert(module_name.to_string(), symbols.clone());
-        
-        Ok(symbols.iter().map(|s| (s.name.clone(), s.clone())).collect())
-    }
-    
-    /// Check if an item is public
-    fn is_item_public(item: &Item) -> bool {
-        match item {
-            Item::Function(f) => f.is_pub,
-            Item::Struct(s) => s.is_pub,
-            Item::Enum(_) => true,
-            Item::Const(_) => true,
-            _ => false,
-        }
-    }
-
-    
-    /// Convert an AST item to a symbol
-    fn item_to_symbol(&self, item: &Item, span: Span) -> Option<Symbol> {
-        match item {
-            Item::Function(f) => {
-                let params: Vec<ResolvedType> = f.params.iter()
-                    .map(|p| self.ast_type_to_resolved(&p.ty))
-                    .collect();
-                let ret = f.ret_type.as_ref()
-                    .map(|t| self.ast_type_to_resolved(t))
-                    .unwrap_or(ResolvedType::unit());
-                Some(Symbol {
-                    name: f.name.name.clone(),
-                    kind: SymbolKind::Function { params: params.clone(), ret: ret.clone(), type_params: vec![], const_params: vec![], effects: EffectSet::default() },
-                    ty: ResolvedType::Function { params, ret: Box::new(ret) },
-                    span,
-                    mutable: false,
-                })
-            }
-            Item::Struct(s) => {
-                let fields: Vec<(String, ResolvedType)> = s.fields.iter()
-                    .map(|f| (f.name.name.clone(), self.ast_type_to_resolved(&f.ty)))
-                    .collect();
-                Some(Symbol {
-                    name: s.name.name.clone(),
-                    kind: SymbolKind::Struct { fields: fields.clone(), type_params: vec![], const_params: vec![] },
-                    ty: ResolvedType::Struct { name: s.name.name.clone(), fields },
-                    span,
-                    mutable: false,
-                })
-            }
-            Item::Enum(e) => {
-                let variants: Vec<String> = e.variants.iter()
-                    .map(|v| v.name.name.clone())
-                    .collect();
-                Some(Symbol {
-                    name: e.name.name.clone(),
-                    kind: SymbolKind::Enum { variants, type_params: vec![], const_params: vec![] },
-                    ty: ResolvedType::Enum { name: e.name.name.clone() },
-                    span,
-                    mutable: false,
-                })
-            }
-            Item::Const(c) => {
-                let ty = c.ty.as_ref()
-                    .map(|t| self.ast_type_to_resolved(t))
-                    .unwrap_or(ResolvedType::Unknown);
-                Some(Symbol {
-                    name: c.name.name.clone(),
-                    kind: SymbolKind::Variable,
-                    ty,
-                    span,
-                    mutable: false,
-                })
-            }
-            _ => None,
-        }
-    }
-    
-    /// Convert AST type to resolved type (simplified)
-    fn ast_type_to_resolved(&self, ty: &Type) -> ResolvedType {
-        match ty {
-            Type::Named(name, _) => {
-                match name.as_str() {
-                    "i8" => ResolvedType::Primitive(PrimitiveType::I8),
-                    "i16" => ResolvedType::Primitive(PrimitiveType::I16),
-                    "i32" => ResolvedType::Primitive(PrimitiveType::I32),
-                    "i64" => ResolvedType::Primitive(PrimitiveType::I64),
-                    "u8" => ResolvedType::Primitive(PrimitiveType::U8),
-                    "u16" => ResolvedType::Primitive(PrimitiveType::U16),
-                    "u32" => ResolvedType::Primitive(PrimitiveType::U32),
-                    "u64" => ResolvedType::Primitive(PrimitiveType::U64),
-                    "f32" => ResolvedType::Primitive(PrimitiveType::F32),
-                    "f64" => ResolvedType::Primitive(PrimitiveType::F64),
-                    "bool" => ResolvedType::Primitive(PrimitiveType::Bool),
-                    "void" => ResolvedType::UNIT,
-                    // SIMD vector types
-                    "f32x4" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 4),
-                    "f32x8" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F32)), 8),
-                    "f64x2" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 2),
-                    "f64x4" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::F64)), 4),
-                    "i32x4" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 4),
-                    "i32x8" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I32)), 8),
-                    "i64x2" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I64)), 2),
-                    "i64x4" => ResolvedType::Vector(Box::new(ResolvedType::Primitive(PrimitiveType::I64)), 4),
-                    _ => ResolvedType::Struct { name: name.clone(), fields: vec![] },
-                }
-            }
-            Type::Pointer(inner, _) => {
-                ResolvedType::Pointer(Box::new(self.ast_type_to_resolved(inner)))
-            }
-            Type::Ref { mutable, inner, .. } => {
-                ResolvedType::Reference {
-                    mutable: *mutable,
-                    inner: Box::new(self.ast_type_to_resolved(inner)),
-                }
-            }
-            Type::Array { elem, size, .. } => {
-                ResolvedType::Array {
-                    elem: Box::new(self.ast_type_to_resolved(elem)),
-                    size: *size,
-                }
-            }
-            Type::Unit(_) => ResolvedType::UNIT,
-            Type::Never(_) => ResolvedType::never(),
-            _ => ResolvedType::Unknown,
-        }
-    }
-}
-
 // ==================== Semantic Analyzer ====================
 
 /// Semantic analyzer
@@ -404,10 +189,6 @@ pub struct SemanticAnalyzer {
     system_target: String,
     /// Whether we're in strict mode (@production) or lenient mode (@prototype)
     strict_mode: bool,
-    /// Module resolver for use statements
-    module_resolver: ModuleResolver,
-    /// Imported modules: module_name -> Vec<(symbol_name, Symbol)>
-    pub imported_modules: HashMap<String, Vec<(String, Symbol)>>,
 }
 
 impl SemanticAnalyzer {
@@ -438,8 +219,6 @@ impl SemanticAnalyzer {
             check_entrypoint: true,
             system_target: "native".into(),
             strict_mode: false, // Default: lenient mode
-            module_resolver: ModuleResolver::new(),
-            imported_modules: HashMap::new(),
         };
         analyzer.register_builtins();
         analyzer
@@ -464,41 +243,11 @@ impl SemanticAnalyzer {
             self.define_builtin_with_effects(name, spec.params(), spec.result(),
                 EffectSet { is_pure: false, effects: vec![Effect::Read] });
         }
-        // Create effect sets for builtins
-        let io_effects = EffectSet { is_pure: false, effects: vec![Effect::IO] };
-        let alloc_effects = EffectSet { is_pure: false, effects: vec![Effect::Alloc] };
-        let panic_effects = EffectSet { is_pure: false, effects: vec![Effect::Panic] };
+        for name in crate::intrinsics::host_builtin_names() {
+            let builtin = crate::intrinsics::host_builtin(name).expect("host builtin inventory");
+            self.define_builtin_with_effects(name, builtin.params(self.facts.pointer_width), builtin.result(), builtin.effects());
+        }
 
-        // I/O functions - require effect[io]
-        self.define_builtin_with_effects("print", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], ResolvedType::unit(), io_effects.clone());
-        self.define_builtin_with_effects("println", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], ResolvedType::unit(), io_effects.clone());
-        self.define_builtin_with_effects("puts", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))], ResolvedType::I32, io_effects.clone());
-        self.define_builtin_with_effects("print_i64", vec![ResolvedType::I64], ResolvedType::unit(), io_effects.clone());
-        self.define_builtin_with_effects("println_i64", vec![ResolvedType::I64], ResolvedType::unit(), io_effects.clone());
-
-        // Memory functions - require effect[alloc]
-        self.define_builtin_with_effects("alloc", vec![ResolvedType::U64],
-            ResolvedType::Pointer(Box::new(ResolvedType::U8)), alloc_effects.clone());
-        self.define_builtin_with_effects("malloc", vec![ResolvedType::U64],
-            ResolvedType::Pointer(Box::new(ResolvedType::U8)), alloc_effects.clone());
-        self.define_builtin_with_effects("free",
-            vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))],
-            ResolvedType::unit(), alloc_effects.clone());
-
-        // C library functions for self-hosting (pure - no side effects)
-        self.define_builtin("atof", vec![ResolvedType::Pointer(Box::new(ResolvedType::U8))],
-            ResolvedType::F64);
-        self.define_builtin("strcmp", vec![
-            ResolvedType::Pointer(Box::new(ResolvedType::U8)),
-            ResolvedType::Pointer(Box::new(ResolvedType::U8)),
-        ], ResolvedType::I32);
-
-        // Process control - require effect[panic] (never returns)
-        self.define_builtin_with_effects("exit", vec![ResolvedType::I32], ResolvedType::never(), panic_effects.clone());
-
-        // Debug - require effect[panic]
-        self.define_builtin_with_effects("assert", vec![ResolvedType::BOOL], ResolvedType::UNIT, panic_effects.clone());
-        
         self.register_vector_intrinsics();
     }
     
@@ -976,208 +725,14 @@ impl SemanticAnalyzer {
                     mutable: false,
                 })?;
             }
-            Item::Use(use_decl) => {
-                // Resolve use declaration by loading module symbols
-                self.resolve_use_decl(use_decl)?;
+            Item::Use(declaration) => {
+                return Err(Error::Semantic { code: "E2000", message: "unresolved import reached semantic analysis; resolve modules before checking".into(), span: declaration.span });
             }
             _ => {} // Impl and Interface handled separately
         }
         Ok(())
     }
     
-    /// Resolve a use declaration by importing symbols from the target module
-    fn resolve_use_decl(&mut self, use_decl: &UseDecl) -> Result<()> {
-        // Get module name from path (first segment)
-        if use_decl.path.is_empty() {
-            return Ok(());
-        }
-        
-        let module_name = use_decl.path[0].name.clone();
-        
-        // Check if already imported
-        if self.imported_modules.contains_key(&module_name) {
-            return Ok(());
-        }
-        
-        // Try to load the actual module file
-        if self.module_resolver.find_module(&module_name).is_some() {
-            // Load module and get symbols
-            match self.module_resolver.load_module_symbols(&module_name, use_decl.span) {
-                Ok(symbols) => {
-                    // Store in imported_modules for qualified name lookup
-                    self.imported_modules.insert(module_name.clone(), symbols.clone());
-
-                    // Register symbols for both qualified and simple name lookup
-                    for (name, symbol) in &symbols {
-                        // Register simple name (e.g., "Span") for direct use
-                        let _ = self.symbols.define(symbol.clone());
-
-                        // Also register qualified name (e.g., "span::Span")
-                        let qualified_name = format!("{}::{}", module_name, name);
-                        let mut qualified_symbol = symbol.clone();
-                        qualified_symbol.name = qualified_name;
-                        let _ = self.symbols.define(qualified_symbol);
-                    }
-                    return Ok(());
-                }
-                Err(_) => {
-                    // Fall back to placeholders
-                }
-            }
-        }
-        
-        // Module not found or failed to load - register placeholders for self-hosting
-        self.register_module_placeholder(&module_name, use_decl)?;
-        
-        Ok(())
-    }
-    
-    /// Register placeholder symbols from a module
-    fn register_module_placeholder(&mut self, module_name: &str, use_decl: &UseDecl) -> Result<()> {
-        // Handle common self-hosting module types
-        match module_name {
-            "span" => {
-                // Register Span struct
-                self.symbols.define(Symbol {
-                    name: "Span".to_string(),
-                    kind: SymbolKind::Struct {
-                        fields: vec![
-                            ("file_id".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                            ("start".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                            ("end".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                        ],
-                        type_params: vec![],
-                        const_params: vec![],
-                    },
-                    ty: ResolvedType::Struct {
-                        name: "Span".to_string(),
-                        fields: vec![
-                            ("file_id".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                            ("start".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                            ("end".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                        ],
-                    },
-                    span: use_decl.span,
-                    mutable: false,
-                })?;
-            }
-            "string" => {
-                // Register String struct
-                self.symbols.define(Symbol {
-                    name: "String".to_string(),
-                    kind: SymbolKind::Struct {
-                        fields: vec![
-                            ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
-                            ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                            ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                        ],
-                        type_params: vec![],
-                        const_params: vec![],
-                    },
-                    ty: ResolvedType::Struct {
-                        name: "String".to_string(),
-                        fields: vec![
-                            ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
-                            ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                            ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                        ],
-                    },
-                    span: use_decl.span,
-                    mutable: false,
-                })?;
-            }
-            "vec" => {
-                // Register Vec struct as placeholder
-                self.symbols.define(Symbol {
-                    name: "Vec".to_string(),
-                    kind: SymbolKind::Struct {
-                        fields: vec![
-                            ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
-                            ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                            ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                        ],
-                        type_params: vec!["T".to_string()],
-                        const_params: vec![],
-                    },
-                    ty: ResolvedType::Struct {
-                        name: "Vec".to_string(),
-                        fields: vec![
-                            ("data".to_string(), ResolvedType::Pointer(Box::new(ResolvedType::Primitive(PrimitiveType::U8)))),
-                            ("len".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                            ("cap".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                        ],
-                    },
-                    span: use_decl.span,
-                    mutable: false,
-                })?;
-            }
-            "token" => {
-                // Register Token and TokenKind as placeholders
-                self.symbols.define(Symbol {
-                    name: "Token".to_string(),
-                    kind: SymbolKind::Struct {
-                        fields: vec![
-                            ("kind".to_string(), ResolvedType::Enum { name: "TokenKind".to_string() }),
-                            ("span".to_string(), ResolvedType::Struct { name: "Span".to_string(), fields: vec![
-                                ("file_id".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                                ("start".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                                ("end".to_string(), ResolvedType::Primitive(PrimitiveType::U64)),
-                            ] }),
-                        ],
-                        type_params: vec![],
-                        const_params: vec![],
-                    },
-                    ty: ResolvedType::Struct {
-                        name: "Token".to_string(),
-                        fields: vec![
-                            ("kind".to_string(), ResolvedType::Enum { name: "TokenKind".to_string() }),
-                            ("span".to_string(), ResolvedType::Struct { name: "Span".to_string(), fields: vec![] }),
-                        ],
-                    },
-                    span: use_decl.span,
-                    mutable: false,
-                })?;
-                self.symbols.define(Symbol {
-                    name: "TokenKind".to_string(),
-                    kind: SymbolKind::Enum { variants: vec![], type_params: vec![], const_params: vec![] },
-                    ty: ResolvedType::Enum { name: "TokenKind".to_string() },
-                    span: use_decl.span,
-                    mutable: false,
-                })?;
-                // Register keyword_from_str function
-                self.symbols.define(Symbol {
-                    name: "keyword_from_str".to_string(),
-                    kind: SymbolKind::Function {
-                        params: vec![ResolvedType::Reference {
-                            mutable: false,
-                            inner: Box::new(ResolvedType::Struct { name: "String".to_string(), fields: vec![] }),
-                        }],
-                        ret: ResolvedType::Enum { name: "TokenKind".to_string() },
-                        type_params: vec![],
-                        const_params: vec![],
-                        effects: EffectSet::default(),
-                    },
-                    ty: ResolvedType::Function {
-                        params: vec![ResolvedType::Reference {
-                            mutable: false,
-                            inner: Box::new(ResolvedType::Struct { name: "String".to_string(), fields: vec![] }),
-                        }],
-                        ret: Box::new(ResolvedType::Enum { name: "TokenKind".to_string() }),
-                    },
-                    span: use_decl.span,
-                    mutable: false,
-                })?;
-            }
-            "core" => {
-                // core module - printf already registered as builtin
-            }
-            _ => {
-                // Unknown module - ignore for now
-            }
-        }
-        Ok(())
-    }
-
     /// Type check an item
     fn check_item(&mut self, item: &Item) -> Result<()> {
         match item {
@@ -1203,7 +758,7 @@ impl SemanticAnalyzer {
                 }
                 Ok(())
             }
-            Item::Use(_) => Ok(()), // Import resolution handled elsewhere
+            Item::Use(declaration) => Err(Error::Semantic { code: "E2000", message: "unresolved import reached semantic analysis; resolve modules before checking".into(), span: declaration.span }),
             // Phase 8: FFI and System features
             Item::Extern(_) => Ok(()), // FFI - external symbols registered elsewhere
             Item::Static(definition) => self.check_static_initializer(definition),
@@ -1422,26 +977,7 @@ impl SemanticAnalyzer {
                     let type_name = &segments[0].name;
                     let symbol_name = &segments[1].name;
                     
-                    // Check if this is an imported module symbol (e.g., helper::greet)
-                    if let Some(module_symbols) = self.imported_modules.get(type_name) {
-                        for (name, symbol) in module_symbols {
-                            if name == symbol_name {
-                                // Found the symbol in the imported module
-                                // For functions, ensure we return a Function type
-                                match &symbol.kind {
-                                    SymbolKind::Function { params, ret, .. } => {
-                                        return Ok(ResolvedType::Function {
-                                            params: params.clone(),
-                                            ret: Box::new(ret.clone()),
-                                        });
-                                    }
-                                    _ => return Ok(symbol.ty.clone()),
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Also check qualified name lookup (module::symbol registered in symbol table)
+                    // Resolve registered associated functions and constructors.
                     let qualified_name = segments.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join("::");
                     self.check_method_visibility(&qualified_name, *span)?;
                     if let Some(symbol) = self.symbols.lookup(&qualified_name) {
@@ -1560,6 +1096,13 @@ impl SemanticAnalyzer {
                             }
                         }
 
+                        if let (Expr::Ident(name), Some(function)) = (func.as_ref(), &self.current_function_name) {
+                            if self.symbols.lookup(&name.name).is_some_and(|symbol| symbol.span == Span::dummy()) {
+                                if let Some(builtin) = crate::intrinsics::host_builtin(&name.name) {
+                                    self.facts.host_calls.insert((function.clone(), *span), builtin);
+                                }
+                            }
+                        }
                         if let Expr::Ident(name)=func.as_ref(){self.validate_memory_call(&name.name,args,*span)?;self.validate_vector_call(&name.name,*span)?;}
                         // Substitute generic params in return type
                         let actual_ret = self.substitute_type(&ret, &type_substitutions);
@@ -2519,6 +2062,15 @@ mod tests {
         let program = parser.parse_program()?;
         let mut analyzer = SemanticAnalyzer::new();
         analyzer.analyze(&program)
+    }
+
+    #[test]
+    fn unresolved_imports_never_create_placeholder_symbols() {
+        for source in ["use span::Span; fn main() {}", "use nonexistent::*; fn main() {}"] {
+            let error = analyze(source).unwrap_err();
+            assert!(matches!(error, Error::Semantic { code: "E2000", .. }));
+            assert!(error.to_string().contains("unresolved import"));
+        }
     }
 
     #[test]

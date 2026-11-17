@@ -182,3 +182,154 @@ fn output_protects_imported_sources_and_hardlinks() {
         assert_eq!(fs::read_to_string(p.0.join("main.aeth")).unwrap(), main);
     }
 }
+
+#[test]
+fn explicit_modules_use_exact_files_real_siblings_and_shared_symbols() {
+    let p = Project::new();
+    let library = p.source("vendor/空 格=one/entry=main.aeth", "use sibling::base; fn hidden() -> i32 { base() + 1 } pub fn answer() -> i32 { hidden() }");
+    p.source("vendor/空 格=one/sibling.aeth", "pub fn base() -> i32 { 20 }");
+    p.source("app/sibling.aeth", "pub fn base() -> i32 { 100 }");
+    p.source("roots/数学.aeth", "pub fn answer() -> i32 { 99 }");
+    p.source("second/custom.aeth", "pub fn more() -> i32 { 21 }");
+    p.source("app/main.aeth", "mod 数学; use 数学::answer; use bonus::more; fn main() -> i32 { answer() + more() }");
+    let mappings = ["数学=vendor/空 格=one/entry=main.aeth", "bonus=second/custom.aeth"];
+    success(&p.compiler(&["--module", mappings[0], "check", "app/main.aeth", "--module", mappings[1], "-I", "roots"]));
+    let symbols = p.compiler(&["symbols", "app/main.aeth", "--module", mappings[0], "--module", mappings[1], "-I", "roots"]);
+    success(&symbols);
+    let index: serde_json::Value = serde_json::from_slice(&symbols.stdout).unwrap();
+    let answer = index["symbols"].as_array().unwrap().iter().find(|symbol| symbol["name"] == "answer").unwrap();
+    assert_eq!(answer["definition"]["file"], fs::canonicalize(library).unwrap().to_string_lossy().as_ref());
+    for backend in backends() { for level in ["0", "2"] {
+        success(&p.compiler(&["build", "app/main.aeth", "--module", mappings[0], "--module", mappings[1], "-I", "roots", "--backend", backend, "-O", level, "-o", "program"]));
+        run(&p.0.join("program"), 42);
+    } }
+}
+
+#[test]
+fn explicit_modules_validate_identifiers_files_duplicates_and_preserve_output() {
+    let p = Project::new();
+    p.source("main.aeth", "fn main() -> i32 { 0 }");
+    p.source("library.aeth", "pub fn value() -> i32 { 1 }");
+    p.source("library.ath", "def value():\n    return 1\n");
+    fs::create_dir(p.0.join("directory.aeth")).unwrap();
+    p.source("program.c", "USER OUTPUT");
+    for (mapping, message) in [
+        ("library", "expected NAME=FILE"), ("=library.aeth", "invalid module name"),
+        ("fn=library.aeth", "invalid module name"), ("a::b=library.aeth", "invalid module name"),
+        ("two words=library.aeth", "invalid module name"), (" name=library.aeth", "invalid module name"),
+        ("name =library.aeth", "invalid module name"), ("name/*comment*/=library.aeth", "invalid module name"),
+        ("name=", "requires a source file"), ("name=missing.aeth", "explicit module 'name'"),
+        ("name=library.ath", "exact .aeth source file"), ("name=directory.aeth", "exact .aeth source file"),
+    ] {
+        for command in ["check", "build", "symbols"] {
+            let result = p.compiler(&[command, "main.aeth", "--module", mapping, "--emit-c", "-o", "program.c"]);
+            assert!(!result.status.success(), "accepted {mapping}");
+            assert!(String::from_utf8_lossy(&result.stderr).contains(message), "{}", String::from_utf8_lossy(&result.stderr));
+            assert_eq!(fs::read_to_string(p.0.join("program.c")).unwrap(), "USER OUTPUT");
+        }
+    }
+    let duplicate = p.compiler(&["check", "main.aeth", "--module", "name=library.aeth", "--module", "name=./library.aeth"]);
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("duplicate explicit module 'name'"));
+    let invalid_lsp = p.compiler(&["lsp", "--module", "name=missing.aeth"]);
+    assert!(!invalid_lsp.status.success());
+}
+
+#[test]
+fn explicit_modules_reject_inline_and_different_local_sources() {
+    let p = Project::new();
+    p.source("vendor/library.aeth", "pub fn answer() -> i32 { 42 }");
+    for source in ["mod named { pub fn answer() -> i32 { 1 } } fn main() {}", "mod outer { mod named {} } fn main() {}"] {
+        p.source("app/main.aeth", source);
+        let result = p.compiler(&["check", "app/main.aeth", "--module", "named=vendor/library.aeth"]);
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("conflicts with inline module"));
+    }
+    p.source("app/main.aeth", "use named::answer; fn main() -> i32 { answer() }");
+    for filename in ["app/named.aeth", "app/named/mod.aeth"] {
+        let local = p.source(filename, "pub fn answer() -> i32 { 7 }");
+        for command in ["check", "build", "symbols"] {
+            let result = p.compiler(&[command, "app/main.aeth", "--module", "named=vendor/library.aeth", "--emit-c", "-o", "program.c"]);
+            assert!(!result.status.success());
+            assert!(String::from_utf8_lossy(&result.stderr).contains("conflicts with local module"));
+        }
+        fs::remove_file(local).unwrap();
+    }
+    p.source("app/main.aeth", "use named::missing; fn main() {}");
+    let result = p.compiler(&["check", "app/main.aeth", "--module", "named=vendor/library.aeth"]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("no public import"));
+}
+
+#[test]
+fn explicit_modules_keep_canonical_identity_and_do_not_change_search_order() {
+    let p = Project::new();
+    p.source("app/named.aeth", "pub fn answer() -> i32 { 21 }");
+    p.source("app/main.aeth", "use named::answer; use second::answer as other; fn main() -> i32 { answer() + other() }");
+    success(&p.compiler(&["build", "app/main.aeth", "--module", "named=app/./named.aeth", "--module", "second=app/named.aeth", "-o", "program"]));
+    run(&p.0.join("program"), 42);
+    p.source("vendor/entry.aeth", "pub fn answer() -> i32 { 0 }");
+    p.source("vendor/sibling.aeth", "pub fn value() -> i32 { 99 }");
+    p.source("app/main.aeth", "use sibling::value; fn main() -> i32 { value() }");
+    let result = p.compiler(&["check", "app/main.aeth", "--module", "named=vendor/entry.aeth"]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("module 'sibling' not found"));
+    p.source("first/sibling.aeth", "pub fn value() -> i32 { 11 }");
+    p.source("second/sibling.aeth", "pub fn value() -> i32 { 22 }");
+    for (a, b, code) in [("first", "second", 11), ("second", "first", 22)] {
+        success(&p.compiler(&["build", "app/main.aeth", "-I", a, "-I", b, "--module", "named=vendor/entry.aeth", "-o", "program"]));
+        run(&p.0.join("program"), code);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_modules_accept_same_canonical_local_symlink() {
+    let p = Project::new();
+    let library = p.source("vendor/real.aeth", "use sibling::value; pub fn answer() -> i32 { value() }");
+    p.source("vendor/sibling.aeth", "pub fn value() -> i32 { 42 }");
+    p.source("alias/sibling.aeth", "pub fn value() -> i32 { 99 }");
+    p.source("app/main.aeth", "use named::answer; fn main() -> i32 { answer() }");
+    std::os::unix::fs::symlink(&library, p.0.join("app/named.aeth")).unwrap();
+    std::os::unix::fs::symlink(&library, p.0.join("alias/entry.aeth")).unwrap();
+    success(&p.compiler(&["build", "app/main.aeth", "--module", "named=alias/entry.aeth", "-o", "program"]));
+    run(&p.0.join("program"), 42);
+}
+
+#[test]
+fn explicit_modules_lsp_uses_mapped_sources_and_unsaved_overlays() {
+    use std::{io::Write, process::Stdio};
+    use serde_json::{json, Value};
+    let p = Project::new();
+    let library = p.source("vendor/entry=real.aeth", "pub fn answer() -> i32 { 42 }");
+    let text = "use api::answer;\nfn main() -> i32 { return answer(); }\n";
+    let main = p.source("app/main.aeth", text);
+    let uri = |path: &Path| format!("file://{}", fs::canonicalize(path).unwrap().to_string_lossy().replace('%', "%25").replace(' ', "%20").replace('=', "%3D"));
+    let messages = vec![
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri(&main),"version":1,"text":text}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":uri(&main)},"position":{"line":1,"character":26}}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri(&library),"version":1,"text":"pub fn answer() -> i32 { true }"}}}),
+        json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":uri(&library),"version":2},"contentChanges":[{"text":"pub fn answer() -> i32 { 7 }"}]}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        json!({"jsonrpc":"2.0","method":"exit","params":null}),
+    ];
+    let mut server = Command::new(env!("CARGO_BIN_EXE_aethc")).current_dir(&p.0)
+        .args(["lsp", "--module", "api=vendor/entry=real.aeth"])
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut input = server.stdin.take().unwrap();
+    for message in messages { let body = serde_json::to_vec(&message).unwrap(); write!(input, "Content-Length: {}\r\n\r\n", body.len()).unwrap(); input.write_all(&body).unwrap(); }
+    drop(input);
+    let output = server.wait_with_output().unwrap(); success(&output);
+    let mut bytes = output.stdout.as_slice(); let mut replies: Vec<Value> = Vec::new();
+    while !bytes.is_empty() {
+        let boundary = bytes.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
+        let count: usize = std::str::from_utf8(&bytes[..boundary]).unwrap().strip_prefix("Content-Length: ").unwrap().parse().unwrap();
+        bytes = &bytes[boundary + 4..]; replies.push(serde_json::from_slice(&bytes[..count]).unwrap()); bytes = &bytes[count..];
+    }
+    assert_eq!(replies.iter().find(|reply| reply["id"] == 2).unwrap()["result"]["uri"], uri(&library));
+    let changes: Vec<_> = replies.iter().filter(|reply| reply["method"] == "textDocument/publishDiagnostics" && reply["params"]["uri"] == uri(&library)).collect();
+    assert!(changes.iter().any(|reply| !reply["params"]["diagnostics"].as_array().unwrap().is_empty()));
+    assert!(changes.last().unwrap()["params"]["diagnostics"].as_array().unwrap().is_empty());
+    assert_eq!(fs::read_to_string(library).unwrap(), "pub fn answer() -> i32 { 42 }");
+}

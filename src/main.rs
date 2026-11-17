@@ -14,7 +14,7 @@ mod driver_output;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::{fs, path::{Path, PathBuf}, process::{self, Command}, sync::atomic::{AtomicU64, Ordering}};
-use frontend::{resolve::Resolver, session::{Session, Diagnostic}};
+use frontend::{resolve::{ModuleSearch, Resolver}, session::{Session, Diagnostic}};
 use middle::{ir_gen::IRGenerator, optimize::Optimizer, ir_printer::print_ir};
 use backend::CCodeGen;
 use driver_output::{write, OutputFile};
@@ -58,6 +58,9 @@ struct Cli {
     /// Additional module search directory (repeatable)
     #[arg(short = 'I', long = "module-path", global = true)]
     module_paths: Vec<PathBuf>,
+    /// Bind a module name to an exact .aeth source file (repeatable)
+    #[arg(long = "module", value_name = "NAME=FILE", global = true)]
+    modules: Vec<String>,
     /// Installation prefix containing stdlib/ or lib/aetherlang/stdlib/
     #[arg(long, global = true)]
     sysroot: Option<PathBuf>,
@@ -108,13 +111,13 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
     let (input, check) = match &cli.command {
         Some(Commands::Build { input }) => (input, false),
         Some(Commands::Check { input }) => (input, true),
-        Some(Commands::Lsp) => return lsp::serve(search_paths(cli)?, cli.target.clone()).map_err(Diagnostic::from),
+        Some(Commands::Lsp) => return lsp::serve(module_search(cli)?, cli.target.clone()).map_err(Diagnostic::from),
         Some(Commands::Symbols { input }) => (input, true),
         Some(Commands::Version) => { println!("aethc {}", env!("CARGO_PKG_VERSION")); return Ok(()); }
         None => (cli.input.as_ref().ok_or("no input file; use aethc build <FILE> or aethc check <FILE>")?, false),
     };
     let source = fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
-    let session = Session::parse(input, source, search_paths(cli)?, Default::default())?;
+    let session = Session::parse(input, source, module_search(cli)?, Default::default())?;
     let facts = session.check(&cli.target)?;
     if matches!(cli.command, Some(Commands::Symbols { .. })) {
         println!("{}", serde_json::to_string(&frontend::symbols::SymbolIndex::new(&session, Some(&facts))).expect("serializable symbols"));
@@ -176,6 +179,12 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
     }
     if !cli.quiet { println!("Output: {}", output.display()); }
     Ok(())
+}
+
+fn module_search(cli: &Cli) -> Result<ModuleSearch, String> {
+    let mut search = ModuleSearch::new(search_paths(cli)?);
+    for specification in &cli.modules { search.add_module(specification)?; }
+    Ok(search)
 }
 
 fn search_paths(cli: &Cli) -> Result<Vec<PathBuf>, String> {

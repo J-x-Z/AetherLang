@@ -1,7 +1,7 @@
 //! Shared compilation input and diagnostics for CLI and editor clients.
 use std::{collections::HashMap, path::{Path, PathBuf}};
 use serde::Serialize;
-use super::{ast::Program, lexer::Lexer, resolve::Resolver, semantic::{SemanticAnalyzer, SemanticFacts}};
+use super::{ast::Program, lexer::Lexer, resolve::{ModuleSearch, Resolver}, semantic::{SemanticAnalyzer, SemanticFacts}};
 use crate::utils::{Error, Span};
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,7 +50,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn parse(path: &Path, source: String, paths: Vec<PathBuf>, overlays: HashMap<PathBuf, String>) -> Result<Self, Diagnostic> {
+    pub fn parse(path: &Path, source: String, search: ModuleSearch, overlays: HashMap<PathBuf, String>) -> Result<Self, Diagnostic> {
         let (core, script_map) = if path.extension().is_some_and(|x| x == "ath") {
             let mut parser = crate::script::parser::Parser::new(&source);
             let module = parser.parse().map_err(|e| script_error(path, &source, "E1100", e))?;
@@ -59,7 +59,7 @@ impl Session {
             let map = SourceMap::new(source, &core, &transpiler.source_lines);
             (core, Some(map))
         } else { (source, None) };
-        let mut resolver = Resolver::new(paths).with_overlays(overlays);
+        let mut resolver = Resolver::new(search).with_overlays(overlays);
         let program = resolver.resolve(path, core).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
         let program = super::specialize::specialize(program).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
         Ok(Self { program, resolver, script_map })
