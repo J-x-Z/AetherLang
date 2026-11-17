@@ -29,7 +29,7 @@ python3 tests/package_install.py --work-dir "$CARGO_TARGET_DIR/package-install"
 compiler="$CARGO_TARGET_DIR/debug/aethc"
 # $backends is an intentional list of fixed tokens selected above.
 python3 scripts/validate.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/validation" --backends $backends
-for suite in aggregate_abi system_values global_linkage semantic_values runtime_foundation generic_runtime memory_runtime simd_values platform_intrinsics process_runtime math_values quantum_values cuda_bindings literal_escapes extern_definitions c_void_pointers install_output vec_alignment vec32 darwin_target freestanding target_layout interfaces_methods ffi_modules contracts legacy_runtime text_map host_builtins sha256 compute_runtime; do
+for suite in aggregate_abi system_values global_linkage semantic_values runtime_foundation generic_runtime memory_runtime simd_values platform_intrinsics process_runtime math_values quantum_values cuda_bindings literal_escapes extern_definitions c_void_pointers install_output vec_alignment vec32 darwin_target freestanding target_layout interfaces_methods ffi_modules contracts legacy_runtime text_map host_builtins sha256 compute_runtime compute_applications; do
     python3 "tests/$suite.py" --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/$suite" --backends $backends
 done
 for backend in $backends; do
@@ -40,6 +40,9 @@ for backend in $backends; do
 done
 
 python3 tests/bootstrap_core.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-core" --backend "$bootstrap_backend"
+if clang --version >/dev/null 2>&1; then
+    python3 tests/bootstrap_llvm.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-llvm" --cc clang
+fi
 if [ -n "${AETHER_CUDAQ_BRIDGE:-}" ]; then
     case "${AETHER_CUDAQ_GPU:-0}" in
         0) cudaq_mode= ;;

@@ -1,5 +1,13 @@
 # AetherLang 集中升级交付
 
+## 11 月 18 日双宿主、16 比特量子及自举验收
+
+`423e664` 的 macOS arm64 和 CachyOS x86_64 包均提供 C-only/LLVM+C 两版编译器与相应 JXZ。Linux 携带私有 LLVM 21，清单 SHA-256 为 `940b9094affe63be2feef2af2b5a9297c35b258db4986446febc953e565e4326`。macOS 清单为 `ea387876edc9ef2674a36b3ba2a86211f7a78b93316bae9afe6a7252cb2d5f03`。Linux 缺少 shasum 曾使正常包获取失败，现由 Aether 流式校验受限长度的文件；已用 56 组数据与独立 SHA-256 对照。两套 Linux 安装工具分别通过 40 项 JXZ 项目和 14 项注册表测试。使用这对宿主包的 Shell 分支为 `e1e99bb`，两台机器各完成 51 项原生功能、27 项 PTY 与 65 项脚本主套件，见 `WORK/shell-joint-20261118`。
+
+`10355a4` 的量子态使用复 f32，与独立的 f64 参考模拟器在 65,536 个复振幅上逐项比较。CPU、M4 Metal 及两台 Vulkan 真设备的最大绝对误差约 7.82×10⁻⁸。相同电路、三个泡利轴、参数移位梯度及经典角度更新由 Aether 实现，梯度约 −0.398609264。Metal 计费峰值为 2,129,920 B，NVIDIA 与 Adreno Vulkan 为 2,097,216 B。每轮完成 42 次提交并验证释放后计费归零。新 CUDA-Q SDK 适配的同一程序在 QPP 运行，记录 `on_gpu=0`。RTX 的新 16 比特证据来自 Aether Vulkan，旧 CUDA-Q NVIDIA 验收及其设备选择另存于 `WORK/cudaq/final`。逐后端记录在 `OUT/q16`。
+
+`9839f2f` 和 `06207c6` 让自举编译器从项目入口读取模块，并在 Aether 内生成 C 或直接 LLVM IR。由上代编译全部 13 个模块后三代产生相同 LLVM，SHA-256 为 `691486c1997e60e03c7df6e33d43f7ac32ba2e59edc2a30dc2e7a0297e7d9229`。LLVM 第四代生成与 C 种子相同的 C；宿主 Clang 负责 LLVM 优化、目标码及链接。C、LLVM 两条独立验收的记录在 `WORK/t26-llvm/{c-final,final-entry}`。Rust 主编译器的更广语言支持仍在连续迁移。
+
 ## 11 月 18 日冻结包与后续实机增量
 
 `c5ed0b6` 的 macOS arm64 安装包包含 C-only 和 LLVM+C 编译器、两版 JXZ、Core 第四代和匹配的 stdlib；整包 manifest SHA-256 为 `a7ab8bf0f038a1d8ddc356fc2cefcbc911f2c736319d5f89c9be26d6217dc2e7`。两版 release 分别通过 116 个自举检查。安装至新前缀后，在独立工作目录完成 JXZ 创建、构建、执行、测试发现和清理。包目录为 `WORK/releases/aetherlang-foundations-20261118`。
