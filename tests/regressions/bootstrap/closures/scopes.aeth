@@ -1,0 +1,12 @@
+enum Choice{Number(i64),Empty}
+fn map<F,const N:usize>(f:&F,source:[i64;N])->i64{let mut sum:i64=0;for i in 0..N{sum+=f(source[i]);}return sum;}
+fn main()->i32{
+ let i:i64=99;let value:i64=90;
+ let choice:Choice=Choice::Number(8);
+ let compute:_=||->i64{let mut total:i64=0;for i in 0..3{let nested:_=||i;total+=nested();}match choice{Choice::Number(value)=>{total+value},Choice::Empty=>0}};
+ if compute()!=11{return 1;}
+ let factor:i64=3;let scale:_=|x:i64|x*factor;if map(&scale,[1,2,3,4])!=30{return 2;}
+ let mut slot:i64=4;let raw:*i64=&mut slot as *i64;
+ let mut write:_=||{*raw=17;};write();if slot!=17{return 3;}
+ return 0;
+}

@@ -1,0 +1,22 @@
+fn identity<T>(x:T)->T{let callback:_=|v:T|v;return callback(x);}
+struct Holder<F>{callable:F}
+fn wrap<F>(f:F)->Holder<F>{return Holder{callable:f};}
+fn use_holder<F>(holder:Holder<F>,x:i64)->i64{return holder.callable(x);}
+fn apply<F>(f:&F,value:i64)->i64{return f(value);}
+fn apply_mut<F>(f:&mut F,value:i64)->i64{return f(value);}
+fn relay<F>(f:F)->F{return f;}
+fn main()->i32{
+ if identity(19)!=19{return 7;}
+ let mut base:i64=7;
+ let add:_=|x:i64|->i64{base+x};base=99;
+ if add(5)!=12||apply(&add,2)!=9||use_holder(wrap(add),3)!=10{return 1;}
+ let moved:_=relay(add);if moved(3)!=10{return 2;}
+ let mut counter:_=|x:i64|->i64{base+=x;base};
+ if counter(2)!=101||apply_mut(&mut counter,3)!=104||base!=99{return 3;}
+ let nested:_=|x:i64|->i64{let inner:_=|y:i64|->i64{base+x+y};inner(2)};
+ if nested(3)!=104{return 4;}
+ let factory:_=|x:i64|{|y:i64|base+x+y};let result:_=factory(2);
+ if result(5)!=106||factory(2)(5)!=106||(|x:i64|base+x)(3)!=102{return 5;}
+ let values:[i64;2]=[4,8];let lookup:_=|i:i64|values[i];if lookup(1)!=8{return 6;}
+ return 0;
+}

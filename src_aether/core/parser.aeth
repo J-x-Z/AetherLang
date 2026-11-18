@@ -49,6 +49,7 @@ fn boot_p_type(ctx:*BootContext)->*BootType {
  ctx.depth=ctx.depth-1;return ty;
 }
 fn boot_p_type_inner(ctx:*BootContext)->*BootType {
+ if boot_p_word(ctx,"_"){boot_p_advance(ctx);return boot_type(ctx,BY_INFER);}
  if boot_p_word(ctx,"own"){boot_p_advance(ctx);let inner:*BootType=boot_p_type(ctx);if inner==0 as *BootType{return inner;}return boot_owned_type(ctx,inner);}
  if boot_p_take(ctx,91){
   let inner:*BootType=boot_p_type(ctx);if inner==(0 as *BootType){return inner;}
@@ -142,6 +143,7 @@ fn boot_p_expression(ctx:*BootContext,minimum:i32)->*BootNode {
 fn boot_p_primary(ctx:*BootContext)->*BootNode {
  let token:*BootToken=ctx.cursor;
  let kind:i32=boot_p_kind(ctx);
+ if kind==124||kind==BT_OR{return boot_p_closure(ctx);}
  if boot_p_word(ctx,"match"){return boot_p_match(ctx);}
  if kind==91{return boot_p_array_value(ctx);}
  if boot_p_word(ctx,"if")||kind==123{
@@ -237,10 +239,10 @@ fn boot_p_primary(ctx:*BootContext)->*BootNode {
  return 0 as *BootNode;
 }
 fn boot_p_call(ctx:*BootContext,callee:*BootNode)->*BootNode {
- if callee.kind!=BN_IDENT&&callee.kind!=BN_ENUM_VALUE&&callee.kind!=BN_MEMBER {boot_error(ctx,ctx.cursor,"Core calls require a function name");return 0 as *BootNode;}
+
  let node:*BootNode=boot_node(ctx,BN_CALL,callee.token);
  if node==0 as *BootNode {return node;}
- node.name=callee.name;node.lookup=callee.lookup;if callee.kind==BN_ENUM_VALUE{node.kind=BN_ENUM_VALUE;node.ty=callee.ty;node.flags=node.flags|8192;}if callee.kind==BN_MEMBER{node.kind=BN_METHOD_CALL;node.left=callee.left;}boot_p_advance(ctx);
+ node.name=callee.name;node.lookup=callee.lookup;node.left=callee;if callee.kind==BN_ENUM_VALUE{node.kind=BN_ENUM_VALUE;node.left=0 as *BootNode;node.ty=callee.ty;node.flags=node.flags|8192;}if callee.kind==BN_MEMBER{node.kind=BN_METHOD_CALL;node.left=callee.left;}boot_p_advance(ctx);
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed && boot_p_kind(ctx)!=41 {
   let saved_condition:bool=ctx.parse_condition;ctx.parse_condition=false;
@@ -781,4 +783,25 @@ fn boot_p_range_for(ctx:*BootContext)->*BootNode{
  if boot_p_kind(ctx)!=BT_RANGE{boot_error(ctx,ctx.cursor,"Core for requires an integer range");return 0 as *BootNode;}
  boot_p_advance(ctx);node.right=boot_p_expression(ctx,0);ctx.parse_condition=saved;
  node.body=boot_p_block(ctx);return node;
+}
+
+fn boot_p_closure(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;let empty:bool=boot_p_kind(ctx)==BT_OR;boot_p_advance(ctx);
+ let node:*BootNode=boot_node(ctx,BN_CLOSURE,token);if ctx.failed{return node;}
+ let mut tail:*BootNode=0 as *BootNode;
+ while !empty&&!ctx.failed&&boot_p_kind(ctx)!=124{
+  let mutable:bool=boot_p_word(ctx,"mut");if mutable{boot_p_advance(ctx);}let name:*BootToken=boot_p_name(ctx);
+  if ctx.failed||!boot_p_expect(ctx,58,"closure parameters require explicit types"){return 0 as *BootNode;}
+  let parameter:*BootNode=boot_node(ctx,BN_PARAM,name);if ctx.failed{return node;}parameter.name=name.text;parameter.ty=boot_p_type(ctx);if mutable{parameter.flags=1;}
+  if tail==0 as *BootNode{node.params=parameter;}else{tail.next=parameter;}tail=parameter;
+  if !boot_p_take(ctx,44){break;}
+ }
+ if !empty&&!boot_p_expect(ctx,124,"expected '|' after closure parameters"){return 0 as *BootNode;}
+ node.ty=boot_type(ctx,BY_INFER);if boot_p_take(ctx,BT_ARROW){node.ty=boot_p_type(ctx);}
+ let saved:bool=ctx.parse_condition;ctx.parse_condition=false;
+ if boot_p_kind(ctx)==123{node.body=boot_p_block(ctx);boot_value_tail(node.body,BN_RETURN);}else{
+  let value:*BootNode=boot_p_expression(ctx,0);let body:*BootNode=boot_node(ctx,BN_BLOCK,token);let result:*BootNode=boot_node(ctx,BN_RETURN,token);
+  if !ctx.failed{result.left=value;body.body=result;node.body=body;}
+ }
+ ctx.parse_condition=saved;return node;
 }

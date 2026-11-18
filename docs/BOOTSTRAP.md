@@ -303,3 +303,11 @@ Declare one internal, non-generic `@drop fn release(value: own T)` per canonical
 The current storage boundary is a plain record payload: owners in copyable arrays, records or enum payloads, generic destructors, owner-valued block expressions, and implicit discarded owner results are diagnosed. Bind an owned call argument to a named local before passing it. Access to a raw-pointer field of an owned resource remains an explicit unsafe operation. These restrictions preserve existing manual ABI behavior while the projection-aware ownership surface grows.
 
 `tests/core_owned.py` compares shared rejection cases with the primary compiler and executes actual descriptor closure, heap release, conditional transfers, early exits and packed payloads through C and LLVM at O0/O2 and with ASan/UBSan.
+
+### Captured closures in Core and Script
+
+Core `|x: i64| -> i64 { base + x }` and Script `lambda (x: int) -> int: base + x` create a concrete environment value. Captures are copied when the closure is created; changing a captured field changes the environment, not the original local. Core requires a mutable closure binding for such calls. Each site has its own nominal type, so different closure sites cannot overwrite one fixed local even when their signatures match. Core `let f: _ = ...` infers a concrete closure type, including a closure returned by another call.
+
+The self-hosted compiler supports nested closures, returned environments, immediate calls, generic callback parameters, closure fields in concrete generic records, array/record/enum captures, private module calls and const-generic algorithms using callbacks. References passed as closure parameters and references returned into the closure's own environment use the ordinary provenance checks. Closure environments do not expose a C ABI. Capturing checked references or owned resources is explicitly rejected until aggregate projection-aware lifetime and move tracking is available. This restriction does not erase a reference into a raw pointer.
+
+`tests/bootstrap_closures.py` checks the common Core/Script subset against the primary compiler and executes both native backends with optimization and sanitizers. The environment and exact hidden callee lower to ordinary typed nodes, so arithmetic, borrowing and code generation remain shared with named functions.

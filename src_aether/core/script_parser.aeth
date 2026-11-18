@@ -53,6 +53,7 @@ fn bs_expr(ctx:*BootContext,minimum:i32)->*BootNode{
 }
 fn bs_primary(ctx:*BootContext)->*BootNode{
  let token:*BootToken=ctx.cursor;let kind:i32=token.kind;
+ if bs_word(ctx,"lambda"){return bs_lambda(ctx);}
  if kind==BT_INT||kind==BT_FLOAT||kind==BT_STRING{
   ctx.cursor=token.next;let mut k:i32=BN_INT;if kind==BT_FLOAT{k=BN_FLOAT;}if kind==BT_STRING{k=BN_STRING;}
   let node:*BootNode=boot_node(ctx,k,token);if !ctx.failed{node.name=token.text;}return node;
@@ -85,8 +86,8 @@ fn bs_expr_inner(ctx:*BootContext,minimum:i32)->*BootNode{
   if bs_take(ctx,40){
    let node:*BootNode=boot_node(ctx,BN_CALL,left.token);if ctx.failed{return node;}
    if left.kind==BN_IDENT{node.name=left.name;}
-   else if left.kind==BN_MEMBER{node.name=left.name;node.left=left.left;}
-   else{boot_error(ctx,left.token,"Script calls require a named function");return 0 as *BootNode;}
+   else if left.kind==BN_MEMBER{node.name=left.name;node.left=left.left;node.flags=131072;}
+   else{node.left=left;}
    let mut tail:*BootNode=0 as *BootNode;
    while !ctx.failed&&bs_kind(ctx)!=41{
     let arg:*BootNode=bs_expr(ctx,0);if ctx.failed{return 0 as *BootNode;}
@@ -173,4 +174,20 @@ pub fn boot_script_parse(ctx:*BootContext)->bool{
   if tail==0 as *BootNode{program.body=function;}else{tail.next=function;}tail=function;
  }
  ctx.program=program;return !ctx.failed;
+}
+
+fn bs_lambda(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;ctx.cursor=token.next;let node:*BootNode=boot_node(ctx,BN_CLOSURE,token);if ctx.failed{return node;}
+ if !bs_expect(ctx,40,"Script lambda requires parenthesized typed parameters"){return 0 as *BootNode;}
+ let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed&&bs_kind(ctx)!=41{
+  let name:*BootToken=bs_name(ctx);if ctx.failed||!bs_expect(ctx,58,"lambda parameter requires a type"){return 0 as *BootNode;}
+  let parameter:*BootNode=boot_node(ctx,BN_PARAM,name);if ctx.failed{return node;}parameter.name=name.text;parameter.ty=bs_type(ctx);parameter.flags=1;
+  if tail==0 as *BootNode{node.params=parameter;}else{tail.next=parameter;}tail=parameter;if !bs_take(ctx,44){break;}
+ }
+ if !bs_expect(ctx,41,"expected ')' after lambda parameters"){return 0 as *BootNode;}
+ node.ty=boot_type(ctx,BY_INFER);if bs_take(ctx,BT_ARROW){node.ty=bs_type(ctx);}
+ if !bs_expect(ctx,58,"expected ':' before lambda expression"){return 0 as *BootNode;}
+ let value:*BootNode=bs_expr(ctx,0);let body:*BootNode=boot_node(ctx,BN_BLOCK,token);let result:*BootNode=boot_node(ctx,BN_RETURN,token);
+ if !ctx.failed{result.left=value;body.body=result;node.body=body;}return node;
 }

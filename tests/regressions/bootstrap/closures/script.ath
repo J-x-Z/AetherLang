@@ -1,0 +1,19 @@
+def main():
+    base = 7
+    add = lambda (x: int) -> int: base + x
+    base = 99
+    if add(5) != 12:
+        return 1
+    factory = lambda (x: int): lambda (y: int): base + x + y
+    result = factory(2)
+    if result(5) != 106 or factory(2)(5) != 106:
+        return 2
+    if (lambda (x: int): x * 2)(9) != 18:
+        return 3
+    values = [4, 8]
+    index = lambda (i: int): values[i]
+    if index(1) != 8:
+        return 4
+    show = lambda (): print("script closures ok")
+    show()
+    return 0

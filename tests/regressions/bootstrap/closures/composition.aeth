@@ -1,0 +1,17 @@
+struct Counter{value:i64}
+impl Counter{fn read(self:&Self)->i64{return self.value;}fn add(self:&mut Self,n:i64)->i64{self.value+=n;return self.value;}}
+struct Outer{counter:Counter}
+static mut GLOBAL:i64=4;
+fn main()->i32{
+ let source:Counter=Counter{value:3};let read:_=||source.read();if read()!=3{return 1;}
+ let mut change:_=||source.add(2);if change()!=5||change()!=7||source.value!=3{return 2;}
+ let base:i64=9;let mut mutate:_=||->i64{base+=2;base};let mut outer:_=||->i64{mutate()};if outer()!=11||outer()!=13{return 3;}
+ let shadow:_=|base:i64|->i64{{let base:i64=base+1;base}};if shadow(8)!=9{return 4;}
+ let global:_=||->i64{GLOBAL};GLOBAL=11;if global()!=11{return 5;}
+ {let GLOBAL:i64=100;let local:_=||GLOBAL;if local()!=100{return 6;}}
+ let make:_=||{||->i64{base+=1;base}};let mut isolated:_=make();if isolated()!=10||isolated()!=11{return 7;}
+ let wrapped:Outer=Outer{counter:Counter{value:20}};let mut deep:_=||wrapped.counter.add(3);if deep()!=23||deep()!=26{return 9;}
+ let value:i64=5;let id:_=|v:&i64|->&i64{v};let original:&i64=id(&value);if *original!=5{return 10;}
+ let borrowed:_=||->&i64{&base};let result:&i64=borrowed();if *result!=9{return 8;}
+ return 0;
+}

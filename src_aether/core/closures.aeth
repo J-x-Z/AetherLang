@@ -1,0 +1,135 @@
+use model::*;
+use runtime::*;
+use type_model::*;
+use methods::boot_method_base;
+// Each closure site has a nominal environment and one exact internal callee.
+// Captures are values. No closure ABI or allocation is delegated to a backend.
+struct ClosureScope{name:*u8,next:*ClosureScope}
+struct ClosureCapture{binding:*BootNode,field:*BootNode,value:*BootNode,indirect:bool,next:*ClosureCapture}
+struct ClosureState{ctx:*BootContext,scope:*ClosureScope,captures:*ClosureCapture,tail:*ClosureCapture,environment:*BootNode,mutable:bool}
+fn cl_copyable(ty:*BootType,depth:i32)->bool{
+ if ty==0 as *BootType||depth>256{return false;}
+ if boot_reference(ty)||ty.kind==BY_OWN{return false;}
+ if ty.kind==BY_ARRAY||ty.kind==BY_ALIAS{return cl_copyable(ty.inner,depth+1);}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{if ty.kind==BY_ENUM{let mut payload:*BootNode=field.params;while payload!=0 as *BootNode{if !cl_copyable(payload.ty,depth+1){return false;}payload=payload.next;}}else{if !cl_copyable(field.ty,depth+1){return false;}}field=field.next;}}
+ return true;
+}
+pub fn boot_contains_callable(ty:*BootType,depth:i32)->bool{
+ if ty==0 as *BootType||depth>256{return false;}if ty.callable!=0 as *BootNode{return true;}
+ if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_ALIAS||ty.kind==BY_OWN{return boot_contains_callable(ty.inner,depth+1);}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{if ty.kind==BY_ENUM{let mut payload:*BootNode=field.params;while payload!=0 as *BootNode{if boot_contains_callable(payload.ty,depth+1){return true;}payload=payload.next;}}else{if boot_contains_callable(field.ty,depth+1){return true;}}field=field.next;}}
+ return false;
+}
+fn cl_name(ctx:*BootContext,prefix:*u8,id:i32)->*u8{let name:*u8=boot_alloc(ctx,64) as *u8;if !ctx.failed{snprintf(name,64,"@%s_%d",prefix,id);}return name;}
+fn cl_ident(ctx:*BootContext,binding:*BootNode)->*BootNode{let node:*BootNode=boot_node(ctx,BN_IDENT,binding.token);if !ctx.failed{node.name=binding.name;node.ty=binding.ty;node.decl=binding;}return node;}
+fn cl_scope(state:*ClosureState,node:*BootNode){let scope:*ClosureScope=boot_alloc(state.ctx,size_of(ClosureScope) as u64) as *ClosureScope;if state.ctx.failed{return;}scope.name=node.name;scope.next=state.scope;state.scope=scope;}
+fn cl_binding(state:*ClosureState,node:*BootNode)->*BootNode{
+ if node.lookup!=0 as *BootModule{return 0 as *BootNode;}
+ let mut local:*ClosureScope=state.scope;while local!=0 as *ClosureScope{if strcmp(local.name,node.name)==0{return 0 as *BootNode;}local=local.next;}
+ let mut binding:*BootBinding=state.ctx.bindings;while binding!=0 as *BootBinding{if strcmp(binding.name,node.name)==0{return binding.node;}binding=binding.next;}return 0 as *BootNode;
+}
+fn cl_capture(state:*ClosureState,binding:*BootNode)->*ClosureCapture{
+ let mut previous:*ClosureCapture=state.captures;while previous!=0 as *ClosureCapture{if previous.binding==binding{return previous;}previous=previous.next;}
+ let ctx:*BootContext=state.ctx;let item:*ClosureCapture=boot_alloc(ctx,size_of(ClosureCapture) as u64) as *ClosureCapture;
+ let field:*BootNode=boot_node(ctx,BN_FIELD,binding.token);if ctx.failed{return 0 as *ClosureCapture;}
+ item.binding=binding;item.field=field;field.name=cl_name(ctx,"capture",field.id);field.ty=binding.ty;item.value=cl_ident(ctx,binding);
+ // A nested closure copies its enclosing environment, never its stack address.
+ if (binding.flags&BF_CLOSURE_ENV)!=0{
+  item.indirect=true;field.ty=binding.ty.inner;let dereference:*BootNode=boot_node(ctx,BN_UNARY,binding.token);if ctx.failed{return item;}
+  dereference.op=42;dereference.left=item.value;dereference.ty=field.ty;item.value=dereference;
+ }
+ if !cl_copyable(field.ty,0){boot_error(ctx,binding.token,"closure capture requires copyable values; reference and owner captures need projection-aware storage");return item;}
+ if state.tail==0 as *ClosureCapture{state.captures=item;}else{state.tail.next=item;state.tail.field.next=field;}state.tail=item;return item;
+}
+fn cl_environment_root(node:*BootNode,environment:*BootNode)->bool{
+ if node==0 as *BootNode{return false;}
+ if node.kind==BN_IDENT{return node.decl==environment;}
+ if node.kind==BN_MEMBER||node.kind==BN_INDEX{return cl_environment_root(node.left,environment);}
+ if node.kind==BN_UNARY&&(node.op==42||node.op==38){return cl_environment_root(node.left,environment);}return false;
+}
+fn cl_rewrite(state:*ClosureState,node:*BootNode,nested:i32){
+ let mut item:*BootNode=node;let ctx:*BootContext=state.ctx;
+ while item!=0 as *BootNode&&!ctx.failed{
+  if item.kind==BN_IDENT{
+   let binding:*BootNode=cl_binding(state,item);
+   if binding!=0 as *BootNode{
+    let capture:*ClosureCapture=cl_capture(state,binding);if ctx.failed{return;}
+    let member:*BootNode=boot_node(ctx,BN_MEMBER,item.token);if ctx.failed{return;}member.name=capture.field.name;member.ty=capture.field.ty;member.decl=capture.field;member.left=cl_ident(ctx,state.environment);
+    if capture.indirect{item.kind=BN_UNARY;item.op=38;item.left=member;item.flags=65536;}
+    else{item.kind=BN_MEMBER;item.name=member.name;item.left=member.left;item.ty=member.ty;item.decl=member.decl;}
+   }
+  }else if item.kind==BN_BLOCK{
+   let saved:*ClosureScope=state.scope;cl_rewrite(state,item.body,nested);state.scope=saved;
+  }else if item.kind==BN_RANGE_FOR{
+   cl_rewrite(state,item.left,nested);cl_rewrite(state,item.right,nested);let saved:*ClosureScope=state.scope;cl_scope(state,item);cl_rewrite(state,item.body,nested);state.scope=saved;
+  }else if item.kind==BN_ARM{
+   let saved:*ClosureScope=state.scope;let mut binding:*BootNode=item.params;while binding!=0 as *BootNode{cl_scope(state,binding);binding=binding.next;}
+   cl_rewrite(state,item.right,nested);cl_rewrite(state,item.body,nested);state.scope=saved;
+  }else if item.kind==BN_CLOSURE{
+   let saved:*ClosureScope=state.scope;let mut parameter:*BootNode=item.params;while parameter!=0 as *BootNode{cl_scope(state,parameter);parameter=parameter.next;}
+   cl_rewrite(state,item.body,nested+1);state.scope=saved;
+  }else if item.kind==BN_LET{
+   cl_rewrite(state,item.left,nested);cl_scope(state,item);
+  }else{
+   cl_rewrite(state,item.left,nested);cl_rewrite(state,item.right,nested);cl_rewrite(state,item.third,nested);cl_rewrite(state,item.body,nested);cl_rewrite(state,item.params,nested);
+   if nested==0&&cl_environment_root(item.left,state.environment){
+    if item.kind==BN_ASSIGN||(item.kind==BN_UNARY&&item.op==38&&(item.flags&1)!=0){state.mutable=true;}
+    let left_type:*BootType=cl_type(item.left);
+    if item.kind==BN_CALL&&left_type!=0 as *BootType&&left_type.callable!=0 as *BootNode&&left_type.callable.params.ty.kind==BY_MUTREF{state.mutable=true;}
+    if item.kind==BN_METHOD_CALL&&left_type!=0 as *BootType{
+     let mut receiver:*BootType=left_type;if boot_indirect(receiver){receiver=receiver.inner;}
+     if receiver.kind==BY_STRUCT{let mut field:*BootNode=receiver.fields;while field!=0 as *BootNode{if strcmp(field.name,item.name)==0&&field.ty.callable!=0 as *BootNode&&field.ty.callable.params.ty.kind==BY_MUTREF{state.mutable=true;}field=field.next;}}
+     let mut method:*BootNode=ctx.methods;while method!=0 as *BootNode{if method.decl!=0 as *BootNode&&boot_method_base(method.aux)==boot_method_base(receiver)&&strcmp(method.name,item.name)==0&&method.decl.params!=0 as *BootNode&&method.decl.params.ty.kind==BY_MUTREF{state.mutable=true;}method=method.next;}
+    }
+   }
+  }
+  item=item.next;
+ }
+}
+pub fn boot_closure_prepare(ctx:*BootContext,node:*BootNode)->*BootNode{
+ let ty:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;let function:*BootNode=boot_node(ctx,BN_FN,node.token);let environment:*BootNode=boot_node(ctx,BN_PARAM,node.token);
+ let state:*ClosureState=boot_alloc(ctx,size_of(ClosureState) as u64) as *ClosureState;if ctx.failed{return 0 as *BootNode;}
+ ty.kind=BY_STRUCT;ty.id=boot_id(ctx);ty.name=cl_name(ctx,"closure",ty.id);ty.complete=true;ty.owner=ctx.module;ty.callable=function;ty.next=ctx.types;ctx.types=ty;
+ function.name=cl_name(ctx,"invoke",function.id);function.ty=node.ty;function.body=node.body;function.flags=BF_METHOD|BF_CLOSURE_BODY;
+ environment.name=cl_name(ctx,"environment",environment.id);environment.ty=boot_ref_type(ctx,ty,false);environment.flags=BF_CLOSURE_ENV;environment.next=node.params;function.params=environment;
+ state.ctx=ctx;state.environment=environment;let mut parameter:*BootNode=node.params;while parameter!=0 as *BootNode{cl_scope(state,parameter);parameter=parameter.next;}
+ cl_rewrite(state,node.body,0);if ctx.failed{return function;}
+ if state.mutable{environment.ty=boot_ref_type(ctx,ty,true);}
+ cl_reborrow(node.body,environment,state.mutable);
+ let mut capture:*ClosureCapture=state.captures;let mut first:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;
+ if capture!=0 as *ClosureCapture{ty.fields=capture.field;}
+ while capture!=0 as *ClosureCapture{
+  let value:*BootNode=boot_node(ctx,BN_FIELD,node.token);if ctx.failed{return function;}value.name=capture.field.name;value.decl=capture.field;value.ty=capture.field.ty;value.left=capture.value;
+  if tail==0 as *BootNode{first=value;}else{tail.next=value;}tail=value;capture=capture.next;
+ }
+ node.kind=BN_STRUCT_VALUE;node.ty=ty;node.name=ty.name;node.params=first;node.body=0 as *BootNode;
+ let mut end:*BootNode=ctx.program.body;while end.next!=0 as *BootNode{end=end.next;}end.next=function;
+ return function;
+}
+pub fn boot_closure_callee(ctx:*BootContext,node:*BootNode,actual:*BootType)->bool{
+ let mut ty:*BootType=actual;if boot_reference(ty){ty=ty.inner;}
+ if ty.callable==0 as *BootNode{boot_error(ctx,node.token,"called value is not a closure");return false;}
+ let function:*BootNode=ty.callable;let mut receiver:*BootNode=node.left;
+ if !boot_reference(actual)&&!boot_place_form(receiver){
+  let local:*BootNode=boot_node(ctx,BN_LET,node.token);let ident:*BootNode=boot_node(ctx,BN_IDENT,node.token);let call:*BootNode=boot_node(ctx,BN_CALL,node.token);
+  let yield:*BootNode=boot_node(ctx,BN_YIELD,node.token);let body:*BootNode=boot_node(ctx,BN_BLOCK,node.token);if ctx.failed{return false;}
+  local.name=cl_name(ctx,"closure_receiver",local.id);local.flags=1;local.ty=ty;local.left=receiver;ident.name=local.name;call.left=ident;call.params=node.params;call.name=local.name;yield.left=call;local.next=yield;body.body=local;
+  node.kind=BN_VALUE;node.body=body;node.left=0 as *BootNode;node.params=0 as *BootNode;node.ty=0 as *BootType;return true;
+ }
+ if boot_reference(actual){let dereference:*BootNode=boot_node(ctx,BN_UNARY,node.token);if ctx.failed{return false;}dereference.op=42;dereference.left=receiver;receiver=dereference;}
+ let borrow:*BootNode=boot_node(ctx,BN_UNARY,node.token);if ctx.failed{return false;}borrow.op=38;borrow.left=receiver;if function.params.ty.kind==BY_MUTREF{borrow.flags=1;}
+ borrow.next=node.params;node.params=borrow;node.left=0 as *BootNode;node.name=function.name;node.decl=function;return true;
+}
+
+fn cl_reborrow(node:*BootNode,environment:*BootNode,mutable:bool){
+ let mut item:*BootNode=node;while item!=0 as *BootNode{
+  if item.kind==BN_UNARY&&item.op==38&&(item.flags&65536)!=0&&cl_environment_root(item.left,environment){if mutable{item.flags=item.flags|1;}else{item.flags=item.flags&(-2 as i32);}}
+  cl_reborrow(item.left,environment,mutable);cl_reborrow(item.right,environment,mutable);cl_reborrow(item.third,environment,mutable);cl_reborrow(item.body,environment,mutable);cl_reborrow(item.params,environment,mutable);item=item.next;
+ }
+}
+
+fn cl_type(node:*BootNode)->*BootType{
+ if node==0 as *BootNode{return 0 as *BootType;}if node.ty!=0 as *BootType{return node.ty;}
+ if node.kind==BN_MEMBER{let mut base:*BootType=cl_type(node.left);if base==0 as *BootType{return base;}if boot_indirect(base){base=base.inner;}let mut field:*BootNode=base.fields;while field!=0 as *BootNode{if strcmp(field.name,node.name)==0{return field.ty;}field=field.next;}}
+ if node.kind==BN_INDEX||(node.kind==BN_UNARY&&node.op==42){let base:*BootType=cl_type(node.left);if base!=0 as *BootType{return base.inner;}}return 0 as *BootType;
+}
