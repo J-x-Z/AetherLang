@@ -16,7 +16,7 @@ use std::ptr;
 use crate::backend::codegen::CodeGen;
 use crate::middle::ir::*;
 use crate::utils::{Error, Result};
-use crate::types::ffi_target::{ForeignAbiTarget, AGGREGATE_ABI_ERROR, VECTOR_ABI_ERROR};
+use crate::types::ffi_target::{ForeignAbiTarget, AGGREGATE_ABI_ERROR, VECTOR_ABI_ERROR, WIN64_LAYOUT_ERROR};
 
 /// Source values and machine ABI values deliberately have separate types.
 #[derive(Clone)]
@@ -33,6 +33,7 @@ struct AbiPart { ty: LLVMTypeRef, offset: u64 }
 #[derive(Clone)]
 struct FunctionAbi {
     extend_narrow_integers: bool,
+    extend_bool: bool,
     params: Vec<(IRType, AbiValue)>,
     result: (IRType, AbiValue),
     variadic: bool,

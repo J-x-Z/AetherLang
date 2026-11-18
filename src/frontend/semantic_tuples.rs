@@ -1,6 +1,6 @@
 //! Tuple values are structural language aggregates, not a promised C ABI.
 use super::*;
-use crate::types::ffi_target::{ForeignAbiTarget, AGGREGATE_ABI_ERROR, VECTOR_ABI_ERROR};
+use crate::types::ffi_target::{ForeignAbiTarget, AGGREGATE_ABI_ERROR, VECTOR_ABI_ERROR, WIN64_LAYOUT_ERROR};
 
 impl SemanticAnalyzer {
     fn contains_value_tuple(&self, ty: &ResolvedType, seen: &mut HashSet<String>) -> bool {
@@ -31,11 +31,33 @@ impl SemanticAnalyzer {
         }
     }
 
+    // Empty records and zero-length array fields are compiler extensions with
+    // different layouts in MSVC and GNU modes, including inside another record.
+    fn win64_empty_field(&self, ty: &ResolvedType, seen: &mut HashSet<String>) -> bool {
+        match ty.unqualified() {
+            ResolvedType::Array { elem, size } => *size == 0 || self.win64_empty_field(elem, seen),
+            ResolvedType::Struct { name, .. } if seen.insert(name.clone()) =>
+                self.symbols.lookup(name).is_some_and(|symbol| matches!(&symbol.kind,
+                    SymbolKind::Struct { fields, .. } if fields.is_empty() ||
+                        fields.iter().any(|(_, field)| self.win64_empty_field(field, seen)))),
+            ResolvedType::Enum { name } if seen.insert(name.clone()) => self.facts.enum_variants.get(name)
+                .is_some_and(|variants| variants.iter().any(|(_, fields)| fields.iter().any(|field| self.win64_empty_field(field, seen)))),
+            ResolvedType::Primitive(PrimitiveType::Unit) => true,
+            ResolvedType::Tuple(elements) => elements.is_empty(),
+            _ => false,
+        }
+    }
+
     fn check_foreign_type(&self, ty: &Type, function_edge: bool) -> Result<()> {
         let resolved = self.resolve_type(ty)?;
         self.check_tuple_abi_type(&resolved, ty.span())?;
         let Some(target) = self.llvm_abi.filter(|_| function_edge) else { return Ok(()) };
         let ty_kind = resolved.unqualified();
+        if target == ForeignAbiTarget::WindowsX86_64 && (matches!(ty_kind, ResolvedType::Array { .. }) ||
+            matches!(ty_kind, ResolvedType::Struct { .. } | ResolvedType::Enum { .. }) &&
+                self.win64_empty_field(ty_kind, &mut HashSet::new())) {
+            return Err(Error::semantic_expected("E2407", WIN64_LAYOUT_ERROR, ty.span()));
+        }
         if self.foreign_vector_present(ty_kind, &mut HashSet::new()) {
             let direct = matches!(ty_kind, ResolvedType::Vector(element, lanes)
                 if matches!(element.as_ref(), ResolvedType::Primitive(p) if p.size_of() * lanes == 16));
@@ -109,6 +131,24 @@ mod tests {
     fn check(source: &str) -> Result<()> {
         let program = Parser::new(Lexer::new(source, 0)).parse_program()?;
         SemanticAnalyzer::new().analyze(&program)
+    }
+
+    #[test]
+    fn win64_c_boundary_rejects_nonportable_aggregate_layouts() {
+        let check = |source: &str| {
+            let program = Parser::new(Lexer::new(source, 0)).parse_program()?;
+            let mut analyzer = SemanticAnalyzer::new();
+            analyzer.select_llvm_abi("x86_64-pc-windows-gnu");
+            analyzer.analyze(&program)
+        };
+        for bad_type in ["Empty", "Outer", "Zero", "[u16;4]"] {
+            let declarations = "struct Empty{} struct Outer{n:u16,e:Empty} struct Zero{n:u16,pad:[u8;0]}";
+            for signature in [format!("(value:{bad_type})->i32"), format!("()->{bad_type}")] {
+                let source = format!("{declarations} extern \"C\"{{fn boundary{signature};}}");
+                assert!(matches!(check(&source), Err(Error::Semantic { code: "E2407", .. })), "{source}");
+            }
+        }
+        check("struct Empty{} struct Values{bytes:[u16;4]} extern \"C\"{fn boundary(p:*Empty,s:Values)->Values;}").unwrap();
     }
 
     #[test]

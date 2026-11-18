@@ -1,0 +1,42 @@
+@repr(C) struct Byte { x:u8 }
+@repr(C) struct Half { x:u16 }
+@repr(C) struct FloatBox { x:f32 }
+@repr(C) union Word { x:u64, real:f64 }
+@repr(C) struct Three { x:u8, y:u8, z:u8 }
+@repr(C) struct Large { x:i64, y:f64, z:i64 }
+
+extern "C" {
+    fn c_small(a:Byte,b:Half,c:FloatBox,d:Word)->FloatBox;
+    fn c_three(v:Three)->Three;
+    fn c_bool(a:i8,b:u16,small:Byte,q:bool)->bool;
+    fn c_mixed(a:i64,b:f64,v:Large,d:FloatBox,e:Word,f:f64)->Large;
+    fn check_aether()->i32;
+}
+
+#[no_mangle]
+fn a_small(a:Byte,b:Half,c:FloatBox,d:Word)->FloatBox {
+    unsafe { return FloatBox{x:(a.x as f32)+(b.x as f32)+c.x+(d.real as f32)}; }
+}
+#[no_mangle]
+fn a_three(v:Three)->Three { return Three{x:v.y,y:v.z,z:v.x}; }
+#[no_mangle]
+fn a_bool(a:i8,b:u16,small:Byte,q:bool)->bool { return a==(-9 as i8) && b==65000 && small.x==170 && q; }
+#[no_mangle]
+fn a_mixed(a:i64,b:f64,v:Large,d:FloatBox,e:Word,f:f64)->Large {
+    unsafe { return Large{x:v.x+a,y:v.y+b+(d.x as f64)+f,z:v.z+(e.x as i64)}; }
+}
+
+fn main()->i32 {
+    unsafe {
+        let s:FloatBox=c_small(Byte{x:3},Half{x:259},FloatBox{x:0.5},Word{real:4.25});
+        if s.x!=(266.75 as f32) { return 1; }
+        let odd:Three=Three{x:17,y:18,z:19};
+        let r:Three=c_three(odd);
+        if r.x!=18 || r.y!=19 || r.z!=17 || odd.x!=17 { return 2; }
+        if !c_bool(-9,65000,Byte{x:170},true) || c_bool(-9,65000,Byte{x:170},false) { return 4; }
+        let original:Large=Large{x:100,y:6.25,z:200};
+        let out:Large=c_mixed(7,3.5,original,FloatBox{x:1.25},Word{x:11},0.5);
+        if out.x!=107 || out.y!=11.5 || out.z!=211 || original.x!=100 { return 3; }
+        return check_aether();
+    }
+}

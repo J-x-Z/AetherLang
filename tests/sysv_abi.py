@@ -40,11 +40,13 @@ def run(label, cmd):
     return r
 
 host_supported = ((platform.system() == 'Darwin' and platform.machine() in ('arm64', 'aarch64')) or
-                  (platform.system() in ('Darwin', 'Linux') and platform.machine() in ('x86_64', 'AMD64')))
+                  (platform.system() in ('Darwin', 'Linux', 'Windows') and platform.machine() in ('x86_64', 'AMD64')))
 if not a.target and 'llvm' in a.backends and not host_supported:
     p.error('native aggregate LLVM ABI is not supported on this host; select --backends c or --target for cross-object verification')
 
-for case in ['abi', 'sysv']:
+win64 = ('windows' in a.target.split('-') and a.target.startswith('x86_64-') if a.target else
+         platform.system() == 'Windows' and platform.machine() in ('x86_64', 'AMD64'))
+for case in ['abi', 'win64' if win64 else 'sysv']:
     source = fixtures / f'{case}.aeth'
     for copt in [0, 2, 3]:
         helper = work / f'{case}-native-O{copt}.o'
@@ -65,7 +67,7 @@ for case in ['abi', 'sysv']:
                     assert not r.stdout and not r.stderr
 
 sysv = (a.target and a.target.startswith('x86_64-') and ('-linux-' in a.target or '-apple-' in a.target)) or (
-    not a.target and platform.machine() in ('x86_64', 'AMD64'))
+    not a.target and not win64 and platform.machine() in ('x86_64', 'AMD64'))
 if 'llvm' in a.backends and sysv:
     ir = work / 'sysv-O0.ll'
     run('SysV explicit register and stack signature', [compiler, fixtures / 'sysv.aeth', '--sysroot', repo,

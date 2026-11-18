@@ -127,6 +127,14 @@ impl LLVMCodeGen {
         }
         if !matches!(ty, IRType::Array(_, _) | IRType::Struct(_)) { return Ok(AbiValue::Direct(native)); }
         if target == ForeignAbiTarget::SysvX86_64 { return self.classify_sysv(ty, result); }
+        if target == ForeignAbiTarget::WindowsX86_64 {
+            let size = LLVMABISizeOfType(self.target_data, native);
+            if size == 0 || matches!(ty, IRType::Array(..)) { return Err(Error::CodeGen(WIN64_LAYOUT_ERROR.into())); }
+            return Ok(match size {
+                1 | 2 | 4 | 8 => AbiValue::Coerce(LLVMIntTypeInContext(self.context, (size * 8) as u32)),
+                _ => AbiValue::Indirect,
+            });
+        }
         if target != ForeignAbiTarget::DarwinAarch64 { return Err(Error::CodeGen(format!("{}: '{}'", AGGREGATE_ABI_ERROR, self.target_triple))); }
         let size = LLVMABISizeOfType(self.target_data, native);
         if size == 0 { return Ok(AbiValue::Ignore); }
@@ -183,7 +191,9 @@ impl LLVMCodeGen {
                 }
                 lowered_params.push((ty.clone(), lowering));
             }
-            let abi = FunctionAbi { extend_narrow_integers, params: lowered_params, result, variadic };
+            let extend_bool = extend_narrow_integers ||
+                (c_abi && ForeignAbiTarget::for_triple(&self.target_triple) == ForeignAbiTarget::WindowsX86_64);
+            let abi = FunctionAbi { extend_narrow_integers, extend_bool, params: lowered_params, result, variadic };
             let mut parameter_types = Vec::new();
             if matches!(abi.result.1, AbiValue::Indirect) { parameter_types.push(LLVMPointerTypeInContext(self.context, 0)); }
             for (_, parameter) in &abi.params {
@@ -214,10 +224,10 @@ impl LLVMCodeGen {
             attach(index, LLVMCreateEnumAttribute(self.context, kind, amount as u64));
         };
         let extend = |index, ty: &IRType| {
-            if !abi.extend_narrow_integers { return; }
             let attribute = match ty.unqualified() {
-                IRType::I8 | IRType::I16 => c"signext",
-                IRType::U8 | IRType::U16 | IRType::Bool => c"zeroext",
+                IRType::I8 | IRType::I16 if abi.extend_narrow_integers => c"signext",
+                IRType::U8 | IRType::U16 if abi.extend_narrow_integers => c"zeroext",
+                IRType::Bool if abi.extend_bool => c"zeroext",
                 _ => return,
             };
             let kind = LLVMGetEnumAttributeKindForName(attribute.as_ptr(), attribute.to_bytes().len());
@@ -325,8 +335,13 @@ impl LLVMCodeGen {
                 }
             }
             AbiValue::Indirect | AbiValue::ByVal { .. } => {
-                let slot = self.entry_alloca(self.ir_type_to_llvm(semantic));
+                let ty = self.ir_type_to_llvm(semantic);
+                let slot = self.entry_alloca(ty);
                 if let AbiValue::ByVal { alignment } = lowering { LLVMSetAlignment(slot, *alignment); }
+                else if ForeignAbiTarget::for_triple(&self.target_triple) == ForeignAbiTarget::WindowsX86_64 {
+                    // Win64 passes the address of a private, 16-byte-aligned copy.
+                    LLVMSetAlignment(slot, LLVMABIAlignmentOfType(self.target_data, ty).max(16));
+                }
                 let store = LLVMBuildStore(self.builder, value, slot);
                 LLVMSetAlignment(store, 1);
                 slot

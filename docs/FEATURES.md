@@ -9,7 +9,7 @@
 | 模块和方法 | 导入、别名、私有成员、静态 interface/impl，检查完整签名和效果界限。泛型函数体按实例检查 | 重名模块、多包依赖和递归 Vec 有实际程序 | `tests/interfaces_methods.py`、`jxz/tests/integration.py` |
 | 生命周期与内存 | 跟踪初始化、引用来源和借用。opt-in `own Record` 对绑定的移动、使用和分支归并有检查 | 泛型析构在返回、循环及 `?` 早退时释放拥有的 fd、Vec、TensorHandle 和 LeaseHandle。裸指针仍由使用者保证有效性 | `tests/owned_values.rs`、`tests/{vec_alignment,memory_runtime,process_runtime}.py` |
 | 效果与契约 | 检查纯谓词、显式效果的上界、`requires`、`ensures` 及 `result` | 入口及正常出口执行检查，包括通过 `?` 返回；失败触发 trap | `tests/contracts.py` |
-| C 互调与系统入口 | C 函数/变量、`#[no_mangle]` 导出、union、布局查询、typed volatile、原子操作、受限 interrupt/naked | Apple arm64 和 Linux x86_64 SysV 双向 C ABI，含混合寄存器与栈传参。wasm32 通过实际执行核实目标整数和 Vec。x86-64 裸机处理函数在 QEMU 中处理两种 CPU 帧 | `tests/{global_linkage,aggregate_abi,sysv_abi,vec32,freestanding}.py` |
+| C 互调与系统入口 | C 函数/变量、`#[no_mangle]` 导出、union、布局查询、typed volatile、原子操作、受限 interrupt/naked | Apple arm64、x86_64 SysV 和 Windows x64 支持双向 C 聚合调用。Win64 覆盖 1、2、4、8 字节的整数传递、间接参数及隐藏返回指针。wasm32 通过实际执行核实目标整数和 Vec。x86-64 裸机处理函数在 QEMU 中处理两种 CPU 帧 | `tests/{global_linkage,aggregate_abi,sysv_abi,bootstrap_windows_native,vec32,freestanding}.py` |
 | 数据与宿主库 | 带长度字节、严格 UTF-8、i64 字节键 Map、Option/Result 以及带 errno 的 POSIX 文件/目录/进程接口 | 文件中的 NUL、无效 UTF-8、短读、错误码、子进程和分配失败均有原生用例 | `tests/{text_map,runtime_foundation,process_runtime}.py` |
 | 数学与量子 | CPU f64 张量/反向 AD、标量 DAG、电路与状态向量，OpenBLAS、Metal、CUDA-Q 的接口各自独立 | 真实 CPU native JIT/vmap、低秩、稀疏、PDE、MaxCut；M4 Metal、RTX 3060 和 Adreno 750 Vulkan 运行上层程序与 16q，CUDA-Q QPP 有独立 SDK 验收 | `tests/{math_values,compute_jit,compute_planning,compute_applications,compute_runtime,cudaq_runtime}.py` |
 | 项目、编辑器与安装 | JXZ 本地依赖、精确版本注册表、锁定/离线缓存、项目级 LSP、可校验的整包安装 | 目录移动、子进程退出、并发和中断恢复均有回归 | `jxz/tests/integration.py`、`tests/package_install.py` |
