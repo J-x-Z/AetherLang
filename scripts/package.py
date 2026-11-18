@@ -108,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix='.aether-package-', dir=out.parent) as s
         meta = json.loads((boot/'results.json').read_text())
         if not meta['metadata']['complete'] or meta['metadata']['seed_sha256'] != digest(seed):
             sys.exit('bootstrap receipt does not match release compiler')
-        checks[backend] = dict(seed=digest(seed), checks=len(meta['checks']), stage4=digest(boot/'stage4'), results=str(boot/'results.json'))
+        checks[backend] = dict(seed=digest(seed), checks=len(meta['checks']), stage4=digest(boot/'stage4'), results=(boot/'results.json').relative_to(work).as_posix())
         generated.append(digest(boot/'stage4.c'))
     if generated[0] != generated[1] or source_commit() != commit:
         sys.exit('bootstrap fixed point or source identity changed')
