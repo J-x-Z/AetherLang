@@ -29,10 +29,14 @@ pub fn ll_place(ctx:*BootContext,node:*BootNode)->i32{
  boot_error(ctx,node.token,"LLVM expression has no address");return 0;
 }
 pub fn ll_expr(ctx:*BootContext,node:*BootNode)->i32{
+ return ll_evaluate(ctx,node,false);
+}
+// Materialize an independent value before evaluating siblings that may mutate
+// its storage. Immediate consumers copy directly to their own destination.
+fn ll_evaluate(ctx:*BootContext,node:*BootNode,delayed:bool)->i32{
  if ctx.failed||node==(0 as *BootNode){return 0;}
  let mut value:i32=ll_expr_inner(ctx,node);
- if ll_bulk(node.ty)&&ll_snapshot(node){
-  // The next argument may mutate the original before the callee runs.
+ if ll_needs_snapshot(ctx,node,delayed){
   let snapshot:i32=ll_named(ctx,"bulk",node.id);ll_copy(ctx,node.ty,snapshot,value,vm_access(ctx,node));value=snapshot;
  }node.llvm_value=value;return value;
 }
@@ -134,7 +138,7 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
 fn ll_call(ctx:*BootContext,node:*BootNode)->i32{
  let mut arg:*BootNode=node.params;let mut param:*BootNode=node.decl.params;
  while arg!=(0 as *BootNode){
-  let value:i32=ll_expr(ctx,arg);
+  let value:i32=ll_evaluate(ctx,arg,true);
   if param==(0 as *BootNode){
    if arg.ty.kind==BY_F32{arg.llvm_value=ll_cast(ctx,value,arg.ty,boot_type(ctx,BY_F64));}
    else{if !boot_indirect(arg.ty)&&!ll_float(arg.ty)&&ll_bits(arg.ty)<32{arg.llvm_value=ll_cast(ctx,value,arg.ty,boot_type(ctx,BY_I32));}}
@@ -276,7 +280,7 @@ pub fn ll_statement(ctx:*BootContext,node:*BootNode){
 }
 
 fn ll_enum_value(ctx:*BootContext,node:*BootNode)->i32{
- let mut arg:*BootNode=node.params;while arg!=0 as *BootNode{ll_expr(ctx,arg);arg=arg.next;}
+ let mut arg:*BootNode=node.params;while arg!=0 as *BootNode{ll_evaluate(ctx,arg,true);arg=arg.next;}
  if ll_bulk(node.ty){fprintf(ctx.output,"  call void @llvm.memset.p0.i64(ptr %%enum%d, i8 0, i64 %llu, i1 false)\n",node.id,node.ty.layout_size);}
  else{ll_store_op(ctx);ll_type(ctx,node.ty);fprintf(ctx.output," zeroinitializer, ptr %%enum%d\n",node.id);}
  let tag:i32=ll_id(ctx);ll_begin(ctx,tag);ll_text(ctx,"getelementptr ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%enum%d, i32 0, i32 0\n",node.id);

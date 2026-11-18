@@ -123,7 +123,13 @@ for name, source, modules in [
     for level in ('0','2'):
         binary = w/(name+'-O'+level)
         run(name+'-link-O'+level, [cc, '-O'+level, ir, '-o', binary])
-        run(name+'-run-O'+level, [binary])
+        if name == 'large-value-snapshot' and sys.platform.startswith('linux'):
+            # The Windows x64 driver reserves 1 MiB for this same program.
+            # Catch excessive temporary copies during the native Linux suite too.
+            run(name+'-run-O'+level, [binary], preexec_fn=lambda: resource.setrlimit(
+                resource.RLIMIT_STACK, (1024 * 1024, resource.getrlimit(resource.RLIMIT_STACK)[1])))
+        else:
+            run(name+'-run-O'+level, [binary])
 
 # Reuse the independent UTF-8 byte oracle created by the semantic corpus, but
 # this time execute LLVM output, rather than its separate C-backend check.
