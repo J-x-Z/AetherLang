@@ -1,5 +1,31 @@
 # AetherLang 集中升级交付
 
+## 0.1.0 同版交付与 ARM64 Linux 实机
+
+起点为 `aceff15`。此前 macOS/Linux 和 Windows 安装包取自不同提交。本轮用同一源码 `c0afcaefea18c5b6811bedd7c7334566b47a0ac6` 生成 macOS arm64、Linux x86-64 和 Windows x86-64 发行包。许可证与发行包一并封装，原生验收过的可执行文件、标准库和清单逐文件回读核对。安装清单摘要见发布页，归档摘要如下。[发布与下载](https://github.com/J-x-Z/AetherLang/releases/tag/v0.1.0)
+
+| 平台 | 归档字节数 | SHA-256 |
+| --- | ---: | --- |
+| Linux x86-64 | 59,434,967 | `752ae220abea032cfb0d7d69b8364406ce066b949ca09f4f966577cdc7338a74` |
+| macOS arm64 | 4,515,458 | `6ac6d1ffc9170912f84944624bea21a414704e9624b7126db7977bc05d62106c` |
+| Windows x86-64 | 807,030 | `6264b0725925575000abaf12216ca7ff2b7223aee7c9e6ca5054c96ce43a4436` |
+
+Mac 包内 `aethc-native` 和 `jxz-native` 的 Mach-O 最低系统为 macOS 27.0，Rust 种子为 11.0；后者仍需兼容的 LLVM 21.1。Linux 包含 libLLVM，本机回读的动态依赖包括 `libxml2.so.16`、`libicuuc.so.78` 和 `libicudata.so.78`。其他系统版本可从源码构建。
+
+**从代码到运行的新增能力**
+
+- **内核。** 常规 Aether 编译器能检查中断处理函数的签名、生成正确的 LLVM 中断调用约定和返回指令。相同的 x86-64 裸机程序由两代编译器分别在 LLVM 21/23、O0/O2 下构建，八次 QEMU 启动均在真实工作循环中取得八次周期中断采样，恢复后校验和正确。验证范围为 QEMU 中的页帧、ABI 与时钟。[源码和启动测试](../tests/kernel_timer.py)
+- **量子。** 原有模板需要先绑定角度才能导出。现在可将旋转门的共享角度槽直接导出为 Quake 的 `f64` 形参。C、LLVM 和两代编译器均生成了可由 NVIDIA CUDA-Q 0.16.0 qpp 解析的模块。同一模块接收五组不同输入，按独立公式校验 40 个复振幅，最大误差 `6.21e-17`。Metal、Adreno 和原生 Windows 在这里使用 Aether 自己的计算队列。[模板与 SDK 验证](../tests/verify_cudaq_template.py)
+- **四个宿主环境。** macOS 完整稳定入口与可选 LLVM 23.1.2 自举入口均退出 0，耗时分别为 1257.5 秒和 534.6 秒。稳定包在新前缀用两套 JXZ 各过 40 项，安装后验证 C/LLVM 模板、M4 Metal 和 CUDA-Q。Linux x86-64 双 Core 种子各过 144 项，独立 Shell 的 C/LLVM 版本分别通过 48 个原生和 48 个脚本场景。维护者同一台 RTX 3060 笔记本还在 Windows 11 完成自举、25 项编译器、24 项 LSP、35 项 JXZ 与 10 项 CSV 检查。Windows 包先交叉生成，再到 Windows 自行编译下一代并实际运行。
+- **ARM64 GNU/Linux。** Xiaomi Warsaw 通过 USB 接入。Arch Linux ARM、glibc 2.43、Adreno 830、Mesa Turnip 26.2.3。Mac 交叉生成的 C/LLVM O2 程序和设备从 Aether 源码自行生成的 LLVM O0 程序，在三组 GPU 工作负载上的输出逐字节相同。应用和规划分别通过独立数值校验，提交 125、5 次。16 比特程序提交 42 次，在 65,536 个振幅上的最大逐振幅 L1 误差为 `7.81873961e-8`，队列记录峰值 2,097,216 字节，释放后归零。板上两代编译器的完整 C 和 LLVM IR 输出各自逐字节相同。JXZ 建立项目并运行张量训练，自动微分对有限差分的最大误差为 `1.84e-11`。设备缺少 Clang 命令，本次用临时 `CC` 适配器调用已装的 libLLVM 22 和 GNU ld，在板上生成和链接机器码。此证据覆盖该设备和驱动组合，未制作通用 ARM64 Linux 发行包。[实际计算程序](../tests/regressions/compute) · [量子设备表](QUANTUM.md)
+
+**复审和复现。** 独立复核读取八个中断镜像并核对指令、采样点及哈希；另一组从 SDK 消费者检查有参数模块的复用，发现发行包遗漏 Python 模块读取器并补入。安装复验还发现 JXZ 测试复用旧项目会触发正确的文件保护，测试改为每轮独立的项目目录，同一工作根连续两次各过 42 项。各平台使用的命令和原始凭据位置见[交接](../HANDOFF.md)。Linux x86-64 的 Rust 种子使用发行版 1.99.1，macOS 使用仓库固定的 1.100.0，稳定 LLVM 为 21.1.8。
+
+发行标签与安装清单都指向 `c0afcae`。主分支随后修复了 Rust 种子语言服务器的文件 URI 转换（Windows 的扩展盘符和 UNC 路径、POSIX 文件名中的反斜杠），并让 CI 选用与生成 IR 匹配的 Clang。Windows 包使用经原生测试的 Aether 自举编译器。
+
+**使用范围。** 命令行 CSV 分析、回归、张量、反向微分、原生进程和系统接口已有实际程序。交互式数据帧、绘图、通用统计模型库，以及完整操作系统的进程隔离与设备驱动，仍有独立的工程工作。8 GiB 整机内存余量按维护者决定暂缓。下节记录了编译耗时、RSS、产物体积和运行耗时的同机测量。下一项建议是在第二种 ARM64 GNU/Linux 发行版上构建普通 Clang 安装包并复验依赖，以确定可分发的 glibc 和 LLVM 基线。
+
+
 ## LLVM 21 与 23 的迁移决定
 
 稳定种子、CI 默认和现有发行包继续使用 LLVM 21.1。需要更快的本机编译时可用 `sh scripts/build.sh llvm23` 显式选择 23.1。C-only 种子仍可独立构建。同一工具链仅链接一个 LLVM major；两个版本使用同一套 Aether 代码生成逻辑。

@@ -1,69 +1,49 @@
 # AetherLang 工程交接
 
-工作树 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`，原始起点 `aceff15`。本轮内核和量子从 `78f5ac5` 续做，实现及测试入口至 `4226137`。已验收的宿主安装包仍分别冻结在 macOS/Linux `13941f6`、Windows `98402df`。本地新增的实现、回执与剩余任务见下方；用 `git log -1 --oneline` 查看包含交接的当前提交。[主线任务](MAINLINE_TASKS.md) · [升级报告及测量](docs/UPGRADE.md)
+外置源码位于 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`。升级起点为 `aceff15`，三个宿主包共用的编译器、标准库和运行时源码为 `c0afcaefea18c5b6811bedd7c7334566b47a0ac6`。当前分支提交用 `git rev-parse HEAD` 查询。[主线任务](MAINLINE_TASKS.md) · [升级报告与实测指标](docs/UPGRADE.md)
 
-## 重建
+## 本机重建
 
 ```sh
 cd /Volumes/WINDOWS/work/AetherLang
 . /Volumes/WINDOWS/work/aetherlang-upgrade-work/typed-facts-20261117/env.sh
 sh scripts/build.sh llvm
-python3 scripts/build_selfhost.py --seed "$CARGO_TARGET_DIR/release/aethc" --work-dir "$WORK/regular-work" --output "$WORK/aethc-native"
-AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 OPENBLAS_LIBRARY=/opt/homebrew/opt/openblas/lib/libopenblas.dylib AETHER_CUDAQ_BRIDGE="$WORK/cudaq/quake-export-20261118/libaether_cudaq.dylib" sh scripts/test.sh llvm
+python3 scripts/build_selfhost.py --seed "$CARGO_TARGET_DIR/release/aethc" \
+  --work-dir "$WORK/regular-work" --output "$WORK/aethc-native"
 ```
 
-本机使用外置 Rust 1.100.0、LLVM 21、Clang 和三路 Cargo 并发。`sh scripts/build.sh c` 构建 C-only 种子。`scripts/test.sh llvm seed` 与 `scripts/test.sh llvm selfhost` 可单独复现两组验收。从干净 Git 提交构建发行目录使用 `python3 scripts/package.py --work-dir "$WORK/rebuild-evidence" --output "$WORK/rebuild-release"`，输出应为新目录。Linux 附带 LLVM 共享库时加 `--bundle-linux-llvm`。
+完整验收同时启用 QEMU、Metal、OpenBLAS 和已安装的 CUDA-Q SDK。可选 LLVM 23 使用独立的 Cargo 产物目录。发布包默认用 LLVM 21.1。普通宿主可从 [README](README.md) 的无可选设备命令开始。
 
-## 交付与证据
+```sh
+cycle="$WORK/closure-20261118"
+export AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1
+export OPENBLAS_LIBRARY=/opt/homebrew/opt/openblas/lib/libopenblas.dylib
+export AETHER_CUDAQ_BRIDGE="$cycle/quake/libaether_cudaq.dylib"
+export AETHER_CUDAQ_QUAKE_PYTHON="$cycle/sdk-python"
+sh scripts/test.sh llvm
+LLVM_SYS_231_PREFIX=/opt/homebrew/opt/llvm CARGO_TARGET_DIR="$WORK/llvm23-kernel-quantum-20261118/opt-in-target" sh scripts/test.sh llvm23 selfhost
+python3 scripts/package.py --work-dir "$WORK/rebuild-evidence" --output "$WORK/rebuild-release"
+```
 
-外置根为 `WORK=/Volumes/WINDOWS/work/aetherlang-upgrade-work`。
+包输出应为新目录。Linux 打包可加 `--bundle-linux-llvm`。Windows 从解包根运行 `Test-Native.ps1`，传入 x64 Python 和 llvm-mingw UCRT Clang 的路径。
 
-| 平台 | 包或入口 | 验收 |
+## 当前验收凭据
+
+下列路径相对 `/Volumes/WINDOWS/work/aetherlang-upgrade-work`。原始日志留在外置卷，程序、输入和测试入口随仓库交付。
+
+| 平台或能力 | 已执行的工作 | 本地凭据 |
 | --- | --- | --- |
-| macOS arm64 | `$WORK/releases/aetherlang-macos-472e6fd.tar.gz` | `$WORK/accept-472e6fd/{full.log,run.json,archive.json}` |
-| Linux x86-64 | `$WORK/linux-mainline-20261118/delivered/472e6fd/linux-release-472e6fd.tgz` | 同目录 `final-verification.json` 和证据归档 |
-| Windows x86-64 | `$WORK/windows-native-20261118/aether-windows-x64-117efa2.zip` | 同目录 `native-acceptance.json` 与 `evidence-117efa2.zip` 含真机自举、JXZ、CSV 与 LSP 记录 |
+| macOS arm64 | 稳定版完整入口、可选版本自举、安装和 SDK 模板的分步状态 | `closure-20261118/accept/a24134e3f9/acceptance.json` |
+| Linux x86-64 | 双种子、安装树、JXZ、独立 Shell、QEMU、CPU/Vulkan 实机 | `closure-20261118/platforms/a24134e/linux/acceptance.json` 及中性路径重建后的 `linux-clean/{hashes.json,clean-native-extras.tgz}` |
+| Windows x86-64 | 维护者同一台 RTX 3060 笔记本的 Windows 11；自举、JXZ、LSP、CSV 及模板 | `closure-20261118/platforms/a24134e/windows/final-verification.json` |
+| Arch Linux ARM | Xiaomi Warsaw 实机，板上自举固定点、JXZ、张量微分与 Adreno 830 Vulkan | `closure-20261118/arm64-linux/receipt.json` |
+| x86-64 裸机 | 种子和自举生成的周期中断程序，LLVM 21/23 的 O0/O2 共八次 QEMU 启动 | `closure-20261118/quake/kernel-independent-review.json` |
+| 参数化量子程序 | CUDA-Q SDK 通过同一 Quake 模块执行五组角度 | `closure-20261118/quake/parameterized-final.json` |
 
-常规编译器自举覆盖两种源表示及 C/LLVM；生成的编译器已实际编译 JXZ、独立 Shell、持久服务与科学计算程序。CSV 回归使用精确有理数核验。16 比特程序在 CPU、M4 Metal、RTX 3060 和 Adreno 750 上有实际执行记录，设备取证分别在 Mac 的 compute 日志、Linux 证据包与 `$WORK/adreno-ordered-marginal-94d6348`。最后一项编译器回归及析构验证在 `$WORK/t26-method-receiver/manifest.json`。
+16 比特状态向量结果及 SDK 和原生计算路径见[量子运行时](docs/QUANTUM.md)。维护者已暂缓物理 8 GiB 整机余量测试。
 
-## Windows 复验
+## 发行与下一项
 
-在 NTFS 工作目录解压包，使用 x64 Python 3.10+ 和 llvm-mingw UCRT Clang。Windows 11 build 26200、Python 3.10.11 与 Clang 21.1.8 已跑通该入口。
+发行文件与 `SHA256SUMS` 保存在 `closure-20261118/public`。[0.1.0 发布页](https://github.com/J-x-Z/AetherLang/releases/tag/v0.1.0) · [报告](docs/UPGRADE.md)
 
-```powershell
-.\Test-Native.ps1 -Clang 'C:\Tools\llvm-mingw\bin\clang.exe' -Python python -WorkDir '.\native-results'
-```
-
-历史独立测试设备不属于维护者，此次 Windows 验收仅使用维护者运行 CachyOS 的同一台笔记本。早期 GPU 包在 `$WORK/windows-gpu-20261118/AetherLang-Windows-x64-Vulkan.zip`。解压后 `python windows_vulkan.py run --dir . --vendor 10de` 重跑 RTX 4060 的 CPU/Vulkan 对照。CUDA-Q 的 SDK 设备探针在 `examples/quantum/cudaq_device.aeth`，设备结果见 [量子运行时](docs/QUANTUM.md)。
-
-## 本轮源码和验收
-
-`26378d9` 的周期时钟在持续运行的 Aether 工作函数内实际触发。常规自举编译器在 `7dcd8d8` 加入 x86-64 裸机 LLVM，并在 `8253c44` 修复优化 IR 的目标核对。修正版固定点及直接可用的工具位于 `$WORK/selfhost-metal-target/corrected`。QEMU 用例无需板卡。
-
-```sh
-trial="$WORK/llvm23-kernel-quantum-20261118"
-native="$WORK/selfhost-metal-target/corrected/aethc-native"
-python3 tests/kernel_boot.py --selfhost "$native" --seed "$CARGO_TARGET_DIR/release/aethc" --work-dir "$WORK/recheck-pages" --qemu
-python3 tests/bootstrap_kernel_target.py --compiler "$native" --cc "$LLVM_SYS_211_PREFIX/bin/clang" --work-dir "$WORK/recheck-abi" --qemu
-python3 tests/kernel_timer.py --seed "$CARGO_TARGET_DIR/release/aethc" --work-dir "$WORK/recheck-timer"
-```
-
-`25665bc` 提供显式 LLVM 23 选项。`a98f550` 修复了配套 Clang 检出的宿主 C 后端 FILE 句柄错误。稳定默认仍为 LLVM 21.1。对照使用的 23.1.2 已安装在 `/opt/homebrew/opt/llvm`；浮点文本 IR 由配套的 Clang 读取。两套环境使用独立产物目录。
-
-```sh
-LLVM_SYS_231_PREFIX=/opt/homebrew/opt/llvm CARGO_TARGET_DIR="$trial/opt-in-target" sh scripts/build.sh llvm23
-LLVM_SYS_231_PREFIX=/opt/homebrew/opt/llvm CARGO_TARGET_DIR="$trial/opt-in-target" sh scripts/test.sh llvm23 seed
-python3 scripts/benchmark_host.py --reference "$CARGO_TARGET_DIR/release/aethc" --candidate "$trial/opt-in-target/release/aethc" --work-dir "$WORK/recheck-host-perf" --samples 8
-```
-
-`acf62af` 增加通过 SDK 导出 Quake，`beb76e7` 和 `46ac232` 增加参数模板及 M4 GPU 验收。模板和绑定均在 Aether 中实现。Mac 上 CUDA-Q qpp 和 Metal 可以在同一验收中分别选用。
-
-```sh
-bridge="$WORK/cudaq/quake-export-20261118/libaether_cudaq.dylib"
-python3 tests/quantum_templates.py --compiler "$native" --backends c llvm --bridge "$bridge" --metal --work-dir "$WORK/recheck-templates"
-```
-
-- 21/23 编译耗时、RSS、产物和运行对照在 `$trial/compare-host/{results.json,run.py,provenance.md}`，最终 release 对象的逐字节核对在 `$trial/final-benchmark-objects/results.json`。页帧池在 `$trial/{final21-pages,final23-pages}`，时钟在 `$WORK/kernel-timer-20261118` 与 `$trial/timer`。
-- macOS 完整 LLVM 23 种子入口退出 0，日志为 `$trial/opt-in-final.log`。LLVM 21 构建与单元测试在 `$trial/final-default-{build,unit}.log`。
-- 交叉 ABI 与错误输出保存在 `$WORK/selfhost-metal-target/corrected/{llvm21,llvm23}`。量子记录在 `$WORK/quantum-templates-20261118` 和 `$WORK/cudaq/quake-export-20261118`。
-- 下一项内核工作是让自举编译器支持现有定时器的中断入口。量子下一项是导出保留参数的 Quake 函数并用同一模块执行多组参数。宿主大版本迁移下一步是使用确切拟发布的 LLVM 补丁版本，在 Linux/Windows 的现有原生入口重跑。公开发布和推送由维护者决定。
+下一项具体工作是在另一个配有常规 Clang 的 ARM64 GNU/Linux 发行版上构建和搬移安装包，核验 glibc 与 libLLVM 的最低分发要求。当前 ARM64 真机已经完成原生自举和 Adreno 计算验收。

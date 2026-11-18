@@ -23,6 +23,8 @@ selection are outside this interface. [CUDA-Q dynamic kernel builder](https://nv
 | Linux x86_64, RTX 3060 Laptop GPU | CUDA-Q cuStateVec, fp64 | Eight mixed circuits and 40 optimizer steps, `on_gpu=1` |
 | macOS arm64, Apple M4 GPU | Aether compute queue, Metal, complex64 | 16 qubits, all amplitudes checked, 42 submissions |
 | Linux x86_64, RTX 3060 Laptop GPU | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
+| Windows 11 x86-64, RTX 3060 Laptop GPU | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
+| Arch Linux ARM, Adreno 830 | Aether compute queue, Mesa Turnip 26.2.3, complex64 | C/LLVM binaries and an on-device self-hosted build agreed on all amplitudes, expectations and gradient |
 | Android, Adreno 750 | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
 
 CUDA-Q documents GPU simulation targets on Linux and CPU simulation on Apple
@@ -30,6 +32,27 @@ Silicon. On Windows its documented installation route is Linux under WSL 2.
 The table records the tested host/device combinations. Native Windows and WSL 2
 CUDA-Q execution are unverified in this project. The Metal and Adreno rows run
 Aether's own simulator and require no CUDA-Q SDK. [CUDA-Q installation](https://nvidia.github.io/cuda-quantum/latest/using/install/local_installation.html) · [CUDA-Q simulator targets](https://nvidia.github.io/cuda-quantum/latest/using/quick_start.html)
+
+The Arch Linux ARM device used glibc 2.43 and reported Vulkan 1.4.354 on
+the integrated Adreno 830. The 16-qubit run checked all 65,536 amplitudes
+against the fp64 reference. Maximum per-amplitude L1 error was
+7.81873961e-8. The queue accounted for 2,097,216 bytes at peak and zero
+after cleanup. The application and planning suites also ran on the device
+and passed their independent numerical checks. These figures measure queue
+allocations. Whole-system memory headroom on an 8 GiB device remains unmeasured.
+
+To repeat the three workloads on a GNU/Linux Vulkan host with Clang, Vulkan
+development headers and `glslc`, set `AETHC` to an absolute compiler path
+and `WORK` to a writable directory. Select the intended device's ICD in the
+environment when multiple drivers are installed.
+
+```sh
+python3 scripts/build_vulkan.py --output "$WORK/libaether_vulkan.so"
+for suite in compute_applications compute_planning compute_runtime; do
+    python3 "tests/$suite.py" --compiler "$AETHC" --work-dir "$WORK/$suite" \
+        --backends c llvm --provider "$WORK/libaether_vulkan.so" --device vulkan
+done
+```
 
 On Windows the optional compute package contains `aether_vulkan.dll`,
 `loader.obj` and C/LLVM workloads. Run

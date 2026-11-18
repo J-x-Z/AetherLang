@@ -5,7 +5,27 @@ Use `.ath` for indentation-based Script and `.aeth` for explicit Core. Core
 provides control over memory layout, ownership and C interfaces. JXZ builds
 multi-package projects, runs programs and discovers tests.
 
-## Build and run
+## Install a release
+
+Download the archive for your platform and its checksums from
+[GitHub Releases](https://github.com/J-x-Z/AetherLang/releases). On macOS and Linux,
+extract the archive, enter the directory containing `manifest.json` and run:
+
+```sh
+sh install.sh --package . --prefix "$HOME/.aetherlang" --manifest-sha256 "$MANIFEST_SHA256"
+"$HOME/.aetherlang/bin/aethc-native" --version
+```
+
+Set `MANIFEST_SHA256` to the digest listed for that platform in the release
+notes. Building programs requires Clang. The macOS Rust seed also requires
+LLVM 21.1. The packaged Aether-written compiler and JXZ target macOS 27.0
+or newer. The Linux archive includes its LLVM shared library and was tested
+on CachyOS with libxml2.so.16 and ICU 78. Build from source for systems
+with different library versions. Windows ships
+the self-hosted compiler and JXZ. Extract the ZIP and run the PowerShell
+validation command in the installation section below.
+
+## Build from source
 
 On macOS or Linux, install the pinned Rust toolchain and Clang. The Rust LLVM
 backend defaults to LLVM 21.1. Set `LLVM_SYS_211_PREFIX` if needed. `CARGO_TARGET_DIR`
@@ -75,12 +95,15 @@ remain gaps for users of those ecosystems. [Numerical API](docs/MATH.md) ·
   reads commands, writes a journal and closes its resources.
 - **Accelerators.** Aether code owns tensor shapes, budgets, operator scheduling
   and resource lifetimes. Compute providers have run on CPU, Apple Metal and
-  Vulkan on NVIDIA and Adreno devices. Callers select a device and receive
+  Vulkan on NVIDIA and Adreno devices. On Arch Linux ARM, the self-hosted
+  compiler rebuilt itself and compiled programs that ran on an Adreno 830. Callers select a device and receive
   errors for unsupported operations or allocation failures.
 - **Quantum simulation.** An fp64 state-vector reference and an fp32 simulator
   using the compute queue run Aether circuits. The separate CUDA-Q SDK bridge
   supports QPP and NVIDIA environments and exports validated circuits as Quake MLIR.
-  Reusable Aether circuit templates bind shared rotation parameters before execution. Metal and Adreno use Aether's own
+  Reusable Aether circuit templates can bind shared rotation parameters or export
+  them as scalar `f64` parameters in Quake. CUDA-Q can load one exported module
+  and execute it with successive sets of angles. Metal and Adreno use Aether's own
   simulator. A 16-qubit workload checks all 65,536 amplitudes, expectations
   and a parameter-shift gradient. [Quantum API and device results](docs/QUANTUM.md)
 - **Project tools.** JXZ checks, builds, runs and tests projects with local or
@@ -88,7 +111,7 @@ remain gaps for users of those ecosystems. [Numerical API](docs/MATH.md) ·
   JSON diagnostics, a symbol index and a stdio language server for unsaved
   buffers and imports. [JXZ usage](jxz/README.md)
 
-## Reproduce and install
+## Reproduce the release
 
 ```sh
 sh scripts/test.sh llvm
@@ -96,7 +119,7 @@ python3 scripts/package.py --work-dir "$build/package-evidence" --output "$build
 sh install.sh --package "$build/local-release" --prefix "$HOME/.aetherlang" --manifest-sha256 "$MANIFEST_SHA256"
 ```
 
-Set `MANIFEST_SHA256` to the hash printed by the package command. A release
+Set `MANIFEST_SHA256` to the hash printed by the package command. A POSIX release
 contains `aethc` (Rust seed), `aethc-native` (Aether), their JXZ executables and
 the standard library. On Linux, `--bundle-linux-llvm` includes the seed's LLVM
 library. The installer verifies file checksums and switches versions atomically.
