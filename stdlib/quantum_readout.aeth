@@ -1,0 +1,30 @@
+// A selected qubit at position j becomes bit j of the observed outcome.
+// Precompute masks before touching the output so a rejected query preserves it.
+use result::Result;
+pub struct ReadoutPlan { masks:[u64;63], bits:u32 }
+pub fn readout_plan(qubits:u32,selected:*u32,count:u32,output:*f64,length:u64)->Result<ReadoutPlan,i32>{
+    if qubits==0 || qubits>62 || count>qubits || output==0 as *f64 || (count!=0 && selected==0 as *u32){
+        return Result::Err(1);
+    }
+    let bins:u64=(1 as u64)<<(count as u64);
+    if length!=bins{return Result::Err(1);}
+    let mut plan:ReadoutPlan=ReadoutPlan{masks:[0;63],bits:count};
+    let mut used:u64=0;let mut j:u32=0;
+    while j<count{
+        let q:u32=selected[j];
+        if q>=qubits{return Result::Err(1);}
+        let mask:u64=(1 as u64)<<(q as u64);
+        if (used&mask)!=0{return Result::Err(1);}
+        plan.masks[j]=mask;used=used|mask;j+=1;
+    }
+    let mut i:u64=0;while i<bins{output[i]=0.0;i+=1;}
+    return Result::Ok(plan);
+}
+pub fn readout_add(plan:*ReadoutPlan,index:u64,re:f64,im:f64,output:*f64){
+    let mut bin:u64=0;let mut j:u32=0;
+    while j<plan.bits{
+        if (index&plan.masks[j])!=0{bin=bin|((1 as u64)<<(j as u64));}
+        j+=1;
+    }
+    output[bin]+=re*re+im*im;
+}

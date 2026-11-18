@@ -146,3 +146,21 @@ python3 tests/cudaq_runtime.py --compiler /path/to/aethc \
 `quantum_compute_gradient` uses parameter shift with separate rotations, including when a large finite angle would round away an added shift. `quantum_compute_cudaq` accepts an explicit SDK placement requirement, returns the same readable state, and propagates SDK failures and placement mismatches. Its host f64 return and f32 conversion storage both count against the queue. SDK verification requires the optional CUDA-Q bridge.
 
 `tests/compute_runtime.py` runs the 16q all-gate workload, checks every amplitude against the f64 reference, all three Pauli axes, analytic gradient, a classical optimizer update, rollback and zero remaining bytes. Use `--metal` or `--device vulkan --provider /absolute/path/libaether_vulkan.so` to require a real GPU. `tests/cudaq_runtime.py` checks the same circuit through the SDK and verifies the reported state placement.
+
+### Reading a subset of qubits
+
+`quantum_marginal(state, selected, count, output, length)` writes the exact
+computational-basis distribution of the selected qubits. Supply a disjoint
+output array of exactly `2^count` f64 elements. Position `j` in `selected`
+is bit `j` of the output bin. An empty selection produces the total squared
+norm in one bin. Duplicate or out-of-range indices and incorrect lengths
+return an error before writing. The computation preserves the state and uses
+fixed scratch space independent of state size.
+
+`quantum_compute_marginal` accepts a state produced on a compute queue. It
+reads the synchronized f32 amplitudes already held by the simulator and
+accumulates probabilities on the host in f64. CUDA-Q results exported through
+the fp64 bridge use `quantum_marginal`. Two Bell states can have identical
+one-qubit marginals and disjoint two-qubit distributions. The reference tests
+exercise that distinction and the 16-qubit workload checks the specified bit
+order against analytical probabilities.

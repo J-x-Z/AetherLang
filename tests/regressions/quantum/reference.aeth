@@ -1,6 +1,6 @@
 use result::Result;
 use quantum::{Circuit, QuantumState, quantum_new, quantum_free, quantum_gate, quantum_set_angle,
- quantum_simulate, quantum_state_free, quantum_probability, quantum_expect, quantum_gradient,
+ quantum_simulate, quantum_state_free, quantum_probability, quantum_marginal, quantum_expect, quantum_gradient,
  Q_H,Q_X,Q_Y,Q_Z,Q_RX,Q_RY,Q_RZ,Q_CX,Q_CZ,Q_SWAP};
 extern "C"{fn sin(x:f64)->f64;fn cos(x:f64)->f64;}
 fn near(a:f64,b:f64)->bool{let d:f64=a-b;d<0.000000001&&d> -0.000000001}
@@ -10,7 +10,24 @@ fn work()->Result<i32,i32>{
  let state:*QuantumState=quantum_simulate(bell,8)?;
  if !near(quantum_probability(state,0)?,0.5)||!near(quantum_probability(state,3)?,0.5)||!near(quantum_probability(state,1)?,0.0){return Result::Err(11);}
  if !near(quantum_expect(state,0,0)?,0.0){return Result::Err(12);}
- quantum_state_free(state);quantum_free(bell);
+ let bit:[u32;1]=[0];let both:[u32;2]=[0,1];
+ let mut marginal:[f64;2]=[0.0;2];let mut full:[f64;4]=[0.0;4];let mut norm:f64=0.0;
+ quantum_marginal(state,0 as *u32,0,&mut norm as *f64,1)?;
+ quantum_marginal(state,&bit[0] as *u32,1,&mut marginal[0] as *f64,2)?;
+ quantum_marginal(state,&both[0] as *u32,2,&mut full[0] as *f64,4)?;
+ if !near(norm,1.0)||!near(marginal[0],0.5)||!near(marginal[1],0.5)||!near(full[0],0.5)||!near(full[3],0.5){return Result::Err(41);}
+ quantum_state_free(state);
+ if quantum_gate(bell,Q_X,1,0,0.0)!=0{return Result::Err(42);}
+ let opposite:*QuantumState=quantum_simulate(bell,8)?;
+ quantum_marginal(opposite,&bit[0] as *u32,1,&mut marginal[0] as *f64,2)?;
+ quantum_marginal(opposite,&both[0] as *u32,2,&mut full[0] as *f64,4)?;
+ if !near(marginal[0],0.5)||!near(marginal[1],0.5)||!near(full[1],0.5)||!near(full[2],0.5)||!near(full[0],0.0)||!near(full[3],0.0){return Result::Err(43);}
+ let dup:[u32;2]=[0,0];let bad:[u32;1]=[2];
+ let duplicate:bool=match quantum_marginal(opposite,&dup[0] as *u32,2,&mut full[0] as *f64,4){Result::Err(_)=>true,Result::Ok(_)=>false};
+ let outside:bool=match quantum_marginal(opposite,&bad[0] as *u32,1,&mut full[0] as *f64,2){Result::Err(_)=>true,Result::Ok(_)=>false};
+ let short:bool=match quantum_marginal(opposite,&both[0] as *u32,2,&mut full[0] as *f64,3){Result::Err(_)=>true,Result::Ok(_)=>false};
+ if !duplicate||!outside||!short||!near(full[1],0.5)||!near(full[2],0.5){return Result::Err(44);}
+ quantum_state_free(opposite);quantum_free(bell);
  // Check each phase-bearing gate against its analytical single-qubit state.
  let mut kind:i32=Q_RX;
  while kind<=Q_RZ{

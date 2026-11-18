@@ -4,6 +4,7 @@
 use quantum::{Circuit,QuantumGate,Complex64,quantum_validate,quantum_gate_matrix,Q_CX,Q_SWAP,Q_RX,Q_RZ};
 use compute::*;
 use result::Result;
+use quantum_readout::{ReadoutPlan,readout_plan,readout_add};
 extern "C" { fn malloc(size:usize)->*void; fn free(ptr:*void); }
 
 pub struct ComputeQuantumState {
@@ -23,6 +24,19 @@ pub fn quantum_compute_amplitude(state:*ComputeQuantumState,index:u64)->Result<C
     if state==0 as *ComputeQuantumState || index>=state.length {return Result::Err(compute_error(COMPUTE_BOUNDS,0));}
     let data:*f32=compute_scratch_data(state.backing) as *f32;
     Result::Ok(Complex64{re:data[index*2] as f64,im:data[index*2+1] as f64})
+}
+// The state's synchronized f32 amplitudes are accumulated in f64 on the host.
+pub fn quantum_compute_marginal(state:*ComputeQuantumState,selected:*u32,count:u32,output:*f64,length:u64)->Result<(),ComputeError>{
+    if state==0 as *ComputeQuantumState{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    let mut plan:ReadoutPlan=match readout_plan(state.qubits,selected,count,output,length){
+        Result::Ok(value)=>value,Result::Err(_)=>{return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    };
+    let data:*f32=compute_scratch_data(state.backing) as *f32;
+    let mut i:u64=0;
+    while i<state.length{
+        readout_add(&mut plan as *ReadoutPlan,i,data[2*i] as f64,data[2*i+1] as f64,output);i+=1;
+    }
+    return Result::Ok(());
 }
 pub fn quantum_compute_expect(state:*ComputeQuantumState,qubit:u32,axis:i32)->Result<f64,ComputeError> {
     if state==0 as *ComputeQuantumState || qubit>=state.qubits || axis<0 || axis>2 {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}

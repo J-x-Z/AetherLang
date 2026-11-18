@@ -40,6 +40,14 @@ fn circuit_test(queue:*ComputeQueue,circuit:*Circuit)->Result<(),ComputeError> {
         if e>max_error {max_error=e;}
         norm+=a.re*a.re+a.im*a.im;i+=1;
     }
+    // q2 is set by X. q9 is an independent RY(theta); reversing the
+    // readout order must permute the occupied bins, preserving all the mass.
+    let order:[u32;2]=[9,2];let reversed:[u32;2]=[2,9];let mut bins:[f64;4]=[0.0;4];
+    let c:f64=cos(theta*0.5);let s:f64=sin(theta*0.5);
+    quantum_compute_marginal(accelerated,&order[0] as *u32,2,&mut bins[0] as *f64,4)?;
+    ok(bins[0]==0.0 && bins[1]==0.0 && fabs(bins[2]-c*c)<0.000002 && fabs(bins[3]-s*s)<0.000002,116)?;
+    quantum_compute_marginal(accelerated,&reversed[0] as *u32,2,&mut bins[0] as *f64,4)?;
+    ok(bins[0]==0.0 && bins[2]==0.0 && fabs(bins[1]-c*c)<0.000002 && fabs(bins[3]-s*s)<0.000002,117)?;
     let mut expectations:f64=0.0;
     for axis in 0..3 {
         expectations+=fabs(quantum_compute_expect(accelerated,0,axis as i32)?-checked(quantum_expect(oracle,0,axis as i32))?);

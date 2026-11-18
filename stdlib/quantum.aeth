@@ -3,6 +3,7 @@
 // Handles own their buffers: free once; copies are aliases, not new owners.
 use vec::{Vec, vec_new, vec_push, vec_free};
 use result::Result;
+use quantum_readout::{ReadoutPlan,readout_plan,readout_add};
 extern "C" {
     fn malloc(size:u64)->*void;
     fn free(pointer:*void);
@@ -244,6 +245,17 @@ pub fn quantum_probability(state:*QuantumState,index:u64)->Result<f64,i32> {
     let a:Complex64=state.amplitudes[index];Result::Ok(a.re*a.re+a.im*a.im)
 }
 // axis 0 = Z, 1 = X, 2 = Y; no backend-dependent bitstring convention.
+// Exact computational-basis marginal. The caller owns a disjoint output array.
+pub fn quantum_marginal(state:*QuantumState,selected:*u32,count:u32,output:*f64,length:u64)->Result<(),i32>{
+    if state==0 as *QuantumState || state.amplitudes==0 as *Complex64{return Result::Err(Q_INVALID);}
+    let mut plan:ReadoutPlan=readout_plan(state.qubits,selected,count,output,length)?;
+    let mut i:u64=0;
+    while i<state.length{
+        let amplitude:Complex64=state.amplitudes[i];
+        readout_add(&mut plan as *ReadoutPlan,i,amplitude.re,amplitude.im,output);i+=1;
+    }
+    return Result::Ok(());
+}
 pub fn quantum_expect(state:*QuantumState,qubit:u32,axis:i32)->Result<f64,i32> {
     if state==0 as *QuantumState || qubit>=state.qubits || axis<0 || axis>2 {return Result::Err(Q_INVALID);}
     let mask:u64=(1 as u64)<<(qubit as u64);let mut value:f64=0.0;let mut i:u64=0;
