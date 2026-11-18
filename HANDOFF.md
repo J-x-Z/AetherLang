@@ -33,3 +33,9 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 AETHER_CUDAQ_BRIDGE="$WORK/cudaq/libaethe
 主线已验收 27/29 项。T25 的四种能力联合测试至 `d7bac32`。T26 的上一代种子、固定点和项目运行分别见 `$WORK/t26-{abi,language-integrated,project-lsp}`。`8cfd1a1` 用独立 C 调用端和被调用端验证了 Apple arm64 与 x86_64 SysV 的原生聚合 ABI。`b55a11e` 可对两种源表示检查引用、实例化枚举及方法、传播错误、生成 C/LLVM，并从仓库 JXZ 源码构建 JXZ。该 JXZ 在两后端完成含三包依赖、失效重建、Unicode 参数、失败状态和清理的 42 项命令。相邻代 LLVM IR SHA-256 为 `36c05defcc8adcdda3f972169e2bcd3cc2b7f585e76dceb4b080421364cd188d`。`497bd70` 补上文件模块、内联模块及缺失对象路径，`5951201` 修复所有 match 分支均退出时对函数返回的误判。
 
 接下来在同一自举源码上联合验证紧凑布局、所有者析构、常量泛型和 JXZ 调用的语言服务。用生成的 JXZ 和自举编译器一起跑 jxz/tests/integration.py；T29 待 T26 的共享程序、完整固定点与双宿主归档验收后更新。
+
+## 11 月 18 日新增验收范围
+
+`67d05e0` 的 packed/union/指针重定位由 macOS 和 Linux 各自的 120 项命令验证。Mac 的 Rust 种子另以两个后端链接和运行同一含非对齐指针的可执行文件。自举构建的 aether-shell 两个原生程序各通过 48 项既有验收。资源语义提交 `10d1b4c` 有 151 项命令、30 次资源程序运行，证据在 `$WORK/{t26-native-layout,t26-shell-self,t26-owned/integrated}`。
+
+阶段验收补上终端科学数据工作流、Windows 上机前移植与 README。两台登记的 Windows 机器当前离线，用户要求本阶段不推送、保持私有，稍后再做 Windows 原生验收。`$WORK/t26-math-native` 是隔离的公共导出/常规 CLI/效果检查实现和已运行的 AD、CPU/Metal 工作负载。集成后复测固定点与双宿主包。

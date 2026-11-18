@@ -133,7 +133,7 @@ run('void-main-run',[w/'void-main'])
 loop_source=w/'loop-storage.aeth'
 loop_source.write_text('extern "C"{fn printf(format:*u8,...)->i32;}fn main()->i32{'
                       'let mut i:i64=0;let mut sum:i64=0;while i<1000000{'
-                      'let value:i64=i;let pointer:*i64=&value;sum=sum+*pointer;i=i+1;}'
+                      'let value:i64=i;let pointer:*i64=&value as *i64;sum=sum+*pointer;i=i+1;}'
                       'printf("loop=%lld\\n",sum);return 0;}')
 run('loop-storage-emit',[stages[4],loop_source,'--emit-llvm','-o',w/'loop.ll'])
 for level in ['0','2']:

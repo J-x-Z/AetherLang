@@ -8,9 +8,9 @@ fn truth(pair:Pair)->bool {pair.x==1 && pair.y==2}
 fn answer(ok:bool)->i32 {if ok {Pair{x:40,y:2}.x+2} else {0}}
 fn main(argc:i32,argv:**u8)->i32 {
  let mut command:Args=construct(argc,argv)
- if !args_has_flag(&command,"-v","--verbose") {return 1}
- let first:*u8=args_positional(&command,0)
- let second:*u8=args_positional(&command,1)
+ if !args_has_flag(&command as *Args,"-v","--verbose") {return 1}
+ let first:*u8=args_positional(&command as *Args,0)
+ let second:*u8=args_positional(&command as *Args,1)
  if first==(0 as *u8) || second==(0 as *u8) {return 2}
  let buffer:*u8=alloc(64)
  if buffer==(0 as *u8) {return 3}
@@ -19,7 +19,7 @@ fn main(argc:i32,argv:**u8)->i32 {
  dealloc(buffer)
  if !ok {return 5}
  let mut trace:i32=0
- let pair:Pair=make(&trace)
+ let pair:Pair=make(&mut trace as *i32)
  if pair.x!=2 || pair.y!=1 || trace!=2 {return 6}
  if truth(Pair{x:1,y:2}) {if answer(true)!=42 {return 7}}else{return 8}
  let x:i32=12;let y:i32=30
