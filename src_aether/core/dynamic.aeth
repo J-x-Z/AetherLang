@@ -1,0 +1,116 @@
+use model::*;
+use runtime::*;
+use type_model::*;
+use enum_model::*;
+// Borrowed dynamic objects are opaque, closed-world enums. Each variant stores
+// precisely one checked reference; the existing emitters supply tag + union.
+fn dy_name(ctx:*BootContext,id:i32)->*u8{let name:*u8=boot_alloc(ctx,64) as *u8;if !ctx.failed{snprintf(name,64,"@dynamic_%d",id);}return name;}
+fn dy_ident(ctx:*BootContext,binding:*BootNode)->*BootNode{let node:*BootNode=boot_node(ctx,BN_IDENT,binding.token);if !ctx.failed{node.name=binding.name;node.decl=binding;node.ty=binding.ty;}return node;}
+pub fn boot_dynamic_impl(ctx:*BootContext,contract:*BootType,target:*BootType,token:*BootToken)->*BootDynImplementation{
+ let item:*BootDynImplementation=boot_alloc(ctx,size_of(BootDynImplementation) as u64) as *BootDynImplementation;if ctx.failed{return item;}
+ item.contract=contract;item.target=target;item.token=token;item.next=ctx.dynamic_impls;ctx.dynamic_impls=item;return item;
+}
+pub fn boot_dynamic_method(ctx:*BootContext,implementation:*BootDynImplementation,function:*BootNode,name:*u8){
+ let member:*BootNode=boot_node(ctx,BN_FIELD,function.token);if ctx.failed{return;}member.name=name;member.decl=function;member.next=implementation.methods;implementation.methods=member;
+}
+fn dy_self(ty:*BootType,contract:*BootType,depth:i32)->bool{
+ if ty==0 as *BootType||depth>256{return false;}if ty==contract{return true;}
+ if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_ALIAS||ty.kind==BY_OWN{return dy_self(ty.inner,contract,depth+1);}return false;
+}
+fn dy_signature(ctx:*BootContext,contract:*BootType,required:*BootNode,method:*BootNode,target:*BootType)->bool{
+ if required.generics!=0 as *BootNode||required.params==0 as *BootNode||!boot_reference(required.params.ty)||required.params.ty.inner!=contract||(required.flags&4)!=0{
+  boot_error(ctx,required.token,"dynamic method requires a non-generic &Self or &mut Self receiver");return false;
+ }
+ if dy_self(required.ty,contract,0){boot_error(ctx,required.token,"Self outside the receiver is not object safe");return false;}
+ let mut expected:*BootNode=required.params;let mut actual:*BootNode=method.params;
+ while expected!=0 as *BootNode&&actual!=0 as *BootNode{
+  let mut ty:*BootType=expected.ty;if expected==required.params{ty=boot_ref_type(ctx,target,ty.kind==BY_MUTREF);}else{if dy_self(ty,contract,0){boot_error(ctx,expected.token,"Self outside the receiver is not object safe");return false;}}
+  if actual.ty!=ty{boot_error(ctx,actual.token,"interface method parameter type mismatch");return false;}expected=expected.next;actual=actual.next;
+ }
+ if expected!=0 as *BootNode||actual!=0 as *BootNode||method.ty!=required.ty||method.generics!=0 as *BootNode{boot_error(ctx,method.token,"interface method signature mismatch");return false;}
+ if required.effect_explicit{if method.effect_explicit{method.effect_limit=method.effect_limit&required.effect_limit;}else{method.effect_explicit=true;method.effect_limit=required.effect_limit;}}
+ return true;
+}
+fn dy_method(implementation:*BootNode,name:*u8)->*BootNode{let mut method:*BootNode=implementation;while method!=0 as *BootNode{if strcmp(method.name,name)==0{return method.decl;}method=method.next;}return 0 as *BootNode;}
+fn dy_dispatch(ctx:*BootContext,ty:*BootType,required:*BootNode)->*BootNode{
+ let function:*BootNode=boot_node(ctx,BN_FN,required.token);let receiver:*BootNode=boot_node(ctx,BN_PARAM,required.token);let body:*BootNode=boot_node(ctx,BN_BLOCK,required.token);if ctx.failed{return function;}
+ function.name=dy_name(ctx,function.id);function.ty=required.ty;function.flags=BF_METHOD|BF_CLOSURE_BODY|BF_DYN_DISPATCH;function.params=receiver;function.body=body;function.effect_explicit=required.effect_explicit;function.effect_limit=required.effect_limit;
+ receiver.name=dy_name(ctx,receiver.id);receiver.ty=ty;receiver.flags=1;let mut tail:*BootNode=receiver;let mut formal:*BootNode=required.params.next;
+ while formal!=0 as *BootNode{let parameter:*BootNode=boot_node(ctx,BN_PARAM,formal.token);if ctx.failed{return function;}parameter.name=dy_name(ctx,parameter.id);parameter.ty=formal.ty;tail.next=parameter;tail=parameter;formal=formal.next;}
+ let mut variant:*BootNode=ty.fields;let mut previous:*BootNode=0 as *BootNode;
+ while variant!=0 as *BootNode&&!ctx.failed{
+  let method:*BootNode=dy_method(variant.body,required.name);let call:*BootNode=boot_node(ctx,BN_CALL,required.token);let returned:*BootNode=boot_node(ctx,BN_RETURN,required.token);if ctx.failed{return function;}
+  call.name=method.name;call.decl=method;call.ty=method.ty;call.params=boot_enum_projection(ctx,receiver,variant,variant.params);
+  // A shared method reborrows an exclusive payload without moving it.
+  call.params.ty=method.params.ty;tail=call.params;formal=receiver.next;
+  while formal!=0 as *BootNode{let argument:*BootNode=dy_ident(ctx,formal);tail.next=argument;tail=argument;formal=formal.next;}
+  returned.left=call;let block:*BootNode=boot_node(ctx,BN_BLOCK,required.token);if ctx.failed{return function;}block.body=returned;
+  if variant.next==0 as *BootNode{if previous==0 as *BootNode{body.body=block;}else{previous.third=block;}}
+  else{let branch:*BootNode=boot_node(ctx,BN_IF,required.token);if ctx.failed{return function;}branch.left=boot_enum_test(ctx,receiver,variant);branch.body=block;if previous==0 as *BootNode{body.body=branch;}else{previous.third=branch;}previous=branch;}
+  variant=variant.next;
+ }
+ let mut end:*BootNode=ctx.program.body;while end.next!=0 as *BootNode{end=end.next;}end.next=function;return function;
+}
+pub fn boot_dynamic_check(ctx:*BootContext)->bool{
+ let mut implementation:*BootDynImplementation=ctx.dynamic_impls;
+ while implementation!=0 as *BootDynImplementation&&!ctx.failed{
+  implementation.contract=boot_normal_type(ctx,implementation.contract,0,implementation.token);implementation.target=boot_normal_type(ctx,implementation.target,0,implementation.token);
+  if ctx.failed{return false;}if implementation.contract.kind!=BY_INTERFACE||implementation.target.kind!=BY_STRUCT||implementation.target.is_tuple{boot_error(ctx,implementation.token,"interface impl requires a concrete nominal record");return false;}
+  let mut prior:*BootDynImplementation=implementation.next;while prior!=0 as *BootDynImplementation{if boot_normal_type(ctx,prior.contract,0,prior.token)==implementation.contract&&boot_normal_type(ctx,prior.target,0,prior.token)==implementation.target{boot_error(ctx,implementation.token,"duplicate interface implementation");return false;}prior=prior.next;}
+  let mut required:*BootNode=implementation.contract.fields;
+  while required!=0 as *BootNode{
+   let method:*BootNode=dy_method(implementation.methods,required.name);if method==0 as *BootNode{boot_error(ctx,implementation.token,"interface implementation is missing a method");return false;}
+   if !dy_signature(ctx,implementation.contract,required,method,implementation.target){return false;}required=required.next;
+  }
+  let mut method:*BootNode=implementation.methods;while method!=0 as *BootNode{if dy_method(implementation.contract.fields,method.name)==0 as *BootNode{let mut requirement:*BootNode=implementation.contract.fields;let mut found:bool=false;while requirement!=0 as *BootNode{if strcmp(requirement.name,method.name)==0{found=true;}requirement=requirement.next;}if !found{boot_error(ctx,method.token,"method is not declared by the interface");return false;}}method=method.next;}
+  implementation=implementation.next;
+ }
+ let mut ty:*BootType=ctx.types;
+ while ty!=0 as *BootType&&!ctx.failed{
+  if ty.dynamic_contract!=0 as *BootType&&!ty.complete{
+   ty.dynamic_contract=boot_normal_type(ctx,ty.dynamic_contract,0,ctx.cursor);if ctx.failed{return false;}if ty.dynamic_contract.kind!=BY_INTERFACE{boot_error(ctx,ctx.cursor,"dyn requires an interface type");return false;}
+   implementation=ctx.dynamic_impls;let mut tail:*BootNode=0 as *BootNode;let mut tag:i64=0;
+   while implementation!=0 as *BootDynImplementation{
+    if implementation.contract==ty.dynamic_contract{
+     let variant:*BootNode=boot_node(ctx,BN_VARIANT,implementation.token);let field:*BootNode=boot_node(ctx,BN_FIELD,implementation.token);if ctx.failed{return false;}
+     variant.name=dy_name(ctx,variant.id);variant.value=tag;tag+=1;variant.aux=implementation.target;variant.body=implementation.methods;variant.params=field;field.name="";field.ty=boot_ref_type(ctx,implementation.target,ty.dynamic_mutable);boot_enum_payload(ctx,variant);
+     if tail==0 as *BootNode{ty.fields=variant;}else{tail.next=variant;}tail=variant;
+    }implementation=implementation.next;
+   }ty.complete=true;
+   if ty.fields!=0 as *BootNode{let mut required:*BootNode=ty.dynamic_contract.fields;while required!=0 as *BootNode{
+    if required.params==0 as *BootNode||!boot_reference(required.params.ty){boot_error(ctx,required.token,"interface method needs a reference receiver");return false;}
+    if ty.dynamic_mutable||required.params.ty.kind==BY_REF{let metadata:*BootNode=boot_node(ctx,BN_FIELD,required.token);if ctx.failed{return false;}metadata.name=required.name;metadata.decl=dy_dispatch(ctx,ty,required);metadata.next=ty.dynamic_methods;ty.dynamic_methods=metadata;}
+    required=required.next;
+   }}
+  }ty=ty.next;
+ }
+ return !ctx.failed;
+}
+pub fn boot_dynamic_cast(ctx:*BootContext,node:*BootNode,source:*BootType,target:*BootType)->bool{
+ if !boot_reference(source)||(target.dynamic_mutable&&source.kind!=BY_MUTREF){boot_error(ctx,node.token,"dynamic conversion requires a checked reference with matching mutability");return false;}
+ let mut variant:*BootNode=target.fields;while variant!=0 as *BootNode{if variant.aux==source.inner{
+  let value:*BootNode=node.left;value.ty=variant.params.ty;value.next=0 as *BootNode;node.kind=BN_ENUM_VALUE;node.name=variant.name;node.decl=variant;node.ty=target;node.params=value;node.left=0 as *BootNode;return true;
+ }variant=variant.next;}
+ boot_error(ctx,node.token,"type has no implementation of this interface");return false;
+}
+pub fn boot_dynamic_call(ctx:*BootContext,node:*BootNode,actual:*BootType)->bool{
+ let mut metadata:*BootNode=actual.dynamic_methods;while metadata!=0 as *BootNode{if strcmp(metadata.name,node.name)==0{
+  let receiver:*BootNode=node.left;receiver.next=node.params;node.params=receiver;node.left=0 as *BootNode;node.kind=BN_CALL;node.name=metadata.decl.name;node.decl=metadata.decl;return true;
+ }metadata=metadata.next;}
+ boot_error(ctx,node.token,"unknown method or mutable method through a shared dynamic reference");return false;
+}
+struct DynSeen{ty:*BootType,next:*DynSeen}
+struct DynSearch{seen:*DynSeen}
+fn dy_foreign_walk(ctx:*BootContext,ty:*BootType,search:*DynSearch)->bool{
+ if ty==0 as *BootType{return false;}if ty.dynamic_contract!=0 as *BootType{return true;}
+ let mut prior:*DynSeen=search.seen;while prior!=0 as *DynSeen{if prior.ty==ty{return false;}prior=prior.next;}
+ let item:*DynSeen=boot_alloc(ctx,size_of(DynSeen) as u64) as *DynSeen;if ctx.failed{return true;}item.ty=ty;item.next=search.seen;search.seen=item;
+ if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_ALIAS||ty.kind==BY_OWN{return dy_foreign_walk(ctx,ty.inner,search);}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{
+  if ty.kind==BY_ENUM{let mut member:*BootNode=field.params;while member!=0 as *BootNode{if dy_foreign_walk(ctx,member.ty,search){return true;}member=member.next;}}
+  else{if dy_foreign_walk(ctx,field.ty,search){return true;}}field=field.next;
+ }}return false;
+}
+pub fn boot_dynamic_foreign(ctx:*BootContext,ty:*BootType)->bool{
+ let search:*DynSearch=boot_alloc(ctx,size_of(DynSearch) as u64) as *DynSearch;if ctx.failed{return true;}return dy_foreign_walk(ctx,ty,search);
+}

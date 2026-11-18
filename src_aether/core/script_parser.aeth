@@ -24,6 +24,11 @@ fn bs_type_inner(ctx:*BootContext)->*BootType{
  if strcmp(name,"bool")==0{return boot_type(ctx,BY_BOOL);}
  if strcmp(name,"str")==0{return boot_ptr_type(ctx,boot_type(ctx,BY_U8));}
  if strcmp(name,"None")==0||strcmp(name,"void")==0{return boot_type(ctx,BY_VOID);}
+ if strcmp(name,"Dyn")==0||strcmp(name,"DynMut")==0{
+  if !bs_expect(ctx,91,"expected '[' in Script dynamic type"){return 0 as *BootType;}
+  let contract:*BootType=bs_type(ctx);if ctx.failed||!bs_expect(ctx,93,"expected ']' in Script dynamic type"){return 0 as *BootType;}
+  return boot_ref_type(ctx,boot_dynamic_marker(ctx,contract),strcmp(name,"DynMut")==0);
+ }
  if strcmp(name,"Array")==0{
   if !bs_expect(ctx,91,"expected '[' in Script Array type"){return 0 as *BootType;}
   let inner:*BootType=bs_type(ctx);if ctx.failed{return inner;}

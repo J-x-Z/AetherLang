@@ -4,6 +4,7 @@ use runtime::*;
 use type_model::*;
 use const_eval::ce_expression;
 use tuple_model::*;
+use dynamic::*;
 use pattern_model::*;
 use methods::{boot_method_generics,boot_method_register,boot_method_empty};
 // Recursive-descent declarations/statements and a Pratt expression parser.
@@ -52,6 +53,7 @@ fn boot_p_type(ctx:*BootContext)->*BootType {
  ctx.depth=ctx.depth-1;return ty;
 }
 fn boot_p_type_inner(ctx:*BootContext)->*BootType {
+ if boot_p_word(ctx,"dyn"){boot_p_advance(ctx);return boot_dynamic_marker(ctx,boot_p_type(ctx));}
  if boot_p_word(ctx,"_"){boot_p_advance(ctx);return boot_type(ctx,BY_INFER);}
  if boot_p_word(ctx,"own"){boot_p_advance(ctx);let inner:*BootType=boot_p_type(ctx);if inner==0 as *BootType{return inner;}return boot_owned_type(ctx,inner);}
  if boot_p_take(ctx,91){
@@ -623,6 +625,7 @@ pub fn boot_parse(ctx:*BootContext)->bool {
    if boot_p_word(ctx,"fn") {node=boot_p_function(ctx,false);}
    else if boot_p_word(ctx,"struct") || boot_p_word(ctx,"union") {node=boot_p_struct(ctx,packed);}
    else if boot_p_word(ctx,"enum") {node=boot_p_enum(ctx);}
+   else if boot_p_word(ctx,"interface")||boot_p_word(ctx,"trait"){node=boot_p_interface(ctx);}
    else if boot_p_word(ctx,"static") {node=boot_p_static(ctx,false);}
    else if boot_p_word(ctx,"const") {node=boot_p_constant(ctx);}
    else if boot_p_word(ctx,"type") {node=boot_p_alias(ctx);}
@@ -783,7 +786,9 @@ fn boot_p_match(ctx:*BootContext)->*BootNode{
 fn boot_p_impl(ctx:*BootContext)->*BootNode{
  let token:*BootToken=ctx.cursor;boot_p_advance(ctx);
  let saved_parameters:*BootNode=ctx.type_parameters;let saved_target:*BootType=ctx.impl_target;
- ctx.type_parameters=boot_p_type_parameters(ctx);let parameters:*BootNode=ctx.type_parameters;let target:*BootType=boot_p_type(ctx);if ctx.failed{return 0 as *BootNode;}
+ ctx.type_parameters=boot_p_type_parameters(ctx);let parameters:*BootNode=ctx.type_parameters;let mut target:*BootType=boot_p_type(ctx);if ctx.failed{return 0 as *BootNode;}
+ let mut implementation:*BootDynImplementation=0 as *BootDynImplementation;
+ if boot_p_word(ctx,"for"){boot_p_advance(ctx);let contract:*BootType=target;target=boot_p_type(ctx);if ctx.failed{return 0 as *BootNode;}if parameters!=0 as *BootNode{boot_error(ctx,token,"dynamic implementations require concrete record types");return 0 as *BootNode;}implementation=boot_dynamic_impl(ctx,contract,target,token);}
  ctx.impl_target=target;
  if !boot_p_expect(ctx,123,"expected '{' after inherent impl target"){return 0 as *BootNode;}
  let mut first:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;
@@ -791,7 +796,9 @@ fn boot_p_impl(ctx:*BootContext)->*BootNode{
   let mut public:bool=false;if boot_p_word(ctx,"pub"){public=true;boot_p_advance(ctx);}
   let function:*BootNode=boot_p_function(ctx,false);if ctx.failed{return 0 as *BootNode;}
   if public{function.flags=function.flags|8;}
+  let method_name:*u8=function.name;
   if !boot_method_register(ctx,function,target){return 0 as *BootNode;}
+  if implementation!=0 as *BootDynImplementation{boot_dynamic_method(ctx,implementation,function,method_name);}
   if tail==0 as *BootNode{first=function;}else{tail.next=function;}tail=function;
  }
  boot_p_expect(ctx,125,"expected '}' after inherent methods");ctx.type_parameters=saved_parameters;ctx.impl_target=saved_target;
@@ -829,6 +836,15 @@ fn boot_p_closure(ctx:*BootContext)->*BootNode{
  ctx.parse_condition=saved;return node;
 }
 
+fn boot_p_interface(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);let name:*BootToken=boot_p_name(ctx);if ctx.failed{return 0 as *BootNode;}
+ let node:*BootNode=boot_node(ctx,BN_INTERFACE,token);let ty:*BootType=boot_named_type(ctx,name.text);if ctx.failed{return node;}
+ if ty.complete{boot_error(ctx,name,"duplicate interface definition");return 0 as *BootNode;}ty.kind=BY_INTERFACE;ty.complete=true;node.name=name.text;node.ty=ty;
+ if !boot_p_expect(ctx,123,"expected '{' after interface name"){return 0 as *BootNode;}
+ let saved:*BootType=ctx.impl_target;ctx.impl_target=ty;let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed&&boot_p_kind(ctx)!=125{let method:*BootNode=boot_p_function(ctx,true);if ctx.failed{return 0 as *BootNode;}if tail==0 as *BootNode{node.body=method;ty.fields=method;}else{tail.next=method;}tail=method;}
+ ctx.impl_target=saved;if !boot_p_expect(ctx,125,"expected '}' after interface"){return 0 as *BootNode;}return node;
+}
 fn boot_p_pattern(ctx:*BootContext,depth:i32)->*BootNode{
  if depth>256{boot_error(ctx,ctx.cursor,"pattern nesting exceeds 256");return 0 as *BootNode;}
  let token:*BootToken=ctx.cursor;let pattern:*BootNode=boot_node(ctx,BN_PATTERN,token);if ctx.failed{return pattern;}

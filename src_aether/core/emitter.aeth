@@ -282,6 +282,7 @@ fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
   boot_c_text(ctx,"}\n");return;
  }
  if node.kind==BN_LET {
+  if node.left==0 as *BootNode{boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx,";\n");return;}
   boot_emit_expr(ctx,node.left);boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_ASSIGN {

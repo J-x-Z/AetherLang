@@ -1,4 +1,5 @@
 use model::*;
+use runtime::*;
 // Declarations, not source names, identify both values and their storage.
 // Origin sets form a finite lattice: function parameters, globals, and locals.
 pub struct BootBorrowPermit {binding:*BootNode,next:*BootBorrowPermit}
@@ -6,4 +7,25 @@ pub struct BootBorrowOrigin {root:*BootNode,external:bool,permits:*BootBorrowPer
 pub struct BootBorrowEnv {binding:*BootNode,origins:*BootBorrowOrigin,depth:i32,moved:bool,next:*BootBorrowEnv}
 pub struct BootBorrowSummary {function:*BootNode,origins:*BootBorrowOrigin,next:*BootBorrowSummary}
 pub struct BootBorrowUse {node:*BootNode,next:*BootBorrowUse}
-pub struct BootBorrowState {ctx:*BootContext,env:*BootBorrowEnv,depth:i32,summaries:*BootBorrowSummary,collect:bool,returned:*BootBorrowOrigin,live:*BootBorrowUse}
+pub struct BootBorrowState {ctx:*BootContext,env:*BootBorrowEnv,depth:i32,summaries:*BootBorrowSummary,collect:bool,returned:*BootBorrowOrigin,yielded:*BootBorrowOrigin,live:*BootBorrowUse}
+
+pub fn br_contains(ty:*BootType,depth:i32)->bool{
+ if ty==0 as *BootType||depth>256{return false;}
+ if br_reference(ty){return true;}if ty.kind==BY_PTR{return false;}
+ if ty.kind==BY_ARRAY&&ty.extent==0{return false;}if ty.kind==BY_ARRAY||ty.kind==BY_ALIAS||ty.kind==BY_OWN{return br_contains(ty.inner,depth+1);}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{
+  if ty.kind==BY_ENUM{let mut payload:*BootNode=field.params;while payload!=0 as *BootNode{if br_contains(payload.ty,depth+1){return true;}payload=payload.next;}}
+  else{if br_contains(field.ty,depth+1){return true;}}field=field.next;
+ }}return false;
+}
+pub fn br_mut_payload(ty:*BootType,depth:i32)->bool{
+ if ty==0 as *BootType||depth>256{return false;}if br_exclusive(ty){return true;}if ty.kind==BY_PTR||ty.kind==BY_REF{return false;}
+ if ty.kind==BY_ARRAY||ty.kind==BY_ALIAS||ty.kind==BY_OWN{return br_mut_payload(ty.inner,depth+1);}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{
+  if ty.kind==BY_ENUM{let mut payload:*BootNode=field.params;while payload!=0 as *BootNode{if br_mut_payload(payload.ty,depth+1){return true;}payload=payload.next;}}
+  else{if br_mut_payload(field.ty,depth+1){return true;}}field=field.next;
+ }}return false;
+}
+
+pub fn br_reference(ty:*BootType)->bool{return ty!=0 as *BootType&&(boot_reference(ty)||ty.dynamic_contract!=0 as *BootType);}
+pub fn br_exclusive(ty:*BootType)->bool{return ty!=0 as *BootType&&(ty.kind==BY_MUTREF||ty.dynamic_mutable);}

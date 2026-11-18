@@ -35,9 +35,7 @@ negative={
 for name,code in negative.items():
  path=work/f'{name}.aeth';path.write_text(code+'fn main()->i32{return 0;}');run([a.seed,'check',path],1);run([a.compiler,'check',path],1);run([a.compiler,path,'-o',work/'rejected.c'],1)
 for name,code in {
-'shared_reference_capture':'fn f(){let x:i64=3;let p:&i64=&x;let c:_=||*p;}',
 'exclusive_reference_capture':'fn f(){let mut x:i64=3;let p:&mut i64=&mut x;let c:_=||*p;}',
-'aggregate_reference_capture':'struct R{value:&i64}fn f(){let x:i64=3;let r:R=R{value:&x};let c:_=||*r.value;}',
 }.items():
  path=work/f'{name}.aeth';path.write_text(code+'fn main()->i32{return 0;}');run([a.compiler,'check',path],1)
 for name,code in {

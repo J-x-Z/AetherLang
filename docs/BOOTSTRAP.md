@@ -299,7 +299,7 @@ with every feature of the primary compiler.
 
 ## Checked references and methods
 
-The self-hosted compiler gives `&T` and `&mut T` distinct type identities. Convert an address used by a manual C interface explicitly, for example `&mut n as *i32`. Passing an exclusive reference to a checked reference parameter reborrows it. A binding, assignment or return that transfers the reference checks subsequent uses. The compiler traces function result origins and releases loans after their last use. Loans currently use the root storage identity, so simultaneous mutable loans of disjoint fields can be rejected. The first implementation diagnoses references held inside copyable aggregates, nested reference values and reference-valued block expressions that exceed its provenance model.
+The self-hosted compiler gives `&T` and `&mut T` distinct type identities. Convert an address used by a manual C interface explicitly, for example `&mut n as *i32`. Passing an exclusive reference to a checked reference parameter reborrows it. A binding, assignment or return that transfers the reference checks subsequent uses. The compiler traces function result origins and releases loans after their last use. Loans currently use the root storage identity, so simultaneous mutable loans of disjoint fields can be rejected. Shared references can be copied through records, arrays, tuples, enum payloads, nested references and closure captures. Aggregate values retain the union of their referenced storage origins; this is conservative across fields and branches. Borrowing an aggregate keeps both its own storage and embedded targets alive. Reference-valued blocks are checked at their exit. Exclusive-reference aggregate payloads and projected replacement of reference fields remain diagnosed until precise per-field moves are available.
 
 Inherent implementations can define associated functions, shared and mutable methods, and methods on generic records. Static and instance calls enter the same checked function path. Script can call typed Core methods. The regressions include an actual Vec-backed statistics module, private methods, references returned by methods, and a side-effecting receiver evaluated once.
 
@@ -321,7 +321,7 @@ The current storage boundary is a plain record payload: owners in copyable array
 
 Core `|x: i64| -> i64 { base + x }` and Script `lambda (x: int) -> int: base + x` create a concrete environment value. Captures are copied when the closure is created; changing a captured field changes the environment, not the original local. Core requires a mutable closure binding for such calls. Each site has its own nominal type, so different closure sites cannot overwrite one fixed local even when their signatures match. Core `let f: _ = ...` infers a concrete closure type, including a closure returned by another call.
 
-The self-hosted compiler supports nested closures, returned environments, immediate calls, generic callback parameters, closure fields in concrete generic records, array/record/enum captures, private module calls and const-generic algorithms using callbacks. References passed as closure parameters and references returned into the closure's own environment use the ordinary provenance checks. Closure environments do not expose a C ABI. Capturing checked references or owned resources is explicitly rejected until aggregate projection-aware lifetime and move tracking is available. This restriction does not erase a reference into a raw pointer.
+The self-hosted compiler supports nested closures, returned environments, immediate calls, generic callback parameters, closure fields in concrete generic records, array/record/enum captures, private module calls and const-generic algorithms using callbacks. References passed as closure parameters and references returned into the closure's own environment use the ordinary provenance checks. Closure environments do not expose a C ABI. Shared-reference captures retain checked provenance and prevent writes or escapes while live. Capturing exclusive references or owned resources remains explicitly rejected; no checked reference is erased into a raw pointer.
 
 `tests/bootstrap_closures.py` checks the common Core/Script subset against the primary compiler and executes both native backends with optimization and sanitizers. The environment and exact hidden callee lower to ordinary typed nodes, so arithmetic, borrowing and code generation remain shared with named functions.
 
@@ -338,8 +338,8 @@ taking a reference still requires valid addressable storage.
 
 Tuple values, including those nested in records, have no stable C ABI; use a
 named C-compatible record at a foreign value boundary. Raw pointers to opaque
-Aether-owned tuple storage remain available. The current Core reference/owner
-projection restrictions also apply to tuple payloads. Per-field initialization
+Aether-owned tuple storage remain available. Shared-reference tuple payloads retain checked provenance. Exclusive-reference and owner
+projection restrictions still apply to tuple payloads. Per-field initialization
 of a declared but uninitialized tuple is not migrated yet. The standalone
 acceptance command covers the supported value semantics and explicitly checks
 these storage boundaries:
@@ -348,3 +348,27 @@ these storage boundaries:
 python3 tests/bootstrap_tuples.py --compiler "$WORK/core-stage4" \
   --reference-compiler "$AETHC" --work-dir "$WORK/core-tuples" --sanitize
 ```
+
+### Borrowed dynamic interfaces
+
+The self-hosted compiler implements `&dyn Interface` and `&mut dyn Interface`
+as opaque closed-world values with a runtime tag and one active checked
+reference. Concrete non-generic record implementations must exactly match
+the interface signatures. Shared and mutable receiver rules, private direct
+methods, effect bounds and returned-reference provenance remain enforced.
+Descriptors can select different implementations at runtime; shared descriptors
+can also enter aggregates and closure environments. They have no stable C ABI,
+including when nested inside pointer-reachable records or unions. This is an
+internal whole-program representation, not a separately linked plugin ABI.
+
+Script imports the same Core interfaces, using `Dyn[I]`, `DynMut[I]`, `ref`,
+`ref_mut` and `deref`. Local definite-assignment checking precedes storage
+allocation: reference-bearing slots remain physically uninitialized until their
+first assignment instead of receiving fabricated null references. Ordinary
+Core source still requires a `let` initializer. Generic interface implementations
+and exclusive-reference aggregate payloads remain outside this implementation.
+
+`tests/bootstrap_dynamic.py` executes the original Core/Script dynamic workloads,
+shared aggregate references, nested reference projections and private imported
+implementations on C/LLVM O0/O2 and with ASan/UBSan; it compares rejection cases
+with the primary compiler.

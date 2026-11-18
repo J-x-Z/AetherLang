@@ -9,7 +9,8 @@ struct ClosureCapture{binding:*BootNode,field:*BootNode,value:*BootNode,indirect
 struct ClosureState{ctx:*BootContext,scope:*ClosureScope,captures:*ClosureCapture,tail:*ClosureCapture,environment:*BootNode,mutable:bool}
 fn cl_copyable(ty:*BootType,depth:i32)->bool{
  if ty==0 as *BootType||depth>256{return false;}
- if boot_reference(ty)||ty.kind==BY_OWN{return false;}
+ if ty.dynamic_contract!=0 as *BootType{return !ty.dynamic_mutable;}
+ if ty.kind==BY_REF{return true;}if ty.kind==BY_MUTREF||ty.kind==BY_OWN{return false;}
  if ty.kind==BY_ARRAY||ty.kind==BY_ALIAS{return cl_copyable(ty.inner,depth+1);}
  if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{if ty.kind==BY_ENUM{let mut payload:*BootNode=field.params;while payload!=0 as *BootNode{if !cl_copyable(payload.ty,depth+1){return false;}payload=payload.next;}}else{if !cl_copyable(field.ty,depth+1){return false;}}field=field.next;}}
  return true;
@@ -38,7 +39,7 @@ fn cl_capture(state:*ClosureState,binding:*BootNode)->*ClosureCapture{
   item.indirect=true;field.ty=binding.ty.inner;let dereference:*BootNode=boot_node(ctx,BN_UNARY,binding.token);if ctx.failed{return item;}
   dereference.op=42;dereference.left=item.value;dereference.ty=field.ty;item.value=dereference;
  }
- if !cl_copyable(field.ty,0){boot_error(ctx,binding.token,"closure capture requires copyable values; reference and owner captures need projection-aware storage");return item;}
+ if !cl_copyable(field.ty,0){boot_error(ctx,binding.token,"closure capture requires copyable values; exclusive reference and owner captures need projection-aware storage");return item;}
  if state.tail==0 as *ClosureCapture{state.captures=item;}else{state.tail.next=item;state.tail.field.next=field;}state.tail=item;return item;
 }
 fn cl_environment_root(node:*BootNode,environment:*BootNode)->bool{
@@ -63,7 +64,7 @@ fn cl_rewrite(state:*ClosureState,node:*BootNode,nested:i32){
   }else if item.kind==BN_RANGE_FOR{
    cl_rewrite(state,item.left,nested);cl_rewrite(state,item.right,nested);let saved:*ClosureScope=state.scope;cl_scope(state,item);cl_rewrite(state,item.body,nested);state.scope=saved;
   }else if item.kind==BN_ARM{
-   let saved:*ClosureScope=state.scope;let mut binding:*BootNode=item.params;while binding!=0 as *BootNode{cl_scope(state,binding);binding=binding.next;}
+   let saved:*ClosureScope=state.scope;cl_pattern_scope(state,item.left);let mut binding:*BootNode=item.params;while binding!=0 as *BootNode{cl_scope(state,binding);binding=binding.next;}
    cl_rewrite(state,item.right,nested);cl_rewrite(state,item.body,nested);state.scope=saved;
   }else if item.kind==BN_CLOSURE{
    let saved:*ClosureScope=state.scope;let mut parameter:*BootNode=item.params;while parameter!=0 as *BootNode{cl_scope(state,parameter);parameter=parameter.next;}
@@ -132,4 +133,11 @@ fn cl_type(node:*BootNode)->*BootType{
  if node==0 as *BootNode{return 0 as *BootType;}if node.ty!=0 as *BootType{return node.ty;}
  if node.kind==BN_MEMBER{let mut base:*BootType=cl_type(node.left);if base==0 as *BootType{return base;}if boot_indirect(base){base=base.inner;}let mut field:*BootNode=base.fields;while field!=0 as *BootNode{if strcmp(field.name,node.name)==0{return field.ty;}field=field.next;}}
  if node.kind==BN_INDEX||(node.kind==BN_UNARY&&node.op==42){let base:*BootType=cl_type(node.left);if base!=0 as *BootType{return base.inner;}}return 0 as *BootType;
+}
+
+// Pattern bindings are lexical even before the match checker materializes lets.
+fn cl_pattern_scope(state:*ClosureState,node:*BootNode){
+ if node==0 as *BootNode||node.kind!=BN_PATTERN{return;}
+ if node.op==1{cl_scope(state,node);return;}
+ let mut child:*BootNode=node.params;while child!=0 as *BootNode{cl_pattern_scope(state,child);child=child.next;}
 }

@@ -47,11 +47,9 @@ negative={
 for name,source in negative.items():
  path=work/f'{name}.aeth';path.write_text(source+'fn main()->i32{return 0;}')
  run([seed,'check',path],1);run([core,path,'--check'],1);run([core,path,'-o',work/'rejected.c'],1)
-# Explicit first-stage storage/ABI limits must fail, not erase reference facts.
+# Exclusive aggregate payloads and foreign references remain explicit boundaries.
 boundaries={
- 'reference_array':'fn f(x:&i64){let a:[&i64;1]=[x];}',
- 'reference_record':'struct R{x:&i64}fn f(x:&i64){let r:R=R{x:x};}',
- 'nested_reference':'fn f(x:&i64){let r:&&i64=&x;}',
+ 'exclusive_payload':'fn f(x:&mut i64){let a:[&mut i64;1]=[x];}',
  'foreign_reference':'extern "C"{fn bad(x:&i64);}',
  'unproven_raw_origin':'fn f(p:*i64)->&i64{return &*p;}',
 }

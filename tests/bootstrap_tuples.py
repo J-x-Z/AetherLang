@@ -87,7 +87,7 @@ for name,(text,diagnostic) in invalid.items():
 # Copyable tuple storage does not silently bypass the current reference/owner
 # projection restrictions. These are recorded as migration boundaries.
 for name,text in {
- 'reference-payload':'fn bad(x:&i32)->(&i32,){(x,)}',
+ 'exclusive-reference-payload':'fn bad(x:&mut i32)->(&mut i32,){(x,)}',
  'owned-payload':'struct R{fd:i32}fn bad(x:own R){let t:(own R,)=(x,);}',
  'temporary-owner-field':'struct R{fd:i32}fn make()->own R{unsafe{return R{fd:3} as own R;}}@drop fn release(x:own R){}fn bad(){let fd:i32=make().fd;}',
 }.items():

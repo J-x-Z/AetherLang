@@ -218,6 +218,7 @@ pub fn ll_statement(ctx:*BootContext,node:*BootNode){
  if ctx.failed||node==(0 as *BootNode)||ctx.llvm_terminated{return;}
  if node.kind==BN_BLOCK{let mut item:*BootNode=node.body;while item!=(0 as *BootNode)&&!ctx.llvm_terminated{ll_statement(ctx,item);item=item.next;}return;}
  if node.kind==BN_LET{
+  if node.left==0 as *BootNode{return;}
   let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  store ");ll_value(ctx,node.ty,value);fprintf(ctx.output,", ptr %%v%d\n",node.id);return;
  }
  if node.kind==BN_ASSIGN{

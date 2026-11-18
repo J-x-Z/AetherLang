@@ -70,7 +70,7 @@ pub fn br_used(node:*BootNode,decl:*BootNode)->bool{
 }
 pub fn br_expire(state:*BootBorrowState){
  let mut p:*BootBorrowEnv=state.env;while p!=0 as *BootBorrowEnv{
-  if boot_reference(p.binding.ty){
+  if br_contains(p.binding.ty,0){
    let mut live:*BootBorrowUse=state.live;let mut used:bool=false;
    while live!=0 as *BootBorrowUse{if br_used(live.node,p.binding){used=true;}live=live.next;}
    if !used{p.origins=0 as *BootBorrowOrigin;}
