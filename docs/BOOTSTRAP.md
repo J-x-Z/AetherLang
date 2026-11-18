@@ -270,8 +270,15 @@ indexing uses `getelementptr`, and short-circuit operands have actual conditiona
 branches. Integer operations wrap without `nsw`/`nuw`; division/remainder guards
 trap zero and signed MIN/-1. Float casts use LLVM saturating conversion intrinsics, following the
 [LLVM language reference](https://llvm.org/docs/LangRef.html#saturating-floating-point-to-integer-conversions).
-Scalar and pointer C ABI calls include narrow-integer extensions and C varargs
-promotions. Internal aggregate arguments/results are supported. External C aggregate parameters and results follow Apple arm64 or System V x86-64 conventions on the supported hosts; the explicit x86-64 freestanding target also uses System V. Unsupported layouts or conventions fail during checking. Ordinary pointer-to-struct FFI remains available.
+Scalar and pointer C ABI calls use the target's narrow-integer rules and C
+varargs promotions. The LLVM emitter supports external C record arguments and
+results on Apple arm64, System V x86-64 and Windows x64. The x86-64 freestanding
+target uses System V. On Windows, records of 1, 2, 4 or 8 bytes travel as
+integers of that width. For other sizes, the caller passes a 16-byte-aligned
+copy of an argument or supplies storage for the result. By-value records with
+zero-sized members or zero total size are rejected. Opaque record pointers can
+still cross the ABI. The Windows native suite links independent C callers and
+callees against the code emitted by the second-stage compiler.
 
 Existing application/standard-library validation is separate from compiler
 fixtures:
