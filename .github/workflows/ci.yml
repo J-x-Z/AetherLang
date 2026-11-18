@@ -34,7 +34,8 @@ jobs:
           wget -q https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 21
-          sudo apt-get install -y llvm-21-dev libpolly-21-dev
+          sudo apt-get install -y llvm-21-dev libpolly-21-dev libclang-rt-21-dev
+          echo "$LLVM_SYS_211_PREFIX/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
       - run: sh scripts/test.sh llvm
       - run: cargo build --locked --release --features llvm
