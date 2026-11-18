@@ -39,7 +39,8 @@ for backend in ['c','llvm']:
  run('local graph run '+backend,[jxz,'run','--','space value','; & |'],root,extra={'AETHER_BACKEND':backend});run('native enumeration '+backend,[jxz,'test'],root,extra={'AETHER_BACKEND':backend})
 record=(root/'target/.jxz-dependencies').read_bytes();run('deterministic graph record',[jxz,'build'],root);assert (root/'target/.jxz-dependencies').read_bytes()==record
 (leaf/'src/lib.aeth').write_text('pub fn value()->i32{return 44;}');run('dependency edit rebuilds',[jxz,'run'],root,3);(leaf/'src/lib.aeth').write_text('pub fn value()->i32{return 41;}')
-# The compiler child retains the directory HANDLE after JXZ is killed.
+# The compiler child retains the delete-on-close lock HANDLE after JXZ is killed.
+lock_name='.jxz-directory-lock'
 helper=w/'hold.c';helper.write_text('#include <windows.h>\nint main(void){HANDLE f=CreateFileW(L"compiler-started",GENERIC_WRITE,7,0,CREATE_ALWAYS,0,0);if(f==INVALID_HANDLE_VALUE)return 2;CloseHandle(f);for(int i=0;i<3000;i++){if(GetFileAttributesW(L"compiler-release")!=INVALID_FILE_ATTRIBUTES)return 1;Sleep(10);}return 9;}')
 wrapper=w/'holding compiler.exe';run('build native lock helper',[cc,helper,'-o',wrapper],w)
 child=subprocess.Popen([str(jxz),'build'],cwd=root,env={**env,'AETHC':str(wrapper)},stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -47,14 +48,26 @@ try:
  deadline=time.monotonic()+20
  while not (root/'compiler-started').exists() and child.poll() is None and time.monotonic()<deadline:time.sleep(.01)
  assert (root/'compiler-started').exists();child.kill();child.wait(timeout=5)
+ assert lock_name in os.listdir(target)
  r=run('inherited lock survives parent death',[jxz,'clean'],root,1);assert b'busy or cannot be locked' in r.stderr
 finally:
  (root/'compiler-release').touch();child.communicate(timeout=35)
+deadline=time.monotonic()+5
+while lock_name in os.listdir(target) and time.monotonic()<deadline:time.sleep(.01)
+assert lock_name not in os.listdir(target)
 run('recover interrupted publication',[jxz,'build'],root)
 # Unknown ownership records are never silently replaced/deleted.
 protected=w/'protected';(protected/'src').mkdir(parents=True);(protected/'Jxz.toml').write_text("[package]\nname='safe'\n");(protected/'src/main.aeth').write_text('fn main()->i32{return 0;}');(protected/'target').mkdir();unknown=protected/'target/.jxz-dependencies';unknown.write_bytes(b'USER DATA')
 for command in ['build','clean']:
  run('preserve unowned dependency record '+command,[jxz,command],protected,1);assert unknown.read_bytes()==b'USER DATA'
+# A preexisting file at the lock name is never opened for deletion.
+blocked=w/'preexisting-lock';(blocked/'src').mkdir(parents=True);(blocked/'target').mkdir()
+(blocked/'Jxz.toml').write_text("[package]\nname='blocked'\n",encoding='utf-8')
+(blocked/'src/main.aeth').write_text('fn main()->i32{return 0;}',encoding='utf-8')
+user_lock=blocked/'target'/lock_name;user_lock.write_bytes(b'owner data\x00\r\n')
+for command in ['build','clean']:
+ r=run('preserve preexisting lock file '+command,[jxz,command],blocked,1)
+ assert b'busy or cannot be locked' in r.stderr and user_lock.read_bytes()==b'owner data\x00\r\n'
 # Fully verified offline cache: no curl/find/tar process is needed.
 cache=w/'cache';cache.mkdir();(cache/'.jxz-cache').write_bytes(b'JXZ-CACHE-1\n');files={'Jxz.toml':b"[package]\nname='cached'\nversion='1.2.3'\n[build]\nsrc='src'\n",'src/lib.aeth':b'pub fn value()->i32{return 42;}'}
 listing=b'JXZ-PACKAGE-1\n'+b''.join(hashlib.sha256(data).hexdigest().encode()+b'\t'+name.encode()+b'\n' for name,data in sorted(files.items()));digest=hashlib.sha256(listing).hexdigest();package=cache/digest;package.mkdir()
@@ -67,6 +80,12 @@ lock.write_bytes(crlf_pin)
 r=run('preserve malformed CRLF lock',[jxz,'fetch'],offline,1,{'JXZ_CACHE':str(cache)})
 assert b'unrecognized Jxz.lock' in r.stderr and lock.read_bytes()==crlf_pin
 lock.write_bytes(pin)
+fresh_cache=w/'empty-cache';fresh_cache.mkdir()
+r=run('initialize empty offline cache',[jxz,'fetch'],offline,1,{'JXZ_CACHE':str(fresh_cache)})
+assert b'offline registry cache is missing or corrupt' in r.stderr
+assert os.listdir(fresh_cache)==['.jxz-cache'] and lock_name not in os.listdir(offline)
+assert (fresh_cache/'.jxz-cache').read_bytes()==b'JXZ-WIN-MARKER-1\nJXZ-CACHE-1'
+assert lock.read_bytes()==pin
 run('verified offline cache',[jxz,'run'],offline,extra={'JXZ_CACHE':str(cache)});(package/'src/lib.aeth').write_bytes(b'corrupt');run('corrupt offline cache rejected',[jxz,'build'],offline,1,{'JXZ_CACHE':str(cache)});assert (package/'src/lib.aeth').read_bytes()==b'corrupt'
 # Project LSP over standard pipes, including a typed cross-package definition
 # and an unsaved edit. Protocol stdout is parsed byte-for-byte.
