@@ -9,8 +9,7 @@ use emitter::boot_emit;
 use emitter_llvm::{boot_emit_llvm,boot_llvm_supported};
 use native_driver::*;
 use lsp_server::boot_lsp;
-use lsp_buffer::ls_problem;
-use lsp_cli::{boot_symbols,boot_json_diagnostic};
+use lsp_cli::{boot_symbols,boot_json_diagnostic,boot_plain_diagnostic};
 
 fn boot_arguments_error(ctx:*BootContext,message:*u8)->bool {
  boot_error(ctx,0 as *BootToken,message);
@@ -32,6 +31,14 @@ fn boot_add_library(ctx:*BootContext,prefix:*u8,required:bool)->bool {
  if required {return boot_arguments_error(ctx,"sysroot has no stdlib directory");}
  return true;
 }
+// PATH lookup must mirror executable search: an executable/searchable
+// directory is not a compiler. The POSIX dot probe needs search, not read access.
+fn boot_executable_candidate(ctx:*BootContext,path:*u8)->bool{
+ if access(path,1)!=0{return false;}
+ if platform_windows(){let directory:*void=opendir(path);if directory!=0 as *void{closedir(directory);return false;}return true;}
+ let probe:*u8=boot_project_join(ctx,path,".","");if ctx.failed{return false;}
+ return access(probe,1)!=0;
+}
 fn boot_default_library(ctx:*BootContext,invoked:*u8)->bool {
  let mut has_slash:bool=false;let mut k:u64=0;
  while invoked[k]!=0 {if platform_slash(invoked[k]) {has_slash=true;}k=k+1;}
@@ -46,7 +53,7 @@ fn boot_default_library(ctx:*BootContext,invoked:*u8)->bool {
    if ctx.failed{return false;}
    let candidate:*u8=boot_project_join(ctx,dir,invoked,"");
    if ctx.failed{return false;}
-   if access(candidate,1)==0 {resolved=realpath(candidate,0 as *u8);}
+   if boot_executable_candidate(ctx,candidate) {resolved=realpath(candidate,0 as *u8);}
    if paths[end]==0 {break;}end=end+1;start=end;
   }
  }
@@ -212,19 +219,19 @@ fn boot_compiler_entry(argc:i32,argv:**u8,regular:bool)->i32 {
  }
  let ctx:*BootContext=boot_context_new(0 as *u8,0,"aether-core");
  if ctx==0 as *BootContext {return 1;}
- if argc>1&&(strcmp(argv[1],"lsp")==0||strcmp(argv[1],"symbols")==0){ctx.quiet=true;}
+ // All CLI diagnostics are rendered on stderr after the first failure.
+ ctx.quiet=true;
  let mut scan:i32=1;let mut json_errors:bool=false;while scan<argc{if strcmp(argv[scan],"--")==0{break;}if strcmp(argv[scan],"--error-format")==0&&scan+1<argc&&strcmp(argv[scan+1],"json")==0{json_errors=true;ctx.quiet=true;}scan=scan+1;}
  let cmd:*BootCommand=boot_alloc(ctx,size_of(BootCommand) as u64) as *BootCommand;
  let mut ok:bool=cmd!=0 as *BootCommand && boot_parse_command(ctx,cmd,argc,argv,regular);
  if ok&&cmd.lsp{let status:i32=boot_lsp(ctx);boot_context_free(ctx);return status;}
- if ctx.quiet&&!json_errors&&!ok&&(cmd==0 as *BootCommand||!cmd.symbols)&&ctx.diagnostic_message!=0 as *u8{ls_problem(ctx.diagnostic_message);}
  if ok {ok=boot_project(ctx,cmd.input) && boot_check(ctx);}
  if ok && ctx.uses_errno {ok=boot_errno_target(ctx);}
  if ok && cmd.llvm {ok=boot_llvm_supported(ctx);}
  if ok&&cmd.symbols{ok=boot_symbols(ctx);}
  if ok && !cmd.check {ok=boot_generate(ctx,cmd);}
  if !ok&&json_errors{boot_json_diagnostic(ctx);}
- else if !ok&&cmd!=0 as *BootCommand&&cmd.symbols&&ctx.diagnostic_message!=0 as *u8{ls_problem(ctx.diagnostic_message);}
+ else if !ok&&ctx.diagnostic_message!=0 as *u8{boot_plain_diagnostic(ctx);}
  boot_context_free(ctx);
  if ok {return 0;}return 1;
 }

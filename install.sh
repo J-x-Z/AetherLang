@@ -49,6 +49,11 @@ def install():
     if not {"aethc", "jxz", "stdlib/vec.aeth"} <= names:
         raise ValueError("package is missing its compiler, JXZ or standard library")
 
+    # Older packages may contain only the two required tools. Every compiler or
+    # driver actually present in a new package must remain runnable as installed.
+    executable_names = names & {"aethc", "aethc-c", "aethc-core", "aethc-native",
+                                "jxz", "jxz-c", "jxz-native", "jxz-native-c"}
+
     prefix = args.prefix.resolve()
     prefix.mkdir(parents=True, exist_ok=True)
     # The directory lock serializes installs without a stale lock file after SIGKILL.
@@ -88,7 +93,7 @@ def install():
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(package / name, dest)
                     check_file(stage, name, checksum)
-                if not all(os.access(stage / n, os.X_OK) for n in ("aethc", "jxz")):
+                if not all(os.access(stage / n, os.X_OK) for n in executable_names):
                     raise ValueError("package tools are missing executable permission")
                 (stage / "manifest.json").write_bytes(raw)
                 stage.rename(release)
@@ -96,7 +101,7 @@ def install():
                 for name, checksum in entries:
                     check_file(release, name, checksum)
                 check_file(release, "manifest.json", key)
-            if not all(os.access(release / n, os.X_OK) for n in ("aethc", "jxz")):
+            if not all(os.access(release / n, os.X_OK) for n in executable_names):
                 raise ValueError("installed tools are missing executable permission")
             stage.mkdir(exist_ok=True)
             link = stage / "bin"

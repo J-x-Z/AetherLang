@@ -31,3 +31,13 @@ pub fn boot_symbols(ctx:*BootContext)->bool{
  while entry!=0 as *LspOccurrence{if !entry.definition{let target:*LspSymbol=lc_find(symbols,entry.decl);if target!=0 as *LspSymbol{if !first{ls_char(out,44);}first=false;ls_text(out,"{\"symbol\":");ls_number(out,target.id);ls_text(out,",\"location\":");lc_location(out,ctx,entry.token);ls_char(out,125);}}entry=entry.next;}
  ls_text(out,"]}\n");let ok:bool=!arena.failed&&!out.failed&&ls_write_all(1,out.data,out.length);ls_buffer_free(out);boot_context_free(arena);return ok;
 }
+
+// Plain CLI diagnostics share the captured source location with JSON/LSP, but
+// never contaminate generated output or commands that are piped to another tool.
+pub fn boot_plain_diagnostic(ctx:*BootContext)->bool{
+ let out:*LspBuffer=ls_buffer_new();if out==0 as *LspBuffer{return false;}
+ let token:*BootToken=ctx.diagnostic_token;let mut path:*u8=ctx.path;let mut line:i32=1;let mut column:i32=1;
+ if token!=0 as *BootToken{line=token.line;column=token.column;if token.path!=0 as *u8{path=token.path;}}
+ ls_text(out,path);ls_char(out,58);ls_number(out,line as i64);ls_char(out,58);ls_number(out,column as i64);ls_text(out,": ");
+ ls_text(out,ctx.diagnostic_message);ls_char(out,10);let ok:bool=!out.failed&&ls_write_all(2,out.data,out.length);ls_buffer_free(out);return ok;
+}

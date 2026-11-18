@@ -53,6 +53,7 @@ if clang --version >/dev/null 2>&1; then
     python3 tests/bootstrap_tuples.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-tuples" --sanitize
     python3 tests/bootstrap_patterns.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-patterns" --sanitize
     python3 tests/bootstrap_hosted.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-hosted" --sanitize
+    python3 tests/bootstrap_cli.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-cli"
     if [ "$bootstrap_backend" = llvm ]; then
         python3 tests/bootstrap_effects.py --compiler "$native_compiler" --reference-compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-effects"
     else

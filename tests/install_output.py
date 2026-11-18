@@ -92,6 +92,17 @@ fn main() -> i32 {
     elsewhere = work / 'unrelated cwd'
     elsewhere.mkdir(exist_ok=True)
     run('install/prefix-check', [installed, 'check', source], cwd=elsewhere)
+    # execvp skips a directory with the compiler's name. Stdlib discovery must
+    # skip it too, including a searchable directory without listing permission.
+    decoy = work / 'earlier PATH Ω'
+    (decoy / 'aethc').mkdir(parents=True)
+    path_env = {**env, 'PATH': str(decoy)+os.pathsep+str(prefix/'bin')+os.pathsep+env.get('PATH','')}
+    for mode in [0o755, 0o111]:
+        (decoy/'aethc').chmod(mode)
+        try:
+            run('install/path-directory-'+oct(mode), ['aethc','check',source], cwd=elsewhere, environment=path_env)
+        finally:
+            (decoy/'aethc').chmod(0o755)
     moved = work / 'relocated β'
     prefix.rename(moved)
     prefix = moved

@@ -18,12 +18,13 @@ args.work_dir.mkdir(parents=True, exist_ok=True)
 work = Path(tempfile.mkdtemp(dir=args.work_dir.resolve()))
 prefix = work / 'prefix Ω'
 records = []
+optional_tools = ('aethc-c', 'aethc-core', 'aethc-native', 'jxz-c', 'jxz-native', 'jxz-native-c')
 
-def package(version):
+def package(version, tools=None):
     base = work / version
     (base / 'stdlib').mkdir(parents=True)
     artifacts = []
-    for name in ('aethc', 'jxz'):
+    for name in tools or ('aethc', 'jxz', *optional_tools):
         path = base / name
         path.write_text(f'#!/bin/sh\necho {version}\n')
         path.chmod(0o755)
@@ -49,6 +50,11 @@ def check(version):
 one, two = package('one'), package('two')
 invoke('install', one, extra=['--manifest-sha256', hashlib.sha256((one/'manifest.json').read_bytes()).hexdigest()])
 check('one')
+for name in optional_tools:
+    (two/name).chmod(0o644)
+    invoke('non-executable-package-'+name, two, 1)
+    check('one')
+    (two/name).chmod(0o755)
 invoke('mismatched-receipt', two, 1, extra=['--manifest-sha256', '0'*64])
 check('one')
 (two/'stdlib/vec.aeth').write_text('damaged')
@@ -71,6 +77,11 @@ installed = (prefix / 'bin/aethc').resolve()
 installed.chmod(0o644)
 invoke('damaged-installed-mode', two, 1)
 installed.chmod(0o755)
+for name in optional_tools:
+    tool = (prefix/'bin'/name).resolve()
+    tool.chmod(0o644)
+    invoke('non-executable-installed-'+name, two, 1)
+    tool.chmod(0o755)
 invoke('roll-back-to-verified-version', one)
 check('one')
 foreign = work / 'unmanaged'
@@ -78,5 +89,9 @@ foreign = work / 'unmanaged'
 (foreign/'bin/user-data').write_bytes(b'keep')
 invoke('preserve-existing-bin', two, 1, dest=foreign)
 assert (foreign/'bin/user-data').read_bytes() == b'keep'
+legacy = package('legacy', tools=('aethc', 'jxz'))
+legacy_prefix = work / 'legacy prefix'
+invoke('legacy-two-tool-package', legacy, dest=legacy_prefix)
+assert subprocess.check_output([legacy_prefix/'bin/aethc'], text=True).strip() == 'legacy'
 (args.work_dir / 'results.json').write_text(json.dumps(records, indent=2)+'\n')
 print(f'{len(records)} package installation and rollback scenarios passed')
