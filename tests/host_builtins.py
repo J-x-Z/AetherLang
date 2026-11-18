@@ -38,6 +38,23 @@ for backend in args.backends:
             execution = run([output], status)
             assert execution.stdout == stdout and not execution.stderr, execution
 
+# The emitted translation unit is also a public artifact. In strict C11
+# glibc only declares POSIX/XSI interfaces when requested before all headers.
+if 'c' in args.backends and os.name == 'posix':
+    posix = work/'posix-source.aeth'
+    posix.write_text('extern "C"{fn setenv(n:*u8,v:*u8,overwrite:i32)->i32;fn unsetenv(n:*u8)->i32;'
+                     'fn realpath(p:*u8,out:*u8)->*u8;fn dprintf(fd:i32,fmt:*u8,...)->i32;fn free(p:*void);}'
+                     'fn main()->i32{if setenv("AETHER_POSIX_HEADER_TEST","ok",1)!=0{return 1;}'
+                     'if unsetenv("AETHER_POSIX_HEADER_TEST")!=0{return 2;}'
+                     'let p:*u8=realpath(".",0 as *u8);if p==0 as *u8{return 3;}free(p as *void);'
+                     'if dprintf(1,"%s","ok")!=2{return 4;}return 0;}')
+    output = work/'posix-headers'
+    emitted = output.with_suffix('.c')
+    run([compiler, posix, '--emit-c', '-o', emitted])
+    run([os.environ.get('CC','clang'), '-std=c11', '-Werror=implicit-function-declaration',
+         emitted, '-o', output])
+    assert run([output]).stdout == 'ok'
+
 # Clang 23 diagnoses uint8_t** passed to libc char** as an error.
 for backend in args.backends:
     for level in (0, 2, 3):

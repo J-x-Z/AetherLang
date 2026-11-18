@@ -7,9 +7,17 @@ p.add_argument('--compiler',type=Path,required=True);p.add_argument('--work-dir'
 p.add_argument('--alternate-compiler',type=Path);p.add_argument('--backends',nargs='+',choices=['c','llvm'],default=['c','llvm'])
 p.add_argument('--no-sanitize',action='store_true');a=p.parse_args()
 r=Path(__file__).resolve().parents[1];w=a.work_dir.resolve();w.mkdir(parents=True,exist_ok=True)
-env={**os.environ,'TMPDIR':str(w)};cc=Path(shutil.which(os.environ.get('CC','clang'))).resolve();compiler=w/'frozen compiler ü.aethc';shutil.copy2(a.compiler.resolve(),compiler)
+env={**os.environ,'TMPDIR':str(w)};cc=Path(shutil.which(os.environ.get('CC','clang'))).resolve()
 source=r/'tests/regressions/compute/jit.aeth';results=[]
 cases=Path(tempfile.mkdtemp(prefix='cases-',dir=w))
+# Keep the package-relative LLVM loader path intact when testing a copied tool.
+def copy_tool(origin, destination):
+    destination.parent.mkdir(exist_ok=True)
+    shutil.copy2(origin, destination)
+    if (origin.parent / 'lib').is_dir():
+        (destination.parent / 'lib').symlink_to(origin.parent / 'lib', target_is_directory=True)
+    return destination
+compiler = copy_tool(a.compiler.resolve(), cases / 'frozen compiler ü.aethc')
 def run(label,command,ok=True,environment=env):
  command=list(map(str,command));start=time.perf_counter();value=subprocess.run(command,capture_output=True,text=True,timeout=120,env=environment)
  results.append(dict(label=label,command=command,exit=value.returncode,stdout=value.stdout,stderr=value.stderr,elapsed_seconds=time.perf_counter()-start));(w/'results.json').write_text(json.dumps(results,indent=2))
@@ -47,10 +55,10 @@ assert execute('artifact SHA invalidation',outer[0],cache,backend)==key
 assert list(cache.glob('.invalid-*'))
 if a.alternate_compiler:
  alternate=a.alternate_compiler.resolve();assert hashlib.sha256(alternate.read_bytes()).digest()!=hashlib.sha256(compiler.read_bytes()).digest()
- replacement=w/'replacement compiler';shutil.copy2(alternate,replacement)
+ replacement=copy_tool(alternate, cases/'alternate'/'replacement compiler')
  changed_compiler=execute('compiler SHA invalidates',outer[0],cache,backend,tool=replacement);assert changed_compiler not in keys
  # Same compiler bytes at a different path must identify the same artifact.
- same=w/'same bytes different path';shutil.copy2(compiler,same)
+ same=cases/'same bytes different path';shutil.copy2(compiler,same)
  assert execute('compiler identity is content',outer[0],cache,backend,mode='warm',tool=same)==key
 # Failed compilation cannot publish a partial cache entry or leak a private stage.
 failed=cases/'failed cache';false=Path(shutil.which('false')).resolve()
