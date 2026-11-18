@@ -1,7 +1,8 @@
 use model::*;
 pub struct AsyncText{ctx:*BootContext,data:*u8,length:u64,capacity:u64}
-pub struct AsyncSlot{name:*u8,field:*u8,slot:*u8,ty:*BootType,raw:*BootType,mutable:bool,parameter:bool,child:bool,next:*AsyncSlot}
-pub struct AsyncPart{number:i32,statements:*BootNode,incoming:*AsyncSlot,last:*AsyncSlot,output:*AsyncSlot,child:*AsyncSlot,awaited:*BootNode,next:*AsyncPart}
+// outer follows lexical lifetime; next enumerates every physical frame field.
+pub struct AsyncSlot{name:*u8,field:*u8,slot:*u8,ty:*BootType,raw:*BootType,mutable:bool,parameter:bool,outer:*AsyncSlot,next:*AsyncSlot}
+pub struct AsyncPart{number:i32,statements:*BootNode,incoming:*AsyncSlot,last:*AsyncSlot,output:*AsyncSlot,child:*AsyncSlot,awaited:*BootNode,condition:*BootNode,target:*AsyncPart,alternative:*AsyncPart,next:*AsyncPart}
 pub struct AsyncReplace{name:*u8,node:*BootNode,chunk:bool,next:*AsyncReplace}
-pub struct AsyncTask{function:*BootNode,output:*BootType,frame:*BootType,poll:*BootType,receiver:*u8,block_name:*u8,blocker:*BootNode,slots:*AsyncSlot,tail:*AsyncSlot,parts:*AsyncPart,replacements:*AsyncReplace,visiting:bool,done:bool,next:*AsyncTask}
+pub struct AsyncTask{function:*BootNode,output:*BootType,frame:*BootType,poll:*BootType,receiver:*u8,block_name:*u8,blocker:*BootNode,slots:*AsyncSlot,tail:*AsyncSlot,parts:*AsyncPart,parts_tail:*AsyncPart,suspensions:i32,replacements:*AsyncReplace,visiting:bool,done:bool,next:*AsyncTask}
 pub struct AsyncState{ctx:*BootContext,tasks:*AsyncTask,text:*AsyncText,task:*AsyncTask}

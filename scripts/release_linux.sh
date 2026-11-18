@@ -46,6 +46,9 @@ for compiler in aethc aethc-native; do
     python3 jxz/tests/integration.py --jxz "$bin/$driver" --aethc "$bin/$compiler" \
         --backend llvm --work-dir "$work/jxz-$compiler" > "$proof/jxz-$compiler.log" 2>&1
 done
+python3 tests/bootstrap_async.py --compiler "$bin/aethc-native" --seed "$bin/aethc" \
+    --work-dir "$work/async" > "$proof/async.log" 2>&1
+cp "$work/async/results.json" "$proof/async.json"
 cp "$extracted/manifest.json" "$proof/manifest.json"
 cp "$work/bootstrap/regular-bootstrap.json" "$proof/regular-bootstrap.json"
 for backend in c llvm; do

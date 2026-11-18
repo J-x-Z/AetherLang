@@ -9,7 +9,7 @@ def run(command,status=0,stdout=None):
  records.append(dict(command=command,status=r.returncode,expected=status,stdout=r.stdout,stderr=r.stderr));(work/'results.json').write_text(json.dumps(dict(compiler_sha256=hashlib.sha256(a.compiler.read_bytes()).hexdigest(),seed_sha256=hashlib.sha256(a.seed.read_bytes()).hexdigest(),checks=records),indent=2));assert r.returncode==status,records[-1]
  if stdout is not None:assert r.stdout==stdout and not r.stderr,records[-1]
  return r
-for name in ['basic.aeth','combined.aeth','resources.aeth','interleave.aeth','modules.aeth','basic.ath','modules.ath','compositions.ath','aliases.ath']:
+for name in ['basic.aeth','combined.aeth','resources.aeth','interleave.aeth','modules.aeth','basic.ath','modules.ath','compositions.ath','aliases.ath','control_flow.aeth','control_flow.ath']:
  source=fixtures/name;run([a.seed,'check',source,'-I',repo/'stdlib']);run([a.compiler,'check',source,'-I',repo/'stdlib'])
  for backend in ['c','llvm']:
   emitted=work/(name+('.c' if backend=='c' else '.ll'));run([a.compiler,source,'-I',repo/'stdlib','--emit-'+backend,'-o',emitted])
@@ -20,7 +20,7 @@ negative={
  'native_export.aeth':'#[no_mangle] async fn exported()->i32{return 7;}fn main(){}',
  'generic.aeth':'async fn f<T>(x:T)->T{await yield_now();return x;}fn main(){}',
  'recursive.aeth':'async fn f()->i32{let x:i32=await f();return x;}fn main(){}',
- 'nested.aeth':'async fn f(){if true{await yield_now();}}fn main(){}',
+ 'await_condition.aeth':'async fn ok()->bool{return true;}async fn f(){if await ok(){return;}}fn main(){}',
  'nested_argument.aeth':'async fn f(x:i32)->i32{return x;}async fn g(){let x:i32=await f(await f(1));}fn main(){}',
  'not_future.aeth':'fn f()->i32{1}async fn g()->i32{let x:i32=await f();return x;}fn main(){}',
  'uninitialized.aeth':'async fn f(){let x:i32;await yield_now();}fn main(){}',

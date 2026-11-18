@@ -438,13 +438,17 @@ original checks. A task dropped before its first poll releases its captured
 owners; cancellation after suspension also releases a stored child.
 
 This surface is cooperative and single-threaded, without an implicit executor.
-Async functions are concrete and non-generic, with at most 64 top-level
-suspensions and an acyclic child-frame graph of depth at most 32. Checked
-references cannot survive suspension. Nested suspension, async closures, effect
+Async functions are concrete and non-generic, with at most 64 suspension
+points and an acyclic child-frame graph of depth at most 32. Direct await
+statements and local await initializers can suspend inside ordinary blocks,
+`if`/`else`, `while` and `loop`. Branch conditions run once per decision.
+Loop exits and cancellation release the live owners in those scopes.
+Checked references cannot survive suspension. Await in a condition or a
+call argument, async closures, effect
 contracts on async declarations and async `?` propagation are diagnosed; use an
 explicit Result match/return. Ordinary suspension-free blocks still support
 loops, borrowed interfaces, closures and const-generic algorithms.
 
-`tests/bootstrap_async.py` runs the same nine Core/Script workloads as the
-primary compiler through C and LLVM at O0/O2 and with ASan/UBSan. It also verifies
+`tests/bootstrap_async.py` runs the shared Core/Script workloads through the
+self-hosted C and LLVM backends at O0/O2 and with ASan/UBSan. It also verifies
 shared rejection cases and preserves existing output files after failed checks.

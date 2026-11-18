@@ -10,16 +10,16 @@ use lexer::boot_lex;
 use parser::boot_parse;
 fn as_task(state:*AsyncState,function:*BootNode)->*AsyncTask{let mut task:*AsyncTask=state.tasks;while task!=0 as *AsyncTask{if task.function==function{return task;}task=task.next;}return 0 as *AsyncTask;}
 fn as_alias(state:*AsyncState,ty:*BootType)->*u8{let name:*u8=at_name(state.ctx,"type");let alias:*BootType=boot_named_type(state.ctx,name);if !state.ctx.failed{alias.kind=BY_ALIAS;alias.inner=ty;alias.complete=true;}return name;}
-fn as_slot(state:*AsyncState,name:*u8,mut ty:*BootType,mutable:bool,parameter:bool,token:*BootToken)->*AsyncSlot{
- let ctx:*BootContext=state.ctx;let mut old:*AsyncSlot=state.task.slots;while old!=0 as *AsyncSlot{if strcmp(old.name,name)==0{boot_error(ctx,token,"distinct top-level async binding names are required");return 0 as *AsyncSlot;}old=old.next;}
+fn as_slot(state:*AsyncState,outer:*AsyncSlot,name:*u8,mut ty:*BootType,mutable:bool,parameter:bool,token:*BootToken)->*AsyncSlot{
+ let ctx:*BootContext=state.ctx;let mut old:*AsyncSlot=outer;while old!=0 as *AsyncSlot{if strcmp(old.name,name)==0{boot_error(ctx,token,"overlapping async bindings require distinct names");return 0 as *AsyncSlot;}old=old.outer;}
  ty=boot_normal_type(ctx,ty,0,token);if ctx.failed{return 0 as *AsyncSlot;}
  if ty==0 as *BootType||ty.kind==BY_INFER||br_contains(ty,0){boot_error(ctx,token,"async slots require explicit by-value types without checked references");return 0 as *AsyncSlot;}
- let slot:*AsyncSlot=boot_alloc(ctx,size_of(AsyncSlot) as u64) as *AsyncSlot;if ctx.failed{return slot;}slot.name=name;slot.ty=ty;slot.raw=ty;if ty.kind==BY_OWN{slot.raw=ty.inner;}slot.mutable=mutable;slot.parameter=parameter;slot.field=at_name(ctx,"field");slot.slot=at_name(ctx,"slot");
+ let slot:*AsyncSlot=boot_alloc(ctx,size_of(AsyncSlot) as u64) as *AsyncSlot;if ctx.failed{return slot;}slot.outer=outer;slot.name=name;slot.ty=ty;slot.raw=ty;if ty.kind==BY_OWN{slot.raw=ty.inner;}slot.mutable=mutable;slot.parameter=parameter;slot.field=at_name(ctx,"field");slot.slot=at_name(ctx,"slot");
  if state.task.tail==0 as *AsyncSlot{state.task.slots=slot;}else{state.task.tail.next=slot;}state.task.tail=slot;return slot;
 }
 fn as_validate(ctx:*BootContext,node:*BootNode,loops:i32)->bool{
  let mut item:*BootNode=node;while item!=0 as *BootNode&&!ctx.failed{
-  if item.kind==BN_AWAIT{boot_error(ctx,item.token,"await requires a top-level async statement or let initializer");return false;}
+  if item.kind==BN_AWAIT{boot_error(ctx,item.token,"await requires a statement or a direct local initializer in async control flow");return false;}
   if item.kind==BN_TRY{boot_error(ctx,item.token,"use explicit Result match/return in async functions");return false;}
   if (item.kind==BN_BREAK||item.kind==BN_CONTINUE)&&loops==0{boot_error(ctx,item.token,"loop control requires a user loop");return false;}
   let mut nested:i32=loops;if item.kind==BN_WHILE||item.kind==BN_RANGE_FOR{nested+=1;}
@@ -32,14 +32,52 @@ fn as_split(state:*AsyncState,task:*AsyncTask,depth:i32)->bool{
  if task.output.kind!=BY_VOID{boot_value_tail(task.function.body,BN_RETURN);if (boot_flow(task.function.body)&1)!=0{boot_error(ctx,task.function.token,"async function may finish without returning a value");return false;}}else if (boot_flow(task.function.body)&1)!=0{
   let returned:*BootNode=boot_node(ctx,BN_RETURN,task.function.token);if ctx.failed{return false;}let mut last:*BootNode=task.function.body.body;if last==0 as *BootNode{task.function.body.body=returned;}else{while last.next!=0 as *BootNode{last=last.next;}last.next=returned;}
  }
- let mut parameter:*BootNode=task.function.params;while parameter!=0 as *BootNode{as_slot(state,parameter.name,parameter.ty,(parameter.flags&1)!=0,true,parameter.token);parameter=parameter.next;}
- let mut part:*AsyncPart=boot_alloc(ctx,size_of(AsyncPart) as u64) as *AsyncPart;if ctx.failed{return false;}task.parts=part;part.incoming=task.tail;let mut tail:*BootNode=0 as *BootNode;let mut item:*BootNode=task.function.body.body;
+ let mut live:*AsyncSlot=0 as *AsyncSlot;
+ let mut parameter:*BootNode=task.function.params;
+ while parameter!=0 as *BootNode&&!ctx.failed{
+  live=as_slot(state,live,parameter.name,parameter.ty,(parameter.flags&1)!=0,true,parameter.token);
+  parameter=parameter.next;
+ }
+ let entry:*AsyncPart=as_part(state,live);
+ if !as_sequence(state,task.function.body.body,entry,0 as *AsyncPart,0 as *AsyncPart,0 as *AsyncPart,depth){return false;}
+ task.visiting=false;task.done=true;return !ctx.failed;
+}
+
+// Every edge names its destination and the lexical frame slots that survive
+// it. A branch can leave its locals behind, and a loop can revisit its header.
+fn as_part(state:*AsyncState,live:*AsyncSlot)->*AsyncPart{
+ let task:*AsyncTask=state.task;
+ let part:*AsyncPart=boot_alloc(state.ctx,size_of(AsyncPart) as u64) as *AsyncPart;
+ if !state.ctx.failed{
+  if task.parts_tail==0 as *AsyncPart{task.parts=part;}
+  else{task.parts_tail.next=part;part.number=task.parts_tail.number+1;}
+  if part.number>=1024{boot_error(state.ctx,task.function.token,"at most 1024 async control-flow blocks");}
+  task.parts_tail=part;part.incoming=live;
+ }
+ return part;
+}
+fn as_has_control(node:*BootNode,jumps:bool)->bool{
+ let mut n:*BootNode=node;
+ while n!=0 as *BootNode{
+  if n.kind==BN_AWAIT||(jumps&&(n.kind==BN_BREAK||n.kind==BN_CONTINUE)){return true;}
+  if n.kind!=BN_CLOSURE{
+   let inner_jumps:bool=jumps&&n.kind!=BN_WHILE&&n.kind!=BN_RANGE_FOR;
+   if as_has_control(n.left,jumps)||as_has_control(n.right,jumps)||as_has_control(n.third,jumps)||as_has_control(n.params,jumps)||as_has_control(n.body,inner_jumps){return true;}
+  }
+  n=n.next;
+ }
+ return false;
+}
+fn as_sequence(state:*AsyncState,first:*BootNode,entry:*AsyncPart,exit_to:*AsyncPart,break_to:*AsyncPart,continue_to:*AsyncPart,depth:i32)->bool{
+ let ctx:*BootContext=state.ctx;if ctx.failed{return false;}
+ let task:*AsyncTask=state.task;let mut part:*AsyncPart=entry;let mut live:*AsyncSlot=entry.incoming;
+ let mut item:*BootNode=first;let mut tail:*BootNode=0 as *BootNode;
  while item!=0 as *BootNode&&!ctx.failed{
   let next:*BootNode=item.next;item.next=0 as *BootNode;
-  let mut suspension:*BootNode=item.left;if item.kind==BN_ASSIGN{suspension=item.right;}
-  if (item.kind==BN_LET||item.kind==BN_EXPR||item.kind==BN_ASSIGN)&&suspension!=0 as *BootNode&&suspension.kind==BN_AWAIT{
-   if part.number>=64{boot_error(ctx,item.token,"at most 64 async suspension points");return false;}
-   part.awaited=suspension.left;part.last=task.tail;
+  let mut awaited:*BootNode=item.left;if item.kind==BN_ASSIGN{awaited=item.right;}
+  if (item.kind==BN_LET||item.kind==BN_EXPR||item.kind==BN_ASSIGN)&&awaited!=0 as *BootNode&&awaited.kind==BN_AWAIT{
+   if task.suspensions>=64{boot_error(ctx,item.token,"at most 64 async suspension points");return false;}
+   task.suspensions+=1;part.awaited=awaited.left;part.last=live;
    if !as_validate(ctx,part.awaited,0){return false;}
    if part.awaited.kind!=BN_CALL||(part.awaited.left!=0 as *BootNode&&part.awaited.left.kind!=BN_IDENT){boot_error(ctx,item.token,"await requires a direct async call or yield_now()");return false;}
    let declaration:*BootNode=boot_lookup(ctx,part.awaited.name,part.awaited.lookup,part.awaited.token);if ctx.failed{return false;}
@@ -48,22 +86,59 @@ fn as_split(state:*AsyncState,task:*AsyncTask,depth:i32)->bool{
    }else{
     let child:*AsyncTask=as_task(state,declaration);if child==0 as *AsyncTask{boot_error(ctx,item.token,"await requires an async function");return false;}
     if !as_split(state,child,depth+1){return false;}state.task=task;ctx.module=task.function.owner;
-    part.child=as_slot(state,at_name(ctx,"child"),boot_owned_type(ctx,child.frame),true,false,item.token);if ctx.failed{return false;}part.child.child=true;
+    part.child=as_slot(state,0 as *AsyncSlot,at_name(ctx,"child"),boot_owned_type(ctx,child.frame),true,false,item.token);
+    if ctx.failed{return false;}
    }
-   if item.kind==BN_LET{part.output=as_slot(state,item.name,item.ty,(item.flags&1)!=0,false,item.token);}
+   if item.kind==BN_LET{
+    live=as_slot(state,live,item.name,item.ty,(item.flags&1)!=0,false,item.token);part.output=live;
+   }
    if item.kind==BN_ASSIGN{
     if item.op!=0||item.left.kind!=BN_IDENT{boot_error(ctx,item.token,"await assignment requires a direct Script local");return false;}
-    let mut output:*AsyncSlot=task.slots;while output!=0 as *AsyncSlot{if strcmp(output.name,item.left.name)==0{part.output=output;}output=output.next;}
-    if part.output==0 as *AsyncSlot{boot_error(ctx,item.token,"await assignment requires initialized typed storage");return false;}
+    let mut output:*AsyncSlot=live;while output!=0 as *AsyncSlot&&strcmp(output.name,item.left.name)!=0{output=output.outer;}
+    if output==0 as *AsyncSlot||!output.mutable{boot_error(ctx,item.token,"await assignment requires initialized mutable storage");return false;}
+    part.output=output;
    }
-   let following:*AsyncPart=boot_alloc(ctx,size_of(AsyncPart) as u64) as *AsyncPart;if ctx.failed{return false;}following.number=part.number+1;following.incoming=task.tail;part.next=following;part=following;tail=0 as *BootNode;
+   part.target=as_part(state,live);part=part.target;tail=0 as *BootNode;
+  }else if (item.kind==BN_IF||item.kind==BN_WHILE||item.kind==BN_BLOCK)&&as_has_control(item,break_to!=0 as *AsyncPart){
+   let join:*AsyncPart=as_part(state,live);
+   if ctx.failed{return false;}
+   if item.kind==BN_BLOCK{
+    if (item.flags&BF_UNSAFE)!=0{boot_error(ctx,item.token,"suspending inside unsafe blocks requires an explicit safe suspension boundary");return false;}
+    let body:*AsyncPart=as_part(state,live);part.target=body;
+    if !as_sequence(state,item.body,body,join,break_to,continue_to,depth){return false;}
+   }else{
+    if !as_validate(ctx,item.left,0){return false;}
+    let mut condition:*AsyncPart=part;
+    if item.kind==BN_WHILE{condition=as_part(state,live);part.target=condition;}
+    let yes:*AsyncPart=as_part(state,live);if ctx.failed{return false;}
+    condition.condition=item.left;condition.target=yes;condition.alternative=join;
+    if item.kind==BN_WHILE{
+     if !as_sequence(state,item.body.body,yes,condition,join,condition,depth){return false;}
+    }else{
+     if !as_sequence(state,item.body.body,yes,join,break_to,continue_to,depth){return false;}
+     if item.third!=0 as *BootNode{
+      let no:*AsyncPart=as_part(state,live);condition.alternative=no;
+      let mut branch:*BootNode=item.third;if branch.kind==BN_BLOCK{branch=branch.body;}
+      if !as_sequence(state,branch,no,join,break_to,continue_to,depth){return false;}
+     }
+    }
+   }
+   part=join;tail=0 as *BootNode;
+  }else if item.kind==BN_BREAK||item.kind==BN_CONTINUE{
+   if break_to==0 as *AsyncPart{boot_error(ctx,item.token,"loop control requires a user loop");return false;}
+   part.target=if item.kind==BN_BREAK{break_to}else{continue_to};
+   if next==0 as *BootNode{return true;}
+   part=as_part(state,live);tail=0 as *BootNode;
   }else{
    if !as_validate(ctx,item,0){return false;}
-   if item.kind==BN_LET{as_slot(state,item.name,item.ty,(item.flags&1)!=0,false,item.token);}
+   if item.kind==BN_LET{live=as_slot(state,live,item.name,item.ty,(item.flags&1)!=0,false,item.token);}
    if tail==0 as *BootNode{part.statements=item;}else{tail.next=item;}tail=item;
-  }item=next;
+   if (boot_flow(item)&1)==0&&next==0 as *BootNode{return !ctx.failed;}
+  }
+  item=next;
  }
- part.last=task.tail;task.visiting=false;task.done=true;return !ctx.failed;
+ if !ctx.failed{part.target=exit_to;}
+ return !ctx.failed;
 }
 fn as_placeholder(state:*AsyncState,node:*BootNode,chunk:bool)->*u8{
  let item:*AsyncReplace=boot_alloc(state.ctx,size_of(AsyncReplace) as u64) as *AsyncReplace;if state.ctx.failed{return "";}
@@ -77,6 +152,24 @@ fn as_restore(state:*AsyncState,slot:*AsyncSlot){
 }
 fn as_persist(state:*AsyncState,slot:*AsyncSlot){
  as_text(state,"unsafe{");as_field(state,slot);as_text(state,"=");as_enum(state,slot,"Full");as_text(state,"(");as_text(state,slot.name);if slot.ty.kind==BY_OWN{as_text(state," as ");as_text(state,as_alias(state,slot.raw));}as_text(state,");}\n");
+}
+fn as_restore_live(state:*AsyncState,head:*AsyncSlot){
+ if head==0 as *AsyncSlot{return;}
+ // Recreate lexical declaration order, including its reverse-drop order.
+ let mut count:u64=0;let mut slot:*AsyncSlot=head;
+ while slot!=0 as *AsyncSlot{count+=1;slot=slot.outer;}
+ let ordered:**AsyncSlot=boot_alloc(state.ctx,count*size_of(*AsyncSlot)) as **AsyncSlot;
+ if state.ctx.failed{return;}
+ let mut index:u64=count;slot=head;
+ while slot!=0 as *AsyncSlot{index-=1;ordered[index]=slot;slot=slot.outer;}
+ while index<count{as_restore(state,ordered[index]);index+=1;}
+}
+fn as_persist_live(state:*AsyncState,head:*AsyncSlot){
+ let mut slot:*AsyncSlot=head;
+ while slot!=0 as *AsyncSlot{as_persist(state,slot);slot=slot.outer;}
+}
+fn as_jump(state:*AsyncState,target:*AsyncPart){
+ as_persist_live(state,target.incoming);as_phase(state,target.number*2);as_text(state,"continue;");
 }
 fn as_phase(state:*AsyncState,phase:i32){as_text(state,"unsafe{");as_text(state,state.task.receiver);as_text(state,".phase=");at_number(state.text,phase);as_text(state,";}");}
 fn as_ready_return(ctx:*BootContext,task:*AsyncTask,node:*BootNode){
@@ -127,18 +220,24 @@ fn as_emit(state:*AsyncState)->bool{
  let mut part:*AsyncPart=task.parts;
  while part!=0 as *AsyncPart&&!ctx.failed{
   as_text(state,"if ");as_text(state,task.receiver);as_text(state,".phase==");at_number(state.text,part.number*2);as_text(state,"{");
-  slot=task.slots;while part.incoming!=0 as *AsyncSlot&&slot!=0 as *AsyncSlot{if !slot.child{as_restore(state,slot);}if slot==part.incoming{break;}slot=slot.next;}
+  as_restore_live(state,part.incoming);
   as_returns(ctx,task,part.statements);as_text(state,as_placeholder(state,part.statements,true));as_text(state,"();");
   if part.awaited!=0 as *BootNode{
    if part.child!=0 as *AsyncSlot{as_returns(ctx,task,part.awaited);as_text(state,"let mut ");as_text(state,part.child.name);as_text(state,":");as_text(state,as_alias(state,part.child.ty));as_text(state,"=");as_text(state,as_placeholder(state,part.awaited,false));as_text(state,"();");}
-   slot=task.slots;while part.last!=0 as *AsyncSlot&&slot!=0 as *AsyncSlot{if !slot.child{as_persist(state,slot);}if slot==part.last{break;}slot=slot.next;}
+   as_persist_live(state,part.last);
    if part.child!=0 as *AsyncSlot{as_persist(state,part.child);as_phase(state,part.number*2+1);as_text(state,"continue;");}
-   else{if part.output!=0 as *AsyncSlot{as_text(state,"unsafe{");as_field(state,part.output);as_text(state,"=");as_enum(state,part.output,"Full");as_text(state,"(());}");}as_phase(state,(part.number+1)*2);as_text(state,"return ");as_text(state,task.poll.name);as_text(state,"::Pending;");}
+   else{if part.output!=0 as *AsyncSlot{as_text(state,"unsafe{");as_field(state,part.output);as_text(state,"=");as_enum(state,part.output,"Full");as_text(state,"(());}");}as_phase(state,part.target.number*2);as_text(state,"return ");as_text(state,task.poll.name);as_text(state,"::Pending;");}
+  }else if part.condition!=0 as *BootNode{
+   as_returns(ctx,task,part.condition);
+   as_text(state,"if ");as_text(state,as_placeholder(state,part.condition,false));as_text(state,"(){");
+   as_jump(state,part.target);as_text(state,"}else{");as_jump(state,part.alternative);as_text(state,"}");
+  }else if part.target!=0 as *AsyncPart{
+   as_jump(state,part.target);
   }
   as_text(state,"}");
   if part.child!=0 as *AsyncSlot{
    as_text(state,"if ");as_text(state,task.receiver);as_text(state,".phase==");at_number(state.text,part.number*2+1);as_text(state,"{");as_restore(state,part.child);as_text(state,"match ");as_text(state,part.child.name);as_text(state,".poll(){Pending()=>{");as_persist(state,part.child);as_text(state,"return ");as_text(state,task.poll.name);as_text(state,"::Pending;},Ready(value)=>{");
-   if part.output!=0 as *AsyncSlot{as_text(state,"unsafe{");as_field(state,part.output);as_text(state,"=");as_enum(state,part.output,"Full");as_text(state,"(value);}");}as_phase(state,(part.number+1)*2);as_text(state,"continue;},Finished()=>{");as_phase(state,-1);as_text(state,"return ");as_text(state,task.poll.name);as_text(state,"::Finished;}}}");
+   if part.output!=0 as *AsyncSlot{as_text(state,"unsafe{");as_field(state,part.output);as_text(state,"=");as_enum(state,part.output,"Full");as_text(state,"(value);}");}as_phase(state,part.target.number*2);as_text(state,"continue;},Finished()=>{");as_phase(state,-1);as_text(state,"return ");as_text(state,task.poll.name);as_text(state,"::Finished;}}}");
   }part=part.next;
  }
  as_text(state,"return ");as_text(state,task.poll.name);as_text(state,"::Finished;}}}\n");
