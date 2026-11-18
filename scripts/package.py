@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix='.aether-package-', dir=out.parent) as s
     for path in ('runtime/llvm/target_init.c', 'runtime/metal/bridge.m', 'runtime/metal/bridge.h',
                  'runtime/metal/provider.m', 'runtime/compute/provider.h', 'runtime/compute/loader.c',
                  'runtime/vulkan/provider.c', 'runtime/vulkan/gemm.comp', 'scripts/build_vulkan.py',
-                 'runtime/cudaq/bridge.cpp', 'scripts/build_cudaq.py'):
+                 'runtime/cudaq/bridge.cpp', 'runtime/cudaq/quake.py', 'scripts/build_cudaq.py'):
         dest = stage / path
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root/path, dest)
