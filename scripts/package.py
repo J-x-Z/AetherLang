@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 
+from build_selfhost import build as build_selfhost
+
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=Path, required=True, help='new local release directory')
 p.add_argument('--work-dir', type=Path, required=True, help='persistent bootstrap evidence')
@@ -109,6 +111,16 @@ with tempfile.TemporaryDirectory(prefix='.aether-package-', dir=out.parent) as s
     if generated[0] != generated[1] or source_commit() != commit:
         sys.exit('bootstrap fixed point or source identity changed')
     shutil.copy2(work/'bootstrap-llvm/stage4', stage/'aethc-core')
+    native = stage / 'aethc-native'
+    regular = build_selfhost(stage / 'aethc-core', work/'regular', native, 'llvm')
+    for backend in ('c', 'llvm'):
+        jxz_native = stage / ('jxz-native-c' if backend == 'c' else 'jxz-native')
+        command('sh', 'jxz/build.sh', jxz_native,
+                env={**env, 'AETHC': str(native), 'AETHER_BACKEND': backend})
+        command(jxz_native, '--version')
+    if source_commit() != commit:
+        sys.exit('source identity changed during the regular compiler build')
+    (work/'regular-bootstrap.json').write_text(json.dumps(regular, indent=2)+'\n')
     libs = {str(f.relative_to(stage)): digest(f) for f in sorted((stage/'stdlib').iterdir())}
     files = [dict(name=str(f.relative_to(stage)), bytes=f.stat().st_size, sha256=digest(f))
              for f in sorted(stage.rglob('*')) if f.is_file() and f.parent != stage/'stdlib']
@@ -116,7 +128,7 @@ with tempfile.TemporaryDirectory(prefix='.aether-package-', dir=out.parent) as s
     deps = relocated_deps or output(*deps, stage/'aethc').splitlines()
     manifest = dict(release_id=out.name, source_commit=commit, platform=dict(system=platform.system(), machine=platform.machine()),
                     compiler_features=['llvm', 'c'], artifacts=files, stdlib=dict(files=libs),
-                    bootstrap=checks, core_generated_c_sha256=generated[0], rust=output('rustc', '--version'),
+                    bootstrap=checks, regular_compiler={key: value for key, value in regular.items() if key != 'commands'}, core_generated_c_sha256=generated[0], rust=output('rustc', '--version'),
                     clang=output('clang', '--version').splitlines()[0], dynamic_dependencies=deps[1:] if sys.platform == 'darwin' else deps)
     receipt = stage/'manifest.json'
     receipt.write_text(json.dumps(manifest, ensure_ascii=False, indent=2)+'\n')

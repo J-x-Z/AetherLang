@@ -28,14 +28,15 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 AETHER_CUDAQ_BRIDGE="$WORK/cudaq/libaethe
 - 自举编译器能直接构建二进制和对象、使用 JXZ 精确模块映射、读 native errno。相邻代在 Mac/Linux 生成相同的 LLVM IR（`fa4016c`）。`ee987fb` 与 `5316467` 在两主机各通过 20 项 errno 与 47 项原生驱动验收，含两次连续中断后的子进程回收。证据在 `$WORK/{t26-native-driver,t26-errno,t26-wait}`。
 - `f84e9d4` 的完整 macOS 验收退出 0，日志 `$WORK/foundation-c36bd04/full.log`。CachyOS 的同提交打包、搬移和项目验收见 `$WORK/linux-mainline-20261118/c36bd04.log`；同版本再通过 27 项 JIT 与 123 项宿主内建命令。
 
-## 下一项具体任务
+## 当前接续点
 
-主线已验收 27/29 项。T25 的四种能力联合测试至 `d7bac32`。T26 的上一代种子、固定点和项目运行分别见 `$WORK/t26-{abi,language-integrated,project-lsp}`。`8cfd1a1` 用独立 C 调用端和被调用端验证了 Apple arm64 与 x86_64 SysV 的原生聚合 ABI。`b55a11e` 可对两种源表示检查引用、实例化枚举及方法、传播错误、生成 C/LLVM，并从仓库 JXZ 源码构建 JXZ。该 JXZ 在两后端完成含三包依赖、失效重建、Unicode 参数、失败状态和清理的 42 项命令。相邻代 LLVM IR SHA-256 为 `36c05defcc8adcdda3f972169e2bcd3cc2b7f585e76dceb4b080421364cd188d`。`497bd70` 补上文件模块、内联模块及缺失对象路径，`5951201` 修复所有 match 分支均退出时对函数返回的误判。
+最近的语言提交是 `18baf08`。用 `git log -1 --oneline` 查包括打包、文档和后续移植在内的当前提交。保持本地分支、私有仓库，按用户指定在 Windows 上机前停下。
 
-接下来在同一自举源码上联合验证紧凑布局、所有者析构、常量泛型和 JXZ 调用的语言服务。用生成的 JXZ 和自举编译器一起跑 jxz/tests/integration.py；T29 待 T26 的共享程序、完整固定点与双宿主归档验收后更新。
+- `67d05e0` 的 packed/union/指针重定位由 Mac 与 Linux 各自的 120 项命令验证。原生编译器已用两后端构建独立 Shell，各通过 48 项。证据在 `$WORK/{t26-native-layout,t26-shell-self}`。
+- `10d1b4c` 的所有者与作用域析构通过 151 项命令。`042ba7a` 的原生 LSP 有 25 个协议场景。生成的编译器再编译 JXZ，生成的 JXZ 以两个后端各通过原有集成 40 项和注册表 14 项。见 `$WORK/{t26-owned,t26-jxz-closed}`。
+- `5f95130` 新增自举常量泛型，`43279aa` 支持捕获闭包。`eedc7e1` 提供常规二进制入口、转导出与效果检查。该版本自举编译真实 f64 张量和反向微分、CPU/Metal 应用与规划程序。见 `$WORK/t26-math-native/{math,apps,planning}`。
+- `18baf08` 支持元组值与投影。自举固定点 105 项、元组 138 项、所有权 151 项通过。见 `$WORK/t26-tuples/{final,final-tests-fixed,final-owned}`。
+- `5f01665` 的流式 CSV 和配对统计已由 Rust 和自举编译器各跑 96 个命令，用 Python 精确分数独立核对样本方差、协方差和最小二乘系数。见 `$WORK/terminal-analysis`。
+- 常规入口的连续两代生成了相同的 C 和 LLVM。构建命令为 `python3 scripts/build_selfhost.py --seed "$CARGO_TARGET_DIR/release/aethc" --work-dir "$WORK/regular-work" --output "$WORK/aethc-native"`。独立复现用的编译器、原始计时和内存数据在 `$WORK/t26-default-release`。
 
-## 11 月 18 日新增验收范围
-
-`67d05e0` 的 packed/union/指针重定位由 macOS 和 Linux 各自的 120 项命令验证。Mac 的 Rust 种子另以两个后端链接和运行同一含非对齐指针的可执行文件。自举构建的 aether-shell 两个原生程序各通过 48 项既有验收。资源语义提交 `10d1b4c` 有 151 项命令、30 次资源程序运行，证据在 `$WORK/{t26-native-layout,t26-shell-self,t26-owned/integrated}`。
-
-阶段验收补上终端科学数据工作流、Windows 上机前移植与 README。两台登记的 Windows 机器当前离线，用户要求本阶段不推送、保持私有，稍后再做 Windows 原生验收。`$WORK/t26-math-native` 是隔离的公共导出/常规 CLI/效果检查实现和已运行的 AD、CPU/Metal 工作负载。集成后复测固定点与双宿主包。
+下一项是合并并验证原生编译器的剩余共享语义、生成两宿主正式包，完成 Windows 交叉构建及原生验收脚本。正式 T26/T29 证据见主线任务文档，上机验收由用户安排在以后。

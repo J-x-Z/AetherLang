@@ -47,7 +47,10 @@ done
 python3 tests/bootstrap_core.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-core" --backend "$bootstrap_backend"
 if clang --version >/dev/null 2>&1; then
     native_compiler="$CARGO_TARGET_DIR/bootstrap-core/aethc-native"
-    CC=clang "$CARGO_TARGET_DIR/bootstrap-core/stage4" build src_aether/core/aethc.aeth --backend llvm -O2 -o "$native_compiler"
+    CC=clang python3 scripts/build_selfhost.py --seed "$CARGO_TARGET_DIR/bootstrap-core/stage4" \
+        --work-dir "$CARGO_TARGET_DIR/regular-bootstrap" --output "$native_compiler"
+    python3 tests/terminal_stats.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-terminal-stats"
+    python3 tests/bootstrap_tuples.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-tuples" --sanitize
     if [ "$bootstrap_backend" = llvm ]; then
         python3 tests/bootstrap_effects.py --compiler "$native_compiler" --reference-compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-effects"
     else
