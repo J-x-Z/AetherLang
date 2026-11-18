@@ -6,6 +6,7 @@ use const_eval::*;
 use tuple_model::*;
 use pattern_model::*;
 use hosted::*;
+use native_abi::boot_win64_check;
 use memory::*;
 use memory_volatile::*;
 use methods::*;
@@ -761,6 +762,7 @@ pub fn boot_check(ctx:*BootContext)->bool {
     if !boot_check_entry(ctx,item) { return false; }
     if boot_c_symbol(item)&&boot_foreign_enum(item.ty,0){boot_error(ctx,item.token,"foreign enum value ABI is not supported");return false;}
     if boot_c_symbol(item)&&item.ty.kind==BY_ARRAY{boot_error(ctx,item.token,"foreign array value ABI is not supported");return false;}
+    if boot_c_symbol(item)&&!boot_win64_check(ctx,item.ty,item.token){return false;}
     let mut param:*BootNode=item.params;
     while param!=(0 as *BootNode) {
      if !boot_type_valid(ctx,param.ty,param.token,false) { return false; }
@@ -769,6 +771,7 @@ pub fn boot_check(ctx:*BootContext)->bool {
      if boot_c_symbol(item)&&param.ty.kind==BY_VOID{boot_error(ctx,param.token,"foreign unit parameter ABI is not supported");return false;}
      if boot_c_symbol(item)&&boot_foreign_enum(param.ty,0){boot_error(ctx,param.token,"foreign enum value ABI is not supported");return false;}
      if boot_c_symbol(item)&&param.ty.kind==BY_ARRAY{boot_error(ctx,param.token,"foreign array value ABI is not supported");return false;}
+     if boot_c_symbol(item)&&!boot_win64_check(ctx,param.ty,param.token){return false;}
      let mut previous:*BootNode=item.params;
      while previous!=param {
       if strcmp(previous.name,param.name)==0 { boot_error(ctx,param.token,"duplicate function parameter");return false; }

@@ -4,6 +4,8 @@ use model::*;
 use runtime::*;
 use type_model::boot_layout;
 use host_posix::boot_host_info;
+use host_platform::platform_windows;
+pub const ABI_WIN64:i32=3;
 pub const ABI_SCALAR:i32=0;pub const ABI_PARTS:i32=1;pub const ABI_BYVAL:i32=2;
 pub const ABI_INDIRECT:i32=3;pub const ABI_EMPTY:i32=4;
 pub const ABI_FLOAT:i32=-1;pub const ABI_DOUBLE:i32=-2;pub const ABI_FLOAT2:i32=-3;pub const ABI_I64X2:i32=-4;
@@ -19,13 +21,28 @@ pub fn boot_abi_needed(fn_node:*BootNode)->bool{
 pub fn boot_abi_target(ctx:*BootContext,node:*BootNode)->bool{
  if ctx.native_abi!=0{return true;}
  if ctx.bare_x86_64{ctx.native_abi=2;return true;}
+ if platform_windows(){ctx.native_abi=ABI_WIN64;return true;}
  let info:*u8=boot_host_info(ctx);if ctx.failed{return false;}
  if strcmp(info,"Darwin")==0{
   if strcmp(info+1024,"arm64")==0{ctx.native_abi=1;}
   if strcmp(info+1024,"x86_64")==0{ctx.native_abi=2;}
  }else if strcmp(info,"Linux")==0 && strcmp(info+260,"x86_64")==0{ctx.native_abi=2;}
- if ctx.native_abi==0{boot_error(ctx,node.token,"native aggregate ABI requires Apple arm64 or SysV x86_64");return false;}
+ if ctx.native_abi==0{boot_error(ctx,node.token,"native aggregate ABI requires Apple arm64, SysV x86_64 or Windows x64");return false;}
  return true;
+}
+// Empty fields have different layouts in the MS and GNU C extensions. Reject
+// them across the by-value boundary; a pointer to an opaque type remains valid.
+fn boot_win64_fields(ctx:*BootContext,ty:*BootType,token:*BootToken)->bool{
+ if ty.kind!=BY_STRUCT && ty.kind!=BY_ARRAY{return true;}
+ if ty.layout_size==0{boot_error(ctx,token,"zero-sized fields and records have no portable Windows x64 C ABI");return false;}
+ if ty.kind==BY_ARRAY{return boot_win64_fields(ctx,ty.inner,token);}
+ let mut field:*BootNode=ty.fields;
+ while field!=0 as *BootNode{if !boot_win64_fields(ctx,field.ty,field.token){return false;}field=field.next;}
+ return true;
+}
+pub fn boot_win64_check(ctx:*BootContext,ty:*BootType,token:*BootToken)->bool{
+ if ty.kind!=BY_STRUCT || !platform_windows() || ctx.bare_x86_64{return true;}
+ return boot_layout(ctx,ty,0,token) && boot_win64_fields(ctx,ty,token);
 }
 fn boot_hfa(ty:*BootType)->i32{
  if ty.kind==BY_F32{return 101;}if ty.kind==BY_F64{return 201;}
@@ -85,6 +102,11 @@ fn boot_classify(ctx:*BootContext,sig:*BootNativeSignature,ty:*BootType,result:b
  if !boot_layout(ctx,ty,0,token){return 0 as *BootNativeSlot;}
  let size:u64=ty.layout_size;if size==0{slot.mode=ABI_EMPTY;return slot;}
  slot.mode=ABI_PARTS;
+ if ctx.native_abi==ABI_WIN64{
+  if size==1 || size==2 || size==4 || size==8{slot.a=(size*8) as i32;}
+  else{slot.mode=ABI_INDIRECT;}
+  return slot;
+ }
  if ctx.native_abi==1{
   slot.a=boot_hfa(ty);if slot.a!=0{return slot;}
   if size<=8{slot.a=64;if result{slot.a=(size*8) as i32;}return slot;}

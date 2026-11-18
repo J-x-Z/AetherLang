@@ -43,5 +43,27 @@ llvm=[]
 for compiler in [tool,*stages]:
  out=w/(compiler.stem+'.self.ll');run('fixed point emit '+compiler.stem,[compiler,source/'aethc.aeth','--emit-llvm','-o',out]);llvm.append(out.read_bytes())
 assert llvm[0]==llvm[1]==llvm[2],'same-source native compiler LLVM fixed point differs'
+abi = Path(__file__).resolve().parent/'regressions/aggregates'
+oracle = w/'win64-oracle.obj'
+run('compile independent Win64 C caller and callee', [cc, '-std=c11', '-O2', '-c', abi/'win64.c', '-o', oracle])
+for backend in ('c', 'llvm'):
+ for level in (0, 2):
+  exe = w/f'win64-abi-{backend}-O{level}.exe'
+  run(f'Win64 ABI {backend} O{level} build', [stages[1], 'build', abi/'win64.aeth', '--cc', cc,
+      '--backend', backend, f'-O{level}', '--link-object', oracle, '-o', exe])
+  run(f'Win64 bidirectional ABI {backend} O{level} run', [exe])
+scalars=w/'win64-scalar.aeth'
+scalars.write_text('extern "C"{fn narrow(a:i8,b:u16,c:bool)->u8;} fn main()->i32{return narrow(-1,2,true) as i32;}')
+scalar_ir=w/'win64-scalar.ll'
+run('Win64 narrow scalar signature', [stages[1], scalars, '--emit-llvm', '-o', scalar_ir])
+decl=next(line for line in scalar_ir.read_text().splitlines() if line.startswith('declare ') and '@narrow(' in line)
+assert 'declare i8 @narrow(' in decl and decl.count('zeroext')==1 and 'i1 zeroext' in decl and 'signext' not in decl, decl
+for name, definition in [('empty', 'struct S{}'),
+                         ('nested-empty','struct Empty{} struct S{x:u8,empty:Empty}')]:
+ for direction, signature in [('in','(value:S)->i32'),('out','()->S')]:
+  invalid=w/f'win64-{name}-{direction}.aeth'
+  invalid.write_text(definition+' extern "C"{fn boundary'+signature+';} fn main()->i32{return 0;}')
+  result=run(f'reject Win64 {name} record {direction}', [stages[1], 'check', invalid], 1)
+  assert b'zero-sized' in result.stderr
 if a.lsp_runner:run('native LSP suite',[sys.executable,a.lsp_runner.resolve(),'--compiler',stages[1],'--work-dir',w/'lsp','--no-injection'])
 report['status']='native Windows acceptance passed';save();print(w/'results.json')

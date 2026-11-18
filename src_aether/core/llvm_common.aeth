@@ -1,5 +1,6 @@
 use model::*;
-use native_abi::boot_abi_needed;
+use native_abi::{boot_abi_needed,ABI_WIN64};
+use host_platform::platform_windows;
 use runtime::*;
 use memory_volatile::{vm_function,vm_access};
 extern "C" {fn strtod(text:*u8,end:**u8)->f64;}
@@ -43,7 +44,10 @@ pub fn ll_function(ctx:*BootContext,node:*BootNode){
  if boot_c_symbol(node) && ((node.flags&BF_EXPORT)==0 || !boot_abi_needed(node)){fprintf(ctx.output,"@%s",node.name);}else{fprintf(ctx.output,"@a%d_f%d",ctx.c_namespace,node.id);}
 }
 pub fn ll_attr(ctx:*BootContext,ty:*BootType){
- if ty.kind==BY_BOOL||ty.kind==BY_U8||ty.kind==BY_U16{ll_text(ctx,"zeroext ");}
+ if ty.kind==BY_BOOL{ll_text(ctx,"zeroext ");return;}
+ // Win64 leaves integer bits above a narrow parameter or result unspecified.
+ if platform_windows() && !ctx.bare_x86_64{return;}
+ if ty.kind==BY_U8||ty.kind==BY_U16{ll_text(ctx,"zeroext ");}
  if ty.kind==BY_I8||ty.kind==BY_I16{ll_text(ctx,"signext ");}
 }
 pub fn ll_label(ctx:*BootContext,id:i32){fprintf(ctx.output,"b%d:\n",id);ctx.llvm_block=id;ctx.llvm_terminated=false;}
@@ -149,7 +153,11 @@ pub fn ll_globals(ctx:*BootContext,node:*BootNode){
  }
 }
 pub fn ll_abi_width(ty:*BootType)->u64{return ty.layout_size+(8-ty.layout_size%8)%8;}
-pub fn ll_abi_alloc(ctx:*BootContext,ty:*BootType,id:i32,role:*u8){fprintf(ctx.output,"  %%abi%s%d = alloca [%llu x i8], align 8\n",role,id,ll_abi_width(ty));}
+pub fn ll_abi_alloc(ctx:*BootContext,ty:*BootType,id:i32,role:*u8){
+ // Win64 requires 16-byte alignment for caller-owned indirect argument copies.
+ let alignment:i32=if ctx.native_abi==ABI_WIN64{16}else{8};
+ fprintf(ctx.output,"  %%abi%s%d = alloca [%llu x i8], align %d\n",role,id,ll_abi_width(ty),alignment);
+}
 pub fn ll_allocas(ctx:*BootContext,node:*BootNode,delayed:bool){
  let mut item:*BootNode=node;
  while item!=(0 as *BootNode){
