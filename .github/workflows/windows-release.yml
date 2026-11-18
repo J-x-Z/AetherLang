@@ -1,0 +1,63 @@
+name: Verify Windows release bundle
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag containing the Windows bundle
+        required: true
+        type: string
+      sha256:
+        description: Expected SHA-256 of the complete Windows archive
+        required: true
+        type: string
+      source_commit:
+        description: Expected full source commit in the bundle manifest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Fetch and verify archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          ARCHIVE_SHA256: ${{ inputs.sha256 }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Invalid release tag' }
+          $name = "aetherlang-$env:TAG-windows-x86_64.zip"
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern $name
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $name).Hash -ne $env:ARCHIVE_SHA256) { throw 'Archive SHA-256 mismatch' }
+          Expand-Archive $name bundle
+          $entry = @(Get-ChildItem bundle -Recurse -File -Filter Test-Native.ps1)
+          if ($entry.Count -ne 1) { throw 'Expected one native acceptance entry point' }
+          $root = $entry[0].Directory.FullName
+          $manifest = Get-Content (Join-Path $root manifest.json) -Raw | ConvertFrom-Json
+          if ($manifest.source_commit -ne $env:SOURCE_COMMIT) { throw 'Source revision mismatch' }
+          "BUNDLE_ROOT=$root" >> $env:GITHUB_ENV
+      - name: Install verified llvm-mingw UCRT driver
+        run: |
+          $name = 'llvm-mingw-20251216-ucrt-x86_64'
+          $url = "https://github.com/mstorsjo/llvm-mingw/releases/download/20251216/$name.zip"
+          curl.exe --fail --silent --show-error --location $url --output "$name.zip"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash "$name.zip").Hash -ne '2d96a4b758f7f8deaec5065833fe025aa53cfc5f704d0524002510984da0ccf4') { throw 'Toolchain SHA-256 mismatch' }
+          7z x "$name.zip" "-o$env:RUNNER_TEMP" -bso0 -bsp0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "AETHER_CLANG=$env:RUNNER_TEMP\$name\bin\x86_64-w64-mingw32-clang.exe" >> $env:GITHUB_ENV
+      - name: Run packaged compiler, self-host, JXZ, LSP and CSV suites
+        run: |
+          & (Join-Path $env:BUNDLE_ROOT Test-Native.ps1) -Clang $env:AETHER_CLANG -WorkDir "$env:RUNNER_TEMP\aether-results"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-results
+          path: ${{ runner.temp }}/aether-results/**/results.json
