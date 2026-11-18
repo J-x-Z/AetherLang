@@ -20,7 +20,7 @@ impl Project {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&path).unwrap();
-        Self(path)
+        Self(fs::canonicalize(path).unwrap())
     }
     fn file(&self, name: &str, text: &str) -> PathBuf {
         let path = self.0.join(name);

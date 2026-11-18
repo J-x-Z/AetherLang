@@ -19,6 +19,12 @@ jobs:
         with:
           toolchain: 1.100.0
       - uses: Swatinem/rust-cache@v2
+      - name: Install LLVM object inspection tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y llvm
+      - name: Select Xcode object inspection tools
+        if: runner.os == 'macOS'
+        run: dirname "$(xcrun --find llvm-objdump)" >> "$GITHUB_PATH"
       - run: sh scripts/test.sh c
       - run: cargo build --locked --release --no-default-features
   llvm:
