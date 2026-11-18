@@ -1,6 +1,6 @@
 use model::*;
 use runtime::*;
-use type_model::boot_array_type;
+use type_model::{boot_array_type,boot_primitive_type};
 use script_model::*;
 fn bs_kind(ctx:*BootContext)->i32{return ctx.cursor.kind;}
 fn bs_word(ctx:*BootContext,text:*u8)->bool{return bs_kind(ctx)==BT_IDENT&&strcmp(ctx.cursor.text,text)==0;}
@@ -19,11 +19,12 @@ fn bs_type(ctx:*BootContext)->*BootType{
 fn bs_type_inner(ctx:*BootContext)->*BootType{
  let token:*BootToken=bs_name(ctx);if ctx.failed{return 0 as *BootType;}
  let name:*u8=token.text;
- if strcmp(name,"int")==0||strcmp(name,"i64")==0{return boot_type(ctx,BY_I64);}
- if strcmp(name,"float")==0||strcmp(name,"f64")==0{return boot_type(ctx,BY_F64);}
- if strcmp(name,"bool")==0{return boot_type(ctx,BY_BOOL);}
+ if strcmp(name,"int")==0{return boot_type(ctx,BY_I64);}
+ if strcmp(name,"float")==0{return boot_type(ctx,BY_F64);}
  if strcmp(name,"str")==0{return boot_ptr_type(ctx,boot_type(ctx,BY_U8));}
- if strcmp(name,"None")==0||strcmp(name,"void")==0{return boot_type(ctx,BY_VOID);}
+ if strcmp(name,"None")==0{return boot_type(ctx,BY_VOID);}
+ let primitive:*BootType=boot_primitive_type(ctx,name);
+ if primitive!=0 as *BootType||ctx.failed{return primitive;}
  if strcmp(name,"Dyn")==0||strcmp(name,"DynMut")==0{
   if !bs_expect(ctx,91,"expected '[' in Script dynamic type"){return 0 as *BootType;}
   let contract:*BootType=bs_type(ctx);if ctx.failed||!bs_expect(ctx,93,"expected ']' in Script dynamic type"){return 0 as *BootType;}

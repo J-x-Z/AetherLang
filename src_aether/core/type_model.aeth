@@ -4,6 +4,22 @@ use memory_volatile::vm_indirect;
 use const_eval::*;
 use tuple_model::*;
 use enum_model::boot_enum_payload;
+// Source spellings shared by Core and Script. Script aliases are handled by its parser.
+pub fn boot_primitive_type(ctx:*BootContext,name:*u8)->*BootType {
+ if strcmp(name,"void")==0 {return boot_type(ctx,BY_VOID);}
+ if strcmp(name,"bool")==0 {return boot_type(ctx,BY_BOOL);}
+ if strcmp(name,"i8")==0 {return boot_type(ctx,BY_I8);}
+ if strcmp(name,"u8")==0 {return boot_type(ctx,BY_U8);}
+ if strcmp(name,"i16")==0 {return boot_type(ctx,BY_I16);}
+ if strcmp(name,"u16")==0 {return boot_type(ctx,BY_U16);}
+ if strcmp(name,"i32")==0 {return boot_type(ctx,BY_I32);}
+ if strcmp(name,"u32")==0 {return boot_type(ctx,BY_U32);}
+ if strcmp(name,"i64")==0 || strcmp(name,"isize")==0 {return boot_type(ctx,BY_I64);}
+ if strcmp(name,"u64")==0 || strcmp(name,"usize")==0 {return boot_type(ctx,BY_U64);}
+ if strcmp(name,"f32")==0 {return boot_type(ctx,BY_F32);}
+ if strcmp(name,"f64")==0 {return boot_type(ctx,BY_F64);}
+ return 0 as *BootType;
+}
 pub fn boot_array_type(ctx:*BootContext,inner:*BootType,count:u64)->*BootType {
  let mut ty:*BootType=ctx.types;
  while ty!=(0 as *BootType){if ty.kind==BY_ARRAY&&ty.expression==0 as *BootNode&&ty.inner==inner&&ty.extent==count{return ty;}ty=ty.next;}

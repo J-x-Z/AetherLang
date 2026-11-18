@@ -1,0 +1,17 @@
+def value(x: i32) -> i32:
+    return x
+
+def small(x: i8) -> i8:
+    return x
+
+def half(x: u16) -> u16:
+    return x
+
+def wide(x: u64) -> u64:
+    return x
+
+def single(x: f32) -> f32:
+    return x
+
+def main() -> i32:
+    return value(0)

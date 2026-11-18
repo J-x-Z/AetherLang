@@ -103,18 +103,8 @@ fn boot_p_type_inner(ctx:*BootContext)->*BootType {
   }
   return boot_p_type_apply(ctx,boot_resolve_type(ctx,name,lookup,token));
  }
- if strcmp(name,"void")==0 {return boot_type(ctx,BY_VOID);}
- if strcmp(name,"bool")==0 {return boot_type(ctx,BY_BOOL);}
- if strcmp(name,"i8")==0 {return boot_type(ctx,BY_I8);}
- if strcmp(name,"u8")==0 {return boot_type(ctx,BY_U8);}
- if strcmp(name,"i16")==0 {return boot_type(ctx,BY_I16);}
- if strcmp(name,"u16")==0 {return boot_type(ctx,BY_U16);}
- if strcmp(name,"i32")==0 {return boot_type(ctx,BY_I32);}
- if strcmp(name,"u32")==0 {return boot_type(ctx,BY_U32);}
- if strcmp(name,"i64")==0 || strcmp(name,"isize")==0 {return boot_type(ctx,BY_I64);}
- if strcmp(name,"u64")==0 || strcmp(name,"usize")==0 {return boot_type(ctx,BY_U64);}
- if strcmp(name,"f32")==0 {return boot_type(ctx,BY_F32);}
- if strcmp(name,"f64")==0 {return boot_type(ctx,BY_F64);}
+ let primitive:*BootType=boot_primitive_type(ctx,name);
+ if primitive!=0 as *BootType||ctx.failed{return primitive;}
  return boot_p_type_apply(ctx,boot_resolve_type(ctx,name,0 as *BootModule,token));
 }
 fn boot_p_bp(kind:i32)->i32 {

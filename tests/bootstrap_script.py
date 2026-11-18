@@ -43,6 +43,7 @@ if a.seed:
  assert (work/'stage2.ll').read_bytes()==(work/'stage3.ll').read_bytes(),'self-hosted Script compiler LLVM fixed point mismatch'
 else:s3=compiler_input
 cases={fixtures/f'tests/regressions/script/{name}.ath':expected for name,expected in [('compute','338350\n25\n'),('branches','quoted: "Aether"\\path\n'),('float_math','3.25\n'),('compound',''),('loop_hygiene',''),('param_hygiene',''),('nested_hygiene','')]}
+cases[fixtures/'tests/regressions/bootstrap/script/scalar_types.ath']=''
 cases[fixtures/'examples/hello.ath']='Hello from Script!\n'
 cases[fixtures/'tests/regressions/literals/script.ath']='common:\n\r\t\\\"\'\n\x1b\n\x1b[31mred\x1b[0m\nAAAFA1'+'\nAé中😀'+chr(0x10ffff)+'\nraw:é中😀\nnul:\n'
 cases[fixtures/'tests/regressions/bootstrap/script/repeat.ath']='once\nonce\n'
