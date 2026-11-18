@@ -4,7 +4,7 @@ The regular entry `src_aether/core/aethc.aeth` reads Core and Script sources,
 checks them, and emits LLVM IR or C11. The lexer, parser, type checking,
 lowering, code generation and build driver are written in Aether. The regular
 compiler builds its own complete source and compiles JXZ with either backend.
-Rust supplies the initial seed and the broader cross-target compiler. Host
+Rust supplies the initial seed and additional cross-target backends. Host
 Clang supplies instruction selection, optimization and linking.
 
 Build the regular executable and verify that two successive generations
@@ -194,13 +194,19 @@ upper bound follows the primary compiler's existing range syntax. Enum and
 constant declarations are importable without `pub`, matching the primary
 resolver; functions, structs, aliases and statics retain explicit visibility.
 
-The bootstrap compiler remains a subset of the primary compiler. Syntax outside
-its implemented subset fails explicitly. The Core compiler targets the
-existing 64-bit host C ABI; its `usize`/`isize` and libc declarations do not yet
-provide a cross-target data model. This is a real self-host with native module
-loading and LLVM IR generation, not a replacement of the full language compiler.
-LLVM optimization, native instruction selection and linking still use the host
-LLVM/Clang toolchain.
+The regular compiler also targets `x86_64-unknown-none` for Core roots
+marked `#![no_std]`. Pass `--backend llvm --target x86_64-unknown-none`
+to check a module or add `--emit-llvm` or `--emit-obj` to produce IR or an
+ELF64 relocatable. `--cc` selects a target-capable Clang. Target selection
+precedes semantic checks and SysV ABI classification. The emitted definitions
+disable the x86 red zone. The caller supplies startup code, a linker script
+and an ELF linker. Machine-entry attributes such as `@interrupt` still require
+the seed. See the [bare-metal ABI test](../tests/bootstrap_kernel_target.py)
+and [bootable page pool](../tests/kernel_boot.py).
+
+The self-hosted compiler implements a subset of the primary compiler. Its data
+model covers the supported 64-bit hosts and this specific freestanding target.
+Clang performs optimization and instruction selection.
 
 The compiler owns an arena released on success and failure, limits input to
 32 MiB across the source graph and arena allocations to 512 MiB. Module

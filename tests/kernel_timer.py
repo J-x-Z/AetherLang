@@ -25,7 +25,7 @@ report = {'target': target, 'compiler': str(compiler),
           'passed': False, 'runs': [], 'commands': []}
 
 def tool(name):
-    prefix = os.getenv('LLVM_SYS_231_PREFIX')
+    prefix = os.getenv('AETHER_LLVM_PREFIX') or os.getenv('LLVM_SYS_211_PREFIX')
     if prefix and (Path(prefix)/'bin'/name).is_file():
         return str(Path(prefix)/'bin'/name)
     path = shutil.which(name)

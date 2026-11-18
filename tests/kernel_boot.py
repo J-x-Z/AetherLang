@@ -12,10 +12,10 @@ import tempfile
 import time
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--selfhost', required=True, type=Path, help='native Aether compiler with --emit-c')
+parser.add_argument('--selfhost', required=True, type=Path, help='self-hosted Aether compiler')
 parser.add_argument('--seed', type=Path, help='optional Rust seed for cross-target comparison')
-parser.add_argument('--backends', nargs='+', choices=['c', 'llvm'], default=['c', 'llvm'],
-                    help='comparison backends built by the seed')
+parser.add_argument('--backends', nargs='+', choices=['c', 'llvm'], default=['llvm', 'c'],
+                    help='backends built by each compiler; use c alone for historical self-hosts')
 parser.add_argument('--work-dir', required=True, type=Path)
 parser.add_argument('--qemu', action='store_true', help='also boot each image with QEMU TCG')
 args = parser.parse_args()
@@ -31,7 +31,7 @@ print(f'Kernel build results: {receipt}', flush=True)
 
 
 def tool(name):
-    prefix = os.environ.get('LLVM_SYS_211_PREFIX')
+    prefix = os.getenv('AETHER_LLVM_PREFIX') or os.getenv('LLVM_SYS_211_PREFIX')
     if prefix and (Path(prefix)/'bin'/name).is_file():
         return str(Path(prefix)/'bin'/name)
     path = shutil.which(name)
@@ -59,16 +59,18 @@ def inspect_size(path):
     return sum(map(int, sections))
 
 
-def build(compiler, lane, backend, level, clang, resource, boot, memory):
+def build(compiler, lane, backend, level, clang, resource, boot, memory, scalar):
     stem = f'{lane}-{backend}-O{level}'
     obj, elf, image = [work/(stem+suffix) for suffix in ('.o','.elf','.bin')]
     flags = [compiler, example/'pages.aeth', '--backend', backend, f'-O{level}']
-    if lane == 'seed':
+    if not scalar:
         flags += ['--target', target]
+    if lane == 'selfhost' and backend == 'llvm':
+        flags += ['--cc', clang]
     if backend == 'c':
         source = obj.with_suffix('.c')
         run([*flags, '--emit-c', '-o', source])
-        cpu = ['-mgeneral-regs-only'] if lane == 'selfhost' else []
+        cpu = ['-mgeneral-regs-only'] if scalar else []
         run([clang, '--target='+target, *cpu, '-std=c11', '-ffreestanding', '-nostdinc',
              '-isystem', resource/'include', '-mno-red-zone',
              '-fno-stack-protector', f'-O{level}', '-c', source, '-o', obj])
@@ -81,7 +83,7 @@ def build(compiler, lane, backend, level, clang, resource, boot, memory):
     assert end and int(end[1], 16) <= 0x200000, 'guest exceeds its boot mapping'
     run([tool('llvm-objcopy'), '-O', 'binary', elf, image])
     item = {'build': stem, 'compiler': str(compiler), 'kernel_text_bytes': inspect_size(obj),
-            'cpu_policy': 'general registers only' if lane == 'selfhost' else 'x86-64 with SSE2 enabled',
+            'cpu_policy': 'general registers only' if scalar else 'x86-64 with SSE2 enabled',
             'linked_text_bytes': inspect_size(elf), 'image_bytes': image.stat().st_size,
             'image': str(image), 'sha256': hashlib.sha256(image.read_bytes()).hexdigest()}
     report['images'].append(item)
@@ -101,15 +103,19 @@ try:
     run([clang, '--target='+target, '-std=c11', '-ffreestanding', '-fno-builtin',
          '-mgeneral-regs-only', '-mno-red-zone', '-fno-stack-protector', '-O2',
          '-c', example/'memory.c', '-o', memory])
-    lanes = [(args.selfhost.resolve(strict=True), 'selfhost', 'c')]
+    compilers = [(args.selfhost.resolve(strict=True), 'selfhost')]
     if args.seed:
-        lanes += [(args.seed.resolve(strict=True), 'seed', b) for b in args.backends]
-    for lane in dict.fromkeys(lane for _, lane, _ in lanes):
-        flags = ['-DAETHER_BOOT_SSE2'] if lane == 'seed' else []
-        run([clang, '--target='+target, *flags, '-c', example/'pages_boot.S', '-o', work/(lane+'-boot.o')])
-    for compiler, lane, backend in lanes:
-        for level in (0, 2):
-            build(compiler, lane, backend, level, clang, resource, work/(lane+'-boot.o'), memory)
+        compilers.append((args.seed.resolve(strict=True), 'seed'))
+    boots = {}
+    for compiler, lane in compilers:
+        for backend in args.backends:
+            scalar = lane == 'selfhost' and backend == 'c'
+            if scalar not in boots:
+                boots[scalar] = work/('scalar-boot.o' if scalar else 'sse2-boot.o')
+                flags = [] if scalar else ['-DAETHER_BOOT_SSE2']
+                run([clang, '--target='+target, *flags, '-c', example/'pages_boot.S', '-o', boots[scalar]])
+            for level in (0, 2):
+                build(compiler, lane, backend, level, clang, resource, boots[scalar], memory, scalar)
     report['passed'] = True
 finally:
     receipt.write_text(json.dumps(report, indent=2)+'\n', encoding='utf-8')
