@@ -26,9 +26,17 @@ dep_entry.write_text('use leaf::value;\npub fn answer()->i32{return value()+1;}'
 manifest="[package]\nname='program'\n[build]\nsrc='src'\ntarget='target'\n[dependencies]\ndep={path='../dependency 中文'}\n"
 (root/'Jxz.toml').write_text(manifest,encoding='utf8');text='use dep::answer;\nfn main()->i32{if answer()!=42{return 3;}return 0;}\n';(root/'src/main.aeth').write_text(text)
 (root/'tests/nested').mkdir(parents=True);(root/'tests/nested/test_.aeth').write_text('fn main()->i32{return 0;}')
+target=root/'target'
+expected_record=b'JXZ-PATH-DEPS-1\n'+b''.join(
+ f'{name}\t{directory.as_posix()}\t{(directory/"src/lib.aeth").as_posix()}\n'.encode('utf-8')
+ for name,directory in [('dep',dep),('leaf',leaf)])
 for backend in ['c','llvm']:
- run('local graph build '+backend,[jxz,'build','--release'],root,extra={'AETHER_BACKEND':backend});run('local graph run '+backend,[jxz,'run','--','space value','; & |'],root,extra={'AETHER_BACKEND':backend});run('native enumeration '+backend,[jxz,'test'],root,extra={'AETHER_BACKEND':backend})
- assert (root/'target/program.exe').is_file()
+ run('local graph build '+backend,[jxz,'build','--release'],root,extra={'AETHER_BACKEND':backend})
+ assert (target/'.jxz-outputs').read_bytes()==b'program.exe\n'
+ assert (target/'.jxz-dependencies-owner').read_bytes()==b'JXZ-WIN-MARKER-1\nJXZ-PATH-DEPS-RECORD-1'
+ assert (target/'.jxz-dependencies').read_bytes()==expected_record
+ assert (target/'program.exe').is_file()
+ run('local graph run '+backend,[jxz,'run','--','space value','; & |'],root,extra={'AETHER_BACKEND':backend});run('native enumeration '+backend,[jxz,'test'],root,extra={'AETHER_BACKEND':backend})
 record=(root/'target/.jxz-dependencies').read_bytes();run('deterministic graph record',[jxz,'build'],root);assert (root/'target/.jxz-dependencies').read_bytes()==record
 (leaf/'src/lib.aeth').write_text('pub fn value()->i32{return 44;}');run('dependency edit rebuilds',[jxz,'run'],root,3);(leaf/'src/lib.aeth').write_text('pub fn value()->i32{return 41;}')
 # The compiler child retains the directory HANDLE after JXZ is killed.
@@ -51,7 +59,14 @@ for command in ['build','clean']:
 cache=w/'cache';cache.mkdir();(cache/'.jxz-cache').write_bytes(b'JXZ-CACHE-1\n');files={'Jxz.toml':b"[package]\nname='cached'\nversion='1.2.3'\n[build]\nsrc='src'\n",'src/lib.aeth':b'pub fn value()->i32{return 42;}'}
 listing=b'JXZ-PACKAGE-1\n'+b''.join(hashlib.sha256(data).hexdigest().encode()+b'\t'+name.encode()+b'\n' for name,data in sorted(files.items()));digest=hashlib.sha256(listing).hexdigest();package=cache/digest;package.mkdir()
 for name,data in files.items():f=package/name;f.parent.mkdir(parents=True,exist_ok=True);f.write_bytes(data)
-(package/'.jxz-files').write_bytes(listing);offline=w/'offline';(offline/'src').mkdir(parents=True);(offline/'Jxz.toml').write_text("[package]\nname='offline'\n[dependencies]\ncached='1.2.3'\n");(offline/'Jxz.lock').write_text(f'JXZ-REGISTRY-LOCK-1\ncached\t1.2.3\t{digest}\thttps://invalid.example\n');(offline/'src/main.aeth').write_text('use cached::value;fn main()->i32{if value()!=42{return 1;}return 0;}')
+(package/'.jxz-files').write_bytes(listing);offline=w/'offline';(offline/'src').mkdir(parents=True);(offline/'Jxz.toml').write_text("[package]\nname='offline'\n[dependencies]\ncached='1.2.3'\n");(offline/'src/main.aeth').write_text('use cached::value;fn main()->i32{if value()!=42{return 1;}return 0;}')
+lock=offline/'Jxz.lock'
+pin=f'JXZ-REGISTRY-LOCK-1\ncached\t1.2.3\t{digest}\thttps://invalid.example\n'.encode('utf-8')
+crlf_pin=pin.replace(b'\n',b'\r\n')
+lock.write_bytes(crlf_pin)
+r=run('preserve malformed CRLF lock',[jxz,'fetch'],offline,1,{'JXZ_CACHE':str(cache)})
+assert b'unrecognized Jxz.lock' in r.stderr and lock.read_bytes()==crlf_pin
+lock.write_bytes(pin)
 run('verified offline cache',[jxz,'run'],offline,extra={'JXZ_CACHE':str(cache)});(package/'src/lib.aeth').write_bytes(b'corrupt');run('corrupt offline cache rejected',[jxz,'build'],offline,1,{'JXZ_CACHE':str(cache)});assert (package/'src/lib.aeth').read_bytes()==b'corrupt'
 # Project LSP over standard pipes, including a typed cross-package definition
 # and an unsaved edit. Protocol stdout is parsed byte-for-byte.
@@ -80,5 +95,5 @@ for backend in ['c','llvm']:
 spawn_probe=w/'spawn_status.aeth';spawn_probe.write_text('use host::process_run;fn main()->i32{let args:[*u8;2]=["./missing-child.exe",0 as *u8];if process_run(&args[0] as **u8,"spawn-output")!=127{return 1;}return 0;}')
 for backend in ['c','llvm']:
  exe=w/('spawn-status-'+backend+'.exe');run('redirected spawn status build '+backend,[compiler,spawn_probe,'--cc',cc,'--backend',backend,'-O2','--module','host='+str(host_source/'host.aeth'),'-l','bcrypt','-l','shell32','-o',exe],w);run('redirected spawn status '+backend,[exe],w)
-run('clean owned outputs',[jxz,'clean'],root);assert (root/'Jxz.toml').is_file() and (root/'src/main.aeth').is_file();assert not (root/'target/program.exe').exists()
+run('clean owned outputs',[jxz,'clean'],root);assert (root/'Jxz.toml').is_file() and (root/'src/main.aeth').is_file();assert not target.exists()
 report['status']='native Windows JXZ acceptance passed';save();print(w/'results.json')
