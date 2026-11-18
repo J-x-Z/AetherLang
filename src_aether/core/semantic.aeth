@@ -1055,6 +1055,11 @@ fn boot_check_pattern(ctx:*BootContext,pattern:*BootNode,subject:*BootType,value
  if target.kind==BY_TEMPLATE&&subject.base==target{target=subject;}
  if target!=subject{boot_error(ctx,pattern.token,"match pattern uses a different enum type");return false;}pattern.ty=subject;
  let variant:*BootNode=boot_enum_variant(subject,pattern.name);if variant==0 as *BootNode{boot_error(ctx,pattern.token,"unknown enum variant in pattern");return false;}pattern.decl=variant;
+ // Match lowering discards the source patterns, including the final untested arm.
+ if ctx.index_patterns{
+  let use_site:*BootPatternUse=boot_alloc(ctx,size_of(BootPatternUse) as u64) as *BootPatternUse;
+  if ctx.failed{return false;}use_site.pattern=pattern;use_site.next=ctx.pattern_uses;ctx.pattern_uses=use_site;
+ }
  let mut child:*BootNode=pattern.params;let mut field:*BootNode=variant.params;
  while child!=0 as *BootNode&&field!=0 as *BootNode{
   if !boot_check_pattern(ctx,child,field.ty,pm_projection(ctx,value,variant,field),arm,depth+1){return false;}child=child.next;field=field.next;

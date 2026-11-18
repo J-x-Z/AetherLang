@@ -60,6 +60,35 @@ diags=[m['params']['diagnostics'] for m in r if m.get('method')=='textDocument/p
 # Diagnostic locations after astral text are UTF16 rather than UTF8 bytes.
 bad='fn main()->i32{let s:*u8="😀é";return true;}'
 bp=file('utf16-error.aeth',bad);r=run('utf16-diagnostic',[init,opened(bp,bad),*end]);d=next(m['params']['diagnostics'][0] for m in r if m.get('method')=='textDocument/publishDiagnostics' and m['params']['diagnostics']);expected=len(bad[:bad.index('return')].encode('utf-16-le'))//2;assert d['range']['start']['character']==expected,d
+# Qualified names and JSON diagnostics use only the source spelling under the cursor.
+lib=file('qualified_lib.aeth','pub fn answer()->i32{7}')
+t='mod qualified_lib;\nfn main()->i32{let text:*u8="😀é";return qualified_lib::answer();}'
+p=file('qualified.aeth',t)
+r=run('qualified-source-positions',[init,opened(p,t),query(2,'definition',p,t,'qualified_lib::'),
+    query(3,'definition',p,t,'::answer'),query(4,'definition',p,t,'answer()'),*end])
+by=replies(r);assert by[2]['result'] is None and by[3]['result'] is None,by
+assert by[4]['result']['uri']==lib.as_uri(),by
+def source_coords(text,token):
+ start=text.index(token);prefix=text[:start].rsplit('\n',1)[-1]
+ byte=len(text[:start].encode());units=lambda part:len(part.encode('utf-16-le'))//2
+ return dict(start=byte,end=byte+len(token.encode()),line=text[:start].count('\n')+1,
+     end_line=text[:start].count('\n')+1,column=len(prefix)+1,end_column=len(prefix+token)+1,
+     utf16_column=units(prefix),end_utf16_column=units(prefix+token))
+def assert_coords(loc,expected):
+ assert {key:loc[key] for key in expected}==expected,(loc,expected)
+q=subprocess.run([compiler,'symbols',p],capture_output=True,check=True,timeout=30)
+data=json.loads(q.stdout);answer=next(s for s in data['symbols'] if s['name']=='answer')
+refs=[ref for ref in data['references'] if ref['symbol']==answer['id']]
+assert len(refs)==1,refs
+assert_coords(refs[0]['location'],source_coords(t,'answer'))
+bad=r'fn main()->i32{let s:*u8="😀é";let "\u{41}"=1;return 0;}'
+p=file('escaped-diagnostic.aeth',bad);expected=source_coords(bad,r'"\u{41}"')
+q=subprocess.run([compiler,'check','--error-format','json',p],capture_output=True,timeout=30)
+assert q.returncode==1 and not q.stdout,q
+assert_coords(json.loads(q.stderr)['location'],expected)
+r=run('literal-source-range',[init,opened(p,bad),*end])
+d=next(m['params']['diagnostics'][0] for m in r if m.get('method')=='textDocument/publishDiagnostics' and m['params']['diagnostics'])
+assert d['range']==dict(start=dict(line=0,character=expected['utf16_column']),end=dict(line=0,character=expected['end_utf16_column'])),d
 # Open-only source modules are never written to disk. Closing restores disk graph.
 child=w/'overlay_only.aeth';child.unlink(missing_ok=True);ct='pub fn answer()->i32{return 9;}';t='use overlay_only::answer;fn main()->i32{return answer();}';p=file('vfs.aeth',t)
 r=run('vfs',[init,opened(child,ct),opened(p,t),query(2,'definition',p,t,'answer();'),note('textDocument/didClose',dict(textDocument=dict(uri=child.as_uri()))),*end]);assert replies(r)[2]['result']['uri']==child.as_uri();assert not child.exists();assert any(m['params']['diagnostics'] for m in r if m.get('method')=='textDocument/publishDiagnostics' and m['params']['uri']==p.as_uri())

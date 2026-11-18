@@ -1,7 +1,7 @@
 //! A source index shared by the CLI and LSP, built from the resolved program.
 use std::collections::HashMap;
 use serde::Serialize;
-use super::{ast::*, session::{Location, Session}};
+use super::{ast::*, session::{LineIndex, Location, Session}};
 use crate::utils::Span;
 use crate::types::ResolvedType;
 use super::semantic::{SemanticFacts, ResolvedMethodCall};
@@ -21,15 +21,24 @@ pub struct SymbolIndex { pub symbols: Vec<Symbol>, pub references: Vec<Reference
 struct Builder<'a> {
     index: SymbolIndex,
     session: &'a Session,
+    lines: Vec<LineIndex>,
     facts: Option<&'a SemanticFacts>,
     function_name: String,
     binding_types: HashMap<usize, String>,
     scopes: Vec<HashMap<String, usize>>,
     fields: HashMap<String, HashMap<String, usize>>,
+    enum_declarations: HashMap<Span, usize>,
+    variant_declarations: HashMap<(Span, String), usize>,
 }
 impl SymbolIndex {
     pub fn new(session: &Session, facts: Option<&SemanticFacts>) -> Self {
-        let mut builder = Builder { index: Self::default(), session, facts, function_name: String::new(), binding_types: HashMap::new(), scopes: vec![HashMap::new()], fields: HashMap::new() };
+        // Only semantic-index consumers pay for this table. It expires with the borrowed session.
+        let lines = session.resolver.sources.iter().enumerate()
+            .map(|(id, file)| LineIndex::new(session.source(id).unwrap_or(&file.text))).collect();
+        let mut builder = Builder { index: Self::default(), session, lines, facts, function_name: String::new(), binding_types: HashMap::new(), scopes: vec![HashMap::new()], fields: HashMap::new(), enum_declarations: HashMap::new(), variant_declarations: HashMap::new() };
+        for (name, variants) in &session.generic_enum_names {
+            builder.enum_definition(name, variants.iter());
+        }
         for item in &session.program.items { builder.item_definition(item); }
         for item in &session.program.items { builder.item_body(item); }
         builder.index
@@ -42,6 +51,10 @@ impl SymbolIndex {
     }
 }
 impl Builder<'_> {
+    fn location(&self, span: Span) -> Option<Location> {
+        self.session.indexed_location(span, self.lines.get(span.file_id)?)
+    }
+
     fn display_name(&self, name: &str) -> String {
         if let Some(original) = self.session.resolver.original_name(name) { return original.into(); }
         name.strip_prefix("__aeth_script_arg_").unwrap_or(name).into()
@@ -64,7 +77,7 @@ impl Builder<'_> {
     }
 
     fn define(&mut self, key: &str, name: &str, kind: &str, ty: String, span: Span) -> Option<usize> {
-        let mut location = self.session.location(span)?;
+        let mut location = self.location(span)?;
         let name = self.display_name(name);
         // Synthesized Script declarations map to a statement; narrow to the
         // actual source spelling rather than exposing a generated identifier.
@@ -72,7 +85,7 @@ impl Builder<'_> {
             if text.get(location.start..location.end) != Some(&name) {
                 if let Some(segment) = text.get(location.start..location.end) {
                     if let Some(offset) = segment.find(&name) {
-                        location = super::session::text_location(std::path::Path::new(&location.file), text, location.start+offset, location.start+offset+name.len());
+                        location = self.lines[span.file_id].location(std::path::Path::new(&location.file), text, location.start+offset, location.start+offset+name.len());
                     }
                 }
             }
@@ -84,12 +97,36 @@ impl Builder<'_> {
     }
     fn lookup(&self, name: &str) -> Option<usize> { self.scopes.iter().rev().find_map(|scope| scope.get(name).copied()) }
     fn reference(&mut self, key: &str, span: Span) {
-        if let (Some(symbol),Some(location)) = (self.lookup(key),self.session.location(span)) {
+        if let (Some(symbol),Some(location)) = (self.lookup(key),self.location(span)) {
             self.index.references.push(Reference { symbol, location });
         }
     }
     fn signature(&self, f: &Function) -> String {
         format!("fn({}) -> {}", f.params.iter().map(|p| format!("{}: {}",self.display_name(&p.name.name),self.type_name(&p.ty))).collect::<Vec<_>>().join(", "), f.ret_type.as_ref().map(|ty| self.type_name(ty)).unwrap_or("()".into()))
+    }
+    fn enum_definition<'a>(&mut self, name: &Ident, variants: impl Iterator<Item = &'a Ident>) {
+        // Specializations share their declarations with the generic source enum.
+        let enum_id = if let Some(id) = self.enum_declarations.get(&name.span).copied() {
+            self.scopes[0].insert(name.name.clone(), id);
+            id
+        } else {
+            let Some(id) = self.define(&name.name, &name.name, "enum", self.display_name(&name.name), name.span)
+                else { return; };
+            self.enum_declarations.insert(name.span, id);
+            id
+        };
+        for variant in variants {
+            let key = format!("{}::{}", name.name, variant.name);
+            let origin = (variant.span, variant.name.clone());
+            if let Some(id) = self.variant_declarations.get(&origin) {
+                self.scopes[0].insert(key, *id);
+            } else {
+                let enum_name = self.index.symbols[enum_id].name.clone();
+                if let Some(id) = self.define(&key, &variant.name, "variant", enum_name, variant.span) {
+                    self.variant_declarations.insert(origin, id);
+                }
+            }
+        }
     }
     fn item_definition(&mut self, item: &Item) {
         match item {
@@ -103,7 +140,7 @@ impl Builder<'_> {
                 }
                 self.fields.insert(s.name.name.clone(), fields);
             }
-            Item::Enum(e) => { self.define(&e.name.name,&e.name.name,"enum",self.display_name(&e.name.name),e.name.span); }
+            Item::Enum(e) => self.enum_definition(&e.name, e.variants.iter().map(|v| &v.name)),
             Item::Union(u) => { self.define(&u.name.name,&u.name.name,"union",self.display_name(&u.name.name),u.name.span); }
             Item::Const(c) => { self.define(&c.name.name,&c.name.name,"constant",c.ty.as_ref().map(|ty| self.type_name(ty)).unwrap_or("constant".into()),c.name.span); }
             Item::Static(s) => { self.define(&s.name.name,&s.name.name,"static",self.type_name(&s.ty),s.name.span); }
@@ -161,7 +198,12 @@ impl Builder<'_> {
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Ident(i) => self.reference(&i.name,i.span),
-            Expr::Path { segments, span } => { let key=segments.iter().map(|i|i.name.as_str()).collect::<Vec<_>>().join("::"); self.reference(&key,*span); }
+            Expr::Path { segments, .. } => {
+                if let Some(name) = segments.last() {
+                    let key = segments.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join("::");
+                    self.reference(&key, name.span);
+                }
+            }
             Expr::Binary { left, right, .. } => { self.expr(left);self.expr(right); }
             Expr::Unary { expr, .. } | Expr::Ref { expr, .. } | Expr::Deref { expr, .. } | Expr::Cast { expr, .. } | Expr::Try { expr, .. } => self.expr(expr),
             Expr::Call { func, args, .. } => { self.expr(func); for a in args {self.expr(a);} }
@@ -176,7 +218,7 @@ impl Builder<'_> {
                     _ => None,
                 });
                 if let Some(id) = owner.and_then(|key| self.fields.get(key)).and_then(|fields| fields.get(&field.name)).copied() {
-                    if let Some(location) = self.session.location(field.span) { self.index.references.push(Reference { symbol: id, location }); }
+                    if let Some(location) = self.location(field.span) { self.index.references.push(Reference { symbol: id, location }); }
                 }
             }
             Expr::MethodCall { expr, method, args, span } => {
@@ -209,7 +251,13 @@ impl Builder<'_> {
         match pattern {
             Pattern::Binding { name: i, .. } => {self.define(&i.name,&i.name,"binding","pattern value".into(),i.span);}
             Pattern::Struct {fields,..} => for (_,p) in fields {self.pattern(p);},
-            Pattern::Tuple {elements,..} | Pattern::Variant {fields:elements,..} => for p in elements {self.pattern(p);},
+            Pattern::Variant { enum_name, variant, fields, .. } => {
+                if let Some(owner) = enum_name {
+                    self.reference(&format!("{}::{}", owner.name, variant.name), variant.span);
+                }
+                for field in fields { self.pattern(field); }
+            }
+            Pattern::Tuple { elements, .. } => for p in elements { self.pattern(p); },
             _=>{},
         }
     }

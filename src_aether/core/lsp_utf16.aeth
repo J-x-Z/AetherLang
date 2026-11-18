@@ -26,13 +26,13 @@ pub fn ls_byte_position(text:*u8,length:u64,line:i64,column:i64)->u64{
  }
  return at;
 }
-pub fn ls_column(text:*u8,length:u64,line:i32,byte_column:i32)->i32{
- let mut at:u64=0;let mut row:i32=1;
- while at<length&&row<line{if text[at]==10{row=row+1;}at=at+1;}
- let end:u64=at+(byte_column-1) as u64;let mut units:i32=0;
+// Decode one source segment and advance both scalar and UTF-16 coordinates.
+pub fn ls_count_columns(text:*u8,length:u64,begin:u64,end:u64,scalars:*i32,units:*i32){
+ let mut at:u64=begin;
  while at<length&&at<end&&text[at]!=10{
-  let mut scalar:i32=0;let mut count:u64=ls_utf8(text,length,at,&mut scalar as *i32);if count==0{count=1;scalar=65533;}
-  if at+count>end{break;}units=units+1;if scalar>65535{units=units+1;}at=at+count;
+  let mut scalar:i32=0;let mut count:u64=ls_utf8(text,length,at,&mut scalar as *i32);
+  if count==0{count=1;scalar=65533;}
+  if at+count>end{break;}
+  *scalars=*scalars+1;*units=*units+1;if scalar>65535{*units=*units+1;}at=at+count;
  }
- return units;
 }

@@ -22,7 +22,8 @@ fn li_record(arena:*BootContext,index:*LspIndex,node:*BootNode,decl:*BootNode,de
  if node.host_effect!=0||(decl.owner!=0 as *BootModule&&decl.owner.id<0){return;}
  // Numeric tuple fields have no named source declaration to navigate to.
  if decl.kind==BN_FIELD&&decl.name!=0 as *u8&&decl.name[0]>=48&&decl.name[0]<=57{return;}
- if decl.kind!=BN_FN&&decl.name!=0 as *u8&&decl.name[0]==64{return;}let token:*BootToken=ls_name_token(node);if token==0 as *BootToken||token.path==0 as *u8{return;}
+ // Unnamed match temporaries and positional payload types have no source declaration.
+ if decl.kind!=BN_FN&&(decl.name==0 as *u8||decl.name[0]==0||decl.name[0]==64){return;}let token:*BootToken=ls_name_token(node);if token==0 as *BootToken||token.path==0 as *u8{return;}
  // Hidden lowered locals have source tokens, but are not source declarations.
  if definition&&node.name!=0 as *u8&&node.name[0]==64&&node.kind!=BN_FN{return;}
  let entry:*LspOccurrence=boot_alloc(arena,(size_of(LspOccurrence) as u64)) as *LspOccurrence;if entry==0 as *LspOccurrence{return;}
@@ -37,7 +38,12 @@ fn li_walk(arena:*BootContext,index:*LspIndex,nodes:*BootNode,depth:i32){
  }
 }
 pub fn ls_index(arena:*BootContext,ctx:*BootContext)->*LspIndex{
- let index:*LspIndex=boot_alloc(arena,(size_of(LspIndex) as u64)) as *LspIndex;if index==0 as *LspIndex{return index;}if ctx.program!=0 as *BootNode{li_walk(arena,index,ctx.program.body,0);}return index;
+ let index:*LspIndex=boot_alloc(arena,(size_of(LspIndex) as u64)) as *LspIndex;if index==0 as *LspIndex{return index;}if ctx.program!=0 as *BootNode{li_walk(arena,index,ctx.program.body,0);}
+ let mut use_site:*BootPatternUse=ctx.pattern_uses;
+ while use_site!=0 as *BootPatternUse&&!arena.failed{
+  let pattern:*BootNode=use_site.pattern;li_record(arena,index,pattern,pattern.decl,false);use_site=use_site.next;
+ }
+ return index;
 }
 pub fn ls_at(ctx:*BootContext,index:*LspIndex,path:*u8,line:i64,column:i64)->*LspOccurrence{
  let mut item:*LspOccurrence=index.first;
@@ -66,4 +72,4 @@ pub fn ls_signature(out:*LspBuffer,node:*BootNode){
  if node.kind==BN_FN{ls_text(out,"fn ");ls_bytes(out,token.text,token.length);ls_char(out,40);let mut param:*BootNode=node.params;let mut first:bool=true;while param!=0 as *BootNode{if !first{ls_text(out,", ");}first=false;ls_text(out,param.name);ls_text(out,": ");ls_type(out,param.ty,0);param=param.next;}ls_text(out,") -> ");ls_type(out,node.ty,0);return;}
  ls_bytes(out,token.text,token.length);ls_text(out,": ");ls_type(out,node.ty,0);
 }
-pub fn ls_symbol_kind(node:*BootNode)->i32{if node.kind==BN_FN{return 12;}if node.kind==BN_STRUCT{return 23;}if node.kind==BN_ENUM{return 10;}if node.kind==BN_FIELD{return 8;}if node.kind==BN_CONST{return 14;}return 13;}
+pub fn ls_symbol_kind(node:*BootNode)->i32{if node.kind==BN_FN{return 12;}if node.kind==BN_STRUCT{return 23;}if node.kind==BN_ENUM{return 10;}if node.kind==BN_VARIANT{return 22;}if node.kind==BN_FIELD{return 8;}if node.kind==BN_CONST{return 14;}return 13;}

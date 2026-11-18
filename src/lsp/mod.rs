@@ -143,7 +143,7 @@ impl Server {
                     } else { return reply(Value::Null); };
                 let file=path.to_string_lossy();
                 if method=="textDocument/documentSymbol"{
-                    return reply(Value::Array(index.symbols.iter().filter(|s|s.definition.file==file).map(|s|json!({"name":s.name,"detail":s.type_name,"kind":match s.kind.as_str(){"function"|"method"|"extern function"=>12,"struct"|"union"=>23,"enum"=>10,"constant"=>14,_=>13},"range":range(&s.definition),"selectionRange":range(&s.definition)})).collect()));
+                    return reply(Value::Array(index.symbols.iter().filter(|s|s.definition.file==file).map(|s|json!({"name":s.name,"detail":s.type_name,"kind":match s.kind.as_str(){"function"|"method"|"extern function"=>12,"struct"|"union"=>23,"enum"=>10,"variant"=>22,"constant"=>14,_=>13},"range":range(&s.definition),"selectionRange":range(&s.definition)})).collect()));
                 }
                 if method=="textDocument/completion"{
                     return reply(json!({"isIncomplete":false,"items":index.symbols.iter().map(|s|json!({"label":s.name,"detail":s.type_name,"kind":if s.kind.contains("function"){3}else{6}})).collect::<Vec<_>>()}));

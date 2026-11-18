@@ -1,14 +1,9 @@
 // Structured CLI diagnostics and workspace symbols share the LSP's source facts.
 use model::*;use runtime::*;use lsp_model::*;use lsp_buffer::*;use lsp_index::*;use lsp_analysis::*;
-fn lc_offset(ctx:*BootContext,token:*BootToken)->u64{
- let module:*BootModule=ls_module(ctx,token.path);if module==0 as *BootModule{return 0;}let mut at:u64=0;let mut line:i32=1;
- while at<module.length&&line<token.line{if module.source[at]==10{line=line+1;}at=at+1;}
- let end:u64=at+(token.column-1) as u64;if end>module.length{return module.length;}return end;
-}
 fn lc_location(out:*LspBuffer,ctx:*BootContext,token:*BootToken){
- if token==0 as *BootToken{ls_text(out,"null");return;}let offset:u64=lc_offset(ctx,token);let range:LspRange=ls_token_range(ctx,token);
- ls_text(out,"{\"file\":");ls_cstring(out,token.path);ls_text(out,",\"start\":");ls_number(out,offset as i64);ls_text(out,",\"end\":");ls_number(out,(offset+token.length) as i64);
- ls_text(out,",\"line\":");ls_number(out,token.line as i64);ls_text(out,",\"column\":");ls_number(out,token.column as i64);ls_text(out,",\"end_line\":");ls_number(out,(range.end_line+1) as i64);ls_text(out,",\"end_column\":");ls_number(out,(token.column as u64+token.length) as i64);ls_text(out,",\"utf16_column\":");ls_number(out,range.column as i64);ls_text(out,",\"end_utf16_column\":");ls_number(out,range.end_column as i64);ls_char(out,125);
+ if token==0 as *BootToken{ls_text(out,"null");return;}let span:LspSourceSpan=ls_source_span(ctx,token);let range:LspRange=span.range;
+ ls_text(out,"{\"file\":");ls_cstring(out,token.path);ls_text(out,",\"start\":");ls_number(out,span.start as i64);ls_text(out,",\"end\":");ls_number(out,span.end as i64);
+ ls_text(out,",\"line\":");ls_number(out,token.line as i64);ls_text(out,",\"column\":");ls_number(out,span.scalar_column as i64);ls_text(out,",\"end_line\":");ls_number(out,(range.end_line+1) as i64);ls_text(out,",\"end_column\":");ls_number(out,span.end_scalar_column as i64);ls_text(out,",\"utf16_column\":");ls_number(out,range.column as i64);ls_text(out,",\"end_utf16_column\":");ls_number(out,range.end_column as i64);ls_char(out,125);
 }
 pub fn boot_json_diagnostic(ctx:*BootContext)->bool{
  let out:*LspBuffer=ls_buffer_new();if out==0 as *LspBuffer{return false;}ls_text(out,"{\"code\":\"CORE\",\"severity\":\"error\",\"message\":");let mut message:*u8=ctx.diagnostic_message;if message==0 as *u8{message="compiler failed";}ls_cstring(out,message);ls_text(out,",\"location\":");lc_location(out,ctx,ctx.diagnostic_token);ls_text(out,"}\n");let ok:bool=!out.failed&&ls_write_all(2,out.data,out.length);ls_buffer_free(out);return ok;
@@ -37,7 +32,7 @@ pub fn boot_symbols(ctx:*BootContext)->bool{
 pub fn boot_plain_diagnostic(ctx:*BootContext)->bool{
  let out:*LspBuffer=ls_buffer_new();if out==0 as *LspBuffer{return false;}
  let token:*BootToken=ctx.diagnostic_token;let mut path:*u8=ctx.path;let mut line:i32=1;let mut column:i32=1;
- if token!=0 as *BootToken{line=token.line;column=token.column;if token.path!=0 as *u8{path=token.path;}}
+ if token!=0 as *BootToken{let span:LspSourceSpan=ls_source_span(ctx,token);line=token.line;column=span.scalar_column;if token.path!=0 as *u8{path=token.path;}}
  ls_text(out,path);ls_char(out,58);ls_number(out,line as i64);ls_char(out,58);ls_number(out,column as i64);ls_text(out,": ");
  ls_text(out,ctx.diagnostic_message);ls_char(out,10);let ok:bool=!out.failed&&ls_write_all(2,out.data,out.length);ls_buffer_free(out);return ok;
 }

@@ -115,4 +115,44 @@ with tempfile.TemporaryDirectory(dir=base) as folder:
         assert check["ok"] and check["entry"] == "main.ath", check
         symbol = client.call("definition", file="main.ath", line=3, character=12)["symbol"]
         assert symbol["name"] == "answer" and symbol["definition"]["range"]["start"]["line"] == 0, symbol
-print("MCP project and Script queries passed")
+    variants = Path(folder) / "variants"
+    enums = ["pub enum Event<T>{Hit(T),Empty}", "pub enum Other{Hit(i32),Empty}",
+             "pub enum Spare<T>{Retained(T),Vacant}"]
+    save(variants/"kinds.aeth", "\n".join(enums))
+    lines = [
+        "use kinds::{Event,Other};",
+        "fn number(e:Event<i32>)->i32{match e{Hit(x)=>x,Event::Empty=>0}}",
+        "fn flag(e:Event<bool>)->bool{match e{Event::Hit(x)=>x,Event::Empty=>false}}",
+        "fn second(o:Other)->i32{match o{Other::Hit(x)=>x,Other::Empty=>0}}",
+        "fn main()->i32{let n:Event<i32>=Event::Hit(7);let b:Event<bool>=Event::Hit(true);"
+        "let o:Other=Other::Hit(2);if flag(b){return number(n)+second(o);}return 0;}",
+    ]
+    save(variants/"main.aeth", "\n".join(lines))
+    cases = {
+        (0, "Hit"): [(1,"Hit(x)"), (2,"Hit(x)"), (4,"Hit(7)"), (4,"Hit(true)")],
+        (0, "Empty"): [(1,"Empty"), (2,"Empty")],
+        (1, "Hit"): [(3,"Hit(x)"), (4,"Hit(2)")],
+        (1, "Empty"): [(3,"Empty")],
+    }
+    with Client(variants) as client:
+        assert client.call("check")["ok"]
+        unused = client.call("symbols", query="Retained")["items"]
+        assert len(unused) == 1 and unused[0]["kind"] == "variant", unused
+        assert unused[0]["definition"]["range"]["start"] == dict(line=2, character=enums[2].index("Retained"))
+        for (row, label), sites in cases.items():
+            source = dict(file="kinds.aeth", line=row, character=enums[row].index(label))
+            uses = client.call("references", **source)["items"]
+            expected = {(line, lines[line].index(token)) for line, token in sites}
+            observed = {(u["range"]["start"]["line"], u["range"]["start"]["character"])
+                        for u in uses if u["file"] == "main.aeth"}
+            assert observed == expected, (source, uses)
+            for line, column in expected:
+                symbol = client.call("definition", file="main.aeth", line=line, character=column)["symbol"]
+                location = symbol["definition"]
+                assert symbol["kind"] == "variant" and symbol["name"] == label
+                assert location["file"] == source["file"]
+                assert location["range"]["start"] == dict(line=row, character=source["character"])
+        # Compiler-generated match temporaries and anonymous payload slots are internal.
+        for file, row, column in [("main.aeth",1,lines[1].index("match")), ("kinds.aeth",1,enums[1].index("i32"))]:
+            assert client.call("definition",file=file,line=row,character=column)["symbol"] is None
+print("MCP project, Script and enum navigation queries passed")

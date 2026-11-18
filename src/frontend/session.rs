@@ -1,7 +1,7 @@
 //! Shared compilation input and diagnostics for CLI and editor clients.
 use std::{collections::HashMap, path::{Path, PathBuf}};
 use serde::Serialize;
-use super::{ast::Program, lexer::Lexer, resolve::{ModuleSearch, Resolver}, semantic::{SemanticAnalyzer, SemanticFacts}};
+use super::{ast::{Ident, Item, Program}, lexer::Lexer, resolve::{ModuleSearch, Resolver}, semantic::{SemanticAnalyzer, SemanticFacts}};
 use crate::utils::{Error, Span};
 
 #[derive(Debug, Clone, Serialize)]
@@ -16,9 +16,8 @@ pub struct Location {
     pub end_column: usize,
     #[serde(skip)]
     pub source_line: String,
-    #[serde(skip)]
+    /// LSP character offsets are zero based UTF-16 code units.
     pub utf16_column: usize,
-    #[serde(skip)]
     pub end_utf16_column: usize,
 }
 
@@ -46,6 +45,9 @@ impl From<&str> for Diagnostic { fn from(message: &str) -> Self { Self::message(
 pub struct Session {
     pub program: Program,
     pub resolver: Resolver,
+    // Uninstantiated templates disappear from the executable AST. Keep only
+    // their names and source spans for project navigation.
+    pub(super) generic_enum_names: Vec<(Ident, Vec<Ident>)>,
     script_map: Option<SourceMap>,
 }
 
@@ -75,8 +77,13 @@ impl Session {
         } else { (source, None) };
         let mut resolver = Resolver::new(search).with_overlays(overlays);
         let program = resolver.resolve(path, core).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
+        let generic_enum_names = program.items.iter().filter_map(|item| match item {
+            Item::Enum(e) if !e.generic_params.is_empty() || !e.type_params.is_empty() =>
+                Some((e.name.clone(), e.variants.iter().map(|v| v.name.clone()).collect())),
+            _ => None,
+        }).collect();
         let program = super::specialize::specialize_for_width(program, width).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
-        Ok(Self { program, resolver, script_map })
+        Ok(Self { program, resolver, script_map, generic_enum_names })
     }
     pub fn check(&self, target: &str, llvm_backend: bool) -> Result<SemanticFacts, Diagnostic> {
         let mut analyzer = SemanticAnalyzer::for_target(target).map_err(Diagnostic::from)?;
@@ -89,10 +96,13 @@ impl Session {
     }
     fn make_diagnostic(resolver: &Resolver, map: Option<&SourceMap>, error: &Error) -> Diagnostic {
         let mut diagnostic = Diagnostic::message(error_code(error), error.to_string());
-        diagnostic.location = error.span().and_then(|span| location(resolver, map, span));
+        diagnostic.location = error.span().and_then(|span| location(resolver, map, span, None));
         diagnostic
     }
-    pub fn location(&self, span: Span) -> Option<Location> { location(&self.resolver, self.script_map.as_ref(), span) }
+    pub fn location(&self, span: Span) -> Option<Location> { location(&self.resolver, self.script_map.as_ref(), span, None) }
+    pub(super) fn indexed_location(&self, span: Span, lines: &LineIndex) -> Option<Location> {
+        location(&self.resolver, self.script_map.as_ref(), span, Some(lines))
+    }
     pub fn source(&self, file_id: usize) -> Option<&str> {
         if file_id == 0 { if let Some(map) = &self.script_map { return Some(&map.original); } }
         self.resolver.sources.get(file_id).map(|s| s.text.as_str())
@@ -118,7 +128,7 @@ fn error_code(error: &Error) -> &'static str {
     }
 }
 
-fn location(resolver: &Resolver, map: Option<&SourceMap>, span: Span) -> Option<Location> {
+fn location(resolver: &Resolver, map: Option<&SourceMap>, span: Span, lines: Option<&LineIndex>) -> Option<Location> {
     let file = resolver.sources.get(span.file_id)?;
     let (text, start, end) = if span.file_id == 0 {
         if let Some(map) = map {
@@ -126,19 +136,46 @@ fn location(resolver: &Resolver, map: Option<&SourceMap>, span: Span) -> Option<
             (map.original.as_str(), start, end)
         } else { (file.text.as_str(), span.start, span.end) }
     } else { (file.text.as_str(), span.start, span.end) };
-    Some(text_location(&file.path, text, start, end))
+    Some(match lines {
+        Some(index) => index.location(&file.path, text, start, end),
+        None => text_location(&file.path, text, start, end),
+    })
+}
+
+/// Byte offsets of line starts in one immutable source snapshot.
+pub(super) struct LineIndex(Vec<usize>);
+
+impl LineIndex {
+    pub(super) fn new(text: &str) -> Self {
+        let mut starts = vec![0];
+        starts.extend(text.match_indices('\n').map(|(offset, _)| offset + 1));
+        Self(starts)
+    }
+
+    pub(super) fn location(&self, path: &Path, text: &str, start: usize, end: usize) -> Location {
+        let start = text.floor_char_boundary(start.min(text.len()));
+        let end = text.floor_char_boundary(end.min(text.len())).max(start);
+        let position = |offset| {
+            let line = self.0.partition_point(|&first| first <= offset) - 1;
+            let prefix = &text[self.0[line]..offset];
+            let (characters, utf16) = if prefix.is_ascii() {
+                (prefix.len(), prefix.len())
+            } else {
+                (prefix.chars().count(), prefix.encode_utf16().count())
+            };
+            (line, characters + 1, utf16)
+        };
+        let (line, column, utf16_column) = position(start);
+        let (end_line, end_column, end_utf16_column) = position(end);
+        let line_end = self.0.get(line + 1).map_or(text.len(), |&next| next - 1);
+        Location { file: path.to_string_lossy().into(), start, end,
+            line: line + 1, column, end_line: end_line + 1, end_column,
+            source_line: text[self.0[line]..line_end].to_owned(), utf16_column, end_utf16_column }
+    }
 }
 
 pub fn text_location(path: &Path, text: &str, start: usize, end: usize) -> Location {
-    let boundary = |offset: usize| { let mut n = offset.min(text.len()); while !text.is_char_boundary(n) { n -= 1; } n };
-    let start = boundary(start); let end = boundary(end).max(start);
-    let before = &text[..start]; let last = before.rsplit('\n').next().unwrap_or("");
-    let before_end = &text[..end]; let last_end = before_end.rsplit('\n').next().unwrap_or("");
-    Location { file: path.to_string_lossy().into(), start, end,
-        line: before.bytes().filter(|b| *b == b'\n').count() + 1, column: last.chars().count() + 1,
-        end_line: before_end.bytes().filter(|b| *b == b'\n').count() + 1, end_column: last_end.chars().count() + 1,
-        source_line: format!("{}{}", last, text[start..].split('\n').next().unwrap_or("")),
-        utf16_column: last.encode_utf16().count(), end_utf16_column: last_end.encode_utf16().count() }
+    LineIndex::new(text).location(path, text, start, end)
 }
 
 fn script_error(path: &Path, source: &str, code: &str, message: String) -> Diagnostic {
@@ -194,16 +231,92 @@ impl SourceMap {
         map
     }
     fn remap(&self, start: usize, end: usize) -> (usize, usize) {
-        let hits: Vec<_> = self.tokens.iter().filter(|(a,b,_,_)| *a < end.max(start+1) && *b > start).collect();
-        if let (Some(first), Some(last)) = (hits.first(), hits.last()) { return (first.2, last.3.max(first.2)); }
-        if let Some((_,_,a,b)) = self.lines.iter().find(|(a,b,_,_)| *a <= start && start < *b) { return (*a,*b); }
-        (0,0)
+        // Tokens and lines are disjoint and ordered by their generated offsets.
+        let first = self.tokens.partition_point(|&(_, finish, _, _)| finish <= start);
+        let end = end.max(start.saturating_add(1));
+        let past = self.tokens.partition_point(|&(begin, _, _, _)| begin < end);
+        if first < past {
+            let source_start = self.tokens[first].2;
+            return (source_start, self.tokens[past - 1].3.max(source_start));
+        }
+        let line = self.lines.partition_point(|&(_, finish, _, _)| finish <= start);
+        match self.lines.get(line) {
+            Some(&(begin, _, a, b)) if begin <= start => (a, b),
+            _ => (0, 0),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn qualified_references_cover_only_the_referenced_name() {
+        use crate::frontend::symbols::SymbolIndex;
+        let directory = std::env::temp_dir().join("aether-qualified-symbol-overlay");
+        let root = directory.join("main.aeth");
+        let library = directory.join("library.aeth");
+        let source = "mod library;\nfn main()->i32{let text:*u8=\"😀é\";return library::answer();}";
+        let session = Session::parse(&root, source.into(), ModuleSearch::default(),
+            HashMap::from([(library, "pub fn answer()->i32{7}".into())])).unwrap();
+        let facts = session.check("native", false).unwrap();
+        let index = SymbolIndex::new(&session, Some(&facts));
+        let symbol = index.symbols.iter().find(|s| s.name == "answer").unwrap();
+        let loc = &index.references.iter().find(|r| r.symbol == symbol.id).unwrap().location;
+        let start = source.find("answer").unwrap();
+        let line_prefix = source[..start].rsplit('\n').next().unwrap();
+        let serialized = serde_json::to_value(loc).unwrap();
+        assert_eq!((loc.start, loc.end), (start, start + "answer".len()));
+        assert_eq!(serialized["column"], line_prefix.chars().count() + 1);
+        assert_eq!(serialized["utf16_column"], line_prefix.encode_utf16().count());
+        assert!(index.at(&loc.file, source.find("library::").unwrap()).is_none());
+        assert!(index.at(&loc.file, start - 1).is_none());
+        assert_eq!(index.at(&loc.file, start).unwrap().name, "answer");
+    }
+
+    #[test]
+    fn script_lookup_preserves_token_overlaps_and_line_fallbacks() {
+        let map = SourceMap { original: String::new(),
+            lines: vec![(0, 8, 10, 20), (8, 15, 25, 30)],
+            tokens: vec![(1, 3, 12, 14), (4, 6, 15, 17), (11, 13, 26, 28)] };
+        for start in 0..=16 {
+            for end in start..=16 {
+                let hits: Vec<_> = map.tokens.iter()
+                    .filter(|&&(a, b, _, _)| a < end.max(start + 1) && b > start).collect();
+                let expected = match (hits.first(), hits.last()) {
+                    (Some(first), Some(last)) => (first.2, last.3.max(first.2)),
+                    _ => map.lines.iter().find(|&&(a, b, _, _)| a <= start && start < b)
+                        .map_or((0, 0), |&(_, _, a, b)| (a, b)),
+                };
+                assert_eq!(map.remap(start, end), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_locations_match_unicode_and_multiline_prefixes() {
+        let path = Path::new("sample.aeth");
+        for text in ["", "plain", "é😀\r\n\nα尾\n", "final\nline"] {
+            let index = LineIndex::new(text);
+            for start in 0..=text.len() + 1 {
+                for end in 0..=text.len() + 1 {
+                    let loc = index.location(path, text, start, end);
+                    let first = text.floor_char_boundary(start.min(text.len()));
+                    let last = text.floor_char_boundary(end.min(text.len())).max(first);
+                    let reference = |byte| {
+                        let lines: Vec<_> = text[..byte].split('\n').collect();
+                        let prefix = lines.last().unwrap();
+                        (lines.len(), prefix.chars().count() + 1, prefix.encode_utf16().count())
+                    };
+                    assert_eq!((loc.start, loc.end), (first, last));
+                    assert_eq!((loc.line, loc.column, loc.utf16_column), reference(first));
+                    assert_eq!((loc.end_line, loc.end_column, loc.end_utf16_column), reference(last));
+                    assert_eq!(loc.source_line, text.split('\n').nth(loc.line - 1).unwrap());
+                }
+            }
+        }
+    }
+
     #[test]
     fn typed_script_imports_use_editor_overlays_in_both_passes() {
         // No on-disk module: metadata inference and final Core checking must

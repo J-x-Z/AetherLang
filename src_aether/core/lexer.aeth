@@ -20,7 +20,7 @@ fn boot_lex_advance(lexer:*BootLexer) {
 }
 fn boot_lex_problem(lexer:*BootLexer,message:*u8)->bool {
  let token:*BootToken=boot_alloc(lexer.context,size_of(BootToken) as u64) as *BootToken;
- if token!=(0 as *BootToken) { token.line=lexer.token_line;token.column=lexer.token_column;token.path=lexer.context.path; }
+ if token!=(0 as *BootToken) { token.line=lexer.token_line;token.column=lexer.token_column;token.end_column=lexer.token_column;token.path=lexer.context.path; }
  boot_error(lexer.context,token,message);
  return false;
 }
@@ -28,7 +28,7 @@ fn boot_lex_token(lexer:*BootLexer,kind:i32,text:*u8,length:u64)->bool {
  if text==(0 as *u8) { return false; }
  let token:*BootToken=boot_alloc(lexer.context,size_of(BootToken) as u64) as *BootToken;
  if token==(0 as *BootToken) { return false; }
- token.kind=kind;token.text=text;token.length=length;
+ token.kind=kind;token.text=text;token.length=length;token.end_column=lexer.column;
  token.line=lexer.token_line;token.column=lexer.token_column;token.path=lexer.context.path;
  if lexer.tail==(0 as *BootToken) { lexer.context.tokens=token; }
  else { lexer.tail.next=token; }

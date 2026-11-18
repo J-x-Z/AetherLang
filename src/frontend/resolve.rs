@@ -492,13 +492,16 @@ impl Rewriter<'_> {
                     id.name.clone_from(&binding.emitted);
                 }
             },
-            Expr::Path { segments, span } => {
+            Expr::Path { segments, .. } => {
                 let path = segments.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join("::");
                 if let Some(binding) = self.names.get(&path) {
+                    // The resolved identifier denotes the final path component.
+                    // Keep that token as the use site for diagnostics and navigation.
+                    let span = segments.last().expect("path contains an identifier").span;
                     if let Some(declaration) = binding.foreign_declaration {
-                        self.foreign_uses.insert(*span, declaration);
+                        self.foreign_uses.insert(span, declaration);
                     }
-                    *e = Expr::Ident(Ident { name: binding.emitted.clone(), span: *span });
+                    *e = Expr::Ident(Ident { name: binding.emitted.clone(), span });
                 }
                 else {
                     let mut found = false;

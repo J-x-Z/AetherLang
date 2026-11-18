@@ -8,19 +8,33 @@ use lsp_utf16::*;
 use lsp_vfs::*;
 pub fn ls_analyze(server:*LspServer,path:*u8)->*BootContext{
  let ctx:*BootContext=boot_context_new(0 as *u8,0,path);if ctx==0 as *BootContext{return ctx;}
- ctx.quiet=true;ctx.overlays=server.documents;ctx.roots=server.config.roots;ctx.mapped=server.config.mapped;
+ ctx.quiet=true;ctx.index_patterns=true;ctx.overlays=server.documents;ctx.roots=server.config.roots;ctx.mapped=server.config.mapped;
  if boot_project(ctx,path){boot_check(ctx);}return ctx;
 }
 pub fn ls_module(ctx:*BootContext,path:*u8)->*BootModule{
  let mut module:*BootModule=ctx.modules;while module!=0 as *BootModule{if strcmp(module.path,path)==0{return module;}module=module.next;}return 0 as *BootModule;
 }
-pub fn ls_token_range(ctx:*BootContext,token:*BootToken)->LspRange{
- let mut result:LspRange=LspRange{line:0,column:0,end_line:0,end_column:0};
- if token==0 as *BootToken{return result;}result.line=token.line-1;result.end_line=result.line;
+pub fn ls_source_span(ctx:*BootContext,token:*BootToken)->LspSourceSpan{
+ let range:LspRange=LspRange{line:0,column:0,end_line:0,end_column:0};
+ let mut span:LspSourceSpan=LspSourceSpan{range:range,start:0,end:0,scalar_column:1,end_scalar_column:1};
+ if token==0 as *BootToken{return span;}
+ span.range.line=token.line-1;span.range.end_line=span.range.line;
  let module:*BootModule=ls_module(ctx,token.path);
- if module!=0 as *BootModule{result.column=ls_column(module.source,module.length,token.line,token.column);result.end_column=ls_column(module.source,module.length,token.line,token.column+token.length as i32);}
- else{result.column=token.column-1;result.end_column=result.column+token.length as i32;}
- return result;
+ if module==0 as *BootModule{return span;}
+ let mut line_start:u64=0;let mut row:i32=1;
+ while line_start<module.length&&row<token.line{if module.source[line_start]==10{row=row+1;}line_start=line_start+1;}
+ span.start=line_start+(token.column-1) as u64;span.end=line_start+(token.end_column-1) as u64;
+ if span.start>module.length{span.start=module.length;}if span.end>module.length{span.end=module.length;}
+ if span.end<span.start{span.end=span.start;}
+ let mut scalars:i32=0;let mut units:i32=0;
+ ls_count_columns(module.source,module.length,line_start,span.start,&mut scalars as *i32,&mut units as *i32);
+ span.scalar_column=scalars+1;span.range.column=units;
+ ls_count_columns(module.source,module.length,span.start,span.end,&mut scalars as *i32,&mut units as *i32);
+ span.end_scalar_column=scalars+1;span.range.end_column=units;
+ return span;
+}
+pub fn ls_token_range(ctx:*BootContext,token:*BootToken)->LspRange{
+ let span:LspSourceSpan=ls_source_span(ctx,token);return span.range;
 }
 pub fn ls_range(out:*LspBuffer,range:LspRange){
  ls_text(out,"{\"start\":{\"line\":");ls_number(out,range.line as i64);ls_text(out,",\"character\":");ls_number(out,range.column as i64);ls_text(out,"},\"end\":{\"line\":");ls_number(out,range.end_line as i64);ls_text(out,",\"character\":");ls_number(out,range.end_column as i64);ls_text(out,"}}");

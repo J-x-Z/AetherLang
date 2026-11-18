@@ -70,7 +70,8 @@ pub const BF_EXPORT:i32=64;
 pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=34; pub const BN_UNIT:i32=35; pub const BN_TYPE_PARAMETER:i32=36;
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
-pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
+// End-exclusive source byte column. Decoded strings and generated tokens may have a different text length.
+pub struct BootToken { kind:i32,end_column:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
 pub struct BootType { volatile_access:bool,kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool,is_alias:bool,expression:*BootNode,callable:*BootNode,is_tuple:bool,dynamic_contract:*BootType,dynamic_mutable:bool,dynamic_methods:*BootNode,async_frame:bool }
 pub struct BootCallEdge {callee:*BootNode,next:*BootCallEdge}
 pub struct BootNode {
@@ -82,7 +83,9 @@ pub struct BootNode {
 pub struct BootBinding { name:*u8,node:*BootNode,depth:i32,next:*BootBinding }
 pub struct BootOverlay {path:*u8,text:*u8,length:u64,version:i64,next:*BootOverlay}
 pub struct BootDynImplementation{contract:*BootType,target:*BootType,methods:*BootNode,token:*BootToken,next:*BootDynImplementation}
+pub struct BootPatternUse {pattern:*BootNode,next:*BootPatternUse}
 pub struct BootContext {
+ index_patterns:bool,pattern_uses:*BootPatternUse,
  dynamic_impls:*BootDynImplementation,
  no_std:bool,hosted_module:*BootModule,overlays:*BootOverlay,quiet:bool,diagnostic_token:*BootToken,diagnostic_message:*u8,
  arena:*BootArena,allocated:u64,source:*u8,length:u64,path:*u8,

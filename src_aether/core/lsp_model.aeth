@@ -6,6 +6,7 @@ pub struct LspBuffer{data:*u8,length:u64,capacity:u64,failed:bool}
 pub struct LspPath{path:*u8,next:*LspPath}
 pub struct LspServer{config:*BootContext,documents:*BootOverlay,document_count:i32,document_bytes:u64,published:*LspPath,initialized:bool,shutdown:bool}
 pub struct LspRange{line:i32,column:i32,end_line:i32,end_column:i32}
+pub struct LspSourceSpan{range:LspRange,start:u64,end:u64,scalar_column:i32,end_scalar_column:i32}
 pub struct LspLocation{path:*u8,range:LspRange,next:*LspLocation}
 pub struct LspDiagnostic{message:*u8,range:LspRange,next:*LspDiagnostic}
 pub struct LspFileDiagnostics{path:*u8,active:bool,diagnostics:*LspDiagnostic,next:*LspFileDiagnostics}
