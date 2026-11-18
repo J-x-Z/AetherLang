@@ -32,6 +32,7 @@ pub struct Transpiler {
     return_type: ScriptType,
     is_main: bool,
     current_async: bool,
+    async_declarations: BTreeMap<String, String>,
     async_helpers: HashMap<String,String>,
     loop_depth: usize,
     temporary: usize,
@@ -44,7 +45,7 @@ impl Transpiler {
     pub fn new() -> Self {
         Self { imported:ImportedApi::default(), output: String::new(), source_lines: Vec::new(), source_line: 1, indent: 0, source_file: None,
             functions: HashMap::new(), locals: BTreeMap::new(), assigned: HashSet::new(),
-            return_type: "void".into(), is_main: false, current_async:false, async_helpers:HashMap::new(), loop_depth: 0, temporary: 0, reserved_names: HashSet::new(), definitions: HashMap::new(), const_parameters: HashMap::new() }
+            return_type: "void".into(), is_main: false, current_async:false, async_declarations:BTreeMap::new(), async_helpers:HashMap::new(), loop_depth: 0, temporary: 0, reserved_names: HashSet::new(), definitions: HashMap::new(), const_parameters: HashMap::new() }
     }
 
     pub fn with_source_file(mut self, path: &str) -> Self {
@@ -157,6 +158,7 @@ impl Transpiler {
         if function.is_comptime { return Err("Script @comptime execution is not implemented".into()); }
         self.source_line = function.span.line;
         self.current_async=function.is_async;
+        self.async_declarations.clear();
         self.locals.clear();
         self.assigned.clear();
         self.const_parameters.clear();
@@ -213,6 +215,9 @@ impl Transpiler {
             for (name, ty) in self.locals.clone() {
                 if !ty.anonymous_callable() {self.line(&format!("let mut {}: {};", name, ty));}
             }
+        }
+        for declaration in std::mem::take(&mut self.async_declarations).into_values() {
+            self.line(&declaration);
         }
         self.output.push_str(&body);
         self.source_lines.extend(body_lines);
@@ -274,8 +279,21 @@ impl Transpiler {
                 if ty == "void" { return Err(format!("cannot assign a void result to '{}'", name)); }
                 let first=!self.locals.contains_key(name);
                 if self.current_async && first {
-                    if self.indent!=1{return Err("first async Script bindings must be at function scope, outside a branch or loop".into());}
-                    self.line(&format!("let mut {}: {} = {};",name,ty,value));
+                    if self.indent == 1 {
+                        self.line(&format!("let mut {name}: {ty} = {value};"));
+                    } else {
+                        // Definite assignment is still checked with the Script control flow.
+                        // Initialize scalar storage before branching so both arms share it.
+                        let initial = match ty.as_str() {
+                            "bool" => "false",
+                            "f32" | "f64" => "0.0",
+                            "i8" | "i16" | "i32" | "i64" | "isize" |
+                            "u8" | "u16" | "u32" | "u64" | "usize" => "0",
+                            _ => return Err("initialize this async Script local at function scope".into()),
+                        };
+                        self.async_declarations.insert(name.clone(),format!("let mut {name}: {ty} = {initial};"));
+                        self.line(&format!("{name} = {value};"));
+                    }
                 } else if ty.anonymous_callable() && first {
                     if self.indent != 1 {return Err("a closure's first Script binding must be at function scope, outside a branch or loop".into());}
                     self.line(&format!("let mut {}: _ = {};",name,value));

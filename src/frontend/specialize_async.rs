@@ -31,8 +31,16 @@ struct Segment {
     statements: Vec<Stmt>,
     incoming: Vec<usize>,
     outgoing: Vec<usize>,
-    boundary: Option<Boundary>,
+    exit: Exit,
 }
+enum Exit {
+    End,
+    Unreachable,
+    Jump(usize),
+    Branch(Expr, usize, usize),
+    Suspend(Boundary, usize),
+}
+
 fn invalid(message: impl Into<String>, span: Span) -> Error {
     Error::semantic_expected("E2406", message, span)
 }
@@ -270,6 +278,7 @@ struct Builder<'a> {
     file: usize,
     seq: usize,
     used: HashSet<String>,
+    suspensions: usize,
 }
 impl<'a> Builder<'a> {
     fn new(
@@ -338,6 +347,7 @@ impl<'a> Builder<'a> {
             file: usize::MAX / 2 + serial * 65536,
             seq: 0,
             used: names,
+            suspensions: 0,
         })
     }
     fn fresh(&mut self, kind: &str) -> String {
@@ -372,9 +382,12 @@ impl<'a> Builder<'a> {
         self.expressions.insert(n.clone(), e);
         n
     }
-    fn slot(&mut self, name: String, ty: Type, mutable: bool) -> Result<usize> {
-        if self.slots.iter().any(|s| s.name == name) {
-            return Err(invalid("distinct top-level async binding names; put temporary shadows in a suspension-free block",ty.span()));
+    fn slot(&mut self, live: &[usize], name: String, ty: Type, mutable: bool) -> Result<usize> {
+        if live.iter().any(|&i| self.slots[i].name == name) {
+            return Err(invalid(
+                "distinct simultaneously live async bindings",
+                ty.span(),
+            ));
         }
         let ty = self.canonical(&ty, &mut HashSet::new())?;
         if matches!(ty, Type::Infer(_)) {
@@ -422,112 +435,315 @@ impl<'a> Builder<'a> {
                     param.span,
                 ));
             }
-            active.push(self.slot(param.name.name, param.ty, param.mutable)?);
+            active.push(self.slot(&active, param.name.name, param.ty, param.mutable)?);
         }
-        let mut incoming = active.clone();
-        let mut statements = Vec::new();
-        for stmt in f.body.stmts {
-            let awaited = match &stmt {
-                Stmt::Let { value: Some(e), .. } | Stmt::Semi(e) | Stmt::Expr(e) => {
-                    await_value(e).cloned()
-                }
+        let start = self.new_segment(&active);
+        self.split_statements(f.body.stmts, start, &mut active, None, true)?;
+        Ok(())
+    }
+    fn new_segment(&mut self, live: &[usize]) -> usize {
+        let id = self.segments.len();
+        self.segments.push(Segment {
+            statements: vec![],
+            incoming: live.to_vec(),
+            outgoing: vec![],
+            exit: Exit::End,
+        });
+        id
+    }
+    fn jump(&mut self, from: usize, target: usize) {
+        self.segments[from].outgoing = self.segments[target].incoming.clone();
+        self.segments[from].exit = Exit::Jump(target);
+    }
+    fn suspend(
+        &mut self,
+        stmt: &Stmt,
+        mut expression: Expr,
+        live: &mut Vec<usize>,
+        from: usize,
+    ) -> Result<usize> {
+        if self.suspensions >= 64 {
+            return Err(invalid(
+                "at most 64 async suspension points",
+                expression.span(),
+            ));
+        }
+        self.suspensions += 1;
+        validate_user_expr(&mut expression, 0)?;
+        let output = match stmt {
+            Stmt::Let {
+                name,
+                mutable,
+                ty: Some(ty),
+                ..
+            } => Some(self.slot(live, name.name.clone(), ty.clone(), *mutable)?),
+            Stmt::Let { span, .. } => {
+                return Err(invalid("explicit type for an await binding", *span))
+            }
+            _ => None,
+        };
+        let child = if matches!(&expression,Expr::Call{func,args,..} if args.is_empty()&&matches!(&**func,Expr::Ident(n) if n.name=="yield_now"))
+        {
+            None
+        } else {
+            let Expr::Call { func, .. } = &expression else {
+                return Err(invalid(
+                    "await of a direct async constructor or yield_now()",
+                    expression.span(),
+                ));
+            };
+            let Expr::Ident(name) = &**func else {
+                return Err(invalid(
+                    "direct named async child constructor",
+                    expression.span(),
+                ));
+            };
+            let child = self.tasks.get(&name.name).cloned().ok_or_else(|| {
+                invalid(
+                    "await of an async function; synchronous calls are not futures",
+                    expression.span(),
+                )
+            })?;
+            let hidden = self.fresh("child");
+            let index = self.slot(
+                live,
+                hidden,
+                Type::Owned {
+                    inner: Box::new(Type::Named(child.frame.clone(), expression.span())),
+                    ownership: Ownership::Own,
+                    span: expression.span(),
+                },
+                true,
+            )?;
+            Some((child, index))
+        };
+        let outgoing = live.clone();
+        if let Some(index) = output {
+            live.push(index);
+        }
+        let next = self.new_segment(live);
+        self.segments[from].outgoing = outgoing;
+        self.segments[from].exit = Exit::Suspend(
+            Boundary {
+                expression,
+                output,
+                child,
+            },
+            next,
+        );
+        Ok(next)
+    }
+
+    // Non-suspending regions retain their original AST and lexical scopes. Edges into
+    // a different scope carry exactly its live bindings, so exiting a loop or branch
+    // drops its owned locals and cancellation sees only initialized frame slots.
+    fn split_statements(
+        &mut self,
+        stmts: Vec<Stmt>,
+        mut id: usize,
+        live: &mut Vec<usize>,
+        loops: Option<(usize, usize)>,
+        terminal: bool,
+    ) -> Result<Option<usize>> {
+        let mut flows = true;
+        let count = stmts.len();
+        for (n, stmt) in stmts.into_iter().enumerate() {
+            if self.segments.len() > 1024 {
+                return Err(invalid(
+                    "at most 1024 async control-flow blocks",
+                    self.task.function.span,
+                ));
+            }
+            let expr = match &stmt {
+                Stmt::Let { value: Some(e), .. } | Stmt::Semi(e) | Stmt::Expr(e) => Some(e),
                 _ => None,
             };
-            if let Some(mut expression) = awaited {
-                validate_user_expr(&mut expression, 0)?;
-                let output = match &stmt {
-                    Stmt::Let {
-                        name,
-                        mutable,
+            if let Some(expr) = expr.and_then(await_value) {
+                id = self.suspend(&stmt, expr.clone(), live, id)?;
+                continue;
+            }
+            // Assign only after the child is Ready. In particular an old owner remains
+            // live while the child is Pending and is dropped by ordinary assignment.
+            if let Some(Expr::Binary {
+                left,
+                op: BinOp::Assign,
+                right,
+                span,
+            }) = expr
+            {
+                if let (Expr::Ident(target), Some(awaited)) = (&**left, await_value(right)) {
+                    let ty = live
+                        .iter()
+                        .rev()
+                        .map(|&i| &self.slots[i])
+                        .find(|slot| slot.name == target.name)
+                        .ok_or_else(|| {
+                            invalid("an initialized local for await assignment", target.span)
+                        })?
+                        .ty
+                        .clone();
+                    let temp = Ident {
+                        name: self.fresh("awaited"),
+                        span: *span,
+                    };
+                    let binding = Stmt::Let {
+                        name: temp.clone(),
+                        mutable: false,
                         ty: Some(ty),
-                        ..
-                    } => Some(self.slot(name.name.clone(), ty.clone(), *mutable)?),
-                    Stmt::Let { span, .. } => {
-                        return Err(invalid("explicit type for an await binding", *span))
-                    }
-                    _ => None,
-                };
-                let child = if matches!(&expression,Expr::Call{func,args,..} if args.is_empty()&&matches!(&**func,Expr::Ident(n) if n.name=="yield_now"))
-                {
-                    None
-                } else {
-                    let Expr::Call { func, .. } = &expression else {
-                        return Err(invalid(
-                            "await of a direct async constructor or yield_now()",
-                            expression.span(),
-                        ));
+                        value: None,
+                        span: *span,
                     };
-                    let Expr::Ident(name) = &**func else {
-                        return Err(invalid(
-                            "direct named async child constructor",
-                            expression.span(),
-                        ));
-                    };
-                    let child = self.tasks.get(&name.name).cloned().ok_or_else(|| {
-                        invalid(
-                            "await of an async function; synchronous calls are not futures",
-                            expression.span(),
-                        )
-                    })?;
-                    let hidden = self.fresh("child");
-                    let index = self.slot(
-                        hidden,
-                        Type::Owned {
-                            inner: Box::new(Type::Named(child.frame.clone(), expression.span())),
-                            ownership: Ownership::Own,
-                            span: expression.span(),
+                    id = self.suspend(&binding, awaited.clone(), live, id)?;
+                    live.pop();
+                    self.segments[id].statements.push(Stmt::Semi(Expr::Binary {
+                        left: left.clone(),
+                        op: BinOp::Assign,
+                        right: Box::new(Expr::Ident(temp)),
+                        span: *span,
+                    }));
+                    continue;
+                }
+            }
+            if let Some((again, after)) = loops {
+                if matches!(stmt, Stmt::Break { .. } | Stmt::Continue { .. }) {
+                    self.jump(
+                        id,
+                        if matches!(stmt, Stmt::Break { .. }) {
+                            after
+                        } else {
+                            again
                         },
-                        true,
-                    )?;
-                    Some((child, index))
-                };
-                if self.segments.len() >= 64 {
-                    return Err(invalid(
-                        "at most 64 suspension points per concrete async function",
-                        expression.span(),
-                    ));
+                    );
+                    flows = false;
+                    id = self.new_segment(live);
+                    continue;
                 }
-                self.segments.push(Segment {
-                    statements: std::mem::take(&mut statements),
-                    incoming,
-                    outgoing: active.clone(),
-                    boundary: Some(Boundary {
-                        expression,
-                        output,
-                        child,
-                    }),
-                });
-                if let Some(index) = output {
-                    active.push(index);
-                }
-                incoming = active.clone();
-            } else {
-                if let Stmt::Let {
-                    name,
-                    ty,
-                    value,
-                    mutable,
-                    span,
-                } = &stmt
-                {
-                    if ty.is_none() || value.is_none() {
-                        return Err(invalid(
-                            "initialized, explicitly typed top-level async locals",
-                            *span,
-                        ));
+            }
+            if let Stmt::Expr(e) | Stmt::Semi(e) = &stmt {
+                let tail = terminal && n + 1 == count && matches!(stmt, Stmt::Expr(_));
+                if nested_await(e)? || loops.is_some() {
+                    match e {
+                        Expr::If {
+                            cond,
+                            then_block,
+                            else_block,
+                            ..
+                        } => {
+                            let mut condition = (**cond).clone();
+                            validate_user_expr(&mut condition, 0)?;
+                            let yes = self.new_segment(live);
+                            let no = self.new_segment(live);
+                            let after = self.new_segment(live);
+                            self.segments[id].outgoing = live.clone();
+                            self.segments[id].exit = Exit::Branch(condition, yes, no);
+                            let y = self.split_statements(
+                                then_block.stmts.clone(),
+                                yes,
+                                &mut live.clone(),
+                                loops,
+                                tail,
+                            )?;
+                            let z = if let Some(other) = else_block {
+                                self.split_statements(
+                                    other.stmts.clone(),
+                                    no,
+                                    &mut live.clone(),
+                                    loops,
+                                    tail,
+                                )?
+                            } else {
+                                Some(no)
+                            };
+                            for arm in [y, z].into_iter().flatten() {
+                                self.jump(arm, after);
+                            }
+                            flows &= y.is_some() || z.is_some();
+                            id = after;
+                            continue;
+                        }
+                        Expr::While { body, .. } | Expr::Loop { body, .. } if nested_await(e)? => {
+                            let cond = self.new_segment(live);
+                            let enter = self.new_segment(live);
+                            let after = self.new_segment(live);
+                            self.jump(id, cond);
+                            if let Expr::While {
+                                cond: expression, ..
+                            } = e
+                            {
+                                let mut test = (**expression).clone();
+                                validate_user_expr(&mut test, 0)?;
+                                self.segments[cond].outgoing = live.clone();
+                                self.segments[cond].exit = Exit::Branch(test, enter, after);
+                            } else {
+                                self.jump(cond, enter);
+                            }
+                            if let Some(last) = self.split_statements(
+                                body.stmts.clone(),
+                                enter,
+                                &mut live.clone(),
+                                Some((cond, after)),
+                                false,
+                            )? {
+                                self.jump(last, cond);
+                            }
+                            id = after;
+                            continue;
+                        }
+                        Expr::Block(body) => {
+                            let after = self.new_segment(live);
+                            if let Some(last) = self.split_statements(
+                                body.stmts.clone(),
+                                id,
+                                &mut live.clone(),
+                                loops,
+                                tail,
+                            )? {
+                                self.jump(last, after);
+                            } else {
+                                flows = false;
+                            }
+                            id = after;
+                            continue;
+                        }
+                        _ => {}
                     }
-                    active.push(self.slot(name.name.clone(), ty.clone().unwrap(), *mutable)?);
                 }
-                statements.push(stmt);
+            }
+            if let Stmt::Let {
+                name,
+                ty,
+                value,
+                mutable,
+                span,
+            } = &stmt
+            {
+                let (Some(ty), Some(_)) = (ty, value) else {
+                    return Err(invalid("initialized, explicitly typed async locals", *span));
+                };
+                live.push(self.slot(live, name.name.clone(), ty.clone(), *mutable)?);
+            }
+            let returns = matches!(stmt, Stmt::Return { .. });
+            if terminal && n + 1 == count && matches!(stmt, Stmt::Expr(_)) {
+                if let Stmt::Expr(value) = stmt {
+                    let span = value.span();
+                    self.segments[id].statements.push(Stmt::Return {
+                        value: Some(value),
+                        span,
+                    });
+                    flows = false;
+                }
+            } else {
+                self.segments[id].statements.push(stmt);
+                if returns {
+                    flows = false;
+                    id = self.new_segment(live);
+                }
             }
         }
-        self.segments.push(Segment {
-            statements,
-            incoming,
-            outgoing: active,
-            boundary: None,
-        });
-        Ok(())
+        if !flows && matches!(self.segments[id].exit, Exit::End) {
+            self.segments[id].exit = Exit::Unreachable;
+        }
+        Ok(flows.then_some(id))
     }
     fn restore(&mut self, index: usize) -> String {
         let s = self.slots[index].clone();
@@ -687,8 +903,9 @@ impl<'a> Builder<'a> {
             for index in segment.incoming {
                 source += &self.restore(index);
             }
-            source += &self.source_chunk(segment.statements, segment.boundary.is_none())?;
-            if let Some(boundary) = segment.boundary {
+            let terminal = matches!(segment.exit, Exit::End);
+            source += &self.source_chunk(segment.statements, terminal)?;
+            if let Exit::Suspend(boundary, next) = segment.exit {
                 if let Some((_, index)) = &boundary.child {
                     let name = self.slots[*index].name.clone();
                     let ty = self.type_name(self.slots[*index].ty.clone());
@@ -718,7 +935,7 @@ impl<'a> Builder<'a> {
                     source += &format!(
                         "unsafe{{{}.phase={};}}return {}::Pending;\n",
                         self.receiver,
-                        (number + 1) * 2,
+                        next * 2,
                         self.task.poll
                     );
                 }
@@ -740,12 +957,8 @@ impl<'a> Builder<'a> {
                             self.receiver, s.field, s.slot
                         );
                     }
-                    let (receiver, child_poll, poll, next) = (
-                        &self.receiver,
-                        &child.poll,
-                        &self.task.poll,
-                        (number + 1) * 2,
-                    );
+                    let (receiver, child_poll, poll, next) =
+                        (&self.receiver, &child.poll, &self.task.poll, next * 2);
                     source += &format!(
                         "unsafe {{ {receiver}.phase = {next}; }}
                          }},
@@ -759,6 +972,35 @@ impl<'a> Builder<'a> {
                     );
                 }
             } else {
+                match segment.exit {
+                    Exit::Branch(mut condition, yes, no) => {
+                        rewrite_expr_returns(&mut condition, self)?;
+                        let test = self.expr_name(condition);
+                        let choice = self.fresh("condition");
+                        source += &format!("let {choice}:bool={test}();\n");
+                        for index in segment.outgoing {
+                            source += &self.persist(index);
+                        }
+                        source += &format!(
+                            "unsafe{{{}.phase=if {choice}{{{}}}else{{{}}};}}continue;\n",
+                            self.receiver,
+                            2 * yes,
+                            2 * no
+                        );
+                    }
+                    Exit::Jump(next) => {
+                        for index in segment.outgoing {
+                            source += &self.persist(index);
+                        }
+                        source +=
+                            &format!("unsafe{{{}.phase={};}}continue;\n", self.receiver, 2 * next);
+                    }
+                    Exit::Unreachable => {
+                        source += &format!("return {}::Finished;\n", self.task.poll);
+                    }
+                    Exit::End => {}
+                    Exit::Suspend(..) => unreachable!(),
+                }
                 source += "}\n";
             }
         }
@@ -824,6 +1066,15 @@ fn rewrite_expr_returns(e: &mut Expr, builder: &mut Builder<'_>) -> Result<()> {
     blocks(e, &mut |b| rewrite_returns(&mut b.stmts, builder))
 }
 
+fn nested_await(e: &Expr) -> Result<bool> {
+    let mut found = false;
+    walk(&mut e.clone(), &mut |expr| {
+        found |= await_value(expr).is_some();
+        Ok(())
+    })?;
+    Ok(found)
+}
+
 fn validate_user_block(block: &mut Block, depth: usize) -> Result<()> {
     for statement in &mut block.stmts {
         if matches!(statement, Stmt::Break { .. } | Stmt::Continue { .. }) && depth == 0 {
@@ -845,7 +1096,10 @@ fn validate_user_block(block: &mut Block, depth: usize) -> Result<()> {
 }
 fn validate_user_expr(e: &mut Expr, depth: usize) -> Result<()> {
     if await_value(e).is_some() {
-        return Err(invalid("await at a top-level async statement or let initializer; nested suspension is not implemented",e.span()));
+        return Err(invalid(
+            "await in statement position, a local initializer or a direct local assignment",
+            e.span(),
+        ));
     }
     if matches!(e, Expr::Try { .. }) {
         return Err(invalid("explicit Result match/return in async functions; async '?' propagation is not implemented",e.span()));

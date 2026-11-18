@@ -19,9 +19,9 @@ sh install.sh --package . --prefix "$HOME/.aetherlang" --manifest-sha256 "$MANIF
 Set `MANIFEST_SHA256` to the digest listed for that platform in the release
 notes. Building programs requires Clang. The macOS Rust seed also requires
 LLVM 21.1. The packaged Aether-written compiler and JXZ target macOS 27.0
-or newer. The Linux archive includes its LLVM shared library and was tested
-on CachyOS with libxml2.so.16 and ICU 78. Build from source for systems
-with different library versions. Windows ships
+or newer. The x86-64 and ARM64 GNU/Linux archives include the LLVM shared library
+used by the Rust seed. The release notes list the glibc requirements and other
+shared-library dependencies for each archive. Windows ships
 the self-hosted compiler and JXZ. Extract the ZIP and run the PowerShell
 validation command in the installation section below.
 
@@ -59,7 +59,7 @@ textual IR emitted by that seed. The stable packages use LLVM 21.
 
 ## Query code from an AI client
 
-The development toolchain includes a local stdio MCP server for project checks,
+The toolchain includes an `aether-mcp --root PROJECT` stdio server for project checks,
 definitions, references and paged symbol search. It accepts both Script and
 Core and uses JXZ to resolve project dependencies. [Configure the server](docs/MCP.md)
 
@@ -129,11 +129,11 @@ Set `MANIFEST_SHA256` to the hash printed by the package command. A POSIX releas
 contains `aethc` (Rust seed), `aethc-native` (Aether), their JXZ executables and
 the standard library. On Linux, `--bundle-linux-llvm` includes the seed's LLVM
 library. The installer verifies file checksums and switches versions atomically.
-macOS arm64 and Linux x86-64 packages have run on their respective hosts.
+Use the archive matching your operating system and CPU architecture.
 The Windows x86-64 bundle runs on Windows 11 with llvm-mingw UCRT Clang.
 Its PowerShell entry verifies the files, compiles another generation of the
-compiler with both backends, and exercises JXZ, the language server and CSV
-statistics. From the extracted bundle run:
+compiler with both backends, and exercises JXZ, the language server, the MCP
+server and CSV statistics. From the extracted bundle run:
 
 ```powershell
 .\Test-Native.ps1 -Clang 'C:\Tools\llvm-mingw\bin\clang.exe' -Python python -WorkDir '.\native-results'

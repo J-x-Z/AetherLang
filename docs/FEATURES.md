@@ -23,7 +23,7 @@
 
 ### 高级语义增量
 
-`451e2f8` 的捕获闭包支持静态调用与组合，`66ccafc` 支持常量泛型。闭世界借用接口 `&dyn` / `&mut dyn` 在 `e08aa2a` 运行时分派，不透明标签与有效载荷留在 Aether 内。`0d06551` 的具体 async 任务持有帧，显式 poll 能得到 Pending、Ready、Finished，取消会释放活跃子任务及资源。当前只支持函数顶层的挂起点，以及非递归、非泛型、无跨挂起借用的帧。带 owner 的局部移动跨越后续挂起点受当前检查限制。运行例与拒绝用例见 `tests/{closure_values,dynamic_values,async_runtime,array_repeat}.py`。
+`451e2f8` 的捕获闭包支持静态调用与组合，`66ccafc` 支持常量泛型。闭世界借用接口 `&dyn` / `&mut dyn` 在 `e08aa2a` 运行时分派，不透明标签与有效载荷留在 Aether 内。`0d06551` 的具体 async 任务持有帧，显式 poll 能得到 Pending、Ready、Finished，取消会释放活跃子任务及资源。0.2.0 支持在语句块、if/else 分支和 while/loop 循环体内挂起。条件按源程序顺序求值，继续或退出循环会清理离开作用域的资源。帧采用非递归、非泛型布局，检查借用不能跨越挂起点。带 owner 的局部移动跨越后续挂起点受当前检查限制。运行例与拒绝用例见 `tests/{closure_values,dynamic_values,async_runtime,array_repeat}.py`。
 
 公开基础库按实际消费者分组。字节、文本、持有键的 Map 使用 `tests/text_map.py`，Vec、Option 和 Result 使用 `tests/{vec_alignment,vec32,generic_runtime}.py`；作用域包装见 `tests/owned_allocations.py`。文件、io、path、fd、process 与二进制接口由 `tests/{runtime_foundation,process_runtime}.py` 和 JXZ 验证；分配器、TOML 子集、标量图见 `tests/legacy_runtime.py`。LLVM/JNI/OpenBLAS 与硬件 SDK 各有宿主或设备依赖，见 `tests/ffi_modules.py` 及升级报告。仓库里的早期生成 `.c`、smoke/test 文件不作为公开标准库接口。
 

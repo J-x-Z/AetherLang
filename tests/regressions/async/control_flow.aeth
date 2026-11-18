@@ -1,0 +1,44 @@
+struct Ticket { id:i32 }
+static mut live:i32=0;
+static mut tests:i32=0;
+static mut branch_tests:i32=0;
+fn ticket(n:i32)->own Ticket { live+=1;unsafe { Ticket{id:n} as own Ticket } }
+@drop fn release(t:own Ticket) { live-=1; }
+fn until(n:i32)->bool {tests+=1;return n<5;}
+fn odd(n:i32)->bool {branch_tests+=1;return (n%2)==1;}
+async fn child(n:i32)->i32 { await yield_now();return n*10; }
+async fn compute(stop:i32)->i32 {
+    let mut i:i32=0;
+    let mut sum:i32=0;
+    while until(i) {
+        i+=1;
+        let guard:own Ticket=ticket(i);
+        if odd(i) {
+            let value:i32=await child(i);
+            sum+=value;
+            if i==stop {break;}
+            continue;
+        } else {
+            await yield_now();
+            sum+=guard.id;
+        }
+    }
+    return sum;
+}
+fn main()->i32 {
+    let mut task:_=compute(3);
+    match task.poll(){Pending()=>{},_=>{return 1;}}
+    if live!=1||tests!=1||branch_tests!=1{return 2;}
+    match task.poll(){Pending()=>{},_=>{return 3;}}
+    if live!=1||tests!=2||branch_tests!=2{return 4;}
+    match task.poll(){Pending()=>{},_=>{return 5;}}
+    if live!=1||tests!=3||branch_tests!=3{return 6;}
+    match task.poll(){Ready(42)=>{},_=>{return 7;}}
+    if live!=0||tests!=3||branch_tests!=3{return 8;}
+    match task.poll(){Finished()=>{},_=>{return 9;}}
+    let mut other:_=compute(0);
+    match other.poll(){Pending()=>{},_=>{return 10;}}
+    other.cancel();
+    if live!=0{return 11;}
+    return 0;
+}

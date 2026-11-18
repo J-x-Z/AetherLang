@@ -1,0 +1,16 @@
+async def child(n: int) -> int:
+    await yield_now()
+    return n * 2
+async def compute(n: int) -> int:
+    i = 0
+    total = 0
+    while i < n:
+        i += 1
+        if i == 2:
+            await yield_now()
+        else:
+            value = await child(i)
+            total += value
+    return total
+def main():
+    return block_on(compute(3)) - 8

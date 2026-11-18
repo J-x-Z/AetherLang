@@ -18,7 +18,7 @@ def run(label,cmd,expected=0,diagnostic=None):
  assert r.returncode==expected,f'{label}: {r.returncode}\n{r.stdout}\n{r.stderr}'
  if diagnostic: assert diagnostic in r.stderr,f'{label}: {r.stderr}'
  return r
-cases=['basic.aeth','combined.aeth','resources.aeth','interleave.aeth','modules.aeth','basic.ath','modules.ath','compositions.ath','aliases.ath']
+cases=['basic.aeth','combined.aeth','resources.aeth','interleave.aeth','modules.aeth','basic.ath','modules.ath','compositions.ath','aliases.ath','control_flow.aeth','control_flow.ath']
 for case in cases:
  run(f'{case}/check',[compiler,'check',root/case,'--sysroot',repo])
  for backend in a.backends:
@@ -37,7 +37,7 @@ negatives={
  'native_export.aeth':('#[no_mangle] async fn exported()->i32{return 7;}fn main(){}','E2406'),
  'generic.aeth':('async fn f<T>(x:T)->T{await yield_now();return x;}fn main(){}','E2406'),
  'recursive.aeth':('async fn f()->i32{let x:i32=await f();return x;}fn main(){}','E2406'),
- 'nested.aeth':('async fn f(){if true{await yield_now();}}fn main(){}','E2406'),
+ 'condition.aeth':('async fn f(){if await yield_now() {}}fn main(){}','E2406'),
  'nested_argument.aeth':('async fn f(x:i32)->i32{return x;}async fn g(){let x:i32=await f(await f(1));}fn main(){}','E2406'),
  'not_future.aeth':('fn f()->i32{1}async fn g()->i32{let x:i32=await f();return x;}fn main(){}','E2406'),
  'uninitialized.aeth':('async fn f(){let x:i32;await yield_now();}fn main(){}','E2406'),
