@@ -6,7 +6,7 @@ pub const PAGE_BYTES:usize = 4096;
 // The caller supplies separate metadata and contiguous, writable page frames.
 // Initialize fresh or quiescent metadata for 1..64 frames. One owner serializes
 // use of the pool. Allocated pages retain their contents.
-#[repr(C)]
+@repr(C)
 pub struct PagePool {
     base:*u8,
     count:u32,
@@ -68,8 +68,8 @@ pub fn kernel_main(base:*u8, pages:u32)->i32 {
         let p:*u8=page_alloc(pool);
         if p!=base+(i as usize)*PAGE_BYTES {return 2;}
         frames[i]=p;
-        p[0]=(i+1) as u8;
-        p[4095]=(16+i) as u8;
+        __volatile_write_u8(p,(i+1) as u8);
+        __volatile_write_u8(p+PAGE_BYTES-1,(16+i) as u8);
         i+=1;
     }
     if page_alloc(pool)!=0 as *u8 {return 3;}
@@ -80,7 +80,7 @@ pub fn kernel_main(base:*u8, pages:u32)->i32 {
     i=0;
     while i<pages {
         let p:*u8=frames[i];
-        if p[0]!=((i+1) as u8) || p[4095]!=((16+i) as u8) {return 7;}
+        if __volatile_read_u8(p)!=((i+1) as u8) || __volatile_read_u8(p+PAGE_BYTES-1)!=((16+i) as u8) {return 7;}
         if !page_release(pool,p) {return 8;}
         i+=1;
     }
