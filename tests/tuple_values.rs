@@ -11,11 +11,11 @@ fn tuple_and_callable_boundaries_share_check_and_build_diagnostics() {
             "fn main(){let pair:(i32,bool)=(1,true);pair.2;}",
             "E2102",
         ),
-        ("closure", "fn main(){|x:i64|->i64{x+1};}", "E2403"),
+        ("closure_function_pointer", "fn main(){let f:fn(i64)->i64=|x:i64|->i64{x+1};}", "E2403"),
         (
             "closure_body",
-            "fn id<T>(value:T)->T{value}fn main(){|x:i64|{id()};}",
-            "E2403",
+            "fn main(){let f:_=|x:i64|->i64{missing+x};}",
+            "E2001",
         ),
         (
             "variadic",

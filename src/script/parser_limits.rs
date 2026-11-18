@@ -36,6 +36,7 @@ impl ParseLimits {
     }
     pub(super) fn expression(&mut self, expr: &Expr) -> Result<(), String> {
         let children = match expr {
+            Expr::Lambda {body,..} => self.depth(body),
             Expr::Unary { expr, .. } => self.depth(expr),
             Expr::Binary { left, right, .. } => self.depth(left).max(self.depth(right)),
             Expr::Call { func, args, .. } => args

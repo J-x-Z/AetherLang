@@ -10,6 +10,8 @@ use super::ast::*;
 type Result<T> = std::result::Result<T, String>;
 #[path = "transpiler_types.rs"]
 mod types;
+#[path="transpiler_closures.rs"]
+mod closures;
 use types::{ScriptType, Dimension};
 
 pub struct Transpiler {
@@ -108,6 +110,7 @@ impl Transpiler {
         }
         while let Some(expr) = expressions.pop() {
             match expr {
+                Expr::Lambda {params,body,..} => {for p in params {self.reserved_names.insert(p.name.clone());}expressions.push(body);},
                 Expr::Identifier { name, .. } => { self.reserved_names.insert(name.clone()); }
                 Expr::Unary { expr, .. } => expressions.push(expr),
                 Expr::Binary { left, right, .. } => { expressions.push(left); expressions.push(right); }
@@ -152,7 +155,11 @@ impl Transpiler {
         let mut copies = Vec::new();
         for param in &function.params {
             let hint = param.type_hint.as_ref().ok_or_else(|| format!("Script parameter '{}' needs a type annotation", param.name))?;
-            let ty = Self::map_type(hint)?;
+            let mut ty = Self::map_type(hint)?;
+            if let ScriptType::Callable {core,..} = &mut ty {
+                let name=self.fresh_name("callback_type");
+                *core=Some(name.clone());generic_parameters.push(name);
+            }
             if self.const_parameters.contains_key(&param.name) || self.locals.insert(param.name.clone(), ty.clone()).is_some() {
                 return Err(format!("duplicate parameter '{}'", param.name));
             }
@@ -160,6 +167,11 @@ impl Transpiler {
             let internal = self.fresh_name("arg");
             parameters.push(format!("{}: {}", internal, ty));
             copies.push(format!("{} = {};", param.name, internal));
+        }
+        if matches!(self.return_type, ScriptType::Callable {..}) {
+            let candidates=function.params.iter().filter_map(|p|self.locals.get(&p.name)).filter(|t|t.same_callable_signature(&self.return_type)).cloned().collect::<Vec<_>>();
+            if candidates.len()!=1 {return Err("a Script Callable return needs exactly one matching Callable parameter to preserve its concrete type".into());}
+            self.return_type=candidates[0].clone();
         }
         let outer_output = std::mem::take(&mut self.output);
         let outer_lines = std::mem::take(&mut self.source_lines);
@@ -174,7 +186,9 @@ impl Transpiler {
         let generics = if generic_parameters.is_empty() {String::new()} else {format!("<{}>",generic_parameters.join(", "))};
         self.line(&format!("fn {}{}({}) -> {} {{", function.name, generics, parameters.join(", "), self.return_type));
         self.indent = 1;
-        for (name, ty) in self.locals.clone() { self.line(&format!("let mut {}: {};", name, ty)); }
+        for (name, ty) in self.locals.clone() {
+            if !ty.anonymous_callable() {self.line(&format!("let mut {}: {};", name, ty));}
+        }
         self.output.push_str(&body);
         self.source_lines.extend(body_lines);
         self.indent = 0;
@@ -224,14 +238,26 @@ impl Transpiler {
                 let value = self.expression(&assignment.value)?;
                 let ty = self.infer_type(&assignment.value)?;
                 if ty == "void" { return Err(format!("cannot assign a void result to '{}'", name)); }
+                let first=!self.locals.contains_key(name);
+                if ty.anonymous_callable() && first {
+                    if self.indent != 1 {return Err("a closure's first Script binding must be at function scope, outside a branch or loop".into());}
+                    self.line(&format!("let mut {}: _ = {};",name,value));
+                } else {
+                    if let Some(previous)=self.locals.get(name) {
+                        if (previous.anonymous_callable() || ty.anonymous_callable()) && previous != &ty {
+                            return Err("a Script closure variable keeps its concrete environment type; assign a copy of the same closure".into());
+                        }
+                    }
+                    self.line(&format!("{} = {};", name, value));
+                }
                 self.locals.entry(name.clone()).or_insert(ty);
                 self.assigned.insert(name.clone());
-                self.line(&format!("{} = {};", name, value));
             }
             Stmt::Expr(expr) => { let value = self.expression(expr)?; self.line(&format!("{};", value)); }
             Stmt::Return(ret) => {
                 if let Some(value) = &ret.value {
                     if self.return_type == "void" { return Err("a Script function returning a value needs a return type annotation".into()); }
+                    self.check_callable_argument(&self.return_type,value)?;
                     let code = self.expression(value)?;
                     // Script int is i64; the native process exit ABI is i32.
                     if self.is_main && self.return_type == "i32" && self.infer_type(value)? == "i64" {
@@ -298,6 +324,7 @@ impl Transpiler {
 
     fn infer_type(&self, expr: &Expr) -> Result<ScriptType> {
         Ok(match expr {
+            Expr::Lambda {params,ret_type,body,span} => self.lambda_parts(params,ret_type.as_ref(),body,*span)?.0,
             Expr::Integer { .. } => "i64".into(), Expr::Float { .. } => "f64".into(),
             Expr::Boolean { .. } => "bool".into(), Expr::String { .. } => "*u8".into(),
             Expr::Identifier { name, .. } => self.locals.get(name).or_else(||self.const_parameters.get(name)).cloned().ok_or_else(|| format!("unknown Script variable '{}'", name))?,
@@ -306,7 +333,8 @@ impl Transpiler {
             Expr::Binary { op: BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::And | BinOp::Or, .. } => "bool".into(),
             Expr::Binary { left, .. } => self.infer_type(left)?,
             Expr::Call { func, args, .. } => {
-                let Expr::Identifier { name, .. } = func.as_ref() else { return Err("Script calls require a named function".into()); };
+                if let Some(result)=self.callable_result(func,args)? {return Ok(result);}
+                let Expr::Identifier { name, .. } = func.as_ref() else { return Err("Script calls require a named function or closure".into()); };
                 if name == "print" { "i32".into() }
                 else if name == "repeat" && !self.functions.contains_key(name) { self.repeat_type(args)? }
                 else { self.call_result_type(name,args)? }
@@ -327,6 +355,7 @@ impl Transpiler {
 
     fn expression(&self, expr: &Expr) -> Result<String> {
         Ok(match expr {
+            Expr::Lambda {params,ret_type,body,span} => self.lambda_parts(params,ret_type.as_ref(),body,*span)?.1,
             Expr::Identifier { name, .. } => {
                 if !self.assigned.contains(name) { return Err(format!("Script variable '{}' may be used before assignment", name)); }
                 name.clone()
@@ -345,7 +374,10 @@ impl Transpiler {
                 format!("({} {} {})", self.expression(left)?, operator, self.expression(right)?)
             }
             Expr::Call { func, args, .. } => {
-                let Expr::Identifier { name, .. } = func.as_ref() else { return Err("Script calls require a named function".into()); };
+                if self.callable_result(func,args)?.is_some() {
+                    return Ok(format!("({})({})",self.expression(func)?,args.iter().map(|arg|self.expression(arg)).collect::<Result<Vec<_>>>()?.join(", ")));
+                }
+                let Expr::Identifier { name, .. } = func.as_ref() else { return Err("Script calls require a named function or closure".into()); };
                 let values = args.iter().map(|arg| self.expression(arg)).collect::<Result<Vec<_>>>()?;
                 if name == "repeat" && !self.functions.contains_key(name) {
                     self.repeat_type(args)?;
@@ -363,6 +395,7 @@ impl Transpiler {
                     }
                 } else {
                     if !self.functions.contains_key(name) { return Err(format!("unknown Script function '{}'", name)); }
+                    self.check_named_callbacks(name,args)?;
                     format!("{}({})", name, values.join(", "))
                 }
             }

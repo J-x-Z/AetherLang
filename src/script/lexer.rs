@@ -254,6 +254,7 @@ impl Lexer {
 
         let kind = match text.as_str() {
             "def" => TokenKind::Def,
+            "lambda" => TokenKind::Lambda,
             "return" => TokenKind::Return,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,

@@ -272,3 +272,15 @@ Repeating shared references preserves lifetime checking. More than one copy of
 an exclusive reference, including a reference inside a record or enum, is
 rejected; affine owners remain excluded from array storage. Script exposes this
 operation as `repeat(value, count)`, with the same evaluation and copy semantics.
+
+### Captured closures (Core)
+
+Typed `|x: i64| expression` and `|| expression` now produce concrete, inline environment values. Local captures are evaluated once and copied or moved into fields; a captured ordinary scalar is a snapshot, not an implicit reference to the original variable. Capture an explicit `&T` or `&mut T` variable when borrowing is intended. Global names are looked up at invocation.
+
+Use `let f: _ = |x: i64| base + x;` for the unnamed concrete type, and generic parameters such as `fn apply<F>(f: &F, x: i64) -> i64 { f(x) }` for callbacks. `_` is only inferred for closure-containing values; this does not enable general Core type inference. Closures can be copied when their fields can be copied, passed and returned through generics, stored in generic records, and returned by other closures. Captured exclusive references retain their move and lifetime rules. Owned resources in environments remain rejected until aggregate ownership is supported.
+
+A closure that changes its captured state needs a mutable binding and is invoked through an exclusive environment borrow. Read-only calls borrow the environment immutably. Existing reference and effect checking applies to generated bodies, including indirect environment reads and writes; hidden IO or escaping local references are rejected. Parameters remain explicitly typed. Add a return annotation when the body cannot determine its result (for example, an explicit `return` without a tail value).
+
+The concrete environment has no implicit heap allocation and no C ABI function-pointer conversion. Use generic callbacks for these closures; function-pointer annotations still receive a diagnostic. Named functions returning an unnamed closure must expose an appropriate concrete/generic interface; opaque return syntax is not introduced by this change.
+
+Script exposes the same values as `lambda (x: int) -> int: base + x` (the return annotation is optional). `Callable[int,int]` means one integer argument and an integer result; the last type is the result, so `Callable[int]` takes no arguments. A named Script function's `Callable` parameter becomes a Core generic parameter, and a matching return annotation can preserve the one corresponding callback parameter's concrete type. Closure copies, nested lambdas and fixed arrays use the same Core representation. The first binding of an anonymous closure value must occur at function scope, outside branches/loops; reassignment must retain the same concrete environment type. These restrictions preserve Script's existing definite-assignment and function-scoped local rules without introducing dynamic closures or uninitialized anonymous types.

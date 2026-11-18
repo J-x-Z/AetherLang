@@ -84,6 +84,7 @@ pub struct AssignStmt {
 
 #[derive(Debug, Clone)]
 pub enum Expr {
+    Lambda {params:Vec<Param>,ret_type:Option<TypeHint>,body:Box<Expr>,span:Span},
     Identifier { name: String, span: Span },
     Integer { value: i64, span: Span },
     Boolean { value: bool, span: Span },
@@ -113,7 +114,7 @@ impl Expr {
             Self::Identifier { span, .. } | Self::Integer { span, .. } | Self::Boolean { span, .. }
             | Self::Unary { span, .. } | Self::Float { span, .. } | Self::String { span, .. }
             | Self::Binary { span, .. } | Self::Call { span, .. } | Self::FieldAccess { span, .. }
-            | Self::List { span, .. } | Self::Index {span,..} => *span,
+            | Self::Lambda {span,..} | Self::List { span, .. } | Self::Index {span,..} => *span,
         }
     }
 }

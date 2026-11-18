@@ -11,6 +11,9 @@ use std::collections::{HashMap, HashSet};
 mod constants;
 #[path = "specialize_drop.rs"]
 mod drop_templates;
+#[path = "specialize_closures.rs"]
+mod closures;
+use closures::ClosureInfo;
 use constants::*;
 use crate::types::PointerWidth;
 
@@ -47,6 +50,13 @@ struct Specializer {
     expansion_depth: usize,
     pointer_width: PointerWidth,
     constant_defs: HashMap<String, ConstDef>,
+    closures: HashMap<String, ClosureInfo>,
+    local_names: HashSet<String>,
+    module_owners: HashMap<Span, usize>,
+    current_owner: usize,
+    closure_impl_type: Option<Type>,
+    closure_method_modes: HashMap<(String, String), bool>,
+    closure_method_signatures: HashMap<(String, String), Signature>,
 }
 
 impl Specializer {
@@ -70,6 +80,13 @@ impl Specializer {
             expansion_depth: 0,
             pointer_width,
             constant_defs: HashMap::new(),
+            closures: HashMap::new(),
+            local_names: HashSet::new(),
+            module_owners: program.module_owners.clone(),
+            current_owner: 0,
+            closure_impl_type: None,
+            closure_method_signatures: program.items.iter().filter_map(|item| match item {Item::Impl(d)=>Some(d),_=>None}).flat_map(|d| d.methods.iter().map(|f| ((d.target.name.clone(),f.name.name.clone()),Signature {params:f.params.iter().map(|p|p.ty.clone()).collect(),ret:f.ret_type.clone().unwrap_or(Type::Unit(f.span))}))).collect(),
+            closure_method_modes: program.items.iter().filter_map(|item| match item { Item::Impl(d) => Some(d), _ => None }).flat_map(|d| d.methods.iter().map(|f| ((d.target.name.clone(), f.name.name.clone()), matches!(f.params.first().map(|p| &p.ty), Some(Type::Ref {mutable:true,..}))))).collect(),
         };
         let mut definitions = HashSet::new();
         for item in &program.items {
@@ -266,9 +283,11 @@ impl Specializer {
             match &mut item {
                 Item::Function(f) => self.function_body(f)?,
                 Item::Impl(d) => {
+                    self.closure_impl_type = Some(named(&d.target.name, d.target.span));
                     for f in &mut d.methods {
                         self.function_body(f)?;
                     }
+                    self.closure_impl_type = None;
                 }
                 Item::Const(d) => {
                     self.locals = self.globals.clone();
@@ -288,7 +307,7 @@ impl Specializer {
         Ok(Program {
             items: self.output,
             inner_attrs: program.inner_attrs,
-            module_owners: program.module_owners,
+            module_owners: self.module_owners,
             foreign_uses: program.foreign_uses,
         })
     }
@@ -311,15 +330,20 @@ impl Specializer {
     }
 
     fn function_body(&mut self, f: &mut Function) -> Result<()> {
+        self.current_owner = self.module_owners.get(&f.span).copied().unwrap_or(0);
+        self.local_names.clear();
         self.bindings = self
             .function_bindings
             .get(&f.name.name)
             .cloned()
             .unwrap_or_default();
+        if let Some(ty) = &self.closure_impl_type {self.bindings.insert("Self".into(),ty.clone());}
         self.locals = self.globals.clone();
         for p in &f.params {
             self.reject_const_shadow(&p.name)?;
-            self.locals.insert(p.name.name.clone(), p.ty.clone());
+            let ty=self.ty(&p.ty, &self.bindings.clone())?;
+            self.locals.insert(p.name.name.clone(), ty);
+            self.local_names.insert(p.name.name.clone());
         }
         self.return_type = Some(f.ret_type.clone().unwrap_or(Type::Unit(f.span)));
         let expected = self.return_type.clone();
@@ -561,6 +585,7 @@ impl Specializer {
 
     fn block(&mut self, block: &mut Block, expected: Option<&Type>) -> Result<Option<Type>> {
         let saved = self.locals.clone();
+        let saved_names = self.local_names.clone();
         let mut result = Some(Type::Unit(block.span));
         let count = block.stmts.len();
         for (index, stmt) in block.stmts.iter_mut().enumerate() {
@@ -569,16 +594,23 @@ impl Specializer {
                     name, ty, value, ..
                 } => {
                     self.reject_const_shadow(name)?;
+                    let closure_inference = matches!(ty, Some(Type::Infer(_)));
                     if let Some(t) = ty {
-                        *t = self.ty(t, &self.bindings.clone())?;
+                        if !closure_inference { *t = self.ty(t, &self.bindings.clone())?; }
                     }
                     let inferred = if let Some(v) = value {
-                        self.expr(v, ty.as_ref())?
+                        self.expr(v, if closure_inference { None } else { ty.as_ref() })?
                     } else {
                         None
                     };
+                    if closure_inference {
+                        if let Some(t) = inferred.as_ref().filter(|t| self.contains_closure(t)) {
+                            *ty = Some(t.clone());
+                        }
+                    }
                     if let Some(t) = ty.clone().or(inferred) {
                         self.locals.insert(name.name.clone(), t);
+                        self.local_names.insert(name.name.clone());
                     }
                     result = Some(Type::Unit(name.span));
                 }
@@ -600,11 +632,15 @@ impl Specializer {
             }
         }
         self.locals = saved;
+        self.local_names = saved_names;
         Ok(result)
     }
 
     fn expr(&mut self, expr: &mut Expr, expected: Option<&Type>) -> Result<Option<Type>> {
         let span = expr.span();
+        if matches!(expr, Expr::Closure {..}) {
+            return self.lower_closure(expr, expected);
+        }
         if let Expr::Ident(id) = expr {
             if let Some(value) = self.bindings.constants.get(&id.name) {
                 let ty = value.ty.clone();
@@ -657,6 +693,9 @@ impl Specializer {
                 }))
             }
             Expr::Path { segments, .. } => {
+                if let Some(first) = segments.first_mut() {
+                    if first.name == "Self" {if let Some(Type::Named(name,_))=self.bindings.get("Self") {first.name=name.clone();}}
+                }
                 if segments.len() == 2 && self.enums.contains_key(&segments[0].name) {
                     let (ty, _) = self.enum_constructor(segments, &mut [], expected, span)?;
                     Ok(Some(ty))
@@ -666,6 +705,9 @@ impl Specializer {
             }
             Expr::Call { func, args, .. } => {
                 if let Expr::Path { segments, .. } = func.as_mut() {
+                    if let Some(first) = segments.first_mut() {
+                        if first.name == "Self" {if let Some(Type::Named(name,_))=self.bindings.get("Self") {first.name=name.clone();}}
+                    }
                     if segments.len() == 2 && self.enums.contains_key(&segments[0].name) {
                         return self
                             .enum_constructor(segments, args, expected, span)
@@ -701,6 +743,9 @@ impl Specializer {
                     }
                 }
                 let callable = self.expr(func, None)?;
+                if let Some(info) = callable.as_ref().and_then(|t| self.closure_info(t)).cloned() {
+                    return self.lower_closure_call(expr, &info, callable.as_ref().unwrap());
+                }
                 let signature = match callable {
                     Some(Type::Function { params, ret, .. }) => {
                         Some(Signature { params, ret: *ret })
@@ -805,9 +850,11 @@ impl Specializer {
             Expr::Match { expr, arms, .. } => {
                 let source = self.expr(expr, None)?;
                 let saved = self.locals.clone();
+                let saved_names = self.local_names.clone();
                 let mut result = expected.cloned();
                 for arm in arms {
                     self.locals = saved.clone();
+                    self.local_names = saved_names.clone();
                     self.pattern(&mut arm.pattern, source.as_ref())?;
                     if let Some(guard) = &mut arm.guard {
                         self.expr(guard, Some(&named("bool", span)))?;
@@ -818,9 +865,11 @@ impl Specializer {
                     }
                 }
                 self.locals = saved;
+                self.local_names = saved_names;
                 Ok(result)
             }
             Expr::StructLit { name, fields, .. } => {
+                if name.name == "Self" {if let Some(Type::Named(actual,_))=self.bindings.get("Self") {name.name=actual.clone();}}
                 let Some(template) = self.structs.get(&name.name).cloned() else {
                     for (_, value) in fields {
                         self.expr(value, None)?;
@@ -939,9 +988,12 @@ impl Specializer {
                 self.reject_const_shadow(var)?;
                 self.expr(iter, None)?;
                 let saved = self.locals.clone();
+                let saved_names = self.local_names.clone();
                 self.locals.insert(var.name.clone(), named("i64", var.span));
+                self.local_names.insert(var.name.clone());
                 self.block(body, None)?;
                 self.locals = saved;
+                self.local_names = saved_names;
                 Ok(Some(Type::Unit(span)))
             }
             Expr::Range { start, end, .. } => {
@@ -960,12 +1012,20 @@ impl Specializer {
                         .and_then(|v| v.into_iter().next())
                 }))
             }
-            Expr::MethodCall { expr, args, .. } => {
-                self.expr(expr, None)?;
-                for arg in args {
-                    self.expr(arg, None)?;
+            Expr::MethodCall { expr: receiver, method, args, .. } => {
+                let source = self.expr(receiver, None)?;
+                if let Some(field) = source.as_ref().and_then(|ty| self.field_type(ty, &method.name)) {
+                    if let Some(info) = self.closure_info(&field).cloned() {
+                        let call = Expr::Call {func:Box::new(Expr::Field {expr:receiver.clone(),field:method.clone(),span}),args:std::mem::take(args),span};
+                        *expr = call;
+                        return self.lower_closure_call(expr, &info, &field);
+                    }
                 }
-                Ok(None)
+                let signature = source.as_ref().and_then(|ty| self.known_closure_method(ty, method));
+                for (index,arg) in args.iter_mut().enumerate() {
+                    self.expr(arg, signature.as_ref().and_then(|s|s.params.get(index+1)))?;
+                }
+                Ok(signature.map(|s|s.ret))
             }
             Expr::Asm { operands, .. } => {
                 for operand in operands {
@@ -1137,6 +1197,7 @@ impl Specializer {
                 self.reject_const_shadow(name)?;
                 if let Some(t) = source {
                     self.locals.insert(name.name.clone(), t.clone());
+                    self.local_names.insert(name.name.clone());
                 }
             }
             Pattern::Variant {

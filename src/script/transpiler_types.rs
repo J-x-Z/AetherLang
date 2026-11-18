@@ -18,6 +18,7 @@ impl fmt::Display for Dimension {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ScriptType {
+    Callable {params:Vec<ScriptType>,result:Box<ScriptType>,identity:String,core:Option<String>},
     Scalar(String),
     Array(Box<ScriptType>, Dimension),
 }
@@ -39,6 +40,7 @@ impl PartialEq<&str> for ScriptType {
 impl fmt::Display for ScriptType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Callable {core,..} => write!(f,"{}",core.as_deref().unwrap_or("_")),
             Self::Scalar(n) => write!(f, "{n}"),
             Self::Array(element, length) => write!(f, "[{element}; {length}]"),
         }
@@ -47,6 +49,7 @@ impl fmt::Display for ScriptType {
 impl ScriptType {
     pub fn as_str(&self) -> &str {
         match self {
+            Self::Callable {..} => "Callable",
             Self::Scalar(name) => name,
             Self::Array(..) => "Array",
         }
@@ -74,7 +77,7 @@ impl ScriptType {
     }
     fn substitute(&self, bindings: &HashMap<String, Dimension>) -> Result<Self> {
         Ok(match self {
-            Self::Scalar(_) => self.clone(),
+            Self::Scalar(_) | Self::Callable {..} => self.clone(),
             Self::Array(element, length) => Self::Array(
                 Box::new(element.substitute(bindings)?),
                 match length {
@@ -102,6 +105,11 @@ impl ScriptType {
 }
 impl Transpiler {
     pub(super) fn map_type(hint: &TypeHint) -> Result<ScriptType> {
+        if hint.name=="Callable" && !hint.generics.is_empty() {
+            let mut types=hint.generics.iter().map(Self::map_type).collect::<Result<Vec<_>>>()?;
+            let result=Box::new(types.pop().unwrap());
+            return Ok(ScriptType::Callable{params:types,result,identity:format!("signature_{}",hint.span.start),core:None});
+        }
         if hint.name == "Array" && hint.generics.len() == 2 && hint.const_value.is_none() {
             let element = Self::map_type(&hint.generics[0])?;
             let dimension = &hint.generics[1];
@@ -174,6 +182,11 @@ impl Transpiler {
             .functions
             .get(name)
             .expect("registered Script signature");
+        if matches!(result, ScriptType::Callable {..}) {
+            let candidates=function.params.iter().enumerate().filter_map(|(i,p)|p.type_hint.as_ref().and_then(|h|Self::map_type(h).ok()).filter(|t|t.same_callable_signature(result)).map(|_|i)).collect::<Vec<_>>();
+            if candidates.len()!=1 {return Err("a Callable return requires one matching callback parameter".into());}
+            return self.infer_type(args.get(candidates[0]).ok_or("missing returned callback argument")?);
+        }
         if function.const_params.is_empty() {
             return Ok(result.clone());
         }

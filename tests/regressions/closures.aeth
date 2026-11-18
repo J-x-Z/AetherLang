@@ -1,0 +1,62 @@
+struct Holder<F> { callable: F }
+struct Counter { value:i64 }
+impl Counter {
+    fn read(self:&Self)->i64 { self.value }
+    fn add(self:&mut Self, delta:i64)->i64 { self.value = self.value + delta; self.value }
+}
+fn apply<F>(f:&F, value:i64)->i64 { f(value) }
+fn apply_mut<F>(f:&mut F, value:i64)->i64 { f(value) }
+fn relay<F>(value:F)->F { value }
+static mut GLOBAL:i64=4;
+fn main()->i32 {
+    let mut base:i64=7;
+    let add:_=|x:i64|->i64 {base+x};
+    base=99;
+    if add(5)!=12 {return 1;}
+    if apply(&add,2)!=9 {return 2;}
+    let moved:_=relay(add);
+    if moved(3)!=10 {return 3;}
+    let mut counter:_=|x:i64|->i64 {base=base+x;base};
+    if counter(2)!=101 {return 4;}
+    if apply_mut(&mut counter,3)!=104 {return 5;}
+    if base!=99 {return 6;}
+    let nested:_=|x:i64|->i64 {let inner:_=|y:i64|->i64{base+x+y};inner(2)};
+    if nested(3)!=104 {return 7;}
+    let factory:_=|x:i64| { |y:i64|base+x+y };
+    let result:_=factory(2);
+    if result(5)!=106 {return 8;}
+    if factory(2)(5)!=106 {return 9;}
+    if (|x:i64|base+x)(3)!=102 {return 10;}
+    let source:Counter=Counter{value:3};
+    let read:_=||source.read();
+    if read()!=3 {return 11;}
+    let mut change:_=||source.add(2);
+    if change()!=5 {return 12;}
+    let holder:_=Holder{callable:|x:i64|base+x};
+    if holder.callable(1)!=100 {return 13;}
+    let value:i64=8;
+    let borrowed:&i64=&value;
+    let borrow:_=||->i64{*borrowed};
+    if borrow()!=8 {return 14;}
+    let mut other:i64=10;
+    let exclusive:&mut i64=&mut other;
+    let mut mutate:_=||->i64{*exclusive=*exclusive+2;*exclusive};
+    if mutate()!=12 {return 15;}
+    let mut outer:_=||->i64{mutate()};
+    if outer()!=14 {return 16;}
+    let local:i64=6;
+    let shadow:_=|local:i64|->i64{{let local:i64=local+1;local}};
+    if shadow(8)!=9 {return 17;}
+    let global:_=||->i64{GLOBAL};
+    GLOBAL=11;
+    if global()!=11 {return 18;}
+    {
+        let GLOBAL:i64=100;
+        let shadow_global:_=||->i64{GLOBAL};
+        if shadow_global()!=100 {return 19;}
+    }
+    let make_counter:_=|| { ||->i64{base=base+1;base} };
+    let mut isolated:_=make_counter();
+    if isolated()!=100 {return 20;}
+    return 0;
+}

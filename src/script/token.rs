@@ -8,6 +8,7 @@ pub enum TokenKind {
 
     // Keywords
     Def,
+    Lambda,
     Return,
     If,
     Else,

@@ -1,0 +1,38 @@
+def apply(f: Callable[int,int], value: int) -> int:
+    return f(value)
+
+def relay(f: Callable[int,int]) -> Callable[int,int]:
+    return f
+
+def ignores(f: Callable[int,int]) -> int:
+    return 0
+
+def main():
+    base = 7
+    add = lambda (x: int) -> int: base + x
+    base = 99
+    if add(3) != 10:
+        return 1
+    if apply(add, 5) != 12:
+        return 2
+    copy = relay(add)
+    if copy(2) != 9:
+        return 3
+    callbacks = repeat(add, 3)
+    if callbacks[1](4) != 11:
+        return 4
+    factory = lambda (x: int): lambda (y: int): base + x + y
+    nested = factory(2)
+    if nested(4) != 105:
+        return 5
+    if factory(3)(5) != 107:
+        return 6
+    zero = lambda (): 31
+    if zero() != 31:
+        return 7
+    if (lambda (x: int): x * 2)(7) != 14:
+        return 8
+    if ignores(add) != 0 or ignores(lambda (other: int): other + 9) != 0:
+        return 9
+    print("script closures ok")
+    return 0

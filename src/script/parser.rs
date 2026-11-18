@@ -498,6 +498,18 @@ impl Parser {
     fn parse_primary_inner(&mut self) -> Result<Expr, String> {
         let t = self.peek().clone();
         match t.kind {
+            TokenKind::Lambda => {
+                self.advance();
+                self.consume(TokenKind::LParen,"lambda requires typed parameters in parentheses")?;
+                let params=self.parse_params()?;
+                self.consume(TokenKind::RParen,"Expected ')' after lambda parameters")?;
+                if params.iter().any(|p|p.type_hint.is_none()) {return Err("lambda parameters need explicit type annotations".into());}
+                let ret_type=if self.match_kind(TokenKind::Arrow) {Some(self.parse_type_hint()?)}else{None};
+                self.consume(TokenKind::Colon,"Expected ':' before lambda expression")?;
+                let body=self.parse_expr()?;
+                let mut span=t.span;span.end=body.span().end;
+                Ok(Expr::Lambda {params,ret_type,body:Box::new(body),span})
+            }
             TokenKind::Identifier(s) => {
                 self.advance();
                 Ok(Expr::Identifier { name: s, span: t.span })
@@ -551,7 +563,7 @@ impl Expr {
             Expr::Binary { span, .. } => *span,
             Expr::Call { span, .. } => *span,
             Expr::FieldAccess { span, .. } => *span,
-            Expr::List { span, .. } | Expr::Index {span,..} => *span,
+            Expr::Lambda {span,..} | Expr::List { span, .. } | Expr::Index {span,..} => *span,
         }
     }
 }

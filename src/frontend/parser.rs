@@ -733,6 +733,7 @@ impl Parser {
         // Named type or Generic type
         if let TokenKind::Ident(name) = self.current_kind().clone() {
             self.advance();
+            if name == "_" { return Ok(Type::Infer(start)); }
             let mut ty_name = name;
             while self.consume(&TokenKind::ColonColon) {
                 ty_name.push_str("::");
@@ -1375,12 +1376,13 @@ impl Parser {
             }
 
             // Closure: |x, y| expr or |x: T| -> T expr
-            TokenKind::Or => {
-                self.advance(); // consume |
+            TokenKind::Or | TokenKind::OrOr => {
+                let empty = matches!(token.kind, TokenKind::OrOr);
+                self.advance(); // consume | or ||
                 let mut params = Vec::new();
                 
                 // Parse parameters: |x: T, y: T| - types are REQUIRED (P5.1)
-                while !self.check(&TokenKind::Or) && !self.is_at_end() {
+                while !empty && !self.check(&TokenKind::Or) && !self.is_at_end() {
                     let name = self.parse_ident()?;
                     // P5.1: Closure parameters MUST have explicit types
                     let ty = if self.consume(&TokenKind::Colon) {
@@ -1396,7 +1398,7 @@ impl Parser {
                         break;
                     }
                 }
-                self.expect(TokenKind::Or)?; // closing |
+                if !empty { self.expect(TokenKind::Or)?; } // closing |
                 
                 // Optional return type: -> T
                 let ret_type = if self.consume(&TokenKind::Arrow) {
