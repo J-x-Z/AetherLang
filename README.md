@@ -1,177 +1,97 @@
 # AetherLang
 
-AetherLang is an independent language project with two source forms: `.ath`
-prioritizes human readability; `.aeth` uses explicit types and exposes pointers,
-layout and foreign interfaces. Both compile through the same checked pipeline.
-The maintained compiler is written in Rust. LLVM is the primary native backend;
-a C backend provides a portable fallback and an independent semantic comparison.
-
-### Install a local release
-
-A release directory contains a matched compiler, JXZ, standard library and
-`manifest.json`. With Python 3 on macOS or Linux, install or switch versions
-at a dedicated prefix:
-
-```sh
-sh install.sh --package "$PACKAGE" --prefix "$PREFIX" --manifest-sha256 "$MANIFEST_SHA256"
-export PATH="$PREFIX/bin:$PATH"
-```
-
-Each installation checks every listed file and the host platform before switching
-`bin` atomically. Reinstall the prior package to roll back. The old installer
-downloaded the historical `0.1.0-alpha` files individually. This local workflow
-takes the release directory and its receipt explicitly.
+AetherLang compiles typed programs to native executables through LLVM or C.
+Use `.ath` for indentation-based Script and `.aeth` for explicit Core. Core
+provides control over memory layout, ownership and C interfaces. JXZ builds
+multi-package projects, runs programs and discovers tests.
 
 ## Build and run
 
-Use Rust 1.100.0, a native C compiler/linker, and LLVM 21 for the primary backend.
-Set `LLVM_SYS_211_PREFIX` if LLVM 21 is not discoverable. The build script detects
-Homebrew LLVM 21. LLVM builds prefer the shared library, which must remain
-available when running `aethc`.
+On macOS or Linux, install the pinned Rust toolchain and Clang. The Rust LLVM
+backend uses LLVM 21. Set `LLVM_SYS_211_PREFIX` if needed. `CARGO_TARGET_DIR`
+and `TMPDIR` can point to an external volume.
 
 ```sh
-scripts/build.sh llvm
-"${CARGO_TARGET_DIR:-target}/release/aethc" build examples/upgrade/compute.aeth -O2 -o ./compute
-./compute
+sh scripts/build.sh llvm
+build="${CARGO_TARGET_DIR:-target}"
+seed="$build/release/aethc"
+python3 scripts/build_selfhost.py --seed "$seed" --work-dir "$build/selfhost" --output "$build/aethc-native"
 
-# C-only fallback, without an LLVM dependency:
-scripts/build.sh c
-"${CARGO_TARGET_DIR:-target}/release/aethc" build examples/upgrade/compute.aeth --backend c -O2 -o ./compute
+"$build/aethc-native" build tests/regressions/script/compute.ath --sysroot . -O2 -o "$build/squares"
+"$build/squares"
+# 338350
+# 25
 ```
 
-`CARGO_TARGET_DIR` and `TMPDIR` can point to an external work volume. The scripts
-reuse installed toolchains and caches and default to three Cargo build jobs.
-The Cargo lockfile and Rust version are committed.
+The self-hosted compiler is written in Aether. This build checks that two
+consecutive generations emit byte-identical C and byte-identical LLVM IR for
+the full compiler entry. Clang compiles or assembles the output and the host
+linker produces the executable. The Rust compiler also supplies cross-target,
+inline assembly, atomic and vector facilities. Build a C-only seed with
+`sh scripts/build.sh c`. [Capabilities](docs/FEATURES.md) · [Bootstrap](docs/BOOTSTRAP.md)
 
-```aether
-// example.aeth
-extern "C" { fn printf(format: *u8, ...) -> i32; }
-fn main() -> i32 {
-    let mut sum: i64 = 0;
-    for i in 0..100 {
-        if i == 50 { continue; }
-        sum = sum + i;
-    }
-    printf("%lld\n\0" as *u8, sum);
-    return 0;
-}
-```
+## Work with data in the terminal
 
-```python
-# example.ath
-def sum_to(n: int) -> int:
-    total = 0
-    for i in range(n):
-        total = total + i
-    return total
-
-def main():
-    print(sum_to(100))
-    return 0
-```
-
-Imports resolve relative to the importing source file, followed by `-I` module
-paths, `AETHER_PATH`, and the bundled standard-library source directory. Imported
-bodies are compiled once; public imports, aliases and private helpers use one
-resolution stage for checking and both backends. Native language definitions
-have private linker names; `main` and explicit `#[no_mangle]` functions retain
-their ABI names.
+The streaming regression example reads a file or stdin, selects two named
+columns and writes a JSON record to stdout.
 
 ```sh
-aethc check example.ath
-aethc build example.ath -O2 -o example
-aethc build example.aeth --backend llvm --emit-obj -o example.o
-aethc example.aeth --emit-c -o example.c
-aethc example.aeth --emit-ir -o example.ir
-aethc example.aeth --emit-llvm -O2 -o example.ll
-aethc check example.ath --error-format json
-aethc symbols example.aeth
-aethc lsp  # stdio JSON-RPC for editors
+"$build/aethc-native" build examples/analysis/regress.aeth --sysroot . -O2 -o "$build/regress"
+printf 'time,value\n1,3\n2,5\n3,7\n' | "$build/regress" - time value
 ```
 
-`check` performs parsing, module resolution and semantic checks. Building also
-validates the supported lowering and target code generation. `--emit-obj` is the
-explicit object-only mode; `build` links an executable. `--cc` or `CC` selects one
-compiler/linker executable. Compiler subprocess failures retain their actual
-diagnostics and exit status.
+This gives three complete pairs, sample covariance 2, slope 2, intercept 1 and
+R² within floating-point rounding of 1. The program handles quoted fields, embedded newlines and missing pairs.
+Malformed records and a constant predictor return an error. An independent
+test checks the floating-point results using exact rational arithmetic. Both
+the parser and statistics routines can be imported into other programs.
+[Analysis source](examples/analysis/regress.aeth) · [Tests](tests/terminal_stats.py)
 
-## Verified workloads and tests
+For MATLAB-style work, the library includes dense tensors, matrix multiplication,
+views, matrix-chain planning and low-rank decomposition. Reverse-mode
+differentiation, finite-difference checks and a gradient-descent workload are
+available. For R- and Python-style batch jobs, native programs handle streaming
+data, statistics, files, subprocesses and exit status. Interactive notebooks,
+a general statistical-model library, dataframe interoperability and plotting
+remain gaps for users of those ecosystems. [Numerical API](docs/MATH.md) ·
+[Computational workloads](tests/regressions/compute)
+
+## Systems, quantum simulation and project tools
+
+- **Systems.** Fixed-size values, raw pointers, checked references, `own T`
+  with typed destructors, packed structs, unions and C linkage are exercised in
+  native programs. Foreign aggregate ABI coverage includes Apple arm64 and
+  x86-64 System V. The [persistent accumulator](examples/upgrade/accumulator.aeth)
+  reads commands, writes a journal and closes its resources.
+- **Accelerators.** Aether code owns tensor shapes, budgets, operator scheduling
+  and resource lifetimes. Compute providers have run on CPU, Apple Metal and
+  Vulkan on NVIDIA and Adreno devices. Callers select a device and receive
+  errors for unsupported operations or allocation failures.
+- **Quantum simulation.** An fp64 state-vector reference and an fp32 simulator
+  using the compute queue run Aether circuits. The separate CUDA-Q SDK bridge
+  supports QPP and NVIDIA environments. Metal and Adreno use Aether's own
+  simulator. A 16-qubit workload checks all 65,536 amplitudes, expectations
+  and a parameter-shift gradient. [Quantum API and device results](docs/QUANTUM.md)
+- **Project tools.** JXZ checks, builds, runs and tests projects with local or
+  locked registry dependencies and preserves child failures. The compiler has
+  JSON diagnostics, a symbol index and a stdio language server for unsaved
+  buffers and imports. [JXZ usage](jxz/README.md)
+
+## Reproduce and install
 
 ```sh
-scripts/test.sh llvm  # semantic/CLI regressions, both backends, real workloads
-scripts/test.sh c     # equivalent supported C-only checks
+sh scripts/test.sh llvm
+python3 scripts/package.py --work-dir "$build/package-evidence" --output "$build/local-release"
+sh install.sh --package "$build/local-release" --prefix "$HOME/.aetherlang" --manifest-sha256 "$MANIFEST_SHA256"
 ```
 
-The native suite compares LLVM and C at O0/O2/O3 using semantic assertions,
-including short circuiting, loop exits, typed pointer indexing, aliases,
-structure copies/returns, scalar numeric behavior, foreign calls and strings.
-The real workloads include:
+Set `MANIFEST_SHA256` to the hash printed by the package command. A release
+contains `aethc` (Rust seed), `aethc-native` (Aether), their JXZ executables and
+the standard library. On Linux, `--bundle-linux-llvm` includes the seed's LLVM
+library. The installer verifies file checksums and switches versions atomically.
+macOS arm64 and Linux x86-64 packages have run on their respective hosts.
+Windows x86-64 has a separate PE cross-build and native test entry. Windows
+runtime acceptance is pending. [Upgrade results](docs/UPGRADE.md) ·
+[Engineering handoff](HANDOFF.md)
 
-- `examples/upgrade/compute.aeth`: heap sort, binary search, deterministic PRNG,
-  integer reduction and floating-point computation over allocated storage.
-- `examples/upgrade/accumulator.aeth`: a persistent input service with bounded
-  integer parsing, command errors, state, journal writes and explicit cleanup.
-- `tests/regressions/script/`: `.ath` arithmetic, loops, functions, branching,
-  printing and rejection of invalid or uninitialized programs.
-- JXZ: real project initialization, configuration, building, running with argv,
-  test aggregation and cleanup. See [JXZ usage and limits](jxz/README.md).
-
-## Values, resources and system interfaces
-
-Fixed arrays and structures are values: copies do not alias and returning them
-preserves their storage. The compiler checks definite initialization and tracks
-reference origins, borrows and escapes across branches, calls and aggregate fields.
-Raw pointers remain available for explicit low-level memory and FFI operations.
-
-Type parameters are specialized into concrete functions, structures and enums.
-`Vec<T>`, `Option<T>`, `Result<T,E>`, payload matching and `?` have native runtime
-tests, including zero-sized values and failed allocation or file operations.
-Use the free-function APIs in `stdlib/vec.aeth`, `option.aeth`, and `result.aeth`;
-see [complete running programs](tests/regressions/generics).
-
-The exercised library set covers strings, byte I/O, files, arguments, paths,
-POSIX processes, vectors and result values. Files and allocations are explicitly
-closed/freed, including error paths. Static storage, unions, `size_of(Type)`,
-`align_of(Type)` and `offset_of(Type, field)` use actual target layout. Union
-reads require `unsafe`. Volatile accesses and atomic operations reach native
-instructions in both backends; atomic order arguments are checked constants.
-Default atomics are sequentially consistent. Raw atomic pointers must address
-live, naturally aligned storage with compatible concurrent access.
-
-`stdlib/mmio.aeth` provides portable volatile accesses and fences. Privileged
-x86 port instructions are isolated in `stdlib/x86io.aeth`; compiling an object
-for x86 does not mean those instructions can run in an ordinary user process.
-
-The editor server shares compiler diagnostics and symbols, supports unsaved
-buffers/imports, completion, hover, definition and references. JSON diagnostics
-include stable category codes and original UTF-8 source spans; LSP positions use
-UTF-16. Script diagnostics map back to the `.ath` input.
-
-## Current boundaries
-
-The native acceptance platform is macOS on Apple Silicon. CI definitions also
-cover Linux and Windows compiler builds; those jobs are not evidence of a run
-until they actually execute. JXZ and the persistent service currently target
-64-bit POSIX hosts.
-
-Raw pointers and C FFI provide direct control and require manual lifetime/ABI
-care. This release does not claim complete ownership enforcement, automatic
-resource destruction, or a trait/closure ecosystem. Unsupported
-lowering must report an error instead of generating placeholder behavior. Const generics, generic impl methods, traits, closures and async are not
-implemented. Older library modules outside the exercised set remain experimental.
-The LLVM foreign aggregate ABI classifier is currently verified for Apple arm64;
-other targets reject those foreign aggregate calls explicitly. Internal LLVM
-aggregate calls and the C fallback do not share that foreign-ABI restriction.
-
-`src_aether/core/` now contains a complete minimal self-hosting compiler written
-in Aether. It compiles its own lexer, parser, type checker and C emitter through
-four native stages with identical generated C. It intentionally implements a
-specified Core subset; the Rust/LLVM compiler remains the full language compiler.
-See [the reproducible bootstrap chain and subset](docs/BOOTSTRAP.md),
-[the tensor/autodiff API](docs/MATH.md), and [native quantum integration](docs/QUANTUM.md).
-
-See [upgrade results and migration notes](docs/UPGRADE.md) and
-[the current engineering handoff](HANDOFF.md). Older design documents describe
-intent; they are not a claim that every described feature works.
-
-Licensed under Apache-2.0; see [LICENSE](LICENSE).
+AetherLang is distributed under the [Apache License 2.0](LICENSE).
