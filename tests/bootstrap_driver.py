@@ -76,6 +76,28 @@ for backend in ('llvm', 'c'):
     run(backend+'/empty object rejected', [compiler, '--emit-obj','--backend',backend,*mapping,
         '-o',product,'--',src.name],1,env={**env,'CC':str(shutil.which('true'))})
     assert product.read_bytes()==saved
+# Link a deterministic POSIX wait implementation into one compiler generation.
+# Two consecutive interruptions must keep waiting for exactly the original pid.
+wait_source = case/'wait.c'
+wait_source.write_text("""#include <sys/wait.h>
+#include <errno.h>
+pid_t waitpid(pid_t pid, int *status, int flags) {
+    static unsigned attempts;
+    if (flags || pid <= 0) { errno = EINVAL; return -1; }
+    if (attempts++ < 2) { errno = EINTR; return -1; }
+    return wait4(pid, status, 0, 0);
+}
+""")
+wait_obj = case/'wait.o'
+generation = case/'interrupted-driver'
+run('compile interrupted wait implementation',[cc,'-c',wait_source,'-o',wait_obj])
+run('link interrupted compiler generation',[compiler,'build',root/'src_aether/core/main.aeth',
+    '--backend','llvm','--link-object',wait_obj,'-o',generation])
+simple = case/'wait-main.aeth'
+simple.write_text('fn main()->i32{return 23;}')
+wait_result = case/'wait-result'
+run('build after two interruptions',[generation,'build',simple,'-o',wait_result])
+run('child result after two interruptions',[wait_result],23)
 foreign_aggregate=case/'aggregate.aeth'
 foreign_aggregate.write_text('struct P{x:i64} extern "C"{fn consume(p:P)->i32;} fn main()->i32{return 0;}')
 for mode in ('check','build'):

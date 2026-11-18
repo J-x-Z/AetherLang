@@ -46,13 +46,9 @@ fn boot_run_tool(args:**u8)->bool {
   _exit(127);
  }
  let mut status:i32=0;let mut waited:i32=waitpid(child,&mut status as *i32,0);
- while waited<0 {
-  // Probe without sleeping: zero means the child is still waitable. A child
-  // that exited between waits supplies its status here. ECHILD ends the loop.
-  waited=waitpid(child,&mut status as *i32,1);
-  if waited<0 {perror("aether-core: waitpid");return false;}
-  if waited==0 {waited=waitpid(child,&mut status as *i32,0);}
- }
+ // Darwin and Linux both assign EINTR the value 4.
+ while waited<0 && __errno_get()==4 {waited=waitpid(child,&mut status as *i32,0);}
+ if waited<0 {perror("aether-core: waitpid");return false;}
  return waited==child && status==0;
 }
 // Both supported hosts are little-endian, 64-bit Mach-O or ELF. A tool
