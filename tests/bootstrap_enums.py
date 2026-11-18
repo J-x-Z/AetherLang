@@ -42,6 +42,7 @@ local=w/'module';local.mkdir(exist_ok=True)
 cases=[('ranges',root/'tests/regressions/bootstrap/range_values.aeth',b'range-values=ok\n',[]),
        ('values',root/'tests/regressions/bootstrap/enum_values.aeth',b'enum-values=ok\n',[]),
        ('file',root/'tests/regressions/bootstrap/enum_file.aeth',b'enum-file=ok\n',[w/'data.bin',w/'empty.bin',w/'missing.bin']),
+       ('generic-result-projection',root/'tests/regressions/bootstrap/generic_result_projection.aeth',b'',[]),
        ('implicit-public',local/'main.aeth',b'',[])]
 for name,source,expected,arguments in cases:
     run(name+'-check',[compiler,source,'-I',root/'stdlib','--check'])

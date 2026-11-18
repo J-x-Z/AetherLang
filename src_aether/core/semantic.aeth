@@ -782,7 +782,10 @@ fn boot_check_generic_call(ctx:*BootContext,node:*BootNode,function:*BootNode,ex
   if param!=(0 as *BootNode)||arg!=(0 as *BootNode){boot_error(ctx,node.token,"generic function value argument count mismatch");return 0 as *BootNode;}
   pass=pass+1;
  }
- return boot_function_instance(ctx,function,bindings,node.token);
+ let instance:*BootNode=boot_function_instance(ctx,function,bindings,node.token);
+ // Direct match and ? need concrete payload layouts before lowering projections.
+ if ctx.failed || !boot_type_valid(ctx,instance.ty,node.token,true){return 0 as *BootNode;}
+ return instance;
 }
 
 fn boot_contextual_tail(ctx:*BootContext,node:*BootNode)->bool{

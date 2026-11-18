@@ -1,0 +1,18 @@
+enum R<T,E>{Ok(T),Err(E)}
+struct Problem{code:i32}
+fn source(n:i32)->R<*i32,i32>{if n==0{R::Ok(0 as *i32)}else{R::Err(n)}}
+fn convert<T>(value:R<T,i32>)->R<T,Problem>{
+    match value{R::Ok(v)=>R::Ok(v),R::Err(e)=>R::Err(Problem{code:e})}
+}
+fn propagate(n:i32)->R<i32,Problem>{
+    let pointer:*i32=convert(source(n))?;
+    if pointer==0 as *i32{R::Ok(7)}else{R::Ok(0)}
+}
+fn inspect(n:i32)->i32{
+    match convert(source(n)){R::Ok(_)=>0,R::Err(e)=>e.code}
+}
+fn main()->i32{
+    let first:i32=match propagate(0){R::Ok(v)=>v,R::Err(_)=>0};
+    let second:i32=match propagate(11){R::Ok(_)=>0,R::Err(e)=>e.code};
+    if first==7 && second==11 && inspect(4)==4{0}else{1}
+}
