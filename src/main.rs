@@ -285,8 +285,7 @@ fn native_compile(cli: &Cli, target: &EffectiveTarget, input: &Path, output: &Pa
     for compiler in &compilers {
         let mut command = Command::new(compiler);
         command.arg(format!("-O{}", cli.opt_level));
-        if ir.no_std { command.arg("-ffreestanding"); }
-        if ir.functions.iter().any(|function| function.interrupt) { command.arg("-mno-red-zone"); }
+        backend::system_attributes::c_machine_flags(&mut command, &target.triple, ir);
         if target.pass_target { command.arg(format!("--target={}", target.triple)); }
         if let Some(version) = &target.macos_deployment {
             command.arg(format!("-mmacosx-version-min={version}"));

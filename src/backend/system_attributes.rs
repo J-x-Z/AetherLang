@@ -4,6 +4,24 @@ use crate::{
     utils::{Error, Result},
 };
 
+/// An interrupt on the current x86-64 stack may overwrite bytes below RSP
+/// even when the interrupted translation unit defines no handlers of its own.
+pub(crate) fn bare_x86_64(target: &str) -> bool {
+    use target_lexicon::{Architecture, OperatingSystem, Triple};
+    target.parse::<Triple>().is_ok_and(|t|
+        matches!(t.architecture, Architecture::X86_64 | Architecture::X86_64h)
+            && t.operating_system == OperatingSystem::None_)
+}
+
+pub(crate) fn c_machine_flags(command: &mut std::process::Command, target: &str, module: &IRModule) {
+    if module.no_std {
+        command.arg("-ffreestanding");
+    }
+    if bare_x86_64(target) || module.functions.iter().any(|f| f.interrupt) {
+        command.arg("-mno-red-zone");
+    }
+}
+
 /// IRET reads the interrupted context from the incoming stack frame. The LLVM
 /// x86_intrcc and Clang ABIs represent that storage as a byval argument, whose
 /// writes would otherwise look dead on return. Expose the original address to
@@ -91,4 +109,20 @@ pub fn validate(module: &IRModule, target: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bare_x86_64;
+
+    #[test]
+    fn bare_x86_64_stack_convention_follows_the_os_and_architecture() {
+        for target in ["x86_64-unknown-none", "x86_64-unknown-none-elf"] {
+            assert!(bare_x86_64(target), "{target}");
+        }
+        for target in ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-pc-windows-gnu",
+                       "aarch64-unknown-none", "riscv64gc-unknown-none-elf", "native"] {
+            assert!(!bare_x86_64(target), "{target}");
+        }
+    }
 }

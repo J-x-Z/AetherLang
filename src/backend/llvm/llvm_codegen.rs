@@ -170,7 +170,7 @@ impl LLVMCodeGen {
     }
 
     /// Generate LLVM IR for a function
-    fn generate_function(&mut self, func: &IRFunction) -> Result<()> {
+    fn generate_function(&mut self, func: &IRFunction, no_red_zone: bool) -> Result<()> {
         unsafe {
             let abi = self.abi.get(&func.name).cloned().ok_or_else(|| Error::CodeGen("function ABI missing".into()))?;
             let name = CString::new(func.name.as_str()).unwrap();
@@ -221,17 +221,19 @@ impl LLVMCodeGen {
                 };
                 self.parameter_values.push(value);
             }
+            let attribute = |name: &str| {
+                let kind = LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len());
+                if kind != 0 { LLVMAddAttributeAtIndex(llvm_func, u32::MAX, LLVMCreateEnumAttribute(self.context, kind, 0)); }
+            };
+            if no_red_zone || func.interrupt {
+                attribute("noredzone");
+            }
             if func.naked || func.interrupt {
-                let attribute = |name: &str| {
-                    let kind = LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len());
-                    if kind != 0 { LLVMAddAttributeAtIndex(llvm_func, u32::MAX, LLVMCreateEnumAttribute(self.context, kind, 0)); }
-                };
                 attribute("noinline");
                 if func.naked { attribute("naked"); }
                 if func.interrupt {
                     // llvm::CallingConv::X86_INTR, not an optional string attribute.
                     LLVMSetFunctionCallConv(llvm_func, 83);
-                    attribute("noredzone");
                     attribute("noimplicitfloat");
                     let IRType::Ptr(frame) = &func.params[0].1 else { unreachable!("validated interrupt frame") };
                     let byval = LLVMGetEnumAttributeKindForName(b"byval".as_ptr().cast(), 5);
@@ -1183,9 +1185,9 @@ impl LLVMCodeGen {
                 unsafe { LLVMSetLinkage(declared, llvm_sys::LLVMLinkage::LLVMInternalLinkage); }
             }
         }
-        // Generate code for each function
+        let no_red_zone = crate::backend::system_attributes::bare_x86_64(&self.target_triple);
         for func in &module.functions {
-            self.generate_function(func)?;
+            self.generate_function(func, no_red_zone)?;
         }
         
         // Verify
