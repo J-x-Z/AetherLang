@@ -1,5 +1,9 @@
 # AetherLang 集中升级交付
 
+## 两种源表示的高级能力
+
+捕获闭包（`451e2f8`）、常量泛型（`66ccafc`）、运行时接口分派（`e08aa2a`）、协作式任务（`0d06551`）各有通过和拒绝用例。联合题让任务先挂起，再恢复并通过动态接口取得偏移量，用捕获闭包计算样本并实例化固定长度数组。C/LLVM 的 O0/O2/O3 都依次得到 Pending、Ready(36)、Finished。独立复核发现 union 字段隐藏动态接口时能误过外部 ABI 检查，修复后连同别名、结构和枚举一并覆盖。证据在 `WORK/{t25-unified/full,t25-dyn/final7,t25-closures/final7}`。第一版采用静态模块图和显式 poll，任务的挂起位置、帧类型和 C ABI 边界见[能力表](FEATURES.md)。
+
 ## 基础冻结与自举原生项目构建
 
 `f84e9d4` 的干净快照通过 macOS arm64 全套集成。CachyOS x86_64 的同提交包完成搬移、双后端项目运行和依赖验收。Linux 的严格 C11 JIT 编译原先缺少 POSIX 函数原型，搬移后的 JIT 编译器也找不到附带的 LLVM 库；`419be63` 修复两点，真实 Linux 安装包通过含第二编译器和消毒器的 27 项 JIT 检查。`f84e9d4` 修复 LLVM 指针复合赋值按错误步长写回的问题。相同程序在两个后端 O0/O2/O3 得到相同结果。详见 `WORK/{foundation-c36bd04,linux-mainline-20261118,compound-assignment}`。

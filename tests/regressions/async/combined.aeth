@@ -1,0 +1,23 @@
+interface Bias {fn get(self:&Self)->i64;}
+struct Offset{value:i64}
+impl Bias for Offset{fn get(self:&Self)->i64{self.value}}
+fn repeat_value<T,const N:usize>(value:T)->[T;N]{[value;N]}
+fn evaluate(bias:&dyn Bias, x:i64)->i64{
+    let add:_=|sample:i64|->i64{bias.get()+sample};
+    let values:[i64;3]=repeat_value(add(x));
+    values[0]+values[1]+values[2]
+}
+async fn compute(x:i64)->i64{
+    await yield_now();
+    return {
+        let bias:Offset=Offset{value:7};
+        evaluate(&bias as &dyn Bias,x)
+    };
+}
+fn main()->i32{
+    let mut job:_=compute(5);
+    match job.poll(){Pending()=>{},_=>{return 1;}}
+    match job.poll(){Ready(36)=>{},_=>{return 2;}}
+    match job.poll(){Finished()=>{},_=>{return 3;}}
+    return 0;
+}
