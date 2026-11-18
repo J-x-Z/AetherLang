@@ -1,0 +1,36 @@
+use result::Result;
+use quantum::{Circuit,Q_RY,Q_ALLOC,quantum_new,quantum_gate,quantum_free};
+use quantum_template::*;
+extern "C" {fn test_fail_after(count:i64);fn test_live()->i64;}
+fn main()->i32 {
+    let c:*Circuit=match quantum_new(1){Result::Ok(c)=>c,Result::Err(_)=>{return 1;}};
+    if quantum_gate(c,Q_RY,0,0,0.75)!=0 {return 2;}
+    let source_live:i64=test_live();
+    test_fail_after(0);
+    match quantum_template_new(c,1) {
+        Result::Ok(v)=>{let mut held:CircuitTemplate=v;quantum_template_free(&mut held as *CircuitTemplate);return 3;},
+        Result::Err(e)=>{if e!=Q_ALLOC || test_live()!=source_live {return 4;}}
+    }
+    test_fail_after(-1);
+    let mut t:CircuitTemplate=match quantum_template_new(c,1){Result::Ok(t)=>t,Result::Err(_)=>{return 5;}};
+    quantum_free(c);
+    if quantum_template_parameter(&mut t as *CircuitTemplate,0,0)!=0 {return 6;}
+    let owned:i64=test_live();
+    let angle:f64=1.25;
+    let mut budget:i64=0;
+    while budget<=2 {
+        test_fail_after(budget);
+        match quantum_template_bind(&mut t as *CircuitTemplate,&angle as *f64,1) {
+            Result::Err(e)=>{if budget==2 || e!=Q_ALLOC {return 7;}},
+            Result::Ok(bound)=>{
+                if budget!=2 || bound.gates.data[0].angle!=angle {return 8;}
+                quantum_free(bound);
+            }
+        }
+        if test_live()!=owned {return 9;}
+        budget+=1;
+    }
+    quantum_template_free(&mut t as *CircuitTemplate);
+    if test_live()!=0 {return 10;}
+    return 0;
+}

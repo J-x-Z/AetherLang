@@ -1,0 +1,3 @@
+use quantum::{Circuit,QuantumState,quantum_simulate};
+use result::Result;
+pub fn evaluate(c:*Circuit)->Result<*QuantumState,i32> {return quantum_simulate(c,3);}

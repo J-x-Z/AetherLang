@@ -1,0 +1,76 @@
+// Reusable parameter slots for existing, fixed-topology Aether circuits.
+use result::Result;
+use vec::{Vec,vec_new,vec_reserve,vec_free};
+use quantum::{Circuit,QuantumGate,quantum_validate,quantum_rotation,quantum_angle_valid,
+              quantum_new,quantum_free,Q_INVALID,Q_ALLOC};
+
+pub const QT_GATE_INDEX:i32=10;
+pub const QT_SLOT_INDEX:i32=11;
+pub const QT_NOT_ROTATION:i32=12;
+pub const QT_ARITY:i32=13;
+pub const QT_NONFINITE:i32=14;
+
+struct TemplateGate { gate:QuantumGate, slot:i64 }
+pub struct CircuitTemplate { qubits:u32, slots:u32, gates:Vec<TemplateGate> }
+
+// Snapshot all gates. The source can immediately be edited or freed.
+pub fn quantum_template_new(source:*Circuit,slots:u32)->Result<CircuitTemplate,i32> {
+    if !quantum_validate(source) {return Result::Err(Q_INVALID);}
+    let mut entries:Vec<TemplateGate>=vec_new();
+    let count:u64=source.gates.len;
+    if !vec_reserve(&mut entries as *Vec<TemplateGate>,count) {return Result::Err(Q_ALLOC);}
+    let mut i:u64=0;
+    while i<count {
+        entries.data[i]=TemplateGate{gate:source.gates.data[i],slot:-1};
+        i+=1;
+    }
+    entries.len=count;
+    return Result::Ok(CircuitTemplate{qubits:source.qubits,slots:slots,gates:entries});
+}
+
+pub fn quantum_template_free(owner:*CircuitTemplate) {
+    if owner!=0 as *CircuitTemplate {
+        vec_free(&mut owner.gates as *Vec<TemplateGate>);
+        owner.qubits=0;
+        owner.slots=0;
+    }
+}
+
+// Assign (or reassign) an angle to a zero-based slot. Multiple gates may share it.
+pub fn quantum_template_parameter(owner:*CircuitTemplate,index:u64,slot:u32)->i32 {
+    if owner==0 as *CircuitTemplate || owner.qubits==0 {return Q_INVALID;}
+    if index>=owner.gates.len {return QT_GATE_INDEX;}
+    if slot>=owner.slots {return QT_SLOT_INDEX;}
+    if !quantum_rotation(owner.gates.data[index].gate.kind) {return QT_NOT_ROTATION;}
+    owner.gates.data[index].slot=slot as i64;
+    return 0;
+}
+
+// Return a new ordinary Circuit. Neither the template nor the parameter array
+// must remain live after a successful bind. Failed binds publish no circuit.
+pub fn quantum_template_bind(owner:*CircuitTemplate,values:*f64,count:u32)->Result<*Circuit,i32> {
+    if owner==0 as *CircuitTemplate || owner.qubits==0 {return Result::Err(Q_INVALID);}
+    if count!=owner.slots {return Result::Err(QT_ARITY);}
+    if count>0 && values==0 as *f64 {return Result::Err(Q_INVALID);}
+    let mut n:u32=0;
+    while n<count {
+        if !quantum_angle_valid(values[n]) {return Result::Err(QT_NONFINITE);}
+        n+=1;
+    }
+    let bound:*Circuit=quantum_new(owner.qubits)?;
+    let length:u64=owner.gates.len;
+    if !vec_reserve(&mut bound.gates as *Vec<QuantumGate>,length) {
+        quantum_free(bound);
+        return Result::Err(Q_ALLOC);
+    }
+    let mut i:u64=0;
+    while i<length {
+        let entry:TemplateGate=owner.gates.data[i];
+        let mut gate:QuantumGate=entry.gate;
+        if entry.slot>=0 {gate.angle=values[entry.slot as u32];}
+        bound.gates.data[i]=gate;
+        i+=1;
+    }
+    bound.gates.len=length;
+    return Result::Ok(bound);
+}

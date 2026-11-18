@@ -80,6 +80,40 @@ measurements. CPU qpp tensor storage and GPU to_host use logical little-endian
 wire order; the adapter deliberately avoids CUDA-Q's big-endian display index
 operator when copying amplitudes.
 
+### Bind parameter slots to a circuit
+
+`quantum_template::quantum_template_new(source,slot_count)` snapshots a
+validated circuit. For example, call `quantum_template_parameter(t,0,0)` and
+`quantum_template_parameter(t,2,0)` to bind gates 0 and 2 to the same angle
+slot. Both indices and slots start at zero. Only Rx, Ry and Rz accept a slot.
+Other gates and unassigned angles retain their original values.
+
+`quantum_template_bind(t,values,count)` requires exactly one finite f64 per
+declared slot and returns an independently owned ordinary `Circuit`. A template
+with zero slots accepts a null values pointer and count zero. Editing or
+freeing the source, binding a new parameter vector, or reassigning a slot
+leaves existing bound circuits intact. Use `quantum_free` on each bound circuit
+and `quantum_template_free` on the template owner. Copies of the template
+record alias its storage.
+
+Assignment returns `QT_GATE_INDEX` for an unknown gate, `QT_SLOT_INDEX` for an
+unknown slot and `QT_NOT_ROTATION` for a fixed gate kind. Binding returns
+`QT_ARITY` for too few or too many values and `QT_NONFINITE` for a NaN or
+infinite value. Failed allocations release intermediate storage and leave the
+template available for another bind.
+
+The regression circuit shares an angle θ between two Ry gates on qubit 2,
+sets qubit 1, controls an X on qubit 0 from qubit 2, and applies Rz(φ) to
+qubit 0. Its only populated amplitudes are `cos(θ) exp(-iφ/2)` at index 2
+and `sin(θ) exp(iφ/2)` at index 7. The runner checks every complex amplitude
+for several bindings and injects allocation failures. Add `--bridge /path/to/libaether_cudaq.dylib`
+to check the same states through CUDA-Q.
+
+```sh
+python3 tests/quantum_templates.py --compiler /path/to/aethc \
+  --work-dir /external/work/quantum-templates
+```
+
 ### Export an Aether circuit to Quake
 
 `quantum_quake::quantum_export_quake(circuit,max_bytes,error,error_capacity)`

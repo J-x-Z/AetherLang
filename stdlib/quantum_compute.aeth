@@ -1,7 +1,7 @@
 // Batched state-vector simulation on a caller-selected compute queue.
 // Qubit zero is the low bit. Each complex amplitude contains two f32 lanes.
 // Aether schedules and gathers pairs; the selected device applies the gates.
-use quantum::{Circuit,QuantumGate,Complex64,quantum_validate,quantum_gate_matrix,Q_CX,Q_SWAP,Q_RX,Q_RZ};
+use quantum::{Circuit,QuantumGate,Complex64,quantum_validate,quantum_gate_matrix,quantum_rotation,Q_CX,Q_SWAP};
 use compute::*;
 use result::Result;
 use quantum_readout::{ReadoutPlan,readout_plan,readout_add};
@@ -173,7 +173,7 @@ fn shifted_expect(queue:*ComputeQueue,circuit:*Circuit,index:u64,shift:f64,qubit
 pub fn quantum_compute_gradient(queue:*ComputeQueue,circuit:*Circuit,index:u64,qubit:u32,axis:i32)->Result<f64,ComputeError> {
     if !quantum_validate(circuit) || index>=circuit.gates.len || qubit>=circuit.qubits || axis<0 || axis>2 {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
     let gate:QuantumGate=circuit.gates.data[index];
-    if gate.kind<Q_RX || gate.kind>Q_RZ {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
+    if !quantum_rotation(gate.kind) {return Result::Err(compute_error(COMPUTE_ARGUMENT,0));}
     let high:f64=shifted_expect(queue,circuit,index,1.5707963267948966192,qubit,axis)?;
     let low:f64=shifted_expect(queue,circuit,index,-1.5707963267948966192,qubit,axis)?;
     Result::Ok((high-low)*0.5)

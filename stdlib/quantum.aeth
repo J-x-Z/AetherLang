@@ -118,9 +118,13 @@ pub fn quantum_new(qubits:u32)->Result<*Circuit,i32> {
 pub fn quantum_free(circuit:*Circuit) {
     if circuit!=0 as *Circuit {vec_free(&mut circuit.gates as *Vec<QuantumGate>); free(circuit as *void);}
 }
+pub fn quantum_rotation(kind:i32)->bool {return kind>=Q_RX && kind<=Q_RZ;}
+pub fn quantum_angle_valid(angle:f64)->bool {
+    return angle<=1.7976931348623157e308 && angle>= -1.7976931348623157e308;
+}
 pub fn quantum_gate_valid(qubits:u32,gate:QuantumGate)->bool {
     if qubits==0 || qubits>62 || gate.kind<Q_H || gate.kind>Q_SWAP || gate.target>=qubits {return false;}
-    if !(gate.angle<=1.7976931348623157e308 && gate.angle>= -1.7976931348623157e308) {return false;}
+    if !quantum_angle_valid(gate.angle) {return false;}
     if gate.kind>=Q_CX {return gate.control<qubits && gate.control!=gate.target;}
     true
 }
@@ -134,14 +138,15 @@ pub fn quantum_gate(circuit:*Circuit,kind:i32,target:u32,control:u32,angle:f64)-
 pub fn quantum_set_angle(circuit:*Circuit,index:u64,angle:f64)->i32 {
     if circuit==0 as *Circuit || index>=circuit.gates.len {return Q_INVALID;}
     let mut gate:QuantumGate=circuit.gates.data[index];
-    if gate.kind<Q_RX || gate.kind>Q_RZ {return Q_INVALID;}
+    if !quantum_rotation(gate.kind) {return Q_INVALID;}
     gate.angle=angle;
     if !quantum_gate_valid(circuit.qubits,gate) {return Q_INVALID;}
     circuit.gates.data[index]=gate; 0
 }
 pub fn quantum_validate(circuit:*Circuit)->bool {
     if circuit==0 as *Circuit {return false;}
-    if circuit.qubits==0 || circuit.qubits>62 {return false;}
+    if circuit.qubits==0 || circuit.qubits>62 || circuit.gates.len>circuit.gates.capacity {return false;}
+    if circuit.gates.len>0 && circuit.gates.data==0 as *QuantumGate {return false;}
     let mut i:u64=0;
     while i<circuit.gates.len {
         if !quantum_gate_valid(circuit.qubits,circuit.gates.data[i]) {return false;}
@@ -276,7 +281,7 @@ pub fn quantum_expect(state:*QuantumState,qubit:u32,axis:i32)->Result<f64,i32> {
 pub fn quantum_gradient(circuit:*Circuit,index:u64,qubit:u32,axis:i32,max_qubits:u32)->Result<f64,i32> {
     if !quantum_validate(circuit) || index>=circuit.gates.len || qubit>=circuit.qubits || axis<0 || axis>2 {return Result::Err(Q_INVALID);}
     let gate:QuantumGate=circuit.gates.data[index];
-    if gate.kind<Q_RX || gate.kind>Q_RZ {return Result::Err(Q_INVALID);}
+    if !quantum_rotation(gate.kind) {return Result::Err(Q_INVALID);}
     let shift:f64=1.5707963267948966192;
     let plus:*QuantumState=q_simulate_shift(circuit,max_qubits,index,shift)?;
     let high:Result<f64,i32>=quantum_expect(plus,qubit,axis);quantum_state_free(plus);

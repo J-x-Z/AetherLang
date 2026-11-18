@@ -1,0 +1,92 @@
+use result::Result;
+use quantum::{Circuit,QuantumState,Q_X,Q_CX,Q_RY,Q_RZ,Q_INVALID,
+              quantum_new,quantum_gate,quantum_set_angle,quantum_free,quantum_state_free};
+use quantum_template::*;
+use template_eval::evaluate;
+extern "C" { fn cos(x:f64)->f64;fn sin(x:f64)->f64; }
+
+fn make_source()->Result<*Circuit,i32> {
+    let c:*Circuit=quantum_new(3)?;
+    if quantum_gate(c,Q_RY,2,0,0.2)!=0 || quantum_gate(c,Q_X,1,0,0.0)!=0 ||
+       quantum_gate(c,Q_RY,2,0,0.4)!=0 || quantum_gate(c,Q_CX,0,2,0.0)!=0 ||
+       quantum_gate(c,Q_RZ,0,0,0.6)!=0 {quantum_free(c);return Result::Err(30);}
+    return Result::Ok(c);
+}
+
+fn near(a:f64,b:f64)->bool {let d:f64=a-b;return d<0.0000000001 && d> -0.0000000001;}
+
+// Consecutive Ry(theta) on q2 add, X sets q1, CX from q2 sets q0 when q2 is one.
+// Rz(phi) on q0 gives opposite phases on basis indices 2 and 7.
+fn correct(c:*Circuit,theta:f64,phi:f64)->bool {
+    let s:*QuantumState=match evaluate(c){Result::Ok(v)=>v,Result::Err(_)=>{return false;}};
+    let mut ok:bool=s.length==8;
+    let mut i:u64=0;
+    while i<s.length {
+        let mut re:f64=0.0;let mut im:f64=0.0;
+        if i==2 {re=cos(theta)*cos(phi/2.0);im= -cos(theta)*sin(phi/2.0);}
+        if i==7 {re=sin(theta)*cos(phi/2.0);im=sin(theta)*sin(phi/2.0);}
+        if !near(s.amplitudes[i].re,re) || !near(s.amplitudes[i].im,im) {ok=false;}
+        i+=1;
+    }
+    quantum_state_free(s);
+    return ok;
+}
+
+fn bind_error(t:*CircuitTemplate,values:*f64,n:u32,expected:i32)->bool {
+    match quantum_template_bind(t,values,n) {
+        Result::Err(e)=>e==expected,
+        Result::Ok(c)=>{quantum_free(c);false}
+    }
+}
+
+fn work()->Result<i32,i32> {
+    let source:*Circuit=make_source()?;
+    let mut template:CircuitTemplate=quantum_template_new(source,2)?;
+    let t:*CircuitTemplate=&mut template as *CircuitTemplate;
+    if quantum_template_parameter(t,0,0)!=0 || quantum_template_parameter(t,2,0)!=0 ||
+       quantum_template_parameter(t,4,1)!=0 {return Result::Err(31);}
+    let mut values:[f64;2]=[0.37,0.93];
+    let first:*Circuit=quantum_template_bind(t,&values[0] as *f64,2)?;
+    if !correct(source,0.3,0.6) {return Result::Err(32);}
+    quantum_set_angle(source,0,10.0);quantum_free(source);
+
+    if quantum_template_parameter(t,5,0)!=QT_GATE_INDEX ||
+       quantum_template_parameter(t,4,2)!=QT_SLOT_INDEX ||
+       quantum_template_parameter(t,3,0)!=QT_NOT_ROTATION {return Result::Err(33);}
+    if !bind_error(t,&values[0] as *f64,1,QT_ARITY) ||
+       !bind_error(t,&values[0] as *f64,3,QT_ARITY) ||
+       !bind_error(t,0 as *f64,2,Q_INVALID) {return Result::Err(34);}
+    let zero:f64=0.0;
+    values[1]=zero/zero;
+    if !bind_error(t,&values[0] as *f64,2,QT_NONFINITE) {return Result::Err(35);}
+    values[1]=1.0/zero;
+    if !bind_error(t,&values[0] as *f64,2,QT_NONFINITE) {return Result::Err(36);}
+    values[0]= -0.88;values[1]= -1.27;
+    let second:*Circuit=quantum_template_bind(t,&values[0] as *f64,2)?;
+    // Reassigning a slot affects subsequent binds alone.
+    if quantum_template_parameter(t,4,0)!=0 {return Result::Err(37);}
+    values[0]=0.71;values[1]=0.0;
+    let third:*Circuit=quantum_template_bind(t,&values[0] as *f64,2)?;
+    quantum_template_free(t);quantum_template_free(t);
+    if !bind_error(t,&values[0] as *f64,2,Q_INVALID) {return Result::Err(38);}
+    if !correct(first,0.37,0.93) || !correct(second,-0.88,-1.27) ||
+       !correct(third,0.71,0.71) {return Result::Err(39);}
+    quantum_set_angle(first,0,99.0);quantum_free(first);quantum_free(third);
+    if !correct(second,-0.88,-1.27) {return Result::Err(40);}
+    quantum_free(second);
+
+    let empty:*Circuit=quantum_new(2)?;
+    let mut plain:CircuitTemplate=quantum_template_new(empty,0)?;
+    let copy:*Circuit=quantum_template_bind(&mut plain as *CircuitTemplate,0 as *f64,0)?;
+    if copy==empty || copy.qubits!=2 || copy.gates.len!=0 {return Result::Err(41);}
+    quantum_free(copy);quantum_template_free(&mut plain as *CircuitTemplate);
+    // Malformed logical source storage is rejected before reading any element.
+    empty.gates.len=1;
+    let rejected:bool=match quantum_template_new(empty,1){
+        Result::Err(e)=>e==Q_INVALID,Result::Ok(value)=>{let mut held:CircuitTemplate=value;quantum_template_free(&mut held as *CircuitTemplate);false}
+    };
+    empty.gates.len=0;quantum_free(empty);
+    if !rejected {return Result::Err(42);}
+    return Result::Ok(0);
+}
+fn main()->i32 {match work(){Result::Ok(n)=>n,Result::Err(e)=>e}}
