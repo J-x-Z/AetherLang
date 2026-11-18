@@ -1,5 +1,35 @@
 # AetherLang 集中升级交付
 
+## LLVM 21 与 23 的迁移决定
+
+稳定种子、CI 默认和现有发行包继续使用 LLVM 21.1。需要更快的本机编译时可用 `sh scripts/build.sh llvm23` 显式选择 23.1。C-only 种子仍可独立构建。同一工具链仅链接一个 LLVM major；两个版本使用同一套 Aether 代码生成逻辑。
+
+在 Apple M4 上使用同一 Rust 1.100.0、同一份 Rust 编译器源码、release 配置和 macOS arm64 目标比较 LLVM 21.1.8 与 23.1.2。实验包含对应的 llvm-sys 绑定。两边都用同一 Apple Clang、SDK 和链接命令，每项预热两次后交替测八对，表中为中位数。
+
+| 操作 | LLVM 21.1.8 | LLVM 23.1.2 |
+| --- | ---: | ---: |
+| JXZ 生成 O2 对象，耗时 / 峰值 RSS | 2,363.62 ms / 122.92 MiB | 1,013.42 ms / 137.52 MiB |
+| 回归分析程序生成 O2 对象，耗时 / 峰值 RSS | 97.00 ms / 43.28 MiB | 78.33 ms / 55.91 MiB |
+| 程序读入 25 万行 CSV 并回归，耗时 / 峰值 RSS | 50.59 ms / 1.66 MiB | 50.40 ms / 1.66 MiB |
+| JXZ 对象 / 可执行文件 | 104,568 / 106,000 B | 103,680 / 106,000 B |
+| 回归程序对象 / 可执行文件 | 8,816 / 34,104 B | 8,752 / 34,104 B |
+
+最终两个 release 种子重新编译这两项负载，四个对象分别与测量时的对象逐字节相同。两个程序的编译在八对测量中均提速。CSV 运行时间落在样本波动范围内，十个输出字段符合数学预期，所有输出 JSON 逐字节相同。LLVM 23 输出的新浮点 IR（例如 `f0x7FEFFFFFFFFFFFFF`）会被本机 Apple Clang 21.0 拒绝。相同量子测试用稳定种子加系统 Clang，或 23 种子加配套 Clang，各通过 31 项。保存的对照实验与原始失败分别在外置工作目录 `llvm23-kernel-quantum-20261118/compare-host/{results.json,run.py,provenance.md}` 和 `suite23-seed.log`。
+
+试用 Clang 23 还暴露了宿主 C 后端的实际错误。Aether 允许通过字节指针传递不透明文件句柄，生成的 C 直接把该指针当作系统 `FILE *` 使用。`a98f550` 按系统函数的句柄参数和返回值位置转换，保留变参格式检查。相同源文件通过 C/LLVM、O0/O2 共 20 项，错误句柄类型仍有诊断，裸机同名声明可单独生成。Clang 对部分字符串的 char 符号差异仍会给出警告。
+
+LLVM 22 的 SLP 向量化器能识别新的浮点乘加模式。LLVM 23 更改了浮点 IR 文字格式及条件分支 C API。上游发布到 23.1.6，本机实测版本为 23.1.2。23.1.4 起包含一项 x86 带错误码中断处理函数调用时的栈对齐修复；本轮使用的 PIT IRQ 没有硬件错误码。Metal、Vulkan 和 CUDA-Q 的设备程序使用各自的编译链。此次迁移评估衡量的是宿主编译器。[LLVM 22 向量化](https://releases.llvm.org/22.1.0/docs/ReleaseNotes.html#changes-to-vectorizers) · [LLVM 23 IR](https://releases.llvm.org/23.1.0/docs/ReleaseNotes.html#changes-to-the-llvm-ir) · [LLVM 23 C API](https://releases.llvm.org/23.1.0/docs/ReleaseNotes.html#changes-to-the-c-api) · [x86 修正](https://github.com/llvm/llvm-project/commit/bb46d66418b91a6f17312ad3ff8d3713d66b89ae) · [23.1.6 发布](https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.6)
+
+macOS 上最终 `sh scripts/test.sh llvm23 seed` 以状态 0 完成，日志为 `WORK/llvm23-kernel-quantum-20261118/opt-in-final.log`。其中包含 239 个 Rust 单元及集成测试，JXZ 在两种后端各跑 40 个集成与 14 个注册表场景，20 项模板检查、35 项 SDK 运行检查和 22 项 CUDA-Q ABI 及错误路径检查。另有带 SDK 解析器的独立导出回执。默认 LLVM 21 release 构建、189 个单元测试和本轮文件句柄回归重新通过。下节自举固定点与 QEMU 验收使用独立入口。Linux 和 Windows 宿主包仍使用各自已验收的版本。
+
+## 自举内核与量子计算新能力
+
+常规自举编译器可以检查带 `#![no_std]` 的 x86-64 裸机程序，发射带目标布局和 `noredzone` 的 LLVM IR，交给目标 Clang 生成 ELF64 可重定位对象。外部启动桩和链接脚本仍由内核提供。复审发现，Clang 包装器返回成功时可能改写优化产物的架构。修复后发射器在发布前核对三元组和完整布局，错误时保留旧文件。修正版连续两代发射的 C 为 3,696,820 字节、LLVM IR 为 5,057,497 字节，各自逐字节相同。LLVM 21 和 23 各通过 24 项，包括 O0/O2 的 QEMU 双向 SysV ABI 调用、结构返回、寄存器耗尽及错误目标输出保留。[交叉编译回归](../tests/bootstrap_kernel_target.py)
+
+两个版本各启动八个页帧池镜像，覆盖种子/自举、C/LLVM、O0/O2。O2 下种子 LLVM 的页帧池代码段两版均为 481 B；自举 LLVM 则从 930 B 变为 943 B。另一个 x86-64 QEMU 客体在 100 Hz 周期时钟下运行普通 Aether 函数；Aether 中断处理函数连续记录八次有进展的样本。宿主检查中断地址属于工作函数，按已完成步数重新计算校验和。该处理函数仍由种子编译。下一步是让自举编译器支持这个机器入口。[页帧池](../tests/kernel_boot.py) · [周期时钟](../tests/kernel_timer.py)
+
+修正版自举编译器在同一轮通过 CPU、Metal 和 qpp 的 20 项模板检查。参数化电路完全由 Aether 构造。同一角度可绑定多个旋转门，绑定结果有独立生命周期，分配失败可重试。三量子位的 CPU、CUDA-Q qpp、Apple M4 Metal 结果均与全部八个解析复振幅比较；M4 的最大单分量误差为 7.49×10⁻⁸，所有提交完成并且内存记账归零。对于具体的十门电路，可调用 NVIDIA SDK 导出 Quake MLIR，并用 SDK 解析和验证寄存器、门序、控制位、目标位及角度。当前模板在导出前绑定数值，未绑定的 Quake 函数参数留待下一步。CUDA-Q SDK 在这台 Mac 上使用 CPU，Metal 加速由 Aether 自有运行时提供。[参数模板](../stdlib/quantum_template.aeth) · [Quake 示例](../examples/quantum/export_quake.aeth) · [设备矩阵](QUANTUM.md)
+
 ## Windows 11 原生交付与设备验证
 
 Windows 包冻结于 `98402df`，SHA-256 为 `3b946dd8aa457dbdef7944d5a0588a67c0702e45eef32ecaa336b3a9f91b507b`。在 Windows x64 build 26200 解压后核验了 168 个载荷文件，并用 llvm-mingw UCRT Clang 21.1.8 和 Python 3.10.11 从包内 PowerShell 入口执行。编译器套件用 C/LLVM 在 O0/O2 编译运行并发射 COFF，还在 Windows 上从 Aether 源码生成了两份下一代编译器，三份编译器对同一入口发射完全相同的 LLVM IR。25 项编译器检查包含 LSP 的入口，内层运行 24 个协议和 CLI 场景。JXZ 35 项及终端 CSV 10 项通过。该机单次耗时为编译器套件 25.22 秒、JXZ 13.03 秒、CSV 2.86 秒。各平台发行基线及编译速度、RSS、产物和运行性能比较见下节。
@@ -10,9 +40,9 @@ Windows 包冻结于 `98402df`，SHA-256 为 `3b946dd8aa457dbdef7944d5a0588a67c0
 
 另一个 Windows 包交付可复用的 Vulkan DLL 和加载器对象。C/LLVM 生成的 16 比特程序在 RTX 4060 Laptop GPU 上完成 42 次提交，全部 65,536 个振幅最大 L1 误差为 `7.81873961e-8`，队列峰值记账 2,097,216 字节，释放后为零。CUDA-Q SDK 独立探针在 Apple M4 实测报告 CPU，Linux RTX 3060 的 cuStateVec GPU 有先前 SDK 实机证据。Windows 4060 的 GPU 验收使用 Aether 自有 Vulkan 路径。证据在 `WORK/windows-native-20261118/{native-acceptance.json,evidence-117efa2.zip}`、`WORK/windows-gpu-20261118/windows-vulkan-results.json` 和 `WORK/cudaq/device-query-20261118/runtime/results.json`。
 
-## Aether 写内核的实际边界
+## 内核初始基线与第一次后端对照
 
-Rust 种子可用 C 或 LLVM 为 `x86_64-unknown-none` 生成裸机对象。已有启动汇编负责建栈、页表、GDT 和 IDT；Aether 中断入口在 QEMU 中执行并返回过两种 CPU 栈帧。ARM64 有裸机对象与裸入口反汇编证据。自举编译器的宿主固定点已验证，目前它的命令行和前端尚缺跨目标和中断入口支持。[裸机验收](../tests/freestanding.py) · [启动夹具](../tests/regressions/freestanding/interrupt_boot.S)
+Rust 种子可用 C 或 LLVM 为 `x86_64-unknown-none` 生成裸机对象。已有启动汇编负责建栈、页表、GDT 和 IDT；Aether 中断入口在 QEMU 中执行并返回过两种 CPU 栈帧。ARM64 有裸机对象与裸入口反汇编证据。该阶段的自举编译器还只有宿主固定点；后续裸机目标进展见上节。[裸机验收](../tests/freestanding.py) · [启动夹具](../tests/regressions/freestanding/interrupt_boot.S)
 
 旧 Rust 种子会在普通 x86-64 裸机函数里使用栈指针以下的 red zone，同栈中断可能覆盖局部变量。`d22a1d9` 为该目标的每个 LLVM 函数设置 `noredzone`，并让 C 编译入口传 `-mno-red-zone`。普通独立翻译单元的两条回归在旧版分别失败，修复后通过。另在 QEMU TCG 启动 C/LLVM、O0/O2 四个原有镜像，均按预期退出。对手工编译发射的 C 源码，外部构建也须传相同参数。
 
@@ -24,7 +54,7 @@ Rust 种子可用 C 或 LLVM 为 `x86_64-unknown-none` 生成裸机对象。已�
 | Rust 种子 → C → Clang | 6,946 B | 887 B |
 | Rust 种子 → 直接 LLVM | 1,774 B | 481 B |
 
-表中是页帧池对象的代码段字节数，启动、对齐、辅助函数和调试信息另计。这些值不衡量运行速度。同一输入上直接 LLVM 的 O2 代码更小；其 O0 普通函数使用了 XMM 寄存器。自举 C 已经能承载这一类内核主体。常规自举编译器自身的 LLVM 发射仍按宿主 ABI 工作，面向裸机的直接 LLVM 路径由种子提供。若继续，先以 QEMU 中的周期定时器和持续运行任务验证早期内核，再独立扩大自举编译器的目标及中断支持。
+表中是页帧池对象的代码段字节数，启动、对齐、辅助函数和调试信息另计。这些值不衡量运行速度。同一输入上直接 LLVM 的 O2 代码更小；其 O0 普通函数使用了 XMM 寄存器。自举 C 已经能承载这一类内核主体。该次实验的裸机直接 LLVM 路径由种子提供；常规自举编译器后来在 `7dcd8d8` 加入同一目标。
 
 ## 2026-11-18 宿主编译器与 JXZ 交付
 

@@ -265,8 +265,7 @@ branches. Integer operations wrap without `nsw`/`nuw`; division/remainder guards
 trap zero and signed MIN/-1. Float casts use LLVM saturating conversion intrinsics, following the
 [LLVM language reference](https://llvm.org/docs/LangRef.html#saturating-floating-point-to-integer-conversions).
 Scalar and pointer C ABI calls include narrow-integer extensions and C varargs
-promotions. Internal aggregate arguments/results are supported. External C aggregate parameters and results follow the Apple arm64 and System V x86-64 host conventions. Unsupported layouts or conventions fail during checking. Ordinary pointer-to-struct FFI remains available. The LLVM path is currently a 64-bit host path,
-with no cross-target ABI claim.
+promotions. Internal aggregate arguments/results are supported. External C aggregate parameters and results follow Apple arm64 or System V x86-64 conventions on the supported hosts; the explicit x86-64 freestanding target also uses System V. Unsupported layouts or conventions fail during checking. Ordinary pointer-to-struct FFI remains available.
 
 Existing application/standard-library validation is separate from compiler
 fixtures:

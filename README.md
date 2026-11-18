@@ -8,7 +8,7 @@ multi-package projects, runs programs and discovers tests.
 ## Build and run
 
 On macOS or Linux, install the pinned Rust toolchain and Clang. The Rust LLVM
-backend uses LLVM 21. Set `LLVM_SYS_211_PREFIX` if needed. `CARGO_TARGET_DIR`
+backend defaults to LLVM 21.1. Set `LLVM_SYS_211_PREFIX` if needed. `CARGO_TARGET_DIR`
 and `TMPDIR` can point to an external volume.
 
 ```sh
@@ -30,6 +30,12 @@ linker produces the executable. The Rust compiler also supplies cross-target,
 inline assembly and vector facilities. The self-hosted compiler supports typed
 atomics, memory fences and volatile access. Build a C-only seed with
 `sh scripts/build.sh c`. [Capabilities](docs/FEATURES.md) · [Bootstrap](docs/BOOTSTRAP.md)
+
+To opt into LLVM 23.1 for the Rust seed, run `sh scripts/build.sh llvm23`.
+Use a separate `CARGO_TARGET_DIR` to keep both executables. Set
+`LLVM_SYS_231_PREFIX` when autodetection needs a path. Use Clang 23 to read
+textual IR emitted by that seed. The stable packages use LLVM 21.
+[Measurements and compatibility](docs/UPGRADE.md#llvm-21-与-23-的迁移决定)
 
 ## Work with data in the terminal
 
@@ -61,7 +67,9 @@ remain gaps for users of those ecosystems. [Numerical API](docs/MATH.md) ·
 
 - **Systems.** Fixed-size values, raw pointers, checked references, `own T`
   with typed destructors, packed structs, unions and C linkage are exercised in
-  native programs. Foreign aggregate ABI coverage includes Apple arm64 and
+  native programs. The self-hosted LLVM backend can emit x86-64 freestanding
+  objects. An Aether page pool boots under QEMU at O0 and O2.
+  Foreign aggregate ABI coverage includes Apple arm64 and
   x86-64 System V. The [persistent accumulator](examples/upgrade/accumulator.aeth)
   reads commands, writes a journal and closes its resources.
 - **Accelerators.** Aether code owns tensor shapes, budgets, operator scheduling
@@ -70,7 +78,8 @@ remain gaps for users of those ecosystems. [Numerical API](docs/MATH.md) ·
   errors for unsupported operations or allocation failures.
 - **Quantum simulation.** An fp64 state-vector reference and an fp32 simulator
   using the compute queue run Aether circuits. The separate CUDA-Q SDK bridge
-  supports QPP and NVIDIA environments. Metal and Adreno use Aether's own
+  supports QPP and NVIDIA environments and exports validated circuits as Quake MLIR.
+  Reusable Aether circuit templates bind shared rotation parameters before execution. Metal and Adreno use Aether's own
   simulator. A 16-qubit workload checks all 65,536 amplitudes, expectations
   and a parameter-shift gradient. [Quantum API and device results](docs/QUANTUM.md)
 - **Project tools.** JXZ checks, builds, runs and tests projects with local or

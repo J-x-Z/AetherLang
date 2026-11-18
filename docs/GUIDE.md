@@ -209,7 +209,8 @@ A: `ref` 是临时借用，函数结束后失效；`shared` 是引用计数，�
 Import a binding from `llvm` or `jni` and pass its native shared library with
 `--link-object`. The five `LLVMInitializeAll…` functions are inline functions
 in LLVM's C header. When calling them, build the supplied adapter against the
-same LLVM 21 installation and include its object in the link.
+same LLVM installation as the shared library and include its object in the link.
+The following example uses the stable LLVM 21 SDK.
 
 ```sh
 clang -I"$LLVM_SYS_211_PREFIX/include" -c runtime/llvm/target_init.c -o "$TMPDIR/target-init.o"
