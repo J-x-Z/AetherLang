@@ -2,6 +2,7 @@ use model::*;
 use runtime::*;
 use emitter::{boot_choose_namespace,boot_storage_name};
 use llvm_common::*;
+use memory_volatile::vm_function;
 use llvm_expr::ll_statement;
 use native_abi::*;
 use llvm_native::*;
@@ -11,9 +12,11 @@ fn ll_signature(ctx:*BootContext,node:*BootNode){
  let irq:bool=(node.flags&BF_INTERRUPT)!=0;
  if irq{ll_text(ctx,"x86_intrcc ");}
  if native_scalar{ll_attr(ctx,node.ty);}
- ll_return_type(ctx,node.ty);ll_text(ctx," ");ll_function(ctx,node);ll_text(ctx,"(");let mut param:*BootNode=node.params;
+ let indirect:bool=ll_bulk(node.ty)&&!native_scalar;
+ if indirect{ll_text(ctx,"void");}else{ll_return_type(ctx,node.ty);}ll_text(ctx," ");ll_function(ctx,node);ll_text(ctx,"(");let mut param:*BootNode=node.params;
+ if indirect{ll_sret(ctx,node.ty);ll_text(ctx,"%out");if param!=0 as *BootNode{ll_text(ctx,", ");}}
  while param!=(0 as *BootNode){
-  ll_type(ctx,param.ty);ll_text(ctx," ");
+  if ll_bulk(param.ty)&&!native_scalar{ll_text(ctx,"ptr ");}else{ll_type(ctx,param.ty);ll_text(ctx," ");}
   if irq && param==node.params{ll_text(ctx,"byval(");ll_type(ctx,param.ty.inner);ll_text(ctx,") ");}
   if native_scalar{ll_attr(ctx,param.ty);}if !foreign{fprintf(ctx.output,"%%arg%d",param.id);}
   param=param.next;if param!=(0 as *BootNode){ll_text(ctx,", ");}
@@ -22,6 +25,7 @@ fn ll_signature(ctx:*BootContext,node:*BootNode){
  if irq{ll_text(ctx," noinline noimplicitfloat \"target-features\"=\"-sse,-sse2,-mmx,-x87,-avx,-avx2\"");}
 }
 fn ll_intrinsics(ctx:*BootContext){
+ ll_text(ctx,"declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1 immarg)\ndeclare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)\n");
  ll_text(ctx,"declare void @llvm.trap()\n");let mut width:i32=8;
  while width<=64{
   fprintf(ctx.output,"declare i%d @llvm.fptosi.sat.i%d.f32(float)\n",width,width);
@@ -170,7 +174,7 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
   if item.kind==BN_FN&&(item.flags&2)==0&&item.generics==(0 as *BootNode){
    ctx.function=item;ctx.llvm_serial=0;ctx.llvm_break=0;ctx.llvm_continue=0;ll_signature(ctx,item);ll_definition_attrs(ctx);ll_text(ctx," {\n");ll_label(ctx,0);
    ll_allocas(ctx,item.params);ll_allocas(ctx,item.body);
-   let mut param:*BootNode=item.params;while param!=(0 as *BootNode){if param.ty.kind!=BY_VOID{ll_store_op(ctx);ll_type(ctx,param.ty);fprintf(ctx.output," %%arg%d, ptr %%v%d\n",param.id,param.id);}param=param.next;}
+   let mut param:*BootNode=item.params;while param!=(0 as *BootNode){if ll_bulk(param.ty){ll_copy(ctx,param.ty,ll_named(ctx,"v",param.id),ll_named(ctx,"arg",param.id),vm_function(ctx));}else if param.ty.kind!=BY_VOID{ll_store_op(ctx);ll_type(ctx,param.ty);fprintf(ctx.output," %%arg%d, ptr %%v%d\n",param.id,param.id);}param=param.next;}
    ll_statement(ctx,item.body);
    if !ctx.llvm_terminated{if item.ty.kind==BY_VOID{ll_return_void(ctx);}else{ll_text(ctx,"  unreachable\n");}}
    ll_text(ctx,"}\n");if (item.flags&BF_EXPORT)!=0 && boot_abi_needed(item){ll_export_wrapper(ctx,item);}

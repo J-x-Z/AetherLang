@@ -1,5 +1,4 @@
-// Marshal only at a C ABI boundary. All ordinary Aether calls and returns use
-// the original source value type, including inside an exported function's body.
+// Convert between the target C ABI and the internal Aether calling convention.
 use model::*;
 use runtime::*;
 use native_abi::*;
@@ -113,7 +112,7 @@ pub fn ll_native_call(ctx:*BootContext,node:*BootNode)->i32{
 fn ll_return_native(ctx:*BootContext,s:*BootNativeSlot,value:i32){
  if s.mode==ABI_EMPTY{ll_text(ctx,"  ret void\n");return;}
  if s.mode==ABI_SCALAR{ll_text(ctx,"  ret ");ll_value(ctx,s.ty,value);ll_text(ctx,"\n");return;}
- if s.mode==ABI_INDIRECT{ll_text(ctx,"  store ");ll_value(ctx,s.ty,value);ll_text(ctx,", ptr %out\n  ret void\n");return;}
+ if s.mode==ABI_INDIRECT{ll_store(ctx,s.ty,value,ll_out(ctx));ll_text(ctx,"  ret void\n");return;}
  ll_put_value(ctx,s,value);
  if s.b==0{ll_text(ctx,"  ret ");ll_piece(ctx,s.a);fprintf(ctx.output," %%r%d\n",s.first);return;}
  let first:i32=ll_id(ctx);ll_begin(ctx,first);ll_text(ctx,"insertvalue ");ll_native_result(ctx,s,false);ll_text(ctx," poison, ");
@@ -130,19 +129,30 @@ pub fn ll_export_wrapper(ctx:*BootContext,node:*BootNode){
    ll_abi_alloc(ctx,s.ty,s.param.id,"arg");ll_slot_address(ctx,s,s.param.id,"arg");ll_save_piece(ctx,s,false,true,0);
    if s.b!=0{ll_save_piece(ctx,s,true,true,0);}s.first=ll_load(ctx,s.ty,s.address);
   }else if s.mode==ABI_BYVAL||s.mode==ABI_INDIRECT{
-   s.first=ll_id(ctx);ll_begin(ctx,s.first);ll_text(ctx,"load ");ll_type(ctx,s.ty);fprintf(ctx.output,", ptr %%n%d, align 1\n",s.param.id);
+   s.first=ll_load(ctx,s.ty,ll_named(ctx,"n",s.param.id));
   }
   s=s.next;
  }
  let ret:*BootNativeSlot=sig.result;
  if ret.mode==ABI_PARTS{ll_abi_alloc(ctx,ret.ty,node.id,"ret");ll_slot_address(ctx,ret,node.id,"ret");}
- let id:i32=ll_id(ctx);if ret.ty.kind!=BY_VOID{ll_begin(ctx,id);}else{ll_text(ctx,"  ");}
- ll_text(ctx,"call ");ll_return_type(ctx,node.ty);ll_text(ctx," ");ll_function(ctx,node);ll_text(ctx,"(");
- s=sig.params;let mut any:bool=false;
+ let bulk:bool=ll_bulk(ret.ty);let mut id:i32=ll_id(ctx);
+ if bulk{
+  if ret.mode==ABI_INDIRECT{id=ll_out(ctx);}else{
+   // The C coercion slot is cleared before packing. Keep its source separate.
+   ll_abi_alloc(ctx,ret.ty,node.id,"value");id=ll_named(ctx,"abivalue",node.id);
+  }
+  ll_text(ctx,"  call void ");
+ }else{
+  if ret.ty.kind!=BY_VOID{ll_begin(ctx,id);}else{ll_text(ctx,"  ");}ll_text(ctx,"call ");ll_return_type(ctx,node.ty);ll_text(ctx," ");
+ }
+ ll_function(ctx,node);ll_text(ctx,"(");
+ if bulk{ll_sret(ctx,ret.ty);ll_reg(ctx,id);}
+ s=sig.params;let mut any:bool=bulk;
  while s!=0 as *BootNativeSlot{
-  ll_comma(ctx,any);any=true;ll_type(ctx,s.ty);ll_text(ctx," ");
+  ll_comma(ctx,any);any=true;if ll_bulk(s.ty){ll_text(ctx,"ptr ");}else{ll_type(ctx,s.ty);ll_text(ctx," ");}
   if s.mode==ABI_EMPTY{ll_text(ctx,"zeroinitializer");}else if s.mode==ABI_SCALAR{fprintf(ctx.output,"%%n%d",s.param.id);}else{ll_reg(ctx,s.first);}
   s=s.next;
  }
- ll_text(ctx,")\n");ll_return_native(ctx,ret,id);ll_text(ctx,"}\n");
+ ll_text(ctx,")\n");
+ if bulk && ret.mode==ABI_INDIRECT{ll_text(ctx,"  ret void\n");}else{ll_return_native(ctx,ret,id);}ll_text(ctx,"}\n");
 }

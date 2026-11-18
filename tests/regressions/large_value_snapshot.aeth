@@ -1,0 +1,29 @@
+fn mutate(p:*u8)->u8 {
+    unsafe { *p=31; }
+    return 31;
+}
+
+fn observed(data:[u8;65536], after:u8)->i32 {
+    if data[65535]!=7 || after!=31 { return 1; }
+    return 0;
+}
+
+pub fn changed(input:[u8;65536], last:u8)->[u8;65536] {
+    let mut result:[u8;65536]=input;
+    result[65535]=last;
+    return result;
+}
+
+fn main()->i32 {
+    let mut source:[u8;65536]=[7;65536];
+    let ptr:*u8=&mut source[65535] as *u8;
+    if observed(source,mutate(ptr))!=0 { return 1; }
+    if source[65535]!=31 { return 2; }
+
+    let mut copy:[u8;65536]=[0;65536];
+    copy=changed(source,17);
+    source[0]=42;
+    copy=copy;
+    if copy[0]!=7 || copy[65535]!=17 || source[65535]!=31 { return 3; }
+    return 0;
+}

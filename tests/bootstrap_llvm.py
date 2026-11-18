@@ -109,6 +109,22 @@ for name,expected in fixtures.items():
         check(name+'-output-O'+level,result.stdout==expected and result.stderr=='')
         if name=='file_io':check(name+'-cleanup-O'+level,not (w/'io-original').exists() and not (w/'io-renamed').exists())
 
+# Exercise instruction selection as well as the emitted text. The module case
+# passes large values across a source boundary and indexes a returned temporary.
+snapshot = root/'tests/regressions/large_value_snapshot.aeth'
+for name, source, modules in [
+    ('large-value-snapshot', snapshot, []),
+    ('large-value-module', root/'tests/regressions/bootstrap/large_value_module.aeth',
+     ['--module', 'snapshots='+str(snapshot)]),
+]:
+    ir = w/(name+'.ll')
+    run(name+'-emit', [stages[4], source, '--emit-llvm', *modules, '-o', ir])
+    run(name+'-x86-object', [cc, '--target=x86_64-unknown-linux-gnu', '-O0', '-c', ir, '-o', w/(name+'.o')])
+    for level in ('0','2'):
+        binary = w/(name+'-O'+level)
+        run(name+'-link-O'+level, [cc, '-O'+level, ir, '-o', binary])
+        run(name+'-run-O'+level, [binary])
+
 # Reuse the independent UTF-8 byte oracle created by the semantic corpus, but
 # this time execute LLVM output, rather than its separate C-backend check.
 run('unicode-emit-llvm',[stages[4],w/'semantics/string_escape_bytes.aeth','--emit-llvm','-o',w/'unicode.ll'])

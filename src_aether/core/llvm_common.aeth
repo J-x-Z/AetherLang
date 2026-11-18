@@ -68,15 +68,43 @@ pub fn ll_literal(ctx:*BootContext,node:*BootNode,ty:*BootType){
  }
  ll_integer(ctx,node.value,ty);
 }
+// The direct backend targets 64-bit machines. Keep large values in storage;
+// the register representing such a value is its address.
+pub fn ll_bulk(ty:*BootType)->bool{
+ if ty==0 as *BootType{return false;}if ty.kind==BY_OWN{return ll_bulk(ty.inner);}
+ return (ty.kind==BY_ARRAY||ty.kind==BY_STRUCT||ty.kind==BY_ENUM) && ty.layout_size>16;
+}
+pub fn ll_named(ctx:*BootContext,name:*u8,index:i32)->i32{
+ let id:i32=ll_id(ctx);ll_begin(ctx,id);fprintf(ctx.output,"getelementptr i8, ptr %%%s%d, i64 0\n",name,index);return id;
+}
+pub fn ll_out(ctx:*BootContext)->i32{
+ let id:i32=ll_id(ctx);ll_begin(ctx,id);ll_text(ctx,"getelementptr i8, ptr %out, i64 0\n");return id;
+}
+pub fn ll_snapshot(node:*BootNode)->bool{
+ return node.kind==BN_IDENT||node.kind==BN_MEMBER||node.kind==BN_INDEX||node.kind==BN_ENUM_FIELD||(node.kind==BN_UNARY&&node.op==42);
+}
+pub fn ll_copy(ctx:*BootContext,ty:*BootType,dst:i32,src:i32,qualified:bool){
+ fprintf(ctx.output,"  call void @llvm.memmove.p0.p0.i64(ptr %%r%d, ptr %%r%d, i64 %llu, i1 ",dst,src,ty.layout_size);
+ if qualified{ll_text(ctx,"true)\n");}else{ll_text(ctx,"false)\n");}
+}
+pub fn ll_sret(ctx:*BootContext,ty:*BootType){ll_text(ctx,"ptr sret(");ll_type(ctx,ty);ll_text(ctx,") ");}
 pub fn ll_load(ctx:*BootContext,ty:*BootType,pointer:i32)->i32{return ll_load_access(ctx,ty,pointer,vm_function(ctx));}
 pub fn ll_load_access(ctx:*BootContext,ty:*BootType,pointer:i32,qualified:bool)->i32{
- if ty.kind==BY_VOID{return ll_unit(ctx);}
+ if ty.kind==BY_VOID{return ll_unit(ctx);}if ll_bulk(ty){return pointer;}
  let id:i32=ll_id(ctx);ll_begin(ctx,id);if qualified{ll_text(ctx,"load volatile ");}else{ll_text(ctx,"load ");}ll_type(ctx,ty);fprintf(ctx.output,", ptr %%r%d, align 1\n",pointer);return id;
 }
 pub fn ll_store(ctx:*BootContext,ty:*BootType,value:i32,pointer:i32){ll_store_access(ctx,ty,value,pointer,vm_function(ctx));}
 pub fn ll_store_access(ctx:*BootContext,ty:*BootType,value:i32,pointer:i32,qualified:bool){
- if ty.kind==BY_VOID{return;}
+ if ty.kind==BY_VOID{return;}if ll_bulk(ty){ll_copy(ctx,ty,pointer,value,qualified);return;}
  if qualified{ll_text(ctx,"  store volatile ");}else{ll_text(ctx,"  store ");}ll_value(ctx,ty,value);fprintf(ctx.output,", ptr %%r%d, align 1\n",pointer);
+}
+pub fn ll_read_named(ctx:*BootContext,ty:*BootType,name:*u8,index:i32)->i32{
+ if ll_bulk(ty){return ll_named(ctx,name,index);}
+ let id:i32=ll_id(ctx);ll_begin(ctx,id);ll_load_op(ctx);ll_type(ctx,ty);fprintf(ctx.output,", ptr %%%s%d\n",name,index);return id;
+}
+pub fn ll_write_named(ctx:*BootContext,ty:*BootType,value:i32,name:*u8,index:i32){
+ if ll_bulk(ty){ll_store(ctx,ty,value,ll_named(ctx,name,index));return;}
+ ll_store_op(ctx);ll_value(ctx,ty,value);fprintf(ctx.output,", ptr %%%s%d\n",name,index);
 }
 pub fn ll_field_index(ty:*BootType,field:*BootNode)->i32{
  let mut index:i32=0;let mut item:*BootNode=ty.fields;
@@ -123,6 +151,9 @@ pub fn ll_abi_alloc(ctx:*BootContext,ty:*BootType,id:i32,role:*u8){fprintf(ctx.o
 pub fn ll_allocas(ctx:*BootContext,node:*BootNode){
  let mut item:*BootNode=node;
  while item!=(0 as *BootNode){
+  if ll_bulk(item.ty) && (ll_snapshot(item)||item.kind==BN_STRUCT_VALUE||item.kind==BN_CALL){
+   fprintf(ctx.output,"  %%bulk%d = alloca ",item.id);ll_type(ctx,item.ty);ll_text(ctx,"\n");
+  }
   if item.kind==BN_CALL && (item.decl.flags&2)!=0 && boot_abi_needed(item.decl){
    if item.ty.kind==BY_STRUCT{ll_abi_alloc(ctx,item.ty,item.id,"ret");}
    let mut p:*BootNode=item.params;while p!=0 as *BootNode{if p.ty.kind==BY_STRUCT{ll_abi_alloc(ctx,p.ty,p.id,"arg");}p=p.next;}
