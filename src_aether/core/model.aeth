@@ -106,3 +106,5 @@ pub struct BootMappedModule { name:*u8, path:*u8, next:*BootMappedModule }
 pub struct BootTypeArgument{ty:*BootType,next:*BootTypeArgument}
 pub struct BootTypeBinding{formal:*BootType,actual:*BootType,next:*BootTypeBinding}
 pub struct BootInstance{source:*BootNode,arguments:*BootTypeArgument,function:*BootNode,next:*BootInstance}
+
+pub const BN_MEMORY:i32=59;

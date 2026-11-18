@@ -1,0 +1,35 @@
+#![no_std]
+// Unaligned volatile storage is intentional; atomic storage below is aligned.
+@repr(packed)
+struct Packed { tag:u8, value:u32 }
+static mut word:u32=0;
+static mut trace:u32=0;
+const RELEASE:i32=1+1;
+const ACQUIRE:i32=1;
+fn address()->*u32 {trace=trace*10+1;return &word as *u32;}
+fn expected()->u32 {trace=trace*10+2;return 41;}
+fn desired()->u32 {trace=trace*10+3;return 42;}
+fn write_value()->u32 {trace=trace*10+2;return 41;}
+fn read(p:*u32)->u32 effect[read] {return __atomic_load_u32_explicit(p,ACQUIRE+0);}
+fn write(p:*u32,value:u32) effect[write] {__atomic_store_u32_explicit(p,value,RELEASE);}
+fn volatile_read(p:*u32)->u32 effect[io] {return __volatile_read_u32(p);}
+fn volatile_write(p:*u32,value:u32) effect[io] {__volatile_write_u32(p,value);}
+fn sync() effect[read,write] {__atomic_thread_fence_explicit(3);}
+fn main()->i32 {
+ __atomic_store_u32(address(),write_value());
+ if trace!=12||word!=41{return 1;}
+ trace=0;
+ if !__atomic_compare_exchange_u32(address(),expected(),desired())||trace!=123||word!=42{return 2;}
+ trace=0;
+ if __atomic_compare_exchange_u32(address(),expected(),desired())||trace!=123||word!=42{return 3;}
+ trace=0;
+ __volatile_write_u32(address(),write_value());
+ if trace!=12||word!=41{return 4;}
+ let mut packed:Packed=Packed{tag:19,value:0};
+ let bytes:*u8=(&packed as *Packed) as *u8;
+ let pointer:*u32=(bytes+1) as *u32;
+ volatile_write(pointer,305419896);
+ if volatile_read(pointer)!=305419896||packed.tag!=19||packed.value!=305419896{return 5;}
+ write(&word as *u32,99);if read(&word as *u32)!=99{return 6;}
+ sync();return 0;
+}

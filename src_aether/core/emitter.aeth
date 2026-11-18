@@ -1,5 +1,6 @@
 use model::*;
 use runtime::*;
+use memory::bm_c_order;
 use type_model::boot_type_concrete;
 // Typed AST -> C11. Every effectful operand is sequenced into a temporary;
 // assignment evaluates its place first, calls evaluate arguments left-to-right.
@@ -156,6 +157,7 @@ fn boot_emit_place(ctx:*BootContext,node:*BootNode) {
 }
 fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
  if ctx.failed||node==0 as *BootNode{return;}
+ if node.kind==BN_MEMORY{boot_c_memory(ctx,node);return;}
  if node.kind==BN_ENUM_VALUE{
   let mut arg:*BootNode=node.params;while arg!=0 as *BootNode{boot_emit_expr(ctx,arg);arg=arg.next;}
   boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_temp(ctx,node);boot_c_text(ctx,";__builtin_memset(&");boot_c_temp(ctx,node);boot_c_text(ctx,",0,sizeof(");boot_c_temp(ctx,node);boot_c_text(ctx,"));\n");
@@ -444,4 +446,40 @@ pub fn boot_emit(ctx:*BootContext)->bool {
 
 fn boot_c_array_bound(ctx:*BootContext,node:*BootNode){
  boot_c_text(ctx,"if((uint64_t)");boot_c_temp(ctx,node.right);fprintf(ctx.output,">=%lluULL)__builtin_trap();\n",node.left.ty.extent);
+}
+
+// Typed memory operations evaluate each runtime operand once, left to right.
+fn boot_c_memory(ctx:*BootContext,node:*BootNode) {
+ let mut arg:*BootNode=node.params;
+ while arg!=0 as *BootNode{boot_emit_expr(ctx,arg);arg=arg.next;}
+ let success:*u8=bm_c_order((node.value%8) as i32);
+ let failure:*u8=bm_c_order((node.value/8) as i32);
+ if node.op==7 {
+  boot_c_type(ctx,node.aux);fprintf(ctx.output," a%d_expected%d = ",ctx.c_namespace,node.id);
+  boot_c_temp(ctx,node.params.next);boot_c_text(ctx,";\n");
+ }
+ if node.ty.kind!=BY_VOID{boot_c_decl(ctx,node);}
+ if node.op==1||node.op==2 {
+  // A packed wrapper preserves alignment-1 semantics; a bare volatile T*
+  // dereference would introduce undefined behavior for packed register fields.
+  boot_c_text(ctx,"((volatile struct __attribute__((packed)) { ");boot_c_type(ctx,node.aux);
+  boot_c_text(ctx," value; }*)");boot_c_temp(ctx,node.params);boot_c_text(ctx,")->value");
+  if node.op==2{boot_c_text(ctx," = ");boot_c_temp(ctx,node.params.next);}
+ }else if node.op==8{fprintf(ctx.output,"__atomic_thread_fence(%s)",success);}
+ else{
+  if node.op==3{boot_c_text(ctx,"__atomic_load_n(");}
+  if node.op==4{boot_c_text(ctx,"__atomic_store_n(");}
+  if node.op==5{boot_c_text(ctx,"__atomic_fetch_add(");}
+  if node.op==6{boot_c_text(ctx,"__atomic_fetch_sub(");}
+  if node.op==7{boot_c_text(ctx,"__atomic_compare_exchange_n(");}
+  boot_c_temp(ctx,node.params);boot_c_text(ctx,",");
+  if node.op==7{
+   fprintf(ctx.output,"&a%d_expected%d,",ctx.c_namespace,node.id);
+   boot_c_temp(ctx,node.params.next.next);fprintf(ctx.output,",false,%s,%s)",success,failure);
+  }else{
+   if node.op!=3{boot_c_temp(ctx,node.params.next);boot_c_text(ctx,",");}
+   fprintf(ctx.output,"%s)",success);
+  }
+ }
+ boot_c_text(ctx,";\n");if node.ty.kind==BY_VOID{boot_c_decl(ctx,node);boot_c_text(ctx,"{};\n");}
 }

@@ -565,21 +565,20 @@ pub fn boot_parse(ctx:*BootContext)->bool {
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed && boot_p_kind(ctx)!=BT_EOF {
   let mut node:*BootNode=0 as *BootNode;
-  let mut packed:bool=false;let mut repr:bool=false;let mut destructor:bool=false;
+  let mut packed:bool=false;let mut repr:bool=false;let mut destructor:bool=false;let mut exported:bool=false;
   if boot_p_take(ctx,64){
-   if boot_p_word(ctx,"drop"){boot_p_advance(ctx);destructor=true;}else{
+   if boot_p_word(ctx,"no_mangle"){boot_p_advance(ctx);exported=true;}else if boot_p_word(ctx,"drop"){boot_p_advance(ctx);destructor=true;}else{
    if !boot_p_word(ctx,"repr"){boot_error(ctx,ctx.cursor,"expected @drop, @repr(C) or @repr(packed)");return false;}
    boot_p_advance(ctx);if !boot_p_expect(ctx,40,"expected '(' after repr"){return false;}
    packed=boot_p_word(ctx,"packed");if !packed && !boot_p_word(ctx,"C"){boot_error(ctx,ctx.cursor,"unknown record representation");return false;}
    boot_p_advance(ctx);if !boot_p_expect(ctx,41,"expected ')' after representation"){return false;}repr=true;
    }
   }
-  let mut exported:bool=false;
   if boot_p_take(ctx,35) {
    let inner:bool=boot_p_take(ctx,33);
    if !boot_p_expect(ctx,91,"expected '[' after '#'"){return false;}
    if inner {
-    if destructor || repr || ctx.module!=ctx.root_module || tail!=0 as *BootNode{
+    if exported || destructor || repr || ctx.module!=ctx.root_module || tail!=0 as *BootNode{
      boot_error(ctx,ctx.cursor,"root inner attributes must precede declarations");return false;
     }
     if boot_p_word(ctx,"no_std"){

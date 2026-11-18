@@ -1,0 +1,18 @@
+#![no_std]
+#![no_main]
+#[no_mangle]
+pub fn memory_register(p:*u32,value:u32)->u32 effect[io] {
+ __volatile_write_u32(p,value);return __volatile_read_u32(p);
+}
+#[no_mangle]
+pub fn memory_publish(p:*u64,value:u64) effect[write] {
+ __atomic_store_u64_explicit(p,value,2);
+}
+#[no_mangle]
+pub fn memory_observe(p:*u64)->u64 effect[read] {
+ return __atomic_load_u64_explicit(p,1);
+}
+#[no_mangle]
+pub fn memory_replace(p:*u64,old:u64,value:u64)->bool effect[read,write] {
+ return __atomic_compare_exchange_u64_explicit(p,old,value,3,1);
+}

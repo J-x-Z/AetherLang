@@ -33,6 +33,7 @@ fn boot_effect_walk(ctx:*BootContext,function:*BootNode,node:*BootNode,access:i3
  if node==0 as *BootNode || ctx.failed{return;}
  if boot_external_place(node){function.effect_bits=function.effect_bits|access;}
  if node.kind==BN_HALT{function.effect_bits=function.effect_bits|FX_PANIC;}
+ if node.kind==BN_MEMORY{function.effect_bits=function.effect_bits|node.host_effect;}
  if node.kind==BN_ERRNO{function.effect_bits=function.effect_bits|FX_READ;}
  if node.kind==BN_CALL && node.decl!=0 as *BootNode{if node.host_effect!=0{function.effect_bits=function.effect_bits|node.host_effect;}else{boot_effect_edge(ctx,function,node.decl);}}
  let mut left_access:i32=FX_READ;

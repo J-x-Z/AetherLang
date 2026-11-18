@@ -3,6 +3,7 @@ use native_abi::boot_abi_needed;
 use llvm_native::ll_native_call;
 use emitter::boot_storage_name;
 use runtime::*;
+use memory::bm_ll_order;
 use llvm_common::*;
 pub fn ll_place(ctx:*BootContext,node:*BootNode)->i32{
  let id:i32=ll_id(ctx);
@@ -35,6 +36,7 @@ fn ll_literal_expr(ctx:*BootContext,node:*BootNode)->i32{
  ll_text(ctx,", ");ll_type(ctx,node.ty);ll_text(ctx," ");ll_literal(ctx,node,node.ty);ll_text(ctx,"\n");return id;
 }
 fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
+ if node.kind==BN_MEMORY{return ll_memory(ctx,node);}
  if node.kind==BN_ENUM_VALUE{return ll_enum_value(ctx,node);}
  if node.kind==BN_ENUM_TAG{
   let value:i32=ll_expr(ctx,node.left);let tag:i32=ll_id(ctx);ll_begin(ctx,tag);ll_text(ctx,"extractvalue ");ll_value(ctx,node.left.ty,value);ll_text(ctx,", 0\n");return tag;
@@ -264,4 +266,32 @@ fn ll_enum_value(ctx:*BootContext,node:*BootNode)->i32{
   ll_store(ctx,field.ty,arg.llvm_value,pointer);arg=arg.next;field=field.next;index=index+1;
  }
  let result:i32=ll_id(ctx);ll_begin(ctx,result);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%enum%d\n",node.id);return result;
+}
+
+fn ll_memory(ctx:*BootContext,node:*BootNode)->i32 {
+ let mut arg:*BootNode=node.params;
+ while arg!=0 as *BootNode{ll_expr(ctx,arg);arg=arg.next;}
+ let id:i32=ll_id(ctx);let success:*u8=bm_ll_order((node.value%8) as i32);
+ let failure:*u8=bm_ll_order((node.value/8) as i32);let alignment:i32=ll_bits(node.aux)/8;
+ if node.op==8{fprintf(ctx.output,"  fence %s\n",success);return ll_unit(ctx);}
+ let address:i32=node.params.llvm_value;
+ if node.op==1||node.op==3{
+  ll_begin(ctx,id);if node.op==1{ll_text(ctx,"load volatile ");}else{ll_text(ctx,"load atomic ");}
+  ll_type(ctx,node.aux);fprintf(ctx.output,", ptr %%r%d",address);
+  if node.op==1{ll_text(ctx,", align 1\n");}else{fprintf(ctx.output," %s, align %d\n",success,alignment);}return id;
+ }
+ if node.op==2||node.op==4{
+  if node.op==2{ll_text(ctx,"  store volatile ");}else{ll_text(ctx,"  store atomic ");}
+  ll_value(ctx,node.aux,node.params.next.llvm_value);fprintf(ctx.output,", ptr %%r%d",address);
+  if node.op==2{ll_text(ctx,", align 1\n");}else{fprintf(ctx.output," %s, align %d\n",success,alignment);}return ll_unit(ctx);
+ }
+ if node.op==5||node.op==6{
+  ll_begin(ctx,id);if node.op==5{ll_text(ctx,"atomicrmw add ");}else{ll_text(ctx,"atomicrmw sub ");}
+  fprintf(ctx.output,"ptr %%r%d, ",address);ll_value(ctx,node.aux,node.params.next.llvm_value);
+  fprintf(ctx.output," %s, align %d\n",success,alignment);return id;
+ }
+ let pair:i32=ll_id(ctx);ll_begin(ctx,pair);fprintf(ctx.output,"cmpxchg ptr %%r%d, ",address);
+ ll_value(ctx,node.aux,node.params.next.llvm_value);ll_text(ctx,", ");ll_value(ctx,node.aux,node.params.next.next.llvm_value);
+ fprintf(ctx.output," %s %s, align %d\n",success,failure,alignment);
+ ll_begin(ctx,id);ll_text(ctx,"extractvalue { ");ll_type(ctx,node.aux);fprintf(ctx.output,", i1 } %%r%d, 1\n",pair);return id;
 }
