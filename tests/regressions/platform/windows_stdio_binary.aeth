@@ -1,0 +1,22 @@
+use stdio_binary::fdopen_binary_read;
+extern "C" {
+    fn _dup(fd:i32)->i32;
+    fn _close(fd:i32)->i32;
+    fn _setmode(fd:i32, mode:i32)->i32;
+    fn fgetc(stream:*void)->i32;
+    fn fclose(stream:*void)->i32;
+}
+fn main()->i32 {
+    // Give stdin a known text mode, then open an owned duplicate as binary.
+    if _setmode(0,16384)<0 {return 1;}
+    let copy:i32=_dup(0);
+    if copy<0 {return 2;}
+    let input:*void=fdopen_binary_read(copy);
+    if input==0 as *void {_close(copy);return 3;}
+    let byte:i32=fgetc(input);
+    let closed:i32=fclose(input);
+    // _setmode returns the previous mode of that descriptor.
+    if _setmode(0,32768)!=16384 {return 4;}
+    if byte!=26 || closed!=0 {return 5;}
+    return 0;
+}

@@ -99,6 +99,10 @@ try:
     for name, exe in [('compiler','aethc.exe'),('jxz','jxz.exe')]:
         shutil.copy2(cross[name][0]/exe, stage/exe)
     shutil.copytree(source/'stdlib',stage/'stdlib')
+    # Install the frozen revision's Windows stdio implementation when present.
+    windows_stdio = source/'stdlib/windows/stdio_binary.aeth'
+    if windows_stdio.is_file():
+        shutil.copy2(windows_stdio, stage/'stdlib/stdio_binary.aeth')
     shutil.copytree(cross['compiler'][0]/'source',stage/'source/core')
     shutil.copytree(cross['jxz'][0]/'source',stage/'source/jxz')
     for path in ['tests/bootstrap_windows_native.py','tests/bootstrap_lsp.py','jxz/tests/windows_native.py',
@@ -176,6 +180,8 @@ revision. No Cargo, downloads, Windows execution or Wine are used by packaging.
                   platform_selection={'source/core/host_platform.aeth':'platform_windows.aeth',
                                       'source/jxz/host.aeth':'host_windows.aeth'},
                   products=products, files=files)
+    if windows_stdio.is_file():
+        manifest['platform_selection']['stdlib/stdio_binary.aeth'] = 'stdlib/windows/stdio_binary.aeth'
     (stage/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
     checksums=[f"{x['sha256']}  {x['name']}" for x in files]
     checksums.append(sha(stage/'manifest.json')+'  manifest.json')

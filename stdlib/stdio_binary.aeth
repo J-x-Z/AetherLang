@@ -1,0 +1,6 @@
+// On success fclose owns the descriptor. On error the caller still owns it.
+// On POSIX binary and text descriptors have identical byte semantics.
+extern "C" { fn fdopen(fd:i32, mode:*u8)->*void; }
+pub fn fdopen_binary_read(fd:i32)->*void {
+    return fdopen(fd, "rb");
+}

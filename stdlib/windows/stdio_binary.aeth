@@ -1,0 +1,14 @@
+// The UCRT stream mode does not change an inherited descriptor's translation
+// mode. Pass an owned duplicate when the original mode must be preserved.
+extern "C" {
+    fn _setmode(fd:i32, mode:i32)->i32;
+    fn _fdopen(fd:i32, mode:*u8)->*void;
+}
+pub fn fdopen_binary_read(fd:i32)->*void {
+    if fd<0 {return 0 as *void;}
+    let old_mode:i32=_setmode(fd,32768);  // _O_BINARY
+    if old_mode<0 {return 0 as *void;}
+    let stream:*void=_fdopen(fd,"rb");
+    if stream==0 as *void {_setmode(fd,old_mode);}
+    return stream;
+}

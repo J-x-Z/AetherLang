@@ -1,14 +1,17 @@
 // regress FILE X_COLUMN Y_COLUMN prints a JSON linear fit. Empty numeric fields
 // skip one observation; malformed numbers, duplicate selected names and ragged rows fail.
+// Windows bundles select binary stdio automatically. When using the raw repository
+// as a Windows sysroot, add --module stdio_binary=stdlib/windows/stdio_binary.aeth.
 use result::Result;
 use vec::{Vec,vec_new,vec_free};
 use csv::{CsvReader,csv_reader,csv_field,CSV_END_RECORD,CSV_EOF};
 use stats::{PairedMoments,LinearFit,paired_new,paired_push,paired_fit};
+use stdio_binary::fdopen_binary_read;
 extern "C"{
     fn fopen(path:*u8,mode:*u8)->*void;fn fclose(file:*void)->i32;
     fn strcmp(a:*u8,b:*u8)->i32;fn strtod(text:*u8,end:**u8)->f64;
     fn printf(format:*u8,...)->i32;fn fflush(stream:*void)->i32;
-    fn dup(fd:i32)->i32;fn close(fd:i32)->i32;fn fdopen(fd:i32,mode:*u8)->*void;
+    fn dup(fd:i32)->i32;fn close(fd:i32)->i32;
     fn write(fd:i32,data:*u8,count:usize)->isize;fn strlen(text:*u8)->usize;
 }
 struct Analysis{moments:PairedMoments,skipped:u64}
@@ -67,7 +70,7 @@ fn main(argc:i32,argv:**u8)->i32{
     if argc!=4{return message(2);}
     let mut fp:*void=0 as *void;
     if strcmp(argv[1],"-")==0{
-        let fd:i32=dup(0);if fd<0{return message(3);}fp=fdopen(fd,"rb");
+        let fd:i32=dup(0);if fd<0{return message(3);}fp=fdopen_binary_read(fd);
         if fp==0 as *void{close(fd);return message(3);}
     }else{fp=fopen(argv[1],"rb");}
     if fp==0 as *void{return message(3);}
