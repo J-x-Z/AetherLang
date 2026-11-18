@@ -25,7 +25,7 @@ if a.seed:
  for stage in [s2,s3]:run(stage.name+'/IR',[stage,main,'--emit-llvm','-o',w/(stage.name+'.ll')])
  assert (w/'stage2.ll').read_bytes()==(w/'stage3.ll').read_bytes(),'LLVM self compiler fixed point mismatch'
 else:s3=compiler_input
-for name in ['values.aeth','modules.aeth','statistics.aeth','script.ath']:
+for name in ['values.aeth','receiver_values.aeth','modules.aeth','statistics.aeth','script.ath']:
  path=fixtures/name;run(name+'/check',[s3,'check',path,'-I',lib])
  for b in ['c','llvm']:
   for o in [0,2]:
@@ -49,6 +49,16 @@ negative={
  'temporary_escape':(base+'fn main(){let reference:&i64=Box::new(7).get_ref();let value:i64=*reference;}','outlives its local storage'),
  'live_borrow':(base+'fn main(){let mut value:Box<i64>=Box::new(7);let reference:&i64=value.get_ref();value.set(8);let copied:i64=*reference;}','live reference loan'),
 }
+receiver_base='struct Box<T>{value:T}impl<T> Box<T>{fn into_value(self:Self)->T{return self.value;}fn consume(self:own Self)->T{return self.value;}fn raw(self:*Self)->T{return self.value;}} '
+negative.update({
+ 'generic_borrowed_value':(receiver_base+'fn main(){let x:Box<i64>=Box{value:7};let r:&Box<i64>=&x;r.into_value();}','by-value method'),
+ 'generic_raw_value':(receiver_base+'fn main(){let x:Box<i64>=Box{value:7};let p:*Box<i64>=&x as *Box<i64>;p.into_value();}','by-value method'),
+ 'generic_plain_into_owned':(receiver_base+'fn main(){let x:Box<i64>=Box{value:7};x.consume();}','type mismatch'),
+ 'generic_owned_into_plain':(receiver_base+'fn main(){let x:own Box<i64>=unsafe{Box{value:7} as own Box<i64>};x.into_value();}','type mismatch'),
+ 'generic_value_into_raw':(receiver_base+'fn main(){let x:Box<i64>=Box{value:7};x.raw();}','type mismatch'),
+ 'generic_reference_into_raw':(receiver_base+'fn main(){let x:Box<i64>=Box{value:7};let r:&Box<i64>=&x;r.raw();}','type mismatch'),
+ 'generic_owned_reused':(receiver_base+'fn main(){let x:own Box<i64>=unsafe{Box{value:7} as own Box<i64>};x.consume();x.consume();}','moved'),
+})
 san=None
 if not a.no_sanitize and a.sanitized_compiler:san=a.sanitized_compiler.resolve()
 if not a.no_sanitize and a.seed and san is None:

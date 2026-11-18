@@ -1,0 +1,33 @@
+// Receiver adjustment must precede, rather than replace, generic call checking.
+struct Box<T>{value:T}
+impl<T> Box<T>{
+ fn into_value(self:Self)->T{return self.value;}
+ fn replace<U>(self:Self,value:U)->Box<U>{return Box{value:value};}
+ fn raw(self:*Self)->T{return self.value;}
+}
+type LongBox=Box<i64>;
+struct Resource<T>{value:T}
+static mut dropped:i32=0;
+@drop fn drop_integer(value:own Resource<i64>){dropped+=1;}
+@drop fn drop_boolean(value:own Resource<bool>){dropped+=1;}
+impl<T> Resource<T>{
+ fn read(self:&own Self)->T{return self.value;}
+ fn consume(self:own Self)->T{return self.value;}
+}
+fn main()->i32{
+ let box:LongBox=Box{value:17};
+ if box.into_value()!=17{return 1;}
+ let flag:Box<bool>=box.replace(true);
+ if !flag.into_value(){return 2;}
+ let empty:Box<()>=Box{value:()};empty.into_value();
+ let borrowed:&LongBox=&box;
+ if (*borrowed).into_value()!=17{return 3;}
+ let pointer:*LongBox=borrowed as *LongBox;
+ if pointer.raw()!=17||(*pointer).into_value()!=17{return 4;}
+ let first:own Resource<i64>=unsafe{Resource{value:23} as own Resource<i64>};
+ if first.read()!=23||dropped!=0{return 5;}
+ if first.consume()!=23||dropped!=1{return 6;}
+ let second:own Resource<bool>=unsafe{Resource{value:true} as own Resource<bool>};
+ if !second.consume()||dropped!=2{return 7;}
+ return 0;
+}

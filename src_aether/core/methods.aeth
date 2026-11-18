@@ -118,9 +118,13 @@ pub fn boot_method_call(ctx:*BootContext,node:*BootNode,actual:*BootType)->bool 
    let dereference:*BootNode=boot_node(ctx,BN_UNARY,node.token);if ctx.failed{return false;}dereference.op=42;dereference.left=receiver;receiver=dereference;
   }
   let borrow:*BootNode=boot_node(ctx,BN_UNARY,node.token);if ctx.failed{return false;}borrow.op=38;borrow.left=receiver;if formal.kind==BY_MUTREF{borrow.flags=1;}receiver=borrow;
- }else if actual!=formal&&formal.kind!=BY_PTR{
+ }else if boot_indirect(actual)&&formal.kind!=BY_PTR{
   boot_error(ctx,node.token,"by-value method requires a value receiver; dereference explicitly");return false;
  }
+ // Self can still be an unspecialized application here. Preserve plain/own
+ // values unchanged and let the ordinary call infer the impl arguments, then
+ // compare its concrete parameter type. Do not erase ownership or implicitly
+ // dereference an indirect receiver to make that comparison succeed.
  receiver.next=node.params;node.params=receiver;node.left=0 as *BootNode;node.kind=BN_CALL;node.name=function.name;node.decl=function;node.aux=target;return true;
 }
 pub fn boot_method_associated(ctx:*BootContext,node:*BootNode)->bool {
