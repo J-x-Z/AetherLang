@@ -3,19 +3,15 @@ use runtime::*;
 use emitter::{boot_choose_namespace,boot_storage_name};
 use llvm_common::*;
 use llvm_expr::ll_statement;
-fn ll_foreign_valid(ctx:*BootContext,node:*BootNode)->bool{
- if node.ty.kind==BY_STRUCT || node.ty.kind==BY_ARRAY {boot_error(ctx,node.token,"Core LLVM foreign aggregate return ABI is not implemented");return false;}
- let mut param:*BootNode=node.params;while param!=(0 as *BootNode){
-  if param.ty.kind==BY_STRUCT || param.ty.kind==BY_ARRAY {boot_error(ctx,param.token,"Core LLVM foreign aggregate parameter ABI is not implemented");return false;}param=param.next;
- }return true;
-}
+use native_abi::*;
+use llvm_native::*;
 fn ll_signature(ctx:*BootContext,node:*BootNode){
- let foreign:bool=(node.flags&2)!=0;
- if foreign{ll_text(ctx,"declare ");}else if boot_c_symbol(node){ll_text(ctx,"define ");}else{ll_text(ctx,"define internal ");}
- if boot_c_symbol(node){ll_attr(ctx,node.ty);}
+ let foreign:bool=(node.flags&2)!=0;let native_scalar:bool=boot_c_symbol(node) && !boot_abi_needed(node);
+ if foreign{ll_text(ctx,"declare ");}else if native_scalar{ll_text(ctx,"define ");}else{ll_text(ctx,"define internal ");}
+ if native_scalar{ll_attr(ctx,node.ty);}
  ll_return_type(ctx,node.ty);ll_text(ctx," ");ll_function(ctx,node);ll_text(ctx,"(");let mut param:*BootNode=node.params;
  while param!=(0 as *BootNode){
-  ll_type(ctx,param.ty);ll_text(ctx," ");if boot_c_symbol(node){ll_attr(ctx,param.ty);}if !foreign{fprintf(ctx.output,"%%arg%d",param.id);}
+  ll_type(ctx,param.ty);ll_text(ctx," ");if native_scalar{ll_attr(ctx,param.ty);}if !foreign{fprintf(ctx.output,"%%arg%d",param.id);}
   param=param.next;if param!=(0 as *BootNode){ll_text(ctx,", ");}
  }
  if (node.flags&4)!=0{ll_text(ctx,", ...");}ll_text(ctx,")");
@@ -73,7 +69,7 @@ fn ll_storage(ctx:*BootContext,item:*BootNode){
 pub fn boot_llvm_supported(ctx:*BootContext)->bool {
  let mut item:*BootNode=ctx.program.body;
  while item!=0 as *BootNode {
-  if item.kind==BN_FN && boot_c_symbol(item) && !ll_foreign_valid(ctx,item){return false;}
+  if item.kind==BN_FN && boot_abi_needed(item) && !boot_abi_target(ctx,item){return false;}
   item=item.next;
  }
  return true;
@@ -102,7 +98,10 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
   if item.kind==BN_FN&&(item.flags&2)!=0{
    let mut previous:*BootNode=ctx.program.body;let mut duplicate:bool=false;
    while previous!=item{if previous.kind==BN_FN&&(previous.flags&2)!=0&&strcmp(previous.name,item.name)==0{duplicate=true;}previous=previous.next;}
-   if !duplicate && boot_symbol_definition(ctx,item)==0 as *BootNode{ll_signature(ctx,item);ll_text(ctx,"\n");}
+   if !duplicate && boot_symbol_definition(ctx,item)==0 as *BootNode{
+    if boot_abi_needed(item){let sig:*BootNativeSignature=boot_abi_signature(ctx,item);if ctx.failed{return false;}ll_text(ctx,"declare ");ll_native_declaration(ctx,item,sig);}
+    else{ll_signature(ctx,item);}ll_text(ctx,"\n");
+   }
   }item=item.next;
  }
  item=ctx.program.body;
@@ -113,7 +112,7 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
    let mut param:*BootNode=item.params;while param!=(0 as *BootNode){ll_text(ctx,"  store ");ll_type(ctx,param.ty);fprintf(ctx.output," %%arg%d, ptr %%v%d\n",param.id,param.id);param=param.next;}
    ll_statement(ctx,item.body);
    if !ctx.llvm_terminated{if item.ty.kind==BY_VOID{ll_text(ctx,"  ret void\n");}else{ll_text(ctx,"  unreachable\n");}}
-   ll_text(ctx,"}\n");
+   ll_text(ctx,"}\n");if (item.flags&BF_EXPORT)!=0 && boot_abi_needed(item){ll_export_wrapper(ctx,item);}
   }item=item.next;
  }
  item=ctx.program.body;

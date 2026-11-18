@@ -1,0 +1,116 @@
+// Native aggregate classification for the direct LLVM backend. Scalar arguments
+// share the register counters so SysV can roll back an entire aggregate to stack.
+use model::*;
+use runtime::*;
+use type_model::boot_layout;
+extern "C"{fn uname(info:*void)->i32;}
+pub const ABI_SCALAR:i32=0;pub const ABI_PARTS:i32=1;pub const ABI_BYVAL:i32=2;
+pub const ABI_INDIRECT:i32=3;pub const ABI_EMPTY:i32=4;
+pub const ABI_FLOAT:i32=-1;pub const ABI_DOUBLE:i32=-2;pub const ABI_FLOAT2:i32=-3;pub const ABI_I64X2:i32=-4;
+pub struct BootNativeSlot {mode:i32,ty:*BootType,a:i32,b:i32,first:i32,second:i32,address:i32,param:*BootNode,next:*BootNativeSlot}
+pub struct BootNativeSignature {result:*BootNativeSlot,params:*BootNativeSlot,gp:i32,sse:i32}
+struct BootChunk{kind:i32,bytes:i32,float_count:i32,double_value:bool}
+pub fn boot_abi_needed(fn_node:*BootNode)->bool{
+ if !boot_c_symbol(fn_node){return false;}
+ if fn_node.ty.kind==BY_STRUCT{return true;}
+ let mut arg:*BootNode=fn_node.params;while arg!=0 as *BootNode{if arg.ty.kind==BY_STRUCT{return true;}arg=arg.next;}
+ return false;
+}
+pub fn boot_abi_target(ctx:*BootContext,node:*BootNode)->bool{
+ if ctx.native_abi!=0{return true;}
+ let info:*u8=boot_alloc(ctx,2048) as *u8;if ctx.failed{return false;}
+ if uname(info as *void)!=0 {boot_error(ctx,node.token,"cannot identify the native aggregate ABI");return false;}
+ if strcmp(info,"Darwin")==0{
+  if strcmp(info+1024,"arm64")==0{ctx.native_abi=1;}
+  if strcmp(info+1024,"x86_64")==0{ctx.native_abi=2;}
+ }else if strcmp(info,"Linux")==0 && strcmp(info+260,"x86_64")==0{ctx.native_abi=2;}
+ if ctx.native_abi==0{boot_error(ctx,node.token,"native aggregate ABI requires Apple arm64 or SysV x86_64");return false;}
+ return true;
+}
+fn boot_hfa(ty:*BootType)->i32{
+ if ty.kind==BY_F32{return 101;}if ty.kind==BY_F64{return 201;}
+ if ty.kind==BY_ARRAY{
+  if ty.extent==0 || ty.extent>4{return 0;}
+  let h:i32=boot_hfa(ty.inner);if h==0{return 0;}
+  let n:i32=(h%100)*(ty.extent as i32);if n>4{return 0;}return h-h%100+n;
+ }
+ if ty.kind!=BY_STRUCT{return 0;}
+ let mut field:*BootNode=ty.fields;let mut kind:i32=0;let mut count:i32=0;
+ while field!=0 as *BootNode {
+  let h:i32=boot_hfa(field.ty);if h==0{return 0;}
+  if kind!=0 && kind!=h-h%100{return 0;}kind=h-h%100;count=count+h%100;if count>4{return 0;}field=field.next;
+ }
+ let mut width:u64=4;if kind==200{width=8;}
+ if count==0 || ty.layout_size!=(count as u64)*width{return 0;}return kind+count;
+}
+fn boot_sysv_chunks(ty:*BootType,offset:u64,chunks:*BootChunk)->bool{
+ if ty.layout_size==0{return true;}
+ if offset%ty.layout_align!=0{return false;}
+ if ty.kind==BY_ARRAY{
+  let mut i:u64=0;while i<ty.extent{if !boot_sysv_chunks(ty.inner,offset+i*ty.inner.layout_size,chunks){return false;}i=i+1;}return true;
+ }
+ if ty.kind==BY_STRUCT{
+  let mut pos:u64=0;let mut f:*BootNode=ty.fields;
+  while f!=0 as *BootNode{
+   let align:u64=f.ty.layout_align;pos=pos+(align-pos%align)%align;
+   if !boot_sysv_chunks(f.ty,offset+pos,chunks){return false;}pos=pos+f.ty.layout_size;f=f.next;
+  }
+  return true;
+ }
+ let mut i:u64=0;
+ while i<ty.layout_size{
+  let at:u64=offset+i;let c:*BootChunk=chunks+at/8;let end:i32=(at%8) as i32+1;
+  if end>c.bytes{c.bytes=end;}
+  if ty.kind==BY_F32 || ty.kind==BY_F64{
+   if c.kind==0{c.kind=2;}if i==0{c.float_count=c.float_count+1;}if ty.kind==BY_F64{c.double_value=true;}
+  }else{c.kind=1;}
+  i=i+1;
+ }
+ return true;
+}
+fn boot_piece(c:*BootChunk)->i32{
+ if c.kind==0{return 0;}if c.kind==1{return c.bytes*8;}if c.double_value{return ABI_DOUBLE;}
+ if c.float_count==1{return ABI_FLOAT;}return ABI_FLOAT2;
+}
+fn boot_classify(ctx:*BootContext,sig:*BootNativeSignature,ty:*BootType,result:bool,token:*BootToken)->*BootNativeSlot{
+ let slot:*BootNativeSlot=boot_alloc(ctx,size_of(BootNativeSlot) as u64) as *BootNativeSlot;
+ if ctx.failed{return slot;}slot.ty=ty;
+ if ty.kind!=BY_STRUCT{
+  if ty.kind==BY_VOID{slot.mode=ABI_EMPTY;return slot;}
+  if !result{
+   if ty.kind==BY_F32 || ty.kind==BY_F64{if sig.sse>0{sig.sse=sig.sse-1;}}
+   else if sig.gp>0{sig.gp=sig.gp-1;}
+  }
+  return slot;
+ }
+ if !boot_layout(ctx,ty,0,token){return 0 as *BootNativeSlot;}
+ let size:u64=ty.layout_size;if size==0{slot.mode=ABI_EMPTY;return slot;}
+ slot.mode=ABI_PARTS;
+ if ctx.native_abi==1{
+  slot.a=boot_hfa(ty);if slot.a!=0{return slot;}
+  if size<=8{slot.a=64;if result{slot.a=(size*8) as i32;}return slot;}
+  if size<=16{slot.a=ABI_I64X2;return slot;}slot.mode=ABI_INDIRECT;return slot;
+ }
+ if size<=16{
+  let chunks:*BootChunk=boot_alloc(ctx,2*(size_of(BootChunk) as u64)) as *BootChunk;if ctx.failed{return 0 as *BootNativeSlot;}
+  if boot_sysv_chunks(ty,0,chunks){
+   slot.a=boot_piece(chunks);slot.b=boot_piece(chunks+1);
+   let mut gp:i32=0;let mut sse:i32=0;
+   if slot.a>0{gp=1;}else if slot.a<0{sse=1;}
+   if slot.b>0{gp=gp+1;}else if slot.b<0{sse=sse+1;}
+   if result{return slot;}
+   if gp<=sig.gp && sse<=sig.sse{sig.gp=sig.gp-gp;sig.sse=sig.sse-sse;return slot;}
+  }
+ }
+ if result{slot.mode=ABI_INDIRECT;sig.gp=sig.gp-1;}else{slot.mode=ABI_BYVAL;}return slot;
+}
+pub fn boot_abi_signature(ctx:*BootContext,node:*BootNode)->*BootNativeSignature{
+ let sig:*BootNativeSignature=boot_alloc(ctx,size_of(BootNativeSignature) as u64) as *BootNativeSignature;
+ if ctx.failed{return sig;}sig.gp=6;sig.sse=8;sig.result=boot_classify(ctx,sig,node.ty,true,node.token);
+ let mut param:*BootNode=node.params;let mut tail:*BootNativeSlot=0 as *BootNativeSlot;
+ while param!=0 as *BootNode && !ctx.failed{
+  let slot:*BootNativeSlot=boot_classify(ctx,sig,param.ty,false,param.token);if ctx.failed{return 0 as *BootNativeSignature;}
+  slot.param=param;if tail==0 as *BootNativeSlot{sig.params=slot;}else{tail.next=slot;}tail=slot;param=param.next;
+ }
+ return sig;
+}

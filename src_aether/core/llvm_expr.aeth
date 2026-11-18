@@ -1,4 +1,6 @@
 use model::*;
+use native_abi::boot_abi_needed;
+use llvm_native::ll_native_call;
 use emitter::boot_storage_name;
 use runtime::*;
 use llvm_common::*;
@@ -99,9 +101,11 @@ fn ll_call(ctx:*BootContext,node:*BootNode)->i32{
    else{if arg.ty.kind!=BY_PTR&&!ll_float(arg.ty)&&ll_bits(arg.ty)<32{arg.llvm_value=ll_cast(ctx,value,arg.ty,boot_type(ctx,BY_I32));}}
   }else{param=param.next;}arg=arg.next;
  }
+ if (node.decl.flags&2)!=0 && boot_abi_needed(node.decl){return ll_native_call(ctx,node);}
+ let native_scalar:bool=boot_c_symbol(node.decl) && !boot_abi_needed(node.decl);
  let id:i32=ll_id(ctx);
  if node.ty.kind!=BY_VOID{ll_begin(ctx,id);}else{ll_text(ctx,"  ");}
- ll_text(ctx,"call ");if boot_c_symbol(node.decl){ll_attr(ctx,node.ty);}ll_return_type(ctx,node.ty);ll_text(ctx," ");
+ ll_text(ctx,"call ");if native_scalar{ll_attr(ctx,node.ty);}ll_return_type(ctx,node.ty);ll_text(ctx," ");
  if (node.decl.flags&4)!=0{
   ll_text(ctx,"(");param=node.decl.params;while param!=(0 as *BootNode){ll_type(ctx,param.ty);ll_text(ctx,", ");param=param.next;}ll_text(ctx,"...) ");
  }
@@ -111,7 +115,7 @@ fn ll_call(ctx:*BootContext,node:*BootNode)->i32{
   if param==(0 as *BootNode){
    if ty.kind==BY_F32{ty=boot_type(ctx,BY_F64);}else{if ty.kind!=BY_PTR&&!ll_float(ty)&&ll_bits(ty)<32{ty=boot_type(ctx,BY_I32);}}
   }
-  ll_type(ctx,ty);ll_text(ctx," ");if param!=(0 as *BootNode)&&boot_c_symbol(node.decl){ll_attr(ctx,ty);}ll_reg(ctx,arg.llvm_value);
+  ll_type(ctx,ty);ll_text(ctx," ");if param!=(0 as *BootNode)&&native_scalar{ll_attr(ctx,ty);}ll_reg(ctx,arg.llvm_value);
   if param!=(0 as *BootNode){param=param.next;}arg=arg.next;if arg!=(0 as *BootNode){ll_text(ctx,", ");}
  }
  ll_text(ctx,")\n");if node.ty.kind==BY_VOID{return ll_unit(ctx);}return id;

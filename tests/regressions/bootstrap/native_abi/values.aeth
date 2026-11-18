@@ -1,0 +1,45 @@
+struct Pair{lo:i64,hi:i64}
+struct Mixed{x:f64,y:i64}
+struct Tiny{x:u8,y:u8,z:u8}
+struct Floats{xy:[f32;3]}
+struct Doubles{xy:[[f64;2];2]}
+struct Big{x:i64,y:i64,z:i64}
+struct Empty{}
+extern "C"{
+ fn pair(p:Pair)->Pair;
+ fn mixed(p:Mixed)->Mixed;
+ fn tiny(p:Tiny)->Tiny;
+ fn floats(p:Floats)->Floats;
+ fn doubles(p:Doubles)->Doubles;
+ fn big(p:Big)->Big;
+ fn spill(a:i64,b:i64,c:i64,d:i64,e:i64,p:Pair,z:i64)->i64;
+ fn sret_spill(a:i64,b:i64,c:i64,d:i64,p:Pair)->Big;
+ fn sse_spill(a:f64,b:f64,c:f64,d:f64,e:f64,f:f64,g:f64,h:f64,p:Mixed)->i64;
+ fn addup(p:Pair,...)->i64;
+ fn empty(p:Empty,x:i32)->i32;
+ fn inspect()->i32;
+}
+#[no_mangle] fn native_pair(p:Pair)->Pair{Pair{lo:p.hi+4,hi:p.lo-3}}
+#[no_mangle] fn native_mixed(p:Mixed)->Mixed{Mixed{x:p.x*2.0,y:p.y+2}}
+#[no_mangle] fn native_tiny(p:Tiny)->Tiny{Tiny{x:p.z,y:p.x,z:p.y}}
+#[no_mangle] fn native_floats(p:Floats)->Floats{Floats{xy:[p.xy[2],p.xy[0],p.xy[1]]}}
+#[no_mangle] fn native_doubles(p:Doubles)->Doubles{Doubles{xy:[p.xy[1],p.xy[0]]}}
+#[no_mangle] fn native_big(p:Big)->Big{Big{x:p.z,y:p.x,z:p.y}}
+#[no_mangle] fn native_spill(a:i64,b:i64,c:i64,d:i64,e:i64,p:Pair,z:i64)->i64{a+b+c+d+e+p.lo+p.hi+z}
+#[no_mangle] fn native_sret(a:i64,b:i64,c:i64,d:i64,p:Pair)->Big{Big{x:p.lo+a+b,y:p.hi+c,z:d}}
+#[no_mangle] fn native_empty(p:Empty,x:i32)->i32{x+1}
+fn main()->i32{
+ let p:Pair=Pair{lo:9,hi:11};
+ let q:Pair=pair(pair(p));if q.lo!=10 || q.hi!=12{return 1;}
+ let m:Mixed=mixed(Mixed{x:2.5,y:12});if m.x!=5.0 || m.y!=14{return 2;}
+ let t:Tiny=tiny(Tiny{x:1,y:2,z:3});if t.x!=3 || t.y!=1 || t.z!=2{return 3;}
+ let f:Floats=floats(Floats{xy:[2.0,3.0,4.0]});if f.xy[0]!=4.0 || f.xy[2]!=3.0{return 4;}
+ let g:Doubles=doubles(Doubles{xy:[[1.0,2.0],[3.0,4.0]]});if g.xy[1][0]!=1.0 || g.xy[0][1]!=4.0{return 5;}
+ let z:Big=big(Big{x:8,y:9,z:10});if z.x!=10 || z.y!=8 || z.z!=9{return 6;}
+ if spill(1,2,3,4,5,p,6)!=41{return 7;}
+ let s:Big=sret_spill(1,2,3,4,p);if s.x!=12 || s.y!=14 || s.z!=4{return 8;}
+ if sse_spill(1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,m)!=55{return 9;}
+ if addup(p,3 as i16,4.0 as f32)!=27{return 10;}
+ if empty(Empty{},40)!=41{return 11;}
+ return inspect();
+}

@@ -1,4 +1,5 @@
 use model::*;
+use native_abi::boot_abi_needed;
 use runtime::*;
 extern "C" {fn strtod(text:*u8,end:**u8)->f64;}
 // Direct opaque-pointer LLVM IR utilities. No LLVM/Rust emitter is invoked.
@@ -24,7 +25,7 @@ pub fn ll_reg(ctx:*BootContext,id:i32){fprintf(ctx.output,"%%r%d",id);}
 pub fn ll_begin(ctx:*BootContext,id:i32){fprintf(ctx.output,"  %%r%d = ",id);}
 pub fn ll_value(ctx:*BootContext,ty:*BootType,id:i32){ll_type(ctx,ty);ll_text(ctx," ");ll_reg(ctx,id);}
 pub fn ll_function(ctx:*BootContext,node:*BootNode){
- if boot_c_symbol(node){fprintf(ctx.output,"@%s",node.name);}else{fprintf(ctx.output,"@a%d_f%d",ctx.c_namespace,node.id);}
+ if boot_c_symbol(node) && ((node.flags&BF_EXPORT)==0 || !boot_abi_needed(node)){fprintf(ctx.output,"@%s",node.name);}else{fprintf(ctx.output,"@a%d_f%d",ctx.c_namespace,node.id);}
 }
 pub fn ll_attr(ctx:*BootContext,ty:*BootType){
  if ty.kind==BY_BOOL||ty.kind==BY_U8||ty.kind==BY_U16{ll_text(ctx,"zeroext ");}
@@ -99,9 +100,15 @@ pub fn ll_globals(ctx:*BootContext,node:*BootNode){
   ll_globals(ctx,item.left);ll_globals(ctx,item.right);ll_globals(ctx,item.third);ll_globals(ctx,item.body);ll_globals(ctx,item.params);item=item.next;
  }
 }
+pub fn ll_abi_width(ty:*BootType)->u64{return ty.layout_size+(8-ty.layout_size%8)%8;}
+pub fn ll_abi_alloc(ctx:*BootContext,ty:*BootType,id:i32,role:*u8){fprintf(ctx.output,"  %%abi%s%d = alloca [%llu x i8], align 8\n",role,id,ll_abi_width(ty));}
 pub fn ll_allocas(ctx:*BootContext,node:*BootNode){
  let mut item:*BootNode=node;
  while item!=(0 as *BootNode){
+  if item.kind==BN_CALL && (item.decl.flags&2)!=0 && boot_abi_needed(item.decl){
+   if item.ty.kind==BY_STRUCT{ll_abi_alloc(ctx,item.ty,item.id,"ret");}
+   let mut p:*BootNode=item.params;while p!=0 as *BootNode{if p.ty.kind==BY_STRUCT{ll_abi_alloc(ctx,p.ty,p.id,"arg");}p=p.next;}
+  }
   if item.kind==BN_LET||item.kind==BN_PARAM{fprintf(ctx.output,"  %%v%d = alloca ",item.id);ll_type(ctx,item.ty);ll_text(ctx,"\n");}
   if item.kind==BN_VALUE&&item.ty.kind!=BY_VOID{fprintf(ctx.output,"  %%yield%d = alloca ",item.id);ll_type(ctx,item.ty);ll_text(ctx,"\n");}
   if item.kind==BN_ARRAY||item.kind==BN_REPEAT||(item.kind==BN_INDEX&&item.left.ty.kind==BY_ARRAY&&!boot_place_form(item.left)){

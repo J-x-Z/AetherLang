@@ -100,10 +100,9 @@ run('build after two interruptions',[generation,'build',simple,'-o',wait_result]
 run('child result after two interruptions',[wait_result],23)
 foreign_aggregate=case/'aggregate.aeth'
 foreign_aggregate.write_text('struct P{x:i64} extern "C"{fn consume(p:P)->i32;} fn main()->i32{return 0;}')
-for mode in ('check','build'):
-    wrong=run('LLVM aggregate rejected by '+mode,[compiler,mode,foreign_aggregate,'--backend','llvm'],1)
-    assert 'foreign aggregate parameter' in wrong.stdout
-run('C aggregate available',[compiler,'check',foreign_aggregate,'--backend','c'])
+for target_backend in ('c','llvm'):
+    run(target_backend+'/foreign aggregate check',[compiler,'check',foreign_aggregate,'--backend',target_backend])
+    run(target_backend+'/foreign aggregate build',[compiler,'build',foreign_aggregate,'--backend',target_backend,'-o',case/('foreign-'+target_backend)])
 run('duplicate binding', [compiler,'check',*mapping,*mapping,'--',src.name],1)
 run('invalid binding', [compiler,'check','--module','fn='+str(module),'--',src.name],1)
 run('exact binding does not expose sibling roots', [compiler,'check','--module','unrelated='+str(module),'--',src.name],1)

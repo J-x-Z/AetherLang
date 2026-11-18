@@ -71,7 +71,7 @@ pub struct BootContext {
  failed:bool,next_id:i32,depth:i32,bindings:*BootBinding,
  function:*BootNode,loop_depth:i32,output:*void,c_namespace:i32,
  module:*BootModule,root_module:*BootModule,modules:*BootModule,modules_tail:*BootModule,
- no_main:bool,export_namespace:*u8,uses_errno:bool,errno_name:*u8,errno_declared:bool,
+ native_abi:i32,no_main:bool,export_namespace:*u8,uses_errno:bool,errno_name:*u8,errno_declared:bool,
  module_count:i32,source_total:u64,roots:*BootRoot,mapped:*BootMappedModule,
  llvm_serial:i32,llvm_block:i32,llvm_break:i32,llvm_continue:i32,llvm_terminated:bool,parse_condition:bool,
  value_type:*BootType,value_target:*BootNode,llvm_yield:i32,

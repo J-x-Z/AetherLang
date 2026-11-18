@@ -1,0 +1,148 @@
+// Marshal only at a C ABI boundary. All ordinary Aether calls and returns use
+// the original source value type, including inside an exported function's body.
+use model::*;
+use runtime::*;
+use native_abi::*;
+use llvm_common::*;
+fn ll_piece(ctx:*BootContext,code:i32){
+ if code>200{fprintf(ctx.output,"[%d x double]",code-200);return;}
+ if code>100{fprintf(ctx.output,"[%d x float]",code-100);return;}
+ if code==ABI_I64X2{ll_text(ctx,"[2 x i64]");return;}
+ if code==ABI_FLOAT2{ll_text(ctx,"<2 x float>");return;}
+ if code==ABI_FLOAT{ll_text(ctx,"float");return;}if code==ABI_DOUBLE{ll_text(ctx,"double");return;}
+ fprintf(ctx.output,"i%d",code);
+}
+fn ll_native_result(ctx:*BootContext,slot:*BootNativeSlot,attrs:bool){
+ if slot.mode==ABI_EMPTY||slot.mode==ABI_INDIRECT{ll_text(ctx,"void");return;}
+ if slot.mode==ABI_SCALAR{if attrs{ll_attr(ctx,slot.ty);}ll_type(ctx,slot.ty);return;}
+ if slot.b==0{ll_piece(ctx,slot.a);return;}
+ ll_text(ctx,"{");ll_piece(ctx,slot.a);ll_text(ctx,", ");ll_piece(ctx,slot.b);ll_text(ctx,"}");
+}
+fn ll_comma(ctx:*BootContext,any:bool){if any{ll_text(ctx,", ");}}
+// Form 0 is a variadic callee type, 1 a declaration/definition and 2 a call.
+fn ll_native_args(ctx:*BootContext,sig:*BootNativeSignature,form:i32)->bool{
+ let mut any:bool=false;
+ if sig.result.mode==ABI_INDIRECT{
+  any=true;ll_text(ctx,"ptr");
+  if form!=0{ll_text(ctx," sret(");ll_type(ctx,sig.result.ty);fprintf(ctx.output,") align %llu ",sig.result.ty.layout_align);}
+  if form==1{ll_text(ctx,"%out");}if form==2{ll_reg(ctx,sig.result.address);}
+ }
+ let mut s:*BootNativeSlot=sig.params;
+ while s!=0 as *BootNativeSlot{
+  if s.mode!=ABI_EMPTY{
+   ll_comma(ctx,any);any=true;
+   if s.mode==ABI_SCALAR{ll_type(ctx,s.ty);if form!=0{ll_text(ctx," ");ll_attr(ctx,s.ty);}}
+   else if s.mode==ABI_PARTS{ll_piece(ctx,s.a);ll_text(ctx," ");}
+   else{ll_text(ctx,"ptr ");if s.mode==ABI_BYVAL && form!=0{ll_text(ctx,"byval(");ll_type(ctx,s.ty);ll_text(ctx,") align 8 ");}}
+   if form==1{fprintf(ctx.output,"%%n%d",s.param.id);}
+   if form==2{if s.mode==ABI_BYVAL||s.mode==ABI_INDIRECT{ll_reg(ctx,s.address);}else{ll_reg(ctx,s.first);}}
+   if s.mode==ABI_PARTS && s.b!=0{
+    ll_text(ctx,", ");ll_piece(ctx,s.b);ll_text(ctx," ");
+    if form==1{fprintf(ctx.output,"%%n%d_1",s.param.id);}if form==2{ll_reg(ctx,s.second);}
+   }
+  }s=s.next;
+ }
+ return any;
+}
+pub fn ll_native_declaration(ctx:*BootContext,node:*BootNode,sig:*BootNativeSignature){
+ ll_native_result(ctx,sig.result,true);fprintf(ctx.output," @%s(",node.name);let any:bool=ll_native_args(ctx,sig,1);
+ if (node.flags&4)!=0{ll_comma(ctx,any);ll_text(ctx,"...");}ll_text(ctx,")");
+}
+fn ll_slot_address(ctx:*BootContext,slot:*BootNativeSlot,id:i32,role:*u8){
+ slot.address=ll_id(ctx);ll_begin(ctx,slot.address);fprintf(ctx.output,"getelementptr i8, ptr %%abi%s%d, i64 0\n",role,id);
+}
+fn ll_slot_offset(ctx:*BootContext,address:i32,offset:i32)->i32{
+ if offset==0{return address;}
+ let id:i32=ll_id(ctx);ll_begin(ctx,id);fprintf(ctx.output,"getelementptr i8, ptr %%r%d, i64 %d\n",address,offset);return id;
+}
+fn ll_get_piece(ctx:*BootContext,code:i32,address:i32,offset:i32)->i32{
+ let p:i32=ll_slot_offset(ctx,address,offset);let id:i32=ll_id(ctx);ll_begin(ctx,id);ll_text(ctx,"load ");ll_piece(ctx,code);
+ fprintf(ctx.output,", ptr %%r%d, align 1\n",p);return id;
+}
+fn ll_put_value(ctx:*BootContext,slot:*BootNativeSlot,value:i32){
+ // A small Darwin argument can consume an eightbyte register even if its
+ // language representation is three bytes. Initialize the entire scratch slot.
+ if slot.mode==ABI_PARTS{fprintf(ctx.output,"  store [%llu x i8] zeroinitializer, ptr %%r%d, align 1\n",ll_abi_width(slot.ty),slot.address);}
+ ll_store(ctx,slot.ty,value,slot.address);
+ if slot.mode==ABI_PARTS{
+  slot.first=ll_get_piece(ctx,slot.a,slot.address,0);
+  if slot.b!=0{slot.second=ll_get_piece(ctx,slot.b,slot.address,8);}
+ }
+}
+fn ll_save_piece(ctx:*BootContext,slot:*BootNativeSlot,second:bool,named:bool,value:i32){
+ let mut code:i32=slot.a;let mut offset:i32=0;if second{code=slot.b;offset=8;}
+ let p:i32=ll_slot_offset(ctx,slot.address,offset);ll_text(ctx,"  store ");ll_piece(ctx,code);ll_text(ctx," ");
+ if named{fprintf(ctx.output,"%%n%d",slot.param.id);if second{ll_text(ctx,"_1");}}else{ll_reg(ctx,value);}
+ fprintf(ctx.output,", ptr %%r%d, align 1\n",p);
+}
+fn ll_unpack_result(ctx:*BootContext,slot:*BootNativeSlot,id:i32)->i32{
+ if slot.mode==ABI_EMPTY{
+  if slot.ty.kind==BY_VOID{return ll_unit(ctx);}
+  let zero:i32=ll_id(ctx);ll_begin(ctx,zero);ll_text(ctx,"freeze ");ll_type(ctx,slot.ty);ll_text(ctx," zeroinitializer\n");return zero;
+ }
+ if slot.mode==ABI_SCALAR{return id;}
+ if slot.mode==ABI_PARTS{
+  if slot.b==0{ll_save_piece(ctx,slot,false,false,id);}
+  else{
+   let mut i:i32=0;while i<2{let part:i32=ll_id(ctx);ll_begin(ctx,part);ll_text(ctx,"extractvalue ");ll_native_result(ctx,slot,false);
+    fprintf(ctx.output," %%r%d, %d\n",id,i);ll_save_piece(ctx,slot,i==1,false,part);i=i+1;}
+  }
+ }
+ return ll_load(ctx,slot.ty,slot.address);
+}
+pub fn ll_native_call(ctx:*BootContext,node:*BootNode)->i32{
+ let sig:*BootNativeSignature=boot_abi_signature(ctx,node.decl);if ctx.failed{return 0;}
+ let mut s:*BootNativeSlot=sig.params;let mut arg:*BootNode=node.params;
+ while s!=0 as *BootNativeSlot{
+  if s.mode==ABI_SCALAR{s.first=arg.llvm_value;}
+  else if s.mode!=ABI_EMPTY{ll_slot_address(ctx,s,arg.id,"arg");ll_put_value(ctx,s,arg.llvm_value);}
+  arg=arg.next;s=s.next;
+ }
+ let ret:*BootNativeSlot=sig.result;if ret.ty.kind==BY_STRUCT && ret.mode!=ABI_EMPTY{ll_slot_address(ctx,ret,node.id,"ret");}
+ let id:i32=ll_id(ctx);if ret.mode!=ABI_INDIRECT && ret.mode!=ABI_EMPTY{ll_begin(ctx,id);}else{ll_text(ctx,"  ");}
+ ll_text(ctx,"call ");ll_native_result(ctx,ret,true);ll_text(ctx," ");
+ if (node.decl.flags&4)!=0{ll_text(ctx,"(");let any:bool=ll_native_args(ctx,sig,0);ll_comma(ctx,any);ll_text(ctx,"...) ");}
+ fprintf(ctx.output,"@%s(",node.decl.name);let mut any:bool=ll_native_args(ctx,sig,2);
+ while arg!=0 as *BootNode{
+  ll_comma(ctx,any);any=true;let mut ty:*BootType=arg.ty;
+  if ty.kind==BY_F32{ty=boot_type(ctx,BY_F64);}else if ty.kind!=BY_PTR && !ll_float(ty) && ll_bits(ty)<32{ty=boot_type(ctx,BY_I32);}
+  ll_value(ctx,ty,arg.llvm_value);arg=arg.next;
+ }
+ ll_text(ctx,")\n");return ll_unpack_result(ctx,ret,id);
+}
+fn ll_return_native(ctx:*BootContext,s:*BootNativeSlot,value:i32){
+ if s.mode==ABI_EMPTY{ll_text(ctx,"  ret void\n");return;}
+ if s.mode==ABI_SCALAR{ll_text(ctx,"  ret ");ll_value(ctx,s.ty,value);ll_text(ctx,"\n");return;}
+ if s.mode==ABI_INDIRECT{ll_text(ctx,"  store ");ll_value(ctx,s.ty,value);ll_text(ctx,", ptr %out\n  ret void\n");return;}
+ ll_put_value(ctx,s,value);
+ if s.b==0{ll_text(ctx,"  ret ");ll_piece(ctx,s.a);fprintf(ctx.output," %%r%d\n",s.first);return;}
+ let first:i32=ll_id(ctx);ll_begin(ctx,first);ll_text(ctx,"insertvalue ");ll_native_result(ctx,s,false);ll_text(ctx," poison, ");
+ ll_piece(ctx,s.a);fprintf(ctx.output," %%r%d, 0\n",s.first);
+ let both:i32=ll_id(ctx);ll_begin(ctx,both);ll_text(ctx,"insertvalue ");ll_native_result(ctx,s,false);fprintf(ctx.output," %%r%d, ",first);
+ ll_piece(ctx,s.b);fprintf(ctx.output," %%r%d, 1\n  ret ",s.second);ll_native_result(ctx,s,false);fprintf(ctx.output," %%r%d\n",both);
+}
+pub fn ll_export_wrapper(ctx:*BootContext,node:*BootNode){
+ let sig:*BootNativeSignature=boot_abi_signature(ctx,node);if ctx.failed{return;}
+ ctx.llvm_serial=0;ll_text(ctx,"define ");ll_native_declaration(ctx,node,sig);ll_text(ctx," {\nentry:\n");
+ let mut s:*BootNativeSlot=sig.params;
+ while s!=0 as *BootNativeSlot{
+  if s.mode==ABI_PARTS{
+   ll_abi_alloc(ctx,s.ty,s.param.id,"arg");ll_slot_address(ctx,s,s.param.id,"arg");ll_save_piece(ctx,s,false,true,0);
+   if s.b!=0{ll_save_piece(ctx,s,true,true,0);}s.first=ll_load(ctx,s.ty,s.address);
+  }else if s.mode==ABI_BYVAL||s.mode==ABI_INDIRECT{
+   s.first=ll_id(ctx);ll_begin(ctx,s.first);ll_text(ctx,"load ");ll_type(ctx,s.ty);fprintf(ctx.output,", ptr %%n%d, align 1\n",s.param.id);
+  }
+  s=s.next;
+ }
+ let ret:*BootNativeSlot=sig.result;
+ if ret.mode==ABI_PARTS{ll_abi_alloc(ctx,ret.ty,node.id,"ret");ll_slot_address(ctx,ret,node.id,"ret");}
+ let id:i32=ll_id(ctx);if ret.ty.kind!=BY_VOID{ll_begin(ctx,id);}else{ll_text(ctx,"  ");}
+ ll_text(ctx,"call ");ll_return_type(ctx,node.ty);ll_text(ctx," ");ll_function(ctx,node);ll_text(ctx,"(");
+ s=sig.params;let mut any:bool=false;
+ while s!=0 as *BootNativeSlot{
+  ll_comma(ctx,any);any=true;ll_type(ctx,s.ty);ll_text(ctx," ");
+  if s.mode==ABI_EMPTY{ll_text(ctx,"zeroinitializer");}else if s.mode==ABI_SCALAR{fprintf(ctx.output,"%%n%d",s.param.id);}else{ll_reg(ctx,s.first);}
+  s=s.next;
+ }
+ ll_text(ctx,")\n");ll_return_native(ctx,ret,id);ll_text(ctx,"}\n");
+}

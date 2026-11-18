@@ -116,15 +116,15 @@ for level in ['0','2']:
     run('unicode-build-O'+level,[cc,'-O'+level,w/'unicode.ll','-o',w/('unicode-O'+level)])
     run('unicode-run-O'+level,[w/('unicode-O'+level)])
 for case,signature,message in [
-    ('return','fn foreign()->S;','foreign aggregate return ABI'),
-    ('parameter','fn foreign(value:S);','foreign aggregate parameter ABI'),
+    ('return','fn foreign()->[i32;2];','foreign array value ABI'),
+    ('parameter','fn foreign(value:[i32;2]);','foreign array value ABI'),
 ]:
     source=w/('unsupported-'+case+'.aeth')
     source.write_text('struct S{x:i32}extern "C"{'+signature+'}fn main()->i32{return 0;}')
     output=w/('preserved-'+case+'.ll');output.write_text('USER ORIGINAL\n')
-    result=run('reject-foreign-aggregate-'+case,[stages[4],source,'--emit-llvm','-o',output],expected=1)
-    check('foreign-aggregate-diagnostic-'+case,message in result.stdout+result.stderr and str(source) in result.stdout+result.stderr)
-    check('foreign-aggregate-output-preserved-'+case,output.read_text()=='USER ORIGINAL\n')
+    result=run('reject-foreign-bare-array-'+case,[stages[4],source,'--emit-llvm','-o',output],expected=1)
+    check('foreign-array-diagnostic-'+case,message in result.stdout+result.stderr and str(source) in result.stdout+result.stderr)
+    check('foreign-array-output-preserved-'+case,output.read_text()=='USER ORIGINAL\n')
 
 void_source=w/'void-main.aeth';void_source.write_text('fn main(){return;}')
 run('void-main-emit',[stages[4],void_source,'--emit-llvm','-o',w/'void.ll'])
