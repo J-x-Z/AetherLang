@@ -1,7 +1,7 @@
 //! Shared compilation input and diagnostics for CLI and editor clients.
 use std::{cell::OnceCell, collections::HashMap, path::{Path, PathBuf}, sync::Arc};
 use serde::Serialize;
-use super::{ast::{Ident, Item, Program}, lexer::Lexer, resolve::{ModuleSearch, Resolver}, semantic::{SemanticAnalyzer, SemanticFacts}};
+use super::{ast::{Item, Program}, lexer::Lexer, resolve::{ModuleSearch, Resolver}, semantic::{SemanticAnalyzer, SemanticFacts}};
 use crate::utils::{Error, Span};
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,17 +45,16 @@ impl From<&str> for Diagnostic { fn from(message: &str) -> Self { Self::message(
 pub struct Session {
     pub program: Program,
     pub resolver: Resolver,
-    // Uninstantiated templates disappear from the executable AST. Keep only
-    // their names and source spans for project navigation.
-    pub(super) generic_enum_names: Vec<(Ident, Vec<Ident>)>,
+    // Owned declarations moved out of the executable AST for source-index consumers.
+    pub(super) templates: Vec<Item>,
     script_map: Option<SourceMap>,
 }
 
 impl Session {
     pub fn parse(path: &Path, source: String, search: ModuleSearch, overlays: HashMap<PathBuf, String>) -> Result<Self, Diagnostic> {
-        Self::parse_for_target(path, source, search, overlays, "native")
+        Self::parse_for_target(path, source, search, overlays, "native", true)
     }
-    pub fn parse_for_target(path: &Path, source: String, search: ModuleSearch, overlays: HashMap<PathBuf, String>, target: &str) -> Result<Self, Diagnostic> {
+    pub fn parse_for_target(path: &Path, source: String, search: ModuleSearch, overlays: HashMap<PathBuf, String>, target: &str, index_templates: bool) -> Result<Self, Diagnostic> {
         let width = crate::types::PointerWidth::for_target(target).map_err(Diagnostic::from)?;
         let mut overlays=overlays;
         let (core, script_map) = if path.extension().is_some_and(|x| x == "ath") {
@@ -77,13 +76,10 @@ impl Session {
         } else { (source, None) };
         let mut resolver = Resolver::new(search).with_overlays(overlays);
         let program = resolver.resolve(path, core).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
-        let generic_enum_names = program.items.iter().filter_map(|item| match item {
-            Item::Enum(e) if !e.generic_params.is_empty() || !e.type_params.is_empty() =>
-                Some((e.name.clone(), e.variants.iter().map(|v| v.name.clone()).collect())),
-            _ => None,
-        }).collect();
-        let program = super::specialize::specialize_for_width(program, width).map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
-        Ok(Self { program, resolver, script_map, generic_enum_names })
+        let mut templates = Vec::new();
+        let program = super::specialize::specialize_with_templates(program, width, index_templates.then_some(&mut templates))
+            .map_err(|e| Self::make_diagnostic(&resolver, script_map.as_ref(), &e))?;
+        Ok(Self { program, resolver, script_map, templates })
     }
     pub fn check(&self, target: &str, llvm_backend: bool) -> Result<SemanticFacts, Diagnostic> {
         let mut analyzer = SemanticAnalyzer::for_target(target).map_err(Diagnostic::from)?;

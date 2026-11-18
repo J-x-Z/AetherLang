@@ -1,5 +1,5 @@
 //! A source index shared by the CLI and LSP, built from the resolved program.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use serde::Serialize;
 use super::{ast::*, session::{LineIndex, Location, Session}};
 use crate::utils::Span;
@@ -27,19 +27,30 @@ struct Builder<'a> {
     binding_types: HashMap<usize, String>,
     scopes: Vec<HashMap<String, usize>>,
     fields: HashMap<String, HashMap<String, usize>>,
-    enum_declarations: HashMap<Span, usize>,
-    variant_declarations: HashMap<(Span, String), usize>,
+    template_declarations: HashMap<(Span, &'static str), usize>,
+    template_references: HashSet<(Span, usize)>,
+    reading_template: bool,
+    in_generic_body: bool,
 }
 impl SymbolIndex {
     pub fn new(session: &Session, facts: Option<&SemanticFacts>) -> Self {
         // Only semantic-index consumers pay for this table. It expires with the borrowed session.
         let lines = session.resolver.sources.iter().enumerate()
             .map(|(id, file)| LineIndex::new(session.source(id).unwrap_or(&file.text))).collect();
-        let mut builder = Builder { index: Self::default(), session, lines, facts, function_name: String::new(), binding_types: HashMap::new(), scopes: vec![HashMap::new()], fields: HashMap::new(), enum_declarations: HashMap::new(), variant_declarations: HashMap::new() };
-        for (name, variants) in &session.generic_enum_names {
-            builder.enum_definition(name, variants.iter());
-        }
+        let mut builder = Builder {
+            index: Self::default(), session, lines, facts, function_name: String::new(),
+            binding_types: HashMap::new(), scopes: vec![HashMap::new()], fields: HashMap::new(),
+            template_declarations: HashMap::new(), template_references: HashSet::new(),
+            reading_template: true, in_generic_body: false,
+        };
+        // Register source signatures first. Every concrete specialization maps its
+        // emitted names back to these IDs, including fields, parameters and locals.
+        for item in &session.templates { builder.item_definition(item); }
+        builder.reading_template = false;
         for item in &session.program.items { builder.item_definition(item); }
+        builder.reading_template = true;
+        for item in &session.templates { builder.item_body(item); }
+        builder.reading_template = false;
         for item in &session.program.items { builder.item_body(item); }
         builder.index
     }
@@ -76,7 +87,11 @@ impl Builder<'_> {
         }
     }
 
-    fn define(&mut self, key: &str, name: &str, kind: &str, ty: String, span: Span) -> Option<usize> {
+    fn define(&mut self, key: &str, name: &str, kind: &'static str, ty: String, span: Span) -> Option<usize> {
+        if let Some(&id) = self.template_declarations.get(&(span, kind)) {
+            self.scopes.last_mut().unwrap().insert(key.into(), id);
+            return Some(id);
+        }
         let mut location = self.location(span)?;
         let name = self.display_name(name);
         // Synthesized Script declarations map to a statement; narrow to the
@@ -91,42 +106,21 @@ impl Builder<'_> {
             }
         }
         let id = self.index.symbols.len();
+        if self.reading_template { self.template_declarations.insert((span, kind), id); }
         self.index.symbols.push(Symbol { id, name, kind: kind.into(), type_name: ty, definition: location });
         self.scopes.last_mut().unwrap().insert(key.into(), id);
         Some(id)
     }
     fn lookup(&self, name: &str) -> Option<usize> { self.scopes.iter().rev().find_map(|scope| scope.get(name).copied()) }
     fn reference(&mut self, key: &str, span: Span) {
-        if let (Some(symbol),Some(location)) = (self.lookup(key),self.location(span)) {
-            self.index.references.push(Reference { symbol, location });
-        }
+        if let Some(symbol) = self.lookup(key) { self.record_reference(symbol, span); }
+    }
+    fn record_reference(&mut self, symbol: usize, span: Span) {
+        if self.in_generic_body && !self.template_references.insert((span, symbol)) { return; }
+        if let Some(location) = self.location(span) { self.index.references.push(Reference { symbol, location }); }
     }
     fn signature(&self, f: &Function) -> String {
         format!("fn({}) -> {}", f.params.iter().map(|p| format!("{}: {}",self.display_name(&p.name.name),self.type_name(&p.ty))).collect::<Vec<_>>().join(", "), f.ret_type.as_ref().map(|ty| self.type_name(ty)).unwrap_or("()".into()))
-    }
-    fn enum_definition<'a>(&mut self, name: &Ident, variants: impl Iterator<Item = &'a Ident>) {
-        // Specializations share their declarations with the generic source enum.
-        let enum_id = if let Some(id) = self.enum_declarations.get(&name.span).copied() {
-            self.scopes[0].insert(name.name.clone(), id);
-            id
-        } else {
-            let Some(id) = self.define(&name.name, &name.name, "enum", self.display_name(&name.name), name.span)
-                else { return; };
-            self.enum_declarations.insert(name.span, id);
-            id
-        };
-        for variant in variants {
-            let key = format!("{}::{}", name.name, variant.name);
-            let origin = (variant.span, variant.name.clone());
-            if let Some(id) = self.variant_declarations.get(&origin) {
-                self.scopes[0].insert(key, *id);
-            } else {
-                let enum_name = self.index.symbols[enum_id].name.clone();
-                if let Some(id) = self.define(&key, &variant.name, "variant", enum_name, variant.span) {
-                    self.variant_declarations.insert(origin, id);
-                }
-            }
-        }
     }
     fn item_definition(&mut self, item: &Item) {
         match item {
@@ -140,7 +134,13 @@ impl Builder<'_> {
                 }
                 self.fields.insert(s.name.name.clone(), fields);
             }
-            Item::Enum(e) => self.enum_definition(&e.name, e.variants.iter().map(|v| &v.name)),
+            Item::Enum(e) => {
+                self.define(&e.name.name,&e.name.name,"enum",self.display_name(&e.name.name),e.name.span);
+                for variant in &e.variants {
+                    let key = format!("{}::{}", e.name.name, variant.name.name);
+                    self.define(&key, &variant.name.name, "variant", self.display_name(&e.name.name), variant.name.span);
+                }
+            }
             Item::Union(u) => { self.define(&u.name.name,&u.name.name,"union",self.display_name(&u.name.name),u.name.span); }
             Item::Const(c) => { self.define(&c.name.name,&c.name.name,"constant",c.ty.as_ref().map(|ty| self.type_name(ty)).unwrap_or("constant".into()),c.name.span); }
             Item::Static(s) => { self.define(&s.name.name,&s.name.name,"static",self.type_name(&s.ty),s.name.span); }
@@ -168,7 +168,7 @@ impl Builder<'_> {
             _ => {},
         }
     }
-    fn typed_binding(&mut self, name: &Ident, kind: &str, ty: Option<&Type>) {
+    fn typed_binding(&mut self, name: &Ident, kind: &'static str, ty: Option<&Type>) {
         let Some(id) = self.define(&name.name, &name.name, kind,
             ty.map(|ty| self.type_name(ty)).unwrap_or_else(|| "inferred".into()), name.span) else { return; };
         let Some(mut base) = ty else { return; };
@@ -178,11 +178,13 @@ impl Builder<'_> {
         if let Type::Named(key, _) = base { self.binding_types.insert(id, key.clone()); }
     }
     fn function(&mut self, f: &Function, emitted: String) {
+        self.in_generic_body = self.template_declarations.contains_key(&(f.name.span, "function"));
         self.function_name = emitted;
         self.scopes.push(HashMap::new());
         for p in &f.params { self.typed_binding(&p.name, "parameter", Some(&p.ty)); }
         self.block(&f.body);
         self.scopes.pop();
+        self.in_generic_body = false;
     }
     fn block(&mut self, block: &Block) {
         self.scopes.push(HashMap::new());
@@ -218,7 +220,7 @@ impl Builder<'_> {
                     _ => None,
                 });
                 if let Some(id) = owner.and_then(|key| self.fields.get(key)).and_then(|fields| fields.get(&field.name)).copied() {
-                    if let Some(location) = self.location(field.span) { self.index.references.push(Reference { symbol: id, location }); }
+                    self.record_reference(id, field.span);
                 }
             }
             Expr::MethodCall { expr, method, args, span } => {

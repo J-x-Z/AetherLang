@@ -268,7 +268,7 @@ fn boot_expand_type(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->*
  let mut source:*BootNode=base.fields;let mut last:*BootNode=0 as *BootNode;
  while source!=(0 as *BootNode)&&!ctx.failed{
   let field:*BootNode=boot_node(ctx,BN_FIELD,source.token);if field==(0 as *BootNode){return 0 as *BootType;}
-  field.owner=source.owner;field.name=source.name;field.flags=source.flags;
+  field.owner=source.owner;field.name=source.name;field.flags=source.flags;field.origin=source;
   if base.is_enum{
    field.kind=BN_VARIANT;field.value=source.value;let mut member:*BootNode=source.params;let mut end:*BootNode=0 as *BootNode;
    while member!=0 as *BootNode{

@@ -82,7 +82,7 @@ fn byte_at(text:&str,pos:&Value)->usize{
 impl Server {
     fn session(&self,path:&Path)->Result<Session,Diagnostic>{
         let source=match self.documents.get(path){Some(doc)=>doc.text.clone(),None=>std::fs::read_to_string(path).map_err(|e|Diagnostic::message("E9001",e.to_string()))?};
-        Session::parse_for_target(path,source,self.search.clone(),self.documents.iter().map(|(p,d)|(p.clone(),d.text.clone())).collect::<HashMap<_,_>>(),&self.target)
+        Session::parse_for_target(path,source,self.search.clone(),self.documents.iter().map(|(p,d)|(p.clone(),d.text.clone())).collect::<HashMap<_,_>>(),&self.target,true)
     }
     fn diagnostics(&mut self)->Vec<Value>{
         self.indexes.clear();

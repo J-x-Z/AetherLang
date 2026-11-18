@@ -33,6 +33,13 @@ fn li_walk(arena:*BootContext,index:*LspIndex,nodes:*BootNode,depth:i32){
  if depth>512||arena.failed{return;}let mut node:*BootNode=nodes;
  while node!=0 as *BootNode&&!arena.failed{
   if li_declaration(node){li_record(arena,index,node,node,true);}
+  else if node.kind==BN_STRUCT_VALUE&&node.name!=0 as *u8&&node.ty!=0 as *BootType{
+   let ty:*BootType=node.ty;
+   if ty.owner!=0 as *BootModule&&ty.name!=0 as *u8{
+    let target:*BootNode=boot_module_item(ty.owner,ty.name);
+    if target!=0 as *BootNode&&target.kind==BN_STRUCT{li_record(arena,index,node,target,false);}
+   }
+  }
   else if node.kind==BN_IDENT||node.kind==BN_CALL||node.kind==BN_MEMBER||node.kind==BN_FIELD||node.kind==BN_ENUM_VALUE{li_record(arena,index,node,node.decl,false);}
   li_walk(arena,index,node.left,depth+1);li_walk(arena,index,node.right,depth+1);li_walk(arena,index,node.third,depth+1);li_walk(arena,index,node.body,depth+1);li_walk(arena,index,node.params,depth+1);node=node.next;
  }

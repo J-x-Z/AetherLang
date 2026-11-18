@@ -59,7 +59,7 @@ fn boot_clone_nodes(ctx:*BootContext,source:*BootNode,bindings:*BootTypeBinding)
 }
 fn boot_clone_node(ctx:*BootContext,source:*BootNode,bindings:*BootTypeBinding)->*BootNode{
  let node:*BootNode=boot_alloc(ctx,size_of(BootNode) as u64) as *BootNode;if node==(0 as *BootNode){return node;}
- memcpy(node as *void,source as *void,size_of(BootNode) as u64);node.id=boot_id(ctx);node.next=0 as *BootNode;node.decl=0 as *BootNode;node.llvm_value=0;
+ memcpy(node as *void,source as *void,size_of(BootNode) as u64);node.id=boot_id(ctx);node.origin=source;node.next=0 as *BootNode;node.decl=0 as *BootNode;node.llvm_value=0;
  node.ty=boot_substitute_type(ctx,source.ty,bindings,0,source.token);node.aux=boot_substitute_type(ctx,source.aux,bindings,0,source.token);
  if node.kind==BN_IDENT&&node.aux!=0 as *BootType&&node.aux.kind==BY_CONST_VALUE{node.kind=BN_CONST_VALUE;node.ty=node.aux.inner;node.value=node.aux.extent as i64;}
  node.left=boot_clone_nodes(ctx,source.left,bindings);node.right=boot_clone_nodes(ctx,source.right,bindings);node.third=boot_clone_nodes(ctx,source.third,bindings);

@@ -27,8 +27,12 @@ pub fn specialize(program: Program) -> Result<Program> {
 }
 
 pub fn specialize_for_width(program: Program, width: PointerWidth) -> Result<Program> {
+    specialize_with_templates(program, width, None)
+}
+
+pub(super) fn specialize_with_templates(program: Program, width: PointerWidth, templates: Option<&mut Vec<Item>>) -> Result<Program> {
     let program = async_tasks::lower(program)?;
-    Specializer::new(&program, width)?.run(program)
+    Specializer::new(&program, width)?.run(program, templates)
 }
 
 #[derive(Clone)]
@@ -199,19 +203,21 @@ impl Specializer {
         Ok(this)
     }
 
-    fn run(mut self, program: Program) -> Result<Program> {
+    fn run(mut self, program: Program, mut templates: Option<&mut Vec<Item>>) -> Result<Program> {
         // Resolve every ordinary signature before visiting any body, including
         // forward references. Requested generic definitions are appended here.
         for mut item in program.items {
             match &mut item {
                 Item::Function(f) => {
                     if !f.type_params.is_empty() || !f.generic_params.is_empty() {
+                        if let Some(templates) = templates.as_deref_mut() { templates.push(item); }
                         continue;
                     }
                     self.signature(f, &Bindings::new())?;
                 }
                 Item::Struct(d) => {
                     if !d.generic_params.is_empty() || !d.type_params.is_empty() {
+                        if let Some(templates) = templates.as_deref_mut() { templates.push(item); }
                         continue;
                     }
                     for field in &mut d.fields {
@@ -221,6 +227,7 @@ impl Specializer {
                 }
                 Item::Enum(d) => {
                     if !d.generic_params.is_empty() || !d.type_params.is_empty() {
+                        if let Some(templates) = templates.as_deref_mut() { templates.push(item); }
                         continue;
                     }
                     for variant in &mut d.variants {

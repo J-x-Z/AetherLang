@@ -155,4 +155,50 @@ with tempfile.TemporaryDirectory(dir=base) as folder:
         # Compiler-generated match temporaries and anonymous payload slots are internal.
         for file, row, column in [("main.aeth",1,lines[1].index("match")), ("kinds.aeth",1,enums[1].index("i32"))]:
             assert client.call("definition",file=file,line=row,character=column)["symbol"] is None
-print("MCP project, Script and enum navigation queries passed")
+    templates = Path(folder) / "templates"
+    declarations = [
+        "pub struct Pair<T>{left:T,right:T}",
+        "pub fn identity<T>(input:T)->T{let copy:T=input;return copy;}",
+        "pub struct Unused<T>{unread:T}",
+        "pub fn inactive<T>(spare:T)->T{return spare;}",
+    ]
+    program = [
+        "use generic::{Pair,identity};",
+        "fn main()->i32{",
+        "let n:Pair<i32>=Pair{left:1,right:2};",
+        "let b:Pair<bool>=Pair{left:true,right:false};",
+        "if identity(b.left){return identity(n.left);}return 0;}",
+    ]
+    save(templates/"generic.aeth", "\n".join(declarations))
+    save(templates/"main.aeth", "\n".join(program))
+    with Client(templates) as client:
+        assert client.call("check")["ok"]
+        for row, name, kind in [
+            (0,"Pair","struct"), (0,"left","field"), (0,"right","field"),
+            (1,"identity","function"), (1,"input","parameter"), (1,"copy","variable"),
+            (2,"Unused","struct"), (2,"unread","field"),
+            (3,"inactive","function"), (3,"spare","parameter"),
+        ]:
+            found = client.call("symbols", query=name)["items"]
+            assert len(found)==1 and found[0]["name"]==name and found[0]["kind"]==kind, (name,found)
+            assert found[0]["definition"] == {
+                "file":"generic.aeth", "range":{
+                    "start":{"line":row,"character":declarations[row].index(name)},
+                    "end":{"line":row,"character":declarations[row].index(name)+len(name)}}}
+            if kind not in ("struct",):
+                assert "T" in found[0]["type"], (name,found)
+        groups = [
+            (0,"Pair",[(2,"Pair{"),(3,"Pair{")]),
+            (0,"left",[(2,"left:"),(3,"left:"),(4,"left){"),(4,"left);")]),
+            (1,"identity",[(4,"identity(b"),(4,"identity(n")]),
+        ]
+        for row, name, sites in groups:
+            declaration = dict(file="generic.aeth",line=row,character=declarations[row].index(name))
+            expected = {(line,program[line].index(token)) for line,token in sites}
+            refs = client.call("references", **declaration)["items"]
+            assert {(r["range"]["start"]["line"],r["range"]["start"]["character"])
+                    for r in refs if r["file"]=="main.aeth"} == expected, (name,refs)
+            for line,column in expected:
+                selected=client.call("definition",file="main.aeth",line=line,character=column)["symbol"]
+                assert selected["name"]==name and selected["definition"]["file"]=="generic.aeth", selected
+print("MCP project, Script, enum and generic declaration queries passed")
