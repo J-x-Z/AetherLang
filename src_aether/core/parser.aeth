@@ -28,7 +28,7 @@ pub fn boot_p_reserved(text:*u8)->bool {
  if strcmp(text,"while")==0 || strcmp(text,"return")==0 || strcmp(text,"break")==0 || strcmp(text,"continue")==0 {return true;}
  if strcmp(text,"struct")==0 || strcmp(text,"extern")==0 || strcmp(text,"const")==0 || strcmp(text,"unsafe")==0 {return true;}
  if strcmp(text,"as")==0 || strcmp(text,"true")==0 || strcmp(text,"false")==0 || strcmp(text,"size_of")==0 || strcmp(text,"align_of")==0 {return true;}
- if strcmp(text,"__errno_get")==0 {return true;}
+ if strcmp(text,"static")==0 || strcmp(text,"__errno_get")==0 {return true;}
  if strcmp(text,"pub")==0 || strcmp(text,"use")==0 || strcmp(text,"enum")==0 || strcmp(text,"impl")==0 {return true;}
  if strcmp(text,"for")==0 || strcmp(text,"loop")==0 || strcmp(text,"match")==0 || strcmp(text,"type")==0 {return true;}
  return false;
@@ -469,6 +469,19 @@ fn boot_p_constant(ctx:*BootContext)->*BootNode {
  if node!=0 as *BootNode {node.name=name.text;node.ty=ty;node.left=value;}
  return node;
 }
+fn boot_p_static(ctx:*BootContext,foreign:bool)->*BootNode {
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);
+ let node:*BootNode=boot_node(ctx,BN_STATIC,token);
+ if node==0 as *BootNode{return node;}
+ if boot_p_word(ctx,"mut"){node.flags=1;boot_p_advance(ctx);}
+ let name:*BootToken=boot_p_name(ctx);
+ if ctx.failed || !boot_p_expect(ctx,58,"static requires a declared type"){return 0 as *BootNode;}
+ node.name=name.text;node.ty=boot_p_type(ctx);
+ if foreign {node.flags=node.flags|2;}
+ else if boot_p_take(ctx,61){node.left=boot_p_expression(ctx,0);}
+ if !boot_p_expect(ctx,59,"expected ';' after static declaration"){return 0 as *BootNode;}
+ return node;
+}
 pub fn boot_parse(ctx:*BootContext)->bool {
  ctx.cursor=ctx.tokens;ctx.depth=0;
  let program:*BootNode=boot_node(ctx,BN_PROGRAM,ctx.cursor);
@@ -477,17 +490,32 @@ pub fn boot_parse(ctx:*BootContext)->bool {
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed && boot_p_kind(ctx)!=BT_EOF {
   let mut node:*BootNode=0 as *BootNode;
+  let mut exported:bool=false;
+  if boot_p_take(ctx,35) {
+   let inner:bool=boot_p_take(ctx,33);
+   if !boot_p_expect(ctx,91,"expected '[' after '#'"){return false;}
+   if inner {
+    if ctx.module!=ctx.root_module || tail!=0 as *BootNode || ctx.no_main || !boot_p_word(ctx,"no_main"){
+     boot_error(ctx,ctx.cursor,"expected a single root #![no_main] before declarations");return false;
+    }
+    boot_p_advance(ctx);if !boot_p_expect(ctx,93,"expected ']' after no_main"){return false;}
+    ctx.no_main=true;continue;
+   }
+   if !boot_p_word(ctx,"no_mangle"){boot_error(ctx,ctx.cursor,"unsupported declaration attribute");return false;}
+   boot_p_advance(ctx);if !boot_p_expect(ctx,93,"expected ']' after no_mangle"){return false;}
+   exported=true;
+  }
   let mut public:bool=false;
   if boot_p_word(ctx,"pub") {public=true;boot_p_advance(ctx);}
   if boot_p_word(ctx,"extern") {
-   if public {boot_error(ctx,ctx.cursor,"extern declarations are already public");return false;}
+   if public || exported {boot_error(ctx,ctx.cursor,"extern declarations are already public");return false;}
    boot_p_advance(ctx);
    if boot_p_kind(ctx)!=BT_STRING {boot_error(ctx,ctx.cursor,"expected foreign ABI string \"C\"");return false;}
    if ctx.cursor.length!=1 || strcmp(ctx.cursor.text,"C")!=0 {boot_error(ctx,ctx.cursor,"Core supports only extern \"C\"");return false;}
    boot_p_advance(ctx);
    if !boot_p_expect(ctx,123,"expected '{' after foreign ABI") {return false;}
    while !ctx.failed && boot_p_kind(ctx)!=125 {
-    node=boot_p_function(ctx,true);
+    if boot_p_word(ctx,"static"){node=boot_p_static(ctx,true);}else{node=boot_p_function(ctx,true);}
     if node==0 as *BootNode {return false;}
     if tail==0 as *BootNode {program.body=node;} else {tail.next=node;}
     tail=node;
@@ -496,10 +524,15 @@ pub fn boot_parse(ctx:*BootContext)->bool {
   } else {
    if boot_p_word(ctx,"fn") {node=boot_p_function(ctx,false);}
    else if boot_p_word(ctx,"struct") {node=boot_p_struct(ctx);}
+   else if boot_p_word(ctx,"static") {node=boot_p_static(ctx,false);}
    else if boot_p_word(ctx,"const") {node=boot_p_constant(ctx);}
    else if boot_p_word(ctx,"type") {node=boot_p_alias(ctx);}
    else {boot_error(ctx,ctx.cursor,"expected fn, struct, const or extern \"C\"; construct outside Core v1");return false;}
    if node==0 as *BootNode {return false;}
+   if exported {
+    if node.kind!=BN_FN && node.kind!=BN_STATIC{boot_error(ctx,node.token,"no_mangle requires a function or static definition");return false;}
+    node.flags=node.flags|BF_EXPORT;
+   }
    if public {node.flags=node.flags|8;}
    if tail==0 as *BootNode {program.body=node;} else {tail.next=node;}
    tail=node;

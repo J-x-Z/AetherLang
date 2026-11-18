@@ -24,7 +24,7 @@ pub fn ll_reg(ctx:*BootContext,id:i32){fprintf(ctx.output,"%%r%d",id);}
 pub fn ll_begin(ctx:*BootContext,id:i32){fprintf(ctx.output,"  %%r%d = ",id);}
 pub fn ll_value(ctx:*BootContext,ty:*BootType,id:i32){ll_type(ctx,ty);ll_text(ctx," ");ll_reg(ctx,id);}
 pub fn ll_function(ctx:*BootContext,node:*BootNode){
- if (node.flags&2)!=0{fprintf(ctx.output,"@%s",node.name);}else{fprintf(ctx.output,"@a%d_f%d",ctx.c_namespace,node.id);}
+ if boot_c_symbol(node){fprintf(ctx.output,"@%s",node.name);}else{fprintf(ctx.output,"@a%d_f%d",ctx.c_namespace,node.id);}
 }
 pub fn ll_attr(ctx:*BootContext,ty:*BootType){
  if ty.kind==BY_BOOL||ty.kind==BY_U8||ty.kind==BY_U16{ll_text(ctx,"zeroext ");}

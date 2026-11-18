@@ -1,6 +1,7 @@
 // Shared model of the independently loaded Core compiler modules. Source loading,
 // imports, lexing, parsing, checking and C emission all run in Aether.
 extern "C" {
+ fn strncmp(a:*u8,b:*u8,n:u64)->i32; fn snprintf(dst:*u8,n:u64,fmt:*u8,...)->i32;
  fn malloc(size:u64)->*void; fn free(pointer:*void);
  fn memset(pointer:*void,value:i32,size:u64)->*void;
  fn memcpy(dest:*void,source:*void,size:u64)->*void;
@@ -50,6 +51,9 @@ pub const BN_INT:i32=22; pub const BN_FLOAT:i32=23; pub const BN_STRING:i32=24;
 pub const BN_IDENT:i32=25; pub const BN_BOOL:i32=26; pub const BN_CONST:i32=27;
 pub const BN_STRUCT_VALUE:i32=28; pub const BN_ARRAY:i32=29; pub const BN_REPEAT:i32=30; pub const BN_ALIAS:i32=31;
 pub const BN_ERRNO:i32=37;
+pub const BN_STATIC:i32=40;
+// A definition carrying #[no_mangle] shares its symbol and native ABI with extern declarations.
+pub const BF_EXPORT:i32=64;
 pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=34; pub const BN_UNIT:i32=35; pub const BN_TYPE_PARAMETER:i32=36;
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
@@ -67,7 +71,7 @@ pub struct BootContext {
  failed:bool,next_id:i32,depth:i32,bindings:*BootBinding,
  function:*BootNode,loop_depth:i32,output:*void,c_namespace:i32,
  module:*BootModule,root_module:*BootModule,modules:*BootModule,modules_tail:*BootModule,
- uses_errno:bool,errno_name:*u8,errno_declared:bool,
+ no_main:bool,export_namespace:*u8,uses_errno:bool,errno_name:*u8,errno_declared:bool,
  module_count:i32,source_total:u64,roots:*BootRoot,mapped:*BootMappedModule,
  llvm_serial:i32,llvm_block:i32,llvm_break:i32,llvm_continue:i32,llvm_terminated:bool,parse_condition:bool,
  value_type:*BootType,value_target:*BootNode,llvm_yield:i32,

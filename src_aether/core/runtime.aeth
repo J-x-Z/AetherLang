@@ -135,8 +135,25 @@ pub fn boot_resolve_type(ctx:*BootContext,name:*u8,module:*BootModule,token:*Boo
  return boot_named_type(ctx,name);
 }
 
+pub fn boot_zero_initializer(node:*BootNode)->bool{
+ if node==0 as *BootNode{return true;}
+ if node.kind==BN_INT || node.kind==BN_BOOL{return node.value==0;}
+ if node.kind==BN_REPEAT{return node.ty.extent==0 || boot_zero_initializer(node.left);}
+ return node.kind==BN_UNIT;
+}
+pub fn boot_c_symbol(node:*BootNode)->bool{return (node.flags&(2|BF_EXPORT))!=0;}
+pub fn boot_symbol_definition(ctx:*BootContext,node:*BootNode)->*BootNode{
+ let mut item:*BootNode=ctx.program.body;
+ while item!=0 as *BootNode{
+  if (item.flags&BF_EXPORT)!=0 && strcmp(item.name,node.name)==0{return item;}
+  item=item.next;
+ }
+ return 0 as *BootNode;
+}
 pub fn boot_foreign_same(a:*BootNode,b:*BootNode)->bool {
- if a.kind!=BN_FN || b.kind!=BN_FN || (a.flags&2)==0 || (b.flags&2)==0 {return false;}
+ if a.kind!=b.kind || !boot_c_symbol(a) || !boot_c_symbol(b){return false;}
+ if a.kind==BN_STATIC{return strcmp(a.name,b.name)==0 && a.ty==b.ty && (a.flags&1)==(b.flags&1);}
+ if a.kind!=BN_FN{return false;}
  if strcmp(a.name,b.name)!=0 || a.ty!=b.ty || (a.flags&4)!=(b.flags&4) {return false;}
  let mut left:*BootNode=a.params;let mut right:*BootNode=b.params;
  while left!=(0 as *BootNode) && right!=(0 as *BootNode) {if left.ty!=right.ty {return false;}left=left.next;right=right.next;}

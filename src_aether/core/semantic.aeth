@@ -21,7 +21,7 @@ fn boot_find_binding(ctx:*BootContext,name:*u8,token:*BootToken)->*BootNode {
   binding=binding.next;
  }
  let item:*BootNode=boot_lookup(ctx,name,0 as *BootModule,token);
- if item!=(0 as *BootNode) && item.kind==BN_CONST { return item; }
+ if item!=(0 as *BootNode) && (item.kind==BN_CONST || item.kind==BN_STATIC) { return item; }
  return 0 as *BootNode;
 }
 fn boot_bind(ctx:*BootContext,node:*BootNode)->bool {
@@ -161,7 +161,7 @@ pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*Boo
  if kind==BN_IDENT {
   if node.lookup!=(0 as *BootModule) {
    node.decl=boot_lookup(ctx,node.name,node.lookup,node.token);
-   if node.decl!=(0 as *BootNode) && node.decl.kind!=BN_CONST {boot_error(ctx,node.token,"imported value must be a constant");return 0 as *BootType;}
+   if node.decl!=(0 as *BootNode) && node.decl.kind!=BN_CONST && node.decl.kind!=BN_STATIC {boot_error(ctx,node.token,"imported name does not denote a value");return 0 as *BootType;}
   } else {node.decl=boot_find_binding(ctx,node.name,node.token);}
   if node.decl==(0 as *BootNode) { boot_error(ctx,node.token,"unknown value name");return 0 as *BootType; }
   node.ty=node.decl.ty;return node.ty;
@@ -414,6 +414,35 @@ fn boot_check_statement(ctx:*BootContext,node:*BootNode)->bool {
  }
  boot_error(ctx,node.token,"unsupported Core statement");return false;
 }
+fn boot_address_base(ctx:*BootContext,node:*BootNode)->bool{
+ if node.kind==BN_IDENT && node.decl.kind==BN_STATIC{return true;}
+ if node.kind==BN_MEMBER && node.left.ty.kind==BY_STRUCT{return boot_address_base(ctx,node.left);}
+ if node.kind==BN_INDEX && node.left.ty.kind==BY_ARRAY && boot_constant_form(node.right){
+  if !boot_constant_checked(ctx,node.right){return false;}
+  if (node.right.value as u64)>=node.left.ty.extent{boot_error(ctx,node.right.token,"static address index is outside its array");return false;}
+  return boot_address_base(ctx,node.left);
+ }
+ boot_error(ctx,node.token,"static address must refer to fixed global storage");return false;
+}
+fn boot_static_initializer(ctx:*BootContext,node:*BootNode)->bool {
+ if boot_constant_form(node){return boot_constant_checked(ctx,node);}
+ if node.kind==BN_STRING || node.kind==BN_UNIT{return true;}
+ if node.kind==BN_CAST && node.ty.kind==BY_PTR {
+  if node.left.ty.kind==BY_PTR{return boot_static_initializer(ctx,node.left);}
+  if node.left.kind==BN_INT && node.left.value==0{return true;}
+ }
+ if node.kind==BN_UNARY && node.op==38{return boot_address_base(ctx,node.left);}
+ if node.kind==BN_STRUCT_VALUE || node.kind==BN_ARRAY {
+  let mut element:*BootNode=node.params;
+  while element!=0 as *BootNode{
+   let mut value:*BootNode=element;if node.kind==BN_STRUCT_VALUE{value=element.left;}
+   if !boot_static_initializer(ctx,value){return false;}element=element.next;
+  }
+  return true;
+ }
+ if node.kind==BN_REPEAT{return boot_static_initializer(ctx,node.left);}
+ boot_error(ctx,node.token,"static initializer must be a constant value or a global address");return false;
+}
 fn boot_constant_form(node:*BootNode)->bool {
  if node.kind==BN_INT || node.kind==BN_FLOAT || node.kind==BN_BOOL { return true; }
  if node.kind==BN_UNARY && (node.op==45 || node.op==33 || node.op==126) { return boot_constant_form(node.left); }
@@ -450,7 +479,7 @@ fn boot_constant_checked(ctx:*BootContext,node:*BootNode)->bool {
  return true;
 }
 fn boot_check_entry(ctx:*BootContext,item:*BootNode)->bool {
- if strcmp(item.name,"main")!=0 { return true; }
+ if ctx.no_main || strcmp(item.name,"main")!=0 { return true; }
  if (item.flags&2)!=0||item.generics!=(0 as *BootNode) {boot_error(ctx,item.token,"main requires a non-foreign i32 or void signature");return false;}
  if item.owner!=ctx.root_module {return true;}
  if (item.flags&2)!=0 || (item.flags&4)!=0 || (item.ty.kind!=BY_I32 && item.ty.kind!=BY_VOID) {
@@ -480,11 +509,17 @@ pub fn boot_check(ctx:*BootContext)->bool {
   if imported!=(0 as *BootNode) && !boot_foreign_same(imported,item) {boot_error(ctx,item.token,"local declaration conflicts with imported symbol");return false;}
   let mut prior:*BootNode=ctx.program.body;
   while prior!=item {
-   if prior.owner==item.owner && strcmp(prior.name,item.name)==0 { boot_error(ctx,item.token,"duplicate top-level name");return false; }
-   if prior.kind==BN_FN && item.kind==BN_FN && (prior.flags&2)!=0 && (item.flags&2)!=0 && strcmp(prior.name,item.name)==0 && !boot_foreign_same(prior,item) {boot_error(ctx,item.token,"incompatible cross-module foreign declarations");return false;}
+   if strcmp(prior.name,item.name)==0 {
+    if boot_c_symbol(prior) && boot_c_symbol(item) {
+     if !boot_foreign_same(prior,item){boot_error(ctx,item.token,"incompatible cross-module foreign declarations");return false;}
+     if (prior.flags&BF_EXPORT)!=0 && (item.flags&BF_EXPORT)!=0{boot_error(ctx,item.token,"duplicate exported definition");return false;}
+     if prior.owner==item.owner && (prior.flags&2)!=0 && (item.flags&2)!=0 {boot_error(ctx,item.token,"duplicate top-level name");return false;}
+    }else if prior.owner==item.owner{boot_error(ctx,item.token,"duplicate top-level name");return false;}
+   }
    prior=prior.next;
   }
   if item.generics!=(0 as *BootNode){
+   if (item.flags&BF_EXPORT)!=0 {boot_error(ctx,item.token,"no_mangle requires a concrete non-generic definition");return false;}
    if item.kind==BN_FN&&!boot_check_entry(ctx,item){return false;}
    if item.kind==BN_FN&&!boot_type_shape(ctx,item.ty,item.token,true,0){return false;}
    let mut field:*BootNode=item.params;if item.kind==BN_STRUCT{field=item.body;}
@@ -512,16 +547,17 @@ pub fn boot_check(ctx:*BootContext)->bool {
   } else {
    if !boot_type_valid(ctx,item.ty,item.token,(item.kind==BN_FN||item.kind==BN_ALIAS)) { return false; }
    if item.kind==BN_FN {
+    if (item.flags&BF_EXPORT)!=0 && strcmp(item.name,"main")==0 && !ctx.no_main {boot_error(ctx,item.token,"exporting the host main symbol requires #![no_main]");return false;}
     if (item.flags&4)!=0 && ((item.flags&2)==0 || item.params==(0 as *BootNode)) {
      boot_error(ctx,item.token,"variadic signature requires a foreign function with a fixed parameter");return false;
     }
     if !boot_check_entry(ctx,item) { return false; }
-    if (item.flags&2)!=0&&item.ty.kind==BY_ARRAY{boot_error(ctx,item.token,"foreign array value ABI is not supported");return false;}
+    if boot_c_symbol(item)&&item.ty.kind==BY_ARRAY{boot_error(ctx,item.token,"foreign array value ABI is not supported");return false;}
     let mut param:*BootNode=item.params;
     while param!=(0 as *BootNode) {
      if !boot_type_valid(ctx,param.ty,param.token,false) { return false; }
-     if (item.flags&2)!=0&&param.ty.kind==BY_VOID{boot_error(ctx,param.token,"foreign unit parameter ABI is not supported");return false;}
-     if (item.flags&2)!=0&&param.ty.kind==BY_ARRAY{boot_error(ctx,param.token,"foreign array value ABI is not supported");return false;}
+     if boot_c_symbol(item)&&param.ty.kind==BY_VOID{boot_error(ctx,param.token,"foreign unit parameter ABI is not supported");return false;}
+     if boot_c_symbol(item)&&param.ty.kind==BY_ARRAY{boot_error(ctx,param.token,"foreign array value ABI is not supported");return false;}
      let mut previous:*BootNode=item.params;
      while previous!=param {
       if strcmp(previous.name,param.name)==0 { boot_error(ctx,param.token,"duplicate function parameter");return false; }
@@ -536,6 +572,10 @@ pub fn boot_check(ctx:*BootContext)->bool {
  item=ctx.program.body;
  while item!=(0 as *BootNode) && !ctx.failed {
   ctx.module=item.owner;
+  if item.kind==BN_STATIC && item.left!=0 as *BootNode {
+   let actual:*BootType=boot_check_expr(ctx,item.left,item.ty);
+   if ctx.failed || !boot_expect(ctx,item,actual,item.ty) || !boot_static_initializer(ctx,item.left){return false;}
+  }
   if item.kind==BN_CONST {
    if !boot_constant_form(item.left) { boot_error(ctx,item.token,"Core constants require scalar literals or unary literals");return false; }
    let actual:*BootType=boot_check_expr(ctx,item.left,item.ty);

@@ -1,0 +1,11 @@
+pub struct Pair{left:i64,right:i64}
+pub static mut STATE:Pair=Pair{right:2,left:7};
+pub static SLOT:*i64=&mut BASE as *i64;
+static mut BASE:i64=9;
+pub static mut COUNT:i32;
+pub static ITEMS:[i16;4]=[3,4,5,6];
+pub static REPEAT:[i64;4]=[-1;4];
+pub static NAME:*u8="epoch";
+pub static mut BANK:[Pair;2]=[Pair{left:8,right:5};2];
+pub static FIELD:*i64=&mut BANK[1].right as *i64;
+pub static ZEROS:[i32;1000000]=[0;1000000];

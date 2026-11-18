@@ -13,7 +13,8 @@ pub fn boot_errno_target(ctx:*BootContext)->bool {
  else {boot_error(ctx,ctx.cursor,"Core LLVM errno requires native Darwin or Linux");return false;}
  let mut item:*BootNode=ctx.program.body;
  while item!=0 as *BootNode {
-  if item.kind==BN_FN && (item.flags&2)!=0 && strcmp(item.name,ctx.errno_name)==0 {
+  if boot_c_symbol(item) && strcmp(item.name,ctx.errno_name)==0 {
+   if item.kind!=BN_FN || (item.flags&BF_EXPORT)!=0{boot_error(ctx,item.token,"reserved native errno accessor must remain a libc function");return false;}
    if item.params!=0 as *BootNode || (item.flags&4)!=0 || item.ty.kind!=BY_PTR || item.ty.inner.kind!=BY_I32 {
     boot_error(ctx,item.token,"foreign declaration conflicts with native errno ABI");return false;
    }

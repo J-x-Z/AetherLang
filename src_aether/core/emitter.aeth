@@ -11,14 +11,14 @@ pub fn boot_choose_namespace(ctx:*BootContext)->bool {
  let mut count:i32=0;
  let mut item:*BootNode=ctx.program.body;
  while item!=0 as *BootNode {
-  if item.kind==BN_FN && (item.flags&2)!=0 { count=count+1; }
+  if boot_c_symbol(item) { count=count+1; }
   item=item.next;
  }
  let used:*u8=boot_alloc(ctx,(count as u64)+1) as *u8;
  if used==0 as *u8 {return false;}
  item=ctx.program.body;
  while item!=0 as *BootNode {
-  if item.kind==BN_FN && (item.flags&2)!=0 {
+  if boot_c_symbol(item) {
    let name:*u8=item.name;
    if name[0]==97 && name[1]>=48 && name[1]<=57 {
     let mut number:i32=0;let mut pos:i32=1;
@@ -32,7 +32,20 @@ pub fn boot_choose_namespace(ctx:*BootContext)->bool {
  }
  let mut choice:i32=0;
  while used[choice]!=0 {choice=choice+1;}
- ctx.c_namespace=choice;return true;
+ ctx.c_namespace=choice;
+ // Match ordinary public storage linkage, escaping prefixes reserved by source ABI names.
+ let mut prefix:*u8=boot_copy(ctx,"__aeth_m",8);if ctx.failed{return false;}
+ let mut number:i32=0;let mut collision:bool=true;
+ while collision {
+  collision=false;item=ctx.program.body;let length:u64=strlen(prefix);
+  while item!=0 as *BootNode && !collision{
+   if strncmp(prefix,item.name,length)==0{collision=true;}
+   item=item.next;
+  }
+  if collision {number=number+1;let longer:*u8=boot_alloc(ctx,32) as *u8;if ctx.failed{return false;}
+   snprintf(longer,32,"__aeth_%d_m",number);prefix=longer;}
+ }
+ ctx.export_namespace=prefix;return true;
 }
 fn boot_c_private(ctx:*BootContext,suffix:*u8) {
  fprintf(ctx.output,"a%d_%s",ctx.c_namespace,suffix);
@@ -58,10 +71,16 @@ fn boot_c_type(ctx:*BootContext,ty:*BootType) {
 }
 fn boot_c_return_type(ctx:*BootContext,ty:*BootType){if ty.kind==BY_VOID{boot_c_text(ctx,"void");}else{boot_c_type(ctx,ty);}}
 fn boot_c_function(ctx:*BootContext,node:*BootNode) {
- if (node.flags&2)!=0 {boot_c_text(ctx,node.name);return;}
+ if boot_c_symbol(node) {boot_c_text(ctx,node.name);return;}
  boot_c_private(ctx,"f");boot_c_number(ctx,node.id);
 }
+pub fn boot_storage_name(ctx:*BootContext,node:*BootNode) {
+ if boot_c_symbol(node){boot_c_text(ctx,node.name);return;}
+ if (node.flags&8)!=0{fprintf(ctx.output,"%s%d_%s",ctx.export_namespace,node.owner.id-1,node.name);return;}
+ fprintf(ctx.output,"a%d_g%d",ctx.c_namespace,node.id);
+}
 fn boot_c_binding(ctx:*BootContext,node:*BootNode) {
+ if node.kind==BN_STATIC{boot_storage_name(ctx,node);return;}
  if node.kind==BN_CONST {boot_c_private(ctx,"c");}else{boot_c_private(ctx,"v");}
  boot_c_number(ctx,node.id);
 }
@@ -91,17 +110,26 @@ fn boot_c_bits(ty:*BootType)->i32 {
  if ty.kind==BY_I8||ty.kind==BY_U8{return 8;}if ty.kind==BY_I16||ty.kind==BY_U16{return 16;}
  if ty.kind==BY_I32||ty.kind==BY_U32{return 32;}return 64;
 }
+fn boot_readonly_place(node:*BootNode)->bool{
+ if node.kind==BN_IDENT{return node.decl.kind==BN_STATIC && (node.decl.flags&1)==0;}
+ if (node.kind==BN_MEMBER || node.kind==BN_INDEX) && node.left.ty.kind!=BY_PTR{return boot_readonly_place(node.left);}
+ return false;
+}
+fn boot_c_place_decl(ctx:*BootContext,node:*BootNode){
+ boot_c_type(ctx,node.ty);if boot_readonly_place(node){boot_c_text(ctx," const");}
+ boot_c_text(ctx," *");boot_c_place(ctx,node);
+}
 fn boot_emit_place(ctx:*BootContext,node:*BootNode) {
  if ctx.failed{return;}
  if node.kind==BN_IDENT {
-  boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = &");boot_c_binding(ctx,node.decl);boot_c_text(ctx,";\n");return;
+  boot_c_place_decl(ctx,node);boot_c_text(ctx," = &");boot_c_binding(ctx,node.decl);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_UNARY&&node.op==42 {
-  boot_emit_expr(ctx,node.left);boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
+  boot_emit_expr(ctx,node.left);boot_c_place_decl(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_MEMBER {
   if node.left.ty.kind==BY_PTR{boot_emit_expr(ctx,node.left);}else{boot_emit_place(ctx,node.left);}
-  boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = &(");
+  boot_c_place_decl(ctx,node);boot_c_text(ctx," = &(");
   if node.left.ty.kind==BY_PTR{boot_c_temp(ctx,node.left);}else{boot_c_place(ctx,node.left);}
   boot_c_text(ctx,"->");boot_c_field(ctx,node.decl);boot_c_text(ctx,");\n");return;
  }
@@ -109,9 +137,9 @@ fn boot_emit_place(ctx:*BootContext,node:*BootNode) {
   if node.left.ty.kind==BY_ARRAY{boot_emit_place(ctx,node.left);}else{boot_emit_expr(ctx,node.left);}boot_emit_expr(ctx,node.right);
   if node.left.ty.kind==BY_ARRAY{boot_c_array_bound(ctx,node);}
   if node.left.ty.kind==BY_PTR&&node.ty.kind==BY_VOID{
-   boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
+   boot_c_place_decl(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
   }
-  boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = &(");
+  boot_c_place_decl(ctx,node);boot_c_text(ctx," = &(");
   if node.left.ty.kind==BY_ARRAY{boot_c_place(ctx,node.left);boot_c_text(ctx,"->data");}else{boot_c_temp(ctx,node.left);}
   boot_c_text(ctx,"[");boot_c_temp(ctx,node.right);boot_c_text(ctx,"]);\n");return;
  }
@@ -161,7 +189,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
   boot_emit_place(ctx,node);boot_c_decl(ctx,node);if node.ty.kind==BY_VOID{boot_c_text(ctx,"{};\n");return;}boot_c_text(ctx,"*");boot_c_place(ctx,node);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_UNARY&&node.op==38 {
-  boot_emit_place(ctx,node.left);boot_c_decl(ctx,node);boot_c_place(ctx,node.left);boot_c_text(ctx,";\n");return;
+  boot_emit_place(ctx,node.left);boot_c_decl(ctx,node);if boot_readonly_place(node.left){boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")");}boot_c_place(ctx,node.left);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_UNARY {
   boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);
@@ -263,7 +291,7 @@ fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
  boot_error(ctx,node.token,"unsupported statement in C emitter");
 }
 fn boot_emit_signature(ctx:*BootContext,node:*BootNode) {
- if (node.flags&2)!=0{boot_c_text(ctx,"extern ");}else{boot_c_text(ctx,"static ");}
+ if (node.flags&2)!=0{boot_c_text(ctx,"extern ");}else if !boot_c_symbol(node){boot_c_text(ctx,"static ");}
  boot_c_return_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_function(ctx,node);boot_c_text(ctx,"(");
  let mut param:*BootNode=node.params;
  if param==0 as *BootNode{boot_c_text(ctx,"void");}
@@ -293,6 +321,47 @@ fn boot_emit_float_constant(ctx:*BootContext,node:*BootNode) {
  if node.kind==BN_UNARY {boot_c_text(ctx,"-(");boot_emit_float_constant(ctx,node.left);boot_c_text(ctx,")");return;}
  boot_c_text(ctx,node.token.text);
 }
+fn boot_c_global_place(ctx:*BootContext,node:*BootNode){
+ if node.kind==BN_IDENT{boot_storage_name(ctx,node.decl);return;}
+ boot_c_global_place(ctx,node.left);
+ if node.kind==BN_MEMBER{boot_c_text(ctx,".");boot_c_field(ctx,node.decl);}
+ else{fprintf(ctx.output,".data[%llu]",node.right.value as u64);}
+}
+fn boot_c_initializer(ctx:*BootContext,node:*BootNode) {
+ if node==0 as *BootNode{boot_c_text(ctx,"{0}");return;}
+ if node.kind==BN_STRING{boot_c_string(ctx,node.token);return;}
+ if node.kind==BN_CAST{boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")");boot_c_initializer(ctx,node.left);return;}
+ if node.kind==BN_UNARY && node.op==38{boot_c_text(ctx,"&");boot_c_global_place(ctx,node.left);return;}
+ if node.kind==BN_STRUCT_VALUE {
+  boot_c_text(ctx,"{");let mut field:*BootNode=node.params;
+  while field!=0 as *BootNode{boot_c_text(ctx,".");boot_c_field(ctx,field.decl);boot_c_text(ctx,"=");boot_c_initializer(ctx,field.left);
+   field=field.next;if field!=0 as *BootNode{boot_c_text(ctx,",");}}
+  boot_c_text(ctx,"}");return;
+ }
+ if node.kind==BN_ARRAY || node.kind==BN_REPEAT {
+  if boot_zero_initializer(node){boot_c_text(ctx,"{{0}}");return;}
+  boot_c_text(ctx,"{{");let mut i:u64=0;let mut value:*BootNode=node.params;
+  while i<node.ty.extent{if i!=0{boot_c_text(ctx,",");}
+   if node.kind==BN_REPEAT{boot_c_initializer(ctx,node.left);}else{boot_c_initializer(ctx,value);value=value.next;}
+   i=i+1;
+  }
+  boot_c_text(ctx,"}}");return;
+ }
+ if node.ty.kind==BY_VOID{boot_c_text(ctx,"{}");return;}
+ if node.ty.kind==BY_BOOL{if node.value==0{boot_c_text(ctx,"false");}else{boot_c_text(ctx,"true");}return;}
+ if boot_c_integer(node.ty){boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);fprintf(ctx.output,")%lluULL",node.value as u64);return;}
+ boot_emit_float_constant(ctx,node);
+}
+fn boot_emit_storage(ctx:*BootContext,node:*BootNode,definition:bool){
+ let foreign:bool=(node.flags&2)!=0;
+ if definition && foreign{return;}
+ if !boot_c_symbol(node) && (node.flags&8)==0{boot_c_text(ctx,"static ");}
+ else if !definition{boot_c_text(ctx,"extern ");}
+ boot_c_type(ctx,node.ty);if (node.flags&1)==0{boot_c_text(ctx," const");}
+ boot_c_text(ctx," ");boot_storage_name(ctx,node);
+ if definition{boot_c_text(ctx," = ");boot_c_initializer(ctx,node.left);}
+ boot_c_text(ctx,";\n");
+}
 fn boot_emit_constant(ctx:*BootContext,node:*BootNode) {
  boot_c_text(ctx,"static const ");boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx," = ");
  if node.ty.kind==BY_BOOL {if node.value==0{boot_c_text(ctx,"false");}else{boot_c_text(ctx,"true");}}
@@ -317,7 +386,9 @@ pub fn boot_emit(ctx:*BootContext)->bool {
  }
  ty=ctx.types;while ty!=0 as *BootType{if (ty.kind==BY_STRUCT||ty.kind==BY_ARRAY)&&boot_type_concrete(ty,0){boot_emit_struct(ctx,ty);}ty=ty.next;}
  let mut item:*BootNode=ctx.program.body;
- while item!=0 as *BootNode {if item.kind==BN_CONST{boot_emit_constant(ctx,item);}item=item.next;}
+ while item!=0 as *BootNode {if item.kind==BN_STATIC{boot_emit_storage(ctx,item,false);}item=item.next;}
+ item=ctx.program.body;
+ while item!=0 as *BootNode {if item.kind==BN_CONST{boot_emit_constant(ctx,item);}else if item.kind==BN_STATIC{boot_emit_storage(ctx,item,true);}item=item.next;}
  item=ctx.program.body;
  while item!=0 as *BootNode{if item.kind==BN_FN&&item.generics==(0 as *BootNode){boot_emit_signature(ctx,item);boot_c_text(ctx,";\n");}item=item.next;}
  item=ctx.program.body;
@@ -327,7 +398,7 @@ pub fn boot_emit(ctx:*BootContext)->bool {
  }
  item=ctx.program.body;
  while item!=0 as *BootNode {
-  if item.kind==BN_FN&&(item.flags&2)==0&&item.owner==ctx.root_module&&strcmp(item.name,"main")==0 {
+  if item.kind==BN_FN&&(item.flags&2)==0&&!ctx.no_main&&item.owner==ctx.root_module&&strcmp(item.name,"main")==0 {
    boot_c_text(ctx,"int main(int argc,char **argv){");if item.ty.kind!=BY_VOID{boot_c_text(ctx,"return (int)");}
    boot_c_function(ctx,item);boot_c_text(ctx,"(");if item.params!=0 as *BootNode{boot_c_text(ctx,"argc,(uint8_t**)argv");}
    boot_c_text(ctx,");");if item.ty.kind==BY_VOID{boot_c_text(ctx,"return 0;");}boot_c_text(ctx,"}\n");

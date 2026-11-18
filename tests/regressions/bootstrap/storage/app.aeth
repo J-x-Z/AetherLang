@@ -1,0 +1,9 @@
+use state::*;
+extern "C"{static mut HOST:i32;fn observe(x:*i64)->i64;}
+#[no_mangle] fn callback(x:i32)->i32{COUNT+=1;HOST+=x;return COUNT+HOST;}
+fn change(){STATE.left+=2; *SLOT=11;}
+fn main()->i32{change();let mut BASE:i64=100;BASE+=2;
+ if BASE!=102 || STATE.left!=9 || STATE.right!=2 || *SLOT!=11 || observe(SLOT)!=15 {return 1;}
+ if callback(3)!=9 || callback(1)!=11 || HOST!=9 {return 2;}
+ if *FIELD!=5 || ZEROS[999999]!=0{return 4;} *FIELD=42;if BANK[1].right!=42 || BANK[0].right!=5{return 5;}
+ if ITEMS[2]!=5 || REPEAT[0]!=-1 || REPEAT[3]!=-1 || NAME[4]!=104 {return 3;}return 0;}
