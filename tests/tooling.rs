@@ -3,7 +3,7 @@ use serde_json::{json,Value};
 static NEXT:AtomicU64=AtomicU64::new(0);
 struct Project(PathBuf);
 impl Project {
-    fn new()->Self{let path=std::env::temp_dir().join(format!("aether-tooling-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));fs::create_dir_all(&path).unwrap();Self(path)}
+    fn new()->Self{let path=std::env::temp_dir().join(format!("aether-tooling-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));fs::create_dir_all(&path).unwrap();Self(fs::canonicalize(path).unwrap())}
     fn file(&self,name:&str,text:&str)->PathBuf{let path=self.0.join(name);fs::write(&path,text).unwrap();path}
 }
 impl Drop for Project{fn drop(&mut self){let _=fs::remove_dir_all(&self.0);}}

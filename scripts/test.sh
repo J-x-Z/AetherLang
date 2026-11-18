@@ -9,8 +9,8 @@ cd "$root"
 : "${CARGO_TARGET_DIR:=$root/target}"
 : "${TMPDIR:=$CARGO_TARGET_DIR/tmp}"
 mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR"
-CARGO_TARGET_DIR=$(CDPATH= cd -- "$CARGO_TARGET_DIR" && pwd)
-TMPDIR=$(CDPATH= cd -- "$TMPDIR" && pwd)
+CARGO_TARGET_DIR=$(CDPATH= cd -- "$CARGO_TARGET_DIR" && pwd -P)
+TMPDIR=$(CDPATH= cd -- "$TMPDIR" && pwd -P)
 export CARGO_BUILD_JOBS RUST_TEST_THREADS CARGO_TARGET_DIR TMPDIR
 phase=${2:-all}
 case "$phase" in
