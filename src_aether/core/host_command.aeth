@@ -1,0 +1,19 @@
+use model::*;
+// Microsoft argv decoding: quote every argument, double backslashes before a
+// quote and before the closing quote. No command shell interprets this text.
+pub fn boot_windows_command(args:**u8)->*u8{
+ let mut count:u64=0;let mut total:u64=1;
+ while args[count]!=0 as *u8{let size:u64=strlen(args[count]);if size>65534||size*2+3>131072-total{return 0 as *u8;}total=total+size*2+3;count=count+1;}
+ let bytes:*u8=malloc(total) as *u8;if bytes==0 as *u8{return 0 as *u8;}let mut used:u64=0;let mut index:u64=0;
+ while index<count{
+  if index!=0{bytes[used]=32;used=used+1;}bytes[used]=34;used=used+1;let text:*u8=args[index];let mut at:u64=0;
+  while text[at]!=0{
+   let mut slashes:u64=0;while text[at]==92{slashes=slashes+1;at=at+1;}
+   let mut copies:u64=slashes;if text[at]==34||text[at]==0{copies=slashes*2;}
+   let mut i:u64=0;while i<copies{bytes[used]=92;used=used+1;i=i+1;}
+   if text[at]==0{break;}if text[at]==34{bytes[used]=92;used=used+1;}bytes[used]=text[at];used=used+1;at=at+1;
+  }
+  bytes[used]=34;used=used+1;index=index+1;
+ }
+ bytes[used]=0;return bytes;
+}

@@ -1,0 +1,64 @@
+// POSIX host implementation selected by default. Windows builds select
+// platform_windows.aeth as this module; compiler consumers remain identical.
+use model::*;use runtime::*;
+extern "C"{
+ fn realpath(path:*u8,resolved:*u8)->*u8;fn mkstemp(path:*u8)->i32;
+ fn fdopen(fd:i32,mode:*u8)->*void;fn close(fd:i32)->i32;
+ fn rename(old:*u8,next:*u8)->i32;fn access(path:*u8,mode:i32)->i32;
+ fn fopen(path:*u8,mode:*u8)->*void;fn remove(path:*u8)->i32;
+ fn fseek(file:*void,offset:i64,origin:i32)->i32;fn ftell(file:*void)->i64;
+ fn read(fd:i32,data:*u8,count:u64)->i64;fn write(fd:i32,data:*u8,count:u64)->i64;
+ fn opendir(path:*u8)->*void;fn closedir(dir:*void)->i32;
+ fn fork()->i32;fn execvp(file:*u8,args:**u8)->i32;fn _exit(code:i32);
+ fn waitpid(child:i32,status:*i32,flags:i32)->i32;fn perror(text:*u8);
+ fn getenv(name:*u8)->*u8;fn uname(buffer:*void)->i32;
+}
+pub fn platform_windows()->bool{return false;}
+pub fn platform_path_separator()->u8{return 58;}
+pub fn platform_slash(byte:u8)->bool{return byte==47;}
+pub fn platform_executable_suffix()->*u8{return "";}
+pub fn platform_env(ctx:*BootContext,name:*u8)->*u8{return getenv(name);}
+pub fn platform_arguments(argc:i32,argv:**u8,count:*i32)->**u8{*count=argc;return argv;}
+pub fn platform_arguments_free(count:i32,args:**u8){}
+pub fn platform_info(ctx:*BootContext)->*u8{
+ let info:*u8=boot_alloc(ctx,2048) as *u8;if ctx.failed{return info;}
+ if uname(info as *void)!=0{boot_error(ctx,ctx.cursor,"cannot identify native target");return 0 as *u8;}return info;
+}
+pub fn platform_absolute(path:*u8)->*u8{
+ let size:u64=strlen(path);let result:*u8=malloc(size+1) as *u8;
+ if result!=0 as *u8{memcpy(result as *void,path as *void,size+1);}return result;
+}
+pub fn platform_run_tool(args:**u8)->bool {
+ let child:i32=fork();
+ if child<0 {perror("aether-core: fork");return false;}
+ if child==0 {
+  execvp(args[0],args);
+  perror("aether-core: exec host compiler");
+  _exit(127);
+ }
+ let mut status:i32=0;let mut waited:i32=waitpid(child,&mut status as *i32,0);
+ // Darwin and Linux both assign EINTR the value 4.
+ while waited<0 && __errno_get()==4 {waited=waitpid(child,&mut status as *i32,0);}
+ if waited<0 {perror("aether-core: waitpid");return false;}
+ return waited==child && status==0;
+}
+pub fn platform_valid_image(path:*u8,object:bool)->bool {
+ let file:*void=fopen(path,"rb");
+ if file==0 as *void {return false;}
+ let mut header:[u8;20]=[0;20];
+ let data:*u8=&mut header[0] as *u8;
+ let read:u64=fread(data,1,20,file);
+ let closed:i32=fclose(file);
+ if read!=20 || closed!=0 {return false;}
+ if header[0]==127 && header[1]==69 && header[2]==76 && header[3]==70 {
+  if header[4]!=2 || header[5]!=1 || header[6]!=1 || header[17]!=0 {return false;}
+  if object {return header[16]==1;}
+  return header[16]==2 || header[16]==3;
+ }
+ if header[0]!=207 || header[1]!=250 || header[2]!=237 || header[3]!=254 {return false;}
+ if header[13]!=0 || header[14]!=0 || header[15]!=0 {return false;}
+ if object {return header[12]==1;}
+ return header[12]==2;
+}
+
+pub fn platform_errno()->i32{return __errno_get();}

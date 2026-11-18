@@ -101,7 +101,7 @@ p=file('symbols.aeth','fn main()->i32{let x:i32=1;{let x:i32=2;x;}return x;}')
 r=subprocess.run([compiler,'symbols',p],capture_output=True,timeout=30);assert r.returncode==0,r.stderr;s=json.loads(r.stdout);xs=[x for x in s['symbols'] if x['name']=='x'];assert len(xs)==2,s;assert len({x['id'] for x in xs})==2
 for x in xs:assert any(y['symbol']==x['id'] for y in s['references'])
 results.append(dict(name='cli-symbols',status='pass'))
-p=file('bad.ath','def main() -> int:\n    return missing\n');r=subprocess.run([compiler,'check','--error-format','json',p],capture_output=True,timeout=30);assert r.returncode==1 and not r.stdout,(r.returncode,r.stdout,r.stderr);d=json.loads(r.stderr);assert d['location']['file']==str(p) and d['location']['line']==2,d;assert '@'not in d['message'];results.append(dict(name='cli-json-script',status='pass'))
+p=file('bad.ath','def main() -> int:\n    return missing\n');r=subprocess.run([compiler,'check','--error-format','json',p],capture_output=True,timeout=30);assert r.returncode==1 and not r.stdout,(r.returncode,r.stdout,r.stderr);d=json.loads(r.stderr);assert Path(d['location']['file']).resolve()==p.resolve() and d['location']['line']==2,d;assert '@'not in d['message'];results.append(dict(name='cli-json-script',status='pass'))
 if not args.no_injection:
  library=w/('eintr.dylib' if sys.platform=='darwin' else 'eintr.so');fixture=repo/'tests/regressions/bootstrap/lsp_eintr.c'
  command=[os.environ.get('CC','clang'),*(['-dynamiclib'] if sys.platform=='darwin' else ['-shared','-fPIC']),str(fixture),'-o',str(library),*([] if sys.platform=='darwin' else ['-ldl'])]

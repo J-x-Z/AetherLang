@@ -6,11 +6,10 @@ extern "C" {
  fn memset(pointer:*void,value:i32,size:u64)->*void;
  fn memcpy(dest:*void,source:*void,size:u64)->*void;
  fn strlen(text:*u8)->u64; fn strcmp(a:*u8,b:*u8)->i32;
- fn fopen(path:*u8,mode:*u8)->*void; fn fclose(file:*void)->i32;
+ fn fclose(file:*void)->i32;
  fn fread(data:*u8,size:u64,count:u64,file:*void)->u64;
  fn fwrite(data:*u8,size:u64,count:u64,file:*void)->u64;
- fn fseek(file:*void,offset:i64,whence:i32)->i32; fn ftell(file:*void)->i64;
- fn ferror(file:*void)->i32; fn remove(path:*u8)->i32;
+ fn ferror(file:*void)->i32;
  fn printf(format:*u8,...)->i32; fn fprintf(file:*void,format:*u8,...)->i32;
  fn fputs(text:*u8,file:*void)->i32; fn fputc(value:i32,file:*void)->i32;
 }

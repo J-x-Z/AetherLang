@@ -1,20 +1,10 @@
+use host_platform::*;
 // The host compiler consumes one emitted translation unit. No shell or Rust
 // compiler participates in argument processing, code generation or publication.
 use model::*;
 use runtime::*;
 use host_posix::boot_host_info;
-extern "C" {
- fn getenv(name:*u8)->*u8;
- fn fork()->i32;
- fn execvp(file:*u8,args:**u8)->i32;
- fn _exit(status:i32);
- fn waitpid(child:i32,status:*i32,options:i32)->i32;
- fn perror(message:*u8);
- fn mkstemp(path:*u8)->i32;
- fn close(fd:i32)->i32;
- fn rename(old:*u8,new_path:*u8)->i32;
- fn access(path:*u8,mode:i32)->i32;
-}
+
 pub struct BootCommand {
  input:*u8, output:*u8, lsp:bool, symbols:bool, json_errors:bool, llvm:bool, native:bool, object:bool, check:bool,
  optimize:*u8,cc:*u8,objects:**u8,object_count:i32,libraries:**u8,library_count:i32
@@ -38,40 +28,6 @@ pub fn boot_tool_path(ctx:*BootContext,path:*u8)->*u8 {
  }
  return normalized;
 }
-fn boot_run_tool(args:**u8)->bool {
- let child:i32=fork();
- if child<0 {perror("aether-core: fork");return false;}
- if child==0 {
-  execvp(args[0],args);
-  perror("aether-core: exec host compiler");
-  _exit(127);
- }
- let mut status:i32=0;let mut waited:i32=waitpid(child,&mut status as *i32,0);
- // Darwin and Linux both assign EINTR the value 4.
- while waited<0 && __errno_get()==4 {waited=waitpid(child,&mut status as *i32,0);}
- if waited<0 {perror("aether-core: waitpid");return false;}
- return waited==child && status==0;
-}
-// Both supported hosts are little-endian, 64-bit Mach-O or ELF. A tool
-// reporting success must have produced the requested kind before publication.
-fn boot_valid_image(path:*u8,object:bool)->bool {
- let file:*void=fopen(path,"rb");
- if file==0 as *void {return false;}
- let mut header:[u8;20]=[0;20];
- let data:*u8=&mut header[0] as *u8;
- let read:u64=fread(data,1,20,file);
- let closed:i32=fclose(file);
- if read!=20 || closed!=0 {return false;}
- if header[0]==127 && header[1]==69 && header[2]==76 && header[3]==70 {
-  if header[4]!=2 || header[5]!=1 || header[6]!=1 || header[17]!=0 {return false;}
-  if object {return header[16]==1;}
-  return header[16]==2 || header[16]==3;
- }
- if header[0]!=207 || header[1]!=250 || header[2]!=237 || header[3]!=254 {return false;}
- if header[13]!=0 || header[14]!=0 || header[15]!=0 {return false;}
- if object {return header[12]==1;}
- return header[12]==2;
-}
 pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bool {
  let stage:*u8=boot_sibling(ctx,options.output);
  let args:**u8=boot_alloc(ctx,((options.object_count as u64)+(options.library_count as u64)+16)*(size_of(*u8) as u64)) as **u8;
@@ -79,7 +35,7 @@ pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bo
  let descriptor:i32=mkstemp(stage);
  if descriptor<0 {perror("aether-core: create output");return false;}
  if close(descriptor)!=0 {perror("aether-core: close output");remove(stage);return false;}
- let mut cc:*u8=options.cc;if cc==0 as *u8{cc=getenv("CC");}let mut n:i32=0;
+ let mut cc:*u8=options.cc;if cc==0 as *u8{cc=platform_env(ctx,"CC");}let mut n:i32=0;
  if cc!=0 as *u8 && cc[0]!=0 {args[n]=cc;}else{args[n]="clang";}
  n=n+1;args[n]=options.optimize;n=n+1;args[n]="-x";n=n+1;
  if options.llvm {args[n]="ir";}else{args[n]="c";}n=n+1;
@@ -91,15 +47,15 @@ pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bo
  while i<options.object_count {args[n]=options.objects[i];i=i+1;n=n+1;}
  if !options.object {
   i=0;while i<options.library_count{args[n]=options.libraries[i];n=n+1;i=i+1;}
-  args[n]="-lm";n=n+1;
+  if !platform_windows(){args[n]="-lm";n=n+1;}
   if ctx.packed_relocation {
    let info:*u8=boot_host_info(ctx);if ctx.failed{remove(stage);return false;}
    if strcmp(info,"Darwin")==0 {args[n]="-Wl,-no_fixup_chains";n=n+1;}
   }
  }
  args[n]="-o";n=n+1;args[n]=boot_tool_path(ctx,stage);n=n+1;args[n]=0 as *u8;
- let mut ok:bool=!ctx.failed && boot_run_tool(args);
- if ok && !boot_valid_image(stage,options.object) {ok=false;boot_error(ctx,ctx.cursor,"host compiler produced an invalid native output");}
+ let mut ok:bool=!ctx.failed && platform_run_tool(args);
+ if ok && !platform_valid_image(stage,options.object) {ok=false;boot_error(ctx,ctx.cursor,"host compiler produced an invalid native output");}
  if ok && !options.object && access(stage,1)!=0 {ok=false;perror("aether-core: output is not executable");}
  if ok && rename(stage,options.output)!=0 {ok=false;perror("aether-core: replace output");}
  if !ok {remove(stage);}

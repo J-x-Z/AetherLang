@@ -1,7 +1,8 @@
+use host_platform::*;
 use model::*;
 use runtime::*;
 use lsp_model::*;
-extern "C"{fn realloc(pointer:*void,size:u64)->*void;fn write(fd:i32,data:*u8,count:u64)->i64;}
+extern "C"{fn realloc(pointer:*void,size:u64)->*void;}
 pub fn ls_buffer_new()->*LspBuffer{let b:*LspBuffer=malloc(size_of(LspBuffer)) as *LspBuffer;if b!=0 as *LspBuffer{memset(b as *void,0,size_of(LspBuffer));}return b;}
 pub fn ls_buffer_free(b:*LspBuffer){if b!=0 as *LspBuffer{free(b.data as *void);free(b as *void);}}
 pub fn ls_bytes(b:*LspBuffer,data:*u8,length:u64){
@@ -24,7 +25,7 @@ pub fn ls_string(b:*LspBuffer,text:*u8,length:u64){
 }
 pub fn ls_cstring(b:*LspBuffer,text:*u8){ls_string(b,text,strlen(text));}
 pub fn ls_write_all(fd:i32,data:*u8,length:u64)->bool{
- let mut at:u64=0;while at<length{let n:i64=write(fd,data+at,length-at);if n<0&&__errno_get()==4{continue;}if n<=0{return false;}at=at+n as u64;}return true;
+ let mut at:u64=0;while at<length{let n:i64=write(fd,data+at,length-at);if n<0&&platform_errno()==4{continue;}if n<=0{return false;}at=at+n as u64;}return true;
 }
 pub fn ls_send(b:*LspBuffer)->bool{
  if b.failed{return false;}let header:*u8=malloc(64) as *u8;if header==0 as *u8{return false;}

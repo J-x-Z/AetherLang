@@ -1,3 +1,4 @@
+use host_platform::*;
 // Native source graph loading. Imports precede declarations; imported files are
 // read, lexed and parsed by this compiler, never concatenated by an external tool.
 use model::*;
@@ -8,7 +9,7 @@ use script_lexer::boot_script_lex;
 use script_parser::boot_script_parse;
 use script_lower::boot_script_lower;
 use script_model::{BS_INDENT,BS_DEDENT};
-extern "C" { fn realpath(path:*u8,resolved:*u8)->*u8; }
+
 fn boot_project_word(token:*BootToken,word:*u8)->bool {
  return token!=(0 as *BootToken) && token.kind==BT_IDENT && strcmp(token.text,word)==0;
 }

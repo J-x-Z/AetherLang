@@ -1,21 +1,13 @@
-// Native Core emits for its own host. The first utsname member is sysname on
-// both supported ABIs (Darwin 5x256 bytes, Linux 6x65). Retain no OS pointers.
-use model::*;
-use runtime::*;
-extern "C" {fn uname(info:*void)->i32;}
-pub fn boot_host_info(ctx:*BootContext)->*u8 {
- if ctx.host_info!=0 as *u8{return ctx.host_info;}
- let info:*u8=boot_alloc(ctx,2048) as *u8;
- if ctx.failed{return 0 as *u8;}
- if uname(info as *void)!=0 {boot_error(ctx,ctx.cursor,"cannot identify native target");return 0 as *u8;}
- ctx.host_info=info;return info;
-}
+// Native target identity and errno ABI, shared by both platform modules.
+use model::*;use runtime::*;use host_platform::platform_info;
+pub fn boot_host_info(ctx:*BootContext)->*u8{if ctx.host_info==0 as *u8{ctx.host_info=platform_info(ctx);}return ctx.host_info;}
 pub fn boot_errno_target(ctx:*BootContext)->bool {
  if ctx.errno_name!=0 as *u8 {return true;}
  let info:*u8=boot_host_info(ctx);if ctx.failed{return false;}
  if strcmp(info,"Darwin")==0 {ctx.errno_name="__error";}
  else if strcmp(info,"Linux")==0 {ctx.errno_name="__errno_location";}
- else {boot_error(ctx,ctx.cursor,"Core LLVM errno requires native Darwin or Linux");return false;}
+ else if strcmp(info,"Windows")==0{ctx.errno_name="_errno";}
+ else {boot_error(ctx,ctx.cursor,"unsupported native errno ABI");return false;}
  let mut item:*BootNode=ctx.program.body;
  while item!=0 as *BootNode {
   if boot_c_symbol(item) && strcmp(item.name,ctx.errno_name)==0 {
