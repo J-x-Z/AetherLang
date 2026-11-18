@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import time
 
 p=argparse.ArgumentParser(description=__doc__)
@@ -14,6 +15,7 @@ p.add_argument('--project-compiler',type=Path,help='JXZ AETHC; defaults to the s
 p.add_argument('--work-dir',type=Path,required=True)
 p.add_argument('--backends',nargs='+',choices=['llvm','c'],default=['llvm','c'])
 a=p.parse_args();root=Path(__file__).resolve().parents[1];w=a.work_dir.resolve();w.mkdir(parents=True,exist_ok=True)
+run_root = Path(tempfile.mkdtemp(prefix="run-", dir=w))
 builder=a.compiler.resolve();project_compiler=(a.project_compiler or a.compiler).resolve();records=[]
 metadata=dict(jxz_builder=str(builder),jxz_builder_sha256=hashlib.sha256(builder.read_bytes()).hexdigest(),
               project_compiler=str(project_compiler),project_compiler_sha256=hashlib.sha256(project_compiler.read_bytes()).hexdigest(),
@@ -35,7 +37,7 @@ def run(name,cmd,cwd,env,expected=0,contains=None):
     return r
 
 for backend in a.backends:
-    area=w/backend;area.mkdir(exist_ok=True)
+    area=run_root/backend;area.mkdir()
     env={**os.environ,'TMPDIR':str(area),'AETHC':str(project_compiler),'AETHER_BACKEND':backend,'AETHER_PATH':str(root/'stdlib')}
     jxz=area/'jxz';run(backend+'/build-jxz',[builder,'build',root/'jxz/src/main.aeth','--sysroot',root,'--backend',backend,'-O2','-o',jxz],area,env)
     case=area/'project Ω space';case.mkdir(exist_ok=True)
