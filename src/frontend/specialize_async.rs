@@ -439,6 +439,26 @@ impl<'a> Builder<'a> {
         }
         let start = self.new_segment(&active);
         self.split_statements(f.body.stmts, start, &mut active, None, true)?;
+        // A loop without a reachable break has no fallthrough. Do not demand a
+        // spurious return at an unreachable join, but still check its source AST.
+        let mut reachable = vec![false; self.segments.len()];
+        let mut todo = vec![start];
+        while let Some(id) = todo.pop() {
+            if std::mem::replace(&mut reachable[id], true) { continue; }
+            match &self.segments[id].exit {
+                Exit::Jump(to) | Exit::Suspend(_, to) => todo.push(*to),
+                Exit::Branch(Expr::Literal(Literal::Bool(value, _)), yes, no) => {
+                    todo.push(if *value { *yes } else { *no });
+                }
+                Exit::Branch(_, yes, no) => todo.extend([*yes, *no]),
+                Exit::End | Exit::Unreachable => {}
+            }
+        }
+        for (segment, reachable) in self.segments.iter_mut().zip(reachable) {
+            if !reachable && matches!(segment.exit, Exit::End) {
+                segment.exit = Exit::Unreachable;
+            }
+        }
         Ok(())
     }
     fn new_segment(&mut self, live: &[usize]) -> usize {
