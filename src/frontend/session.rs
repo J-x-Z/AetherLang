@@ -1,5 +1,5 @@
 //! Shared compilation input and diagnostics for CLI and editor clients.
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use std::{cell::OnceCell, collections::HashMap, path::{Path, PathBuf}, sync::Arc};
 use serde::Serialize;
 use super::{ast::{Ident, Item, Program}, lexer::Lexer, resolve::{ModuleSearch, Resolver}, semantic::{SemanticAnalyzer, SemanticFacts}};
 use crate::utils::{Error, Span};
@@ -15,7 +15,7 @@ pub struct Location {
     pub end_line: usize,
     pub end_column: usize,
     #[serde(skip)]
-    pub source_line: String,
+    pub source_line: Arc<str>,
     /// LSP character offsets are zero based UTF-16 code units.
     pub utf16_column: usize,
     pub end_utf16_column: usize,
@@ -142,23 +142,31 @@ fn location(resolver: &Resolver, map: Option<&SourceMap>, span: Span, lines: Opt
     })
 }
 
-/// Byte offsets of line starts in one immutable source snapshot.
-pub(super) struct LineIndex(Vec<usize>);
+/// Immutable line offsets and lazily shared diagnostic excerpts for one snapshot.
+pub(super) struct LineIndex {
+    lines: Vec<IndexedLine>,
+    ascii: bool,
+}
+struct IndexedLine {
+    start: usize,
+    excerpt: OnceCell<Arc<str>>,
+}
 
 impl LineIndex {
     pub(super) fn new(text: &str) -> Self {
-        let mut starts = vec![0];
-        starts.extend(text.match_indices('\n').map(|(offset, _)| offset + 1));
-        Self(starts)
+        let entry = |start| IndexedLine { start, excerpt: OnceCell::new() };
+        let mut lines = vec![entry(0)];
+        lines.extend(text.match_indices('\n').map(|(offset, _)| entry(offset + 1)));
+        Self { lines, ascii: text.is_ascii() }
     }
 
     pub(super) fn location(&self, path: &Path, text: &str, start: usize, end: usize) -> Location {
         let start = text.floor_char_boundary(start.min(text.len()));
         let end = text.floor_char_boundary(end.min(text.len())).max(start);
         let position = |offset| {
-            let line = self.0.partition_point(|&first| first <= offset) - 1;
-            let prefix = &text[self.0[line]..offset];
-            let (characters, utf16) = if prefix.is_ascii() {
+            let line = self.lines.partition_point(|line| line.start <= offset) - 1;
+            let prefix = &text[self.lines[line].start..offset];
+            let (characters, utf16) = if self.ascii || prefix.is_ascii() {
                 (prefix.len(), prefix.len())
             } else {
                 (prefix.chars().count(), prefix.encode_utf16().count())
@@ -167,10 +175,13 @@ impl LineIndex {
         };
         let (line, column, utf16_column) = position(start);
         let (end_line, end_column, end_utf16_column) = position(end);
-        let line_end = self.0.get(line + 1).map_or(text.len(), |&next| next - 1);
+        let source_line = self.lines[line].excerpt.get_or_init(|| {
+            let end = self.lines.get(line + 1).map_or(text.len(), |next| next.start - 1);
+            Arc::from(&text[self.lines[line].start..end])
+        }).clone();
         Location { file: path.to_string_lossy().into(), start, end,
             line: line + 1, column, end_line: end_line + 1, end_column,
-            source_line: text[self.0[line]..line_end].to_owned(), utf16_column, end_utf16_column }
+            source_line, utf16_column, end_utf16_column }
     }
 }
 
@@ -294,6 +305,18 @@ mod tests {
     }
 
     #[test]
+    fn many_symbols_on_one_line_share_the_complete_diagnostic_excerpt() {
+        let text = "fn square(x: i32)->i32{x*x}";
+        let index = LineIndex::new(text);
+        let first = index.location(Path::new("main.aeth"), text, 3, 9);
+        let second = index.location(Path::new("main.aeth"), text, 10, 11);
+        assert!(Arc::ptr_eq(&first.source_line, &second.source_line));
+        let diagnostic = Diagnostic { code: "TEST".into(), severity: "error",
+            message: "example".into(), location: Some(second) };
+        assert!(diagnostic.render().contains(text));
+    }
+
+    #[test]
     fn indexed_locations_match_unicode_and_multiline_prefixes() {
         let path = Path::new("sample.aeth");
         for text in ["", "plain", "é😀\r\n\nα尾\n", "final\nline"] {
@@ -311,7 +334,7 @@ mod tests {
                     assert_eq!((loc.start, loc.end), (first, last));
                     assert_eq!((loc.line, loc.column, loc.utf16_column), reference(first));
                     assert_eq!((loc.end_line, loc.end_column, loc.end_utf16_column), reference(last));
-                    assert_eq!(loc.source_line, text.split('\n').nth(loc.line - 1).unwrap());
+                    assert_eq!(&*loc.source_line, text.split('\n').nth(loc.line - 1).unwrap());
                 }
             }
         }
