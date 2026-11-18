@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hosted execution of freestanding objects; machine entries get object-only evidence."""
+"""Verify freestanding objects and optionally boot the x86-64 interrupt fixtures."""
 import argparse
 import hashlib
 import json
@@ -94,7 +94,26 @@ try:
             obj=work/f'freestanding-{backend}-{target}.o'
             command=[compiler,fixtures/'compute.aeth','--backend',backend,'--target',target,'--emit-obj','-o',obj]
             if backend=='c':command+=['--cc',cc]
+            first_arg = cc_log.stat().st_size
             run(command)
+            if target == 'x86_64-unknown-none':
+                # Ordinary functions in a separate object obey the same stack
+                # contract as code compiled next to an interrupt entry.
+                if backend == 'c':
+                    with cc_log.open('rb') as arguments:
+                        arguments.seek(first_arg)
+                        assert b'-mno-red-zone' in arguments.read().splitlines()
+                else:
+                    generated = obj.with_suffix('.ll')
+                    run([compiler,fixtures/'compute.aeth','--backend','llvm','--target',target,
+                         '--emit-llvm','-o',generated])
+                    ir = generated.read_text()
+                    definitions = re.findall(r'^define [^\n]+',ir,re.M)
+                    protected = set(re.findall(r'^attributes #(\d+) = \{[^}]*\bnoredzone\b',ir,re.M))
+                    assert definitions,ir
+                    for definition in definitions:
+                        group = re.search(r'#(\d+)\s*\{$',definition)
+                        assert group and group[1] in protected,definition
             # Explicit foreign calls remain link dependencies, never disappear.
             undefined=run([nm,'--undefined-only',obj]).stdout
             assert 'custom_add' in undefined and re.search(r'\babs\b',undefined),undefined
