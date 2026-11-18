@@ -1,0 +1,49 @@
+use option::Option;
+use result::Result;
+extern "C"{fn puts(text:*u8)->i32;}
+enum Inner{Number(i32),Empty}
+enum Outer{Wrapped(Inner),Bits(bool,bool),Empty}
+static mut SUBJECTS:i32=0;static mut GUARDS:i32=0;
+fn describe(value:Outer)->i32{
+ match value{
+  Outer::Wrapped(Inner::Number(n))=>n,
+  Outer::Wrapped(Inner::Empty)=>10,
+  Outer::Bits(true,_)=>20,
+  Outer::Bits(false,true)=>30,
+  Outer::Bits(false,false)=>40,
+  Outer::Empty=>50,
+ }
+}
+fn source()->Outer{SUBJECTS+=1;Outer::Wrapped(Inner::Number(7))}
+fn guard(value:i32,accept:bool)->bool{GUARDS+=1;accept&&value==7}
+fn guarded(value:Outer)->i32{
+ match value{
+  Outer::Wrapped(Inner::Number(n)) if guard(n,false)=>1,
+  Outer::Wrapped(Inner::Number(n)) if guard(n,true)=>n,
+  Outer::Wrapped(_)=>2,
+  _=>0,
+ }
+}
+fn signed(value:i8)->i32{match value{-128=>1,-1=>2,0=>3,127=>4,other=>other as i32+1000}}
+fn unsigned(value:u64)->i32{match value{18446744073709551615=>1,0=>2,_=>3}}
+fn boolean(value:bool)->i32{match value{false=>2,true=>3}}
+fn flatten(value:Option<Result<i32,i32>>)->i32{
+ match value{
+  Option::Some(Result::Ok(0))=>10,
+  Option::Some(Result::Ok(v))=>v,
+  Option::Some(Result::Err(e))=>-e,
+  Option::None=>0,
+ }
+}
+enum Pair<T>{Value(T,bool),Empty}
+fn generic<T>(value:Pair<T>,fallback:T)->T{match value{Pair::Value(v,true)=>v,Pair::Value(v,false)=>v,Pair::Empty=>fallback}}
+fn main()->i32{
+ if describe(Outer::Wrapped(Inner::Number(7)))!=7||describe(Outer::Wrapped(Inner::Empty))!=10{return 1;}
+ if describe(Outer::Bits(true,false))!=20||describe(Outer::Bits(false,true))!=30||describe(Outer::Bits(false,false))!=40||describe(Outer::Empty)!=50{return 2;}
+ if guarded(source())!=7||SUBJECTS!=1||GUARDS!=2{return 3;}
+ if signed(-128)!=1||signed(-1)!=2||signed(0)!=3||signed(127)!=4||signed(13)!=1013{return 4;}
+ if unsigned(18446744073709551615)!=1||unsigned(0)!=2||unsigned(7)!=3||boolean(false)!=2||boolean(true)!=3{return 5;}
+ if flatten(Option::Some(Result::Ok(0)))!=10||flatten(Option::Some(Result::Ok(3)))!=3||flatten(Option::Some(Result::Err(4)))!= -4||flatten(Option::None)!=0{return 7;}
+ if generic(Pair::Value(42,true),0)!=42||generic(Pair::Value(43,false),0)!=43||generic(Pair::Empty,44 as i32)!=44{return 8;}
+ puts("patterns=ok");return 0;
+}

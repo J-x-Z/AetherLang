@@ -160,8 +160,21 @@ python3 tests/bootstrap_constants.py --compiler "$WORK/core-stage4" \
 
 Generic payload enums use a real tag and union payload in both emitters.
 `match` checks variant identity, payload arity, guarded arms, binding scope and
-exhaustiveness; a guard does not establish coverage. Payload extraction happens
-only after the tag matches. `Ok`/`Err` enum propagation with `?` evaluates its
+exhaustiveness; a guard does not establish coverage. Nested variant patterns
+and integer/boolean literals use the same typed payloads as expressions. Coverage
+keeps correlations between payload columns, so `Bits(true, _)` plus
+`Bits(_, true)` still needs a case for `(false, false)`. Open integer domains
+require a binding or wildcard fallback. The subject is evaluated once; nested
+payloads and guards are evaluated only after their enclosing patterns match.
+String, character, floating-point, tuple and range patterns are not yet part of
+this self-hosted subset. Pattern depth and coverage work have diagnostic limits.
+
+```sh
+python3 tests/bootstrap_patterns.py --compiler "$WORK/core-stage4" \
+  --reference-compiler "$WORK/aethc" --work-dir "$WORK/core-patterns" --sanitize
+```
+
+`Ok`/`Err` enum propagation with `?` evaluates its
 operand once and returns the actual error payload, requiring an identical error
 type. The enum name is unrestricted; both
 source and return enums must have exactly one payload in each `Ok`/`Err` variant.

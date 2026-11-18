@@ -4,6 +4,7 @@ use runtime::*;
 use type_model::*;
 use const_eval::ce_expression;
 use tuple_model::*;
+use pattern_model::*;
 use methods::{boot_method_generics,boot_method_register,boot_method_empty};
 // Recursive-descent declarations/statements and a Pratt expression parser.
 // Every accepted construct produces a real AST node; unsupported syntax fails.
@@ -482,9 +483,9 @@ fn boot_p_function(ctx:*BootContext,foreign:bool)->*BootNode {
   node.effect_explicit=true;boot_p_advance(ctx);
   if !boot_p_expect(ctx,91,"expected '[' after effect"){return 0 as *BootNode;}
   while boot_p_kind(ctx)!=93 && !ctx.failed{
-   let effect:i32=boot_effect_name(ctx.cursor.text);
-   if boot_p_kind(ctx)!=BT_IDENT || effect<=0{boot_error(ctx,ctx.cursor,"unknown function effect");return 0 as *BootNode;}
-   node.effect_limit=node.effect_limit|effect;boot_p_advance(ctx);if !boot_p_take(ctx,44){break;}
+   let effect_bits:i32=boot_effect_name(ctx.cursor.text);
+   if boot_p_kind(ctx)!=BT_IDENT || effect_bits<=0{boot_error(ctx,ctx.cursor,"unknown function effect");return 0 as *BootNode;}
+   node.effect_limit=node.effect_limit|effect_bits;boot_p_advance(ctx);if !boot_p_take(ctx,44){break;}
   }
   if !boot_p_expect(ctx,93,"expected ']' after effects"){return 0 as *BootNode;}
  }
@@ -606,9 +607,9 @@ pub fn boot_parse(ctx:*BootContext)->bool {
     let mut annotated:bool=false;let mut mask:i32=0;
     while boot_p_take(ctx,64){
      if boot_p_kind(ctx)!=BT_IDENT{boot_error(ctx,ctx.cursor,"expected a foreign effect annotation");return false;}
-     let effect:i32=boot_effect_name(ctx.cursor.text);
-     if effect<0{boot_error(ctx,ctx.cursor,"unknown foreign effect annotation");return false;}
-     annotated=true;mask=mask|effect;boot_p_advance(ctx);
+     let effect_bits:i32=boot_effect_name(ctx.cursor.text);
+     if effect_bits<0{boot_error(ctx,ctx.cursor,"unknown foreign effect annotation");return false;}
+     annotated=true;mask=mask|effect_bits;boot_p_advance(ctx);
     }
     if boot_p_word(ctx,"static"){
      if annotated{boot_error(ctx,ctx.cursor,"effect annotation requires a function");return false;}node=boot_p_static(ctx,true);
@@ -768,22 +769,7 @@ fn boot_p_match(ctx:*BootContext)->*BootNode{
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed&&boot_p_kind(ctx)!=125{
   let arm:*BootNode=boot_node(ctx,BN_ARM,ctx.cursor);if ctx.failed{return arm;}
-  if boot_p_word(ctx,"_"){boot_p_advance(ctx);arm.flags=1;}
-  else{
-   arm.left=boot_p_primary(ctx);if ctx.failed{return 0 as *BootNode;}
-   if arm.left.kind!=BN_ENUM_VALUE{boot_error(ctx,arm.token,"match pattern requires an enum variant or '_'");return 0 as *BootNode;}
-   if boot_p_take(ctx,40){
-    let mut last:*BootNode=0 as *BootNode;
-    while !ctx.failed&&boot_p_kind(ctx)!=41{
-     let flags:i32=0;
-     let name:*BootToken=boot_p_name(ctx);if name==0 as *BootToken{return 0 as *BootNode;}
-     let binding:*BootNode=boot_node(ctx,BN_LET,name);if ctx.failed{return binding;}binding.name=name.text;binding.flags=flags;
-     if last==0 as *BootNode{arm.params=binding;}else{last.next=binding;}last=binding;
-     if !boot_p_take(ctx,44){break;}
-    }
-    if !boot_p_expect(ctx,41,"expected ')' after pattern bindings"){return 0 as *BootNode;}
-   }
-  }
+  arm.left=boot_p_pattern(ctx,0);if ctx.failed{return 0 as *BootNode;}
   if boot_p_word(ctx,"if"){boot_p_advance(ctx);arm.right=boot_p_expression(ctx,0);}
   if !boot_p_expect(ctx,BT_FAT_ARROW,"expected '=>' after match pattern"){return 0 as *BootNode;}
   if boot_p_kind(ctx)==123{arm.body=boot_p_block(ctx);boot_value_tail(arm.body,BN_YIELD);}
@@ -841,4 +827,25 @@ fn boot_p_closure(ctx:*BootContext)->*BootNode{
   if !ctx.failed{result.left=value;body.body=result;node.body=body;}
  }
  ctx.parse_condition=saved;return node;
+}
+
+fn boot_p_pattern(ctx:*BootContext,depth:i32)->*BootNode{
+ if depth>256{boot_error(ctx,ctx.cursor,"pattern nesting exceeds 256");return 0 as *BootNode;}
+ let token:*BootToken=ctx.cursor;let pattern:*BootNode=boot_node(ctx,BN_PATTERN,token);if ctx.failed{return pattern;}
+ if boot_p_word(ctx,"_"){boot_p_advance(ctx);pattern.op=PM_WILD;return pattern;}
+ let value:*BootNode=boot_p_primary(ctx);if ctx.failed{return 0 as *BootNode;}
+ if value.kind==BN_INT||value.kind==BN_BOOL||(value.kind==BN_UNARY&&value.op==45&&value.left.kind==BN_INT){
+  pattern.op=PM_LITERAL;pattern.left=value;return pattern;
+ }
+ if value.kind==BN_IDENT&&value.lookup==0 as *BootModule&&boot_p_kind(ctx)!=40{pattern.op=PM_BIND;pattern.name=value.name;return pattern;}
+ if value.kind!=BN_ENUM_VALUE&&value.kind!=BN_IDENT{boot_error(ctx,token,"pattern requires a literal, binding, wildcard or enum variant");return 0 as *BootNode;}
+ pattern.op=PM_VARIANT;pattern.name=value.name;pattern.ty=value.ty;
+ if boot_p_take(ctx,40){
+  let mut tail:*BootNode=0 as *BootNode;
+  while !ctx.failed&&boot_p_kind(ctx)!=41{
+   let child:*BootNode=boot_p_pattern(ctx,depth+1);if ctx.failed{return 0 as *BootNode;}
+   if tail==0 as *BootNode{pattern.params=child;}else{tail.next=child;}tail=child;if !boot_p_take(ctx,44){break;}
+  }
+  if !boot_p_expect(ctx,41,"expected ')' after pattern fields"){return 0 as *BootNode;}
+ }return pattern;
 }

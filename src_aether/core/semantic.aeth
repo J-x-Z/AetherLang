@@ -4,6 +4,7 @@ use type_model::*;
 use specialize::*;
 use const_eval::*;
 use tuple_model::*;
+use pattern_model::*;
 use methods::*;
 use borrow::boot_borrow_check;
 use owned::boot_own_lower;
@@ -818,27 +819,21 @@ fn boot_check_enum_value(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
 }
 fn boot_check_match(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType{
  let subject:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);if ctx.failed{return 0 as *BootType;}
- if subject.kind!=BY_ENUM{boot_error(ctx,node.token,"match requires an enum value");return 0 as *BootType;}
+ if subject.kind==BY_OWN{boot_error(ctx,node.token,"owned match requires projection-aware move patterns");return 0 as *BootType;}
  let saved_value:*BootType=ctx.value_type;ctx.value_type=expected;
  let temporary:*BootNode=boot_node(ctx,BN_LET,node.token);if ctx.failed{return 0 as *BootType;}temporary.ty=subject;temporary.left=node.left;
- let mut arm:*BootNode=node.params;let mut wildcard:bool=false;
+ let mut arm:*BootNode=node.params;
  while arm!=0 as *BootNode&&!ctx.failed{
-  if wildcard{boot_error(ctx,arm.token,"unreachable match arm after wildcard");break;}
   let saved:*BootBinding=ctx.bindings;ctx.depth=ctx.depth+1;
-  if (arm.flags&1)==0{
-   let pattern:*BootNode=arm.left;let mut target:*BootType=pattern.ty;
-   if target.kind==BY_TEMPLATE&&subject.base==target{target=subject;}
-   if target!=subject{boot_error(ctx,arm.token,"match pattern uses a different enum type");break;}
-   let variant:*BootNode=boot_enum_variant(subject,pattern.name);if variant==0 as *BootNode{boot_error(ctx,arm.token,"unknown enum variant in pattern");break;}arm.decl=variant;
-   let mut prior:*BootNode=node.params;
-   while prior!=arm{if prior.decl==variant&&prior.right==0 as *BootNode{boot_error(ctx,arm.token,"unreachable duplicate enum pattern");break;}prior=prior.next;}
-   let mut binding:*BootNode=arm.params;let mut field:*BootNode=variant.params;
-   while binding!=0 as *BootNode&&field!=0 as *BootNode{
-    binding.ty=field.ty;binding.left=boot_enum_projection(ctx,temporary,variant,field);
-    if strcmp(binding.name,"_")!=0{boot_bind(ctx,binding);}binding=binding.next;field=field.next;
-   }
-   if binding!=0 as *BootNode||field!=0 as *BootNode{boot_error(ctx,arm.token,"enum pattern payload count mismatch");break;}
-  }else{if arm.right==0 as *BootNode{wildcard=true;}}
+  if !boot_check_pattern(ctx,arm.left,subject,boot_enum_reference(ctx,temporary),arm,0){break;}
+  let mut prior:*BootNode=node.params;
+  while prior!=arm{
+   if prior.right==0 as *BootNode&&pm_covers(prior.left,arm.left,0){
+    if pm_irrefutable(prior.left){boot_error(ctx,arm.token,"unreachable match arm after wildcard");}
+    else if prior.left.op==PM_VARIANT{boot_error(ctx,arm.token,"unreachable duplicate enum pattern");}
+    else{boot_error(ctx,arm.token,"unreachable duplicate match pattern");}break;
+   }prior=prior.next;
+  }
   if arm.right!=0 as *BootNode{let guard:*BootType=boot_check_expr(ctx,arm.right,boot_type(ctx,BY_BOOL));if !ctx.failed{boot_expect(ctx,arm.right,guard,boot_type(ctx,BY_BOOL));}}
   boot_check_statement(ctx,arm.body);
   if !ctx.failed&&(boot_flow(arm.body)&1)!=0{
@@ -851,13 +846,7 @@ fn boot_check_match(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTy
   ctx.depth=ctx.depth-1;ctx.bindings=saved;arm=arm.next;
  }
  let mut result:*BootType=ctx.value_type;ctx.value_type=saved_value;if ctx.failed{return 0 as *BootType;}
- if !wildcard{
-  let mut variant:*BootNode=subject.fields;
-  while variant!=0 as *BootNode{
-   let mut found:bool=false;arm=node.params;while arm!=0 as *BootNode{if arm.decl==variant&&arm.right==0 as *BootNode{found=true;}arm=arm.next;}
-   if !found{boot_error(ctx,node.token,"non-exhaustive enum match");return 0 as *BootType;}variant=variant.next;
-  }
- }
+ if !pm_exhaustive(ctx,subject,node.params){boot_error(ctx,node.token,"non-exhaustive enum or scalar match");return 0 as *BootType;}
  if result==0 as *BootType{result=boot_type(ctx,BY_VOID);}
  // Lower already-checked arms to ordinary scopes/conditions/yields. A guard's
  // payload bindings exist only after its tag test; a failed guard keeps trying.
@@ -870,7 +859,7 @@ fn boot_check_match(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTy
   if arm.right!=0 as *BootNode{body=boot_node(ctx,BN_IF,arm.token);if ctx.failed{return 0 as *BootType;}body.left=arm.right;body.body=boot_enum_block(ctx,arm.body);}
   if end==0 as *BootNode{first=body;}else{end.next=body;}scope.body=first;
   let mut statement:*BootNode=scope;
-  if arm.next!=0 as *BootNode&&(arm.flags&1)==0{statement=boot_node(ctx,BN_IF,arm.token);if ctx.failed{return 0 as *BootType;}statement.left=boot_enum_test(ctx,temporary,arm.decl);statement.body=scope;}
+  if arm.next!=0 as *BootNode&&!pm_irrefutable(arm.left){statement=boot_node(ctx,BN_IF,arm.token);if ctx.failed{return 0 as *BootType;}statement.left=pm_test(ctx,arm.left,boot_enum_reference(ctx,temporary));statement.body=scope;}
   last.next=statement;last=statement;arm=arm.next;
  }
  node.kind=BN_VALUE;node.flags=node.flags|4096;node.ty=result;node.body=block;node.left=0 as *BootNode;node.params=0 as *BootNode;return result;
@@ -949,4 +938,30 @@ fn boot_check_tuple(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTy
  let mut argument:*BootNode=fields;let mut field:*BootNode=ty.fields;
  while argument!=0 as *BootNode{argument.decl=field;argument=argument.next;field=field.next;}
  node.kind=BN_STRUCT_VALUE;node.ty=ty;node.params=fields;return ty;
+}
+
+fn boot_check_pattern(ctx:*BootContext,pattern:*BootNode,subject:*BootType,value:*BootNode,arm:*BootNode,depth:i32)->bool{
+ if ctx.failed{return false;}if depth>256{boot_error(ctx,pattern.token,"pattern nesting exceeds 256");return false;}
+ if pattern.op==PM_WILD{pattern.ty=subject;return true;}
+ if pattern.op==PM_BIND{
+  pattern.ty=subject;let binding:*BootNode=boot_node(ctx,BN_LET,pattern.token);if ctx.failed{return false;}
+  binding.name=pattern.name;binding.ty=subject;binding.left=value;pattern.decl=binding;
+  if !boot_bind(ctx,binding){return false;}
+  if arm.params==0 as *BootNode{arm.params=binding;}else{let mut tail:*BootNode=arm.params;while tail.next!=0 as *BootNode{tail=tail.next;}tail.next=binding;}return true;
+ }
+ if pattern.op==PM_LITERAL{
+  if !boot_integer(subject)&&subject.kind!=BY_BOOL{boot_error(ctx,pattern.token,"literal pattern requires a matching scalar type");return false;}
+  let actual:*BootType=boot_check_expr(ctx,pattern.left,subject);if ctx.failed||!boot_expect(ctx,pattern,actual,subject){return false;}
+  pattern.ty=subject;if boot_integer(subject)||subject.kind==BY_BOOL{if !boot_constant_checked(ctx,pattern.left){return false;}pattern.value=pattern.left.value;}return !ctx.failed;
+ }
+ if subject.kind!=BY_ENUM{boot_error(ctx,pattern.token,"enum variant pattern requires an enum value");return false;}
+ let mut target:*BootType=pattern.ty;if target==0 as *BootType{target=subject;}
+ if target.kind==BY_TEMPLATE&&subject.base==target{target=subject;}
+ if target!=subject{boot_error(ctx,pattern.token,"match pattern uses a different enum type");return false;}pattern.ty=subject;
+ let variant:*BootNode=boot_enum_variant(subject,pattern.name);if variant==0 as *BootNode{boot_error(ctx,pattern.token,"unknown enum variant in pattern");return false;}pattern.decl=variant;
+ let mut child:*BootNode=pattern.params;let mut field:*BootNode=variant.params;
+ while child!=0 as *BootNode&&field!=0 as *BootNode{
+  if !boot_check_pattern(ctx,child,field.ty,pm_projection(ctx,value,variant,field),arm,depth+1){return false;}child=child.next;field=field.next;
+ }
+ if child!=0 as *BootNode||field!=0 as *BootNode{boot_error(ctx,pattern.token,"enum pattern payload count mismatch");return false;}return true;
 }

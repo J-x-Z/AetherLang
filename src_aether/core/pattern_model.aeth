@@ -1,0 +1,85 @@
+use model::*;
+use runtime::*;
+// Pattern trees retain payload correlations. A row is one unguarded arm;
+// specializing an enum constructor expands all payload columns together.
+pub const PM_WILD:i32=0;pub const PM_BIND:i32=1;pub const PM_VARIANT:i32=2;pub const PM_LITERAL:i32=3;
+struct PmColumn{pattern:*BootNode,next:*PmColumn}
+struct PmRow{columns:*PmColumn,next:*PmRow}
+struct PmType{ty:*BootType,next:*PmType}
+struct PmBudget{remaining:u64,token:*BootToken}
+pub fn pm_irrefutable(pattern:*BootNode)->bool{return pattern==0 as *BootNode||pattern.op==PM_WILD||pattern.op==PM_BIND;}
+pub fn pm_covers(left:*BootNode,right:*BootNode,depth:i32)->bool{
+ if depth>256{return false;}if pm_irrefutable(left){return true;}if pm_irrefutable(right)||left.op!=right.op{return false;}
+ if left.op==PM_LITERAL{return left.ty==right.ty&&left.ty.kind!=BY_F32&&left.ty.kind!=BY_F64&&left.value==right.value;}
+ if left.op==PM_VARIANT{
+  if left.decl!=right.decl{return false;}let mut a:*BootNode=left.params;let mut b:*BootNode=right.params;
+  while a!=0 as *BootNode&&b!=0 as *BootNode{if !pm_covers(a,b,depth+1){return false;}a=a.next;b=b.next;}return a==0 as *BootNode&&b==0 as *BootNode;
+ }return false;
+}
+fn pm_column(ctx:*BootContext,pattern:*BootNode)->*PmColumn{let col:*PmColumn=boot_alloc(ctx,size_of(PmColumn)) as *PmColumn;if col!=0 as *PmColumn{col.pattern=pattern;}return col;}
+fn pm_type(ctx:*BootContext,ty:*BootType)->*PmType{let col:*PmType=boot_alloc(ctx,size_of(PmType)) as *PmType;if col!=0 as *PmType{col.ty=ty;}return col;}
+fn pm_row(ctx:*BootContext,columns:*PmColumn,next:*PmRow)->*PmRow{let row:*PmRow=boot_alloc(ctx,size_of(PmRow)) as *PmRow;if row!=0 as *PmRow{row.columns=columns;row.next=next;}return row;}
+fn pm_complete(ctx:*BootContext,rows:*PmRow,types:*PmType,budget:*PmBudget,depth:i32)->bool{
+ if ctx.failed{return false;}if budget.remaining==0||depth>256{boot_error(ctx,budget.token,"pattern coverage complexity exceeds limit");return false;}budget.remaining-=1;
+ if types==0 as *PmType{return rows!=0 as *PmRow;}if rows==0 as *PmRow{return false;}
+ let mut row:*PmRow=rows;
+ while row!=0 as *PmRow{let mut col:*PmColumn=row.columns;let mut all:bool=true;while col!=0 as *PmColumn{if !pm_irrefutable(col.pattern){all=false;break;}col=col.next;}if all{return true;}row=row.next;}
+ let ty:*BootType=types.ty;
+ if ty.kind==BY_ENUM{
+  let mut variant:*BootNode=ty.fields;
+  while variant!=0 as *BootNode&&!ctx.failed{
+   let mut specialized:*PmRow=0 as *PmRow;row=rows;
+   while row!=0 as *PmRow&&!ctx.failed{
+    let pattern:*BootNode=row.columns.pattern;let wild:bool=pm_irrefutable(pattern);
+    if wild||(pattern.op==PM_VARIANT&&pattern.decl==variant){
+     let mut first:*PmColumn=0 as *PmColumn;let mut tail:*PmColumn=0 as *PmColumn;let mut field:*BootNode=variant.params;let mut child:*BootNode=0 as *BootNode;if !wild{child=pattern.params;}
+     while field!=0 as *BootNode&&!ctx.failed{let col:*PmColumn=pm_column(ctx,child);if ctx.failed{return false;}if tail==0 as *PmColumn{first=col;}else{tail.next=col;}tail=col;if child!=0 as *BootNode{child=child.next;}field=field.next;}
+     if tail==0 as *PmColumn{first=row.columns.next;}else{tail.next=row.columns.next;}specialized=pm_row(ctx,first,specialized);
+    }row=row.next;
+   }
+   let mut first:*PmType=0 as *PmType;let mut tail:*PmType=0 as *PmType;let mut field:*BootNode=variant.params;
+   while field!=0 as *BootNode&&!ctx.failed{let col:*PmType=pm_type(ctx,field.ty);if ctx.failed{return false;}if tail==0 as *PmType{first=col;}else{tail.next=col;}tail=col;field=field.next;}
+   if tail==0 as *PmType{first=types.next;}else{tail.next=types.next;}
+   if !pm_complete(ctx,specialized,first,budget,depth+1){return false;}variant=variant.next;
+  }return !ctx.failed;
+ }
+ if ty.kind==BY_BOOL{
+  let mut value:i64=0;while value<2{
+   let mut specialized:*PmRow=0 as *PmRow;row=rows;
+   while row!=0 as *PmRow&&!ctx.failed{let pattern:*BootNode=row.columns.pattern;if pm_irrefutable(pattern)||(pattern.op==PM_LITERAL&&pattern.value==value){specialized=pm_row(ctx,row.columns.next,specialized);}row=row.next;}
+   if !pm_complete(ctx,specialized,types.next,budget,depth+1){return false;}value+=1;
+  }return true;
+ }
+ let mut defaults:*PmRow=0 as *PmRow;row=rows;
+ while row!=0 as *PmRow&&!ctx.failed{if pm_irrefutable(row.columns.pattern){defaults=pm_row(ctx,row.columns.next,defaults);}row=row.next;}
+ return pm_complete(ctx,defaults,types.next,budget,depth+1);
+}
+pub fn pm_exhaustive(ctx:*BootContext,ty:*BootType,arms:*BootNode)->bool{
+ let mut rows:*PmRow=0 as *PmRow;let mut arm:*BootNode=arms;
+ while arm!=0 as *BootNode&&!ctx.failed{if arm.right==0 as *BootNode{rows=pm_row(ctx,pm_column(ctx,arm.left),rows);}arm=arm.next;}
+ let budget:*PmBudget=boot_alloc(ctx,size_of(PmBudget)) as *PmBudget;if ctx.failed{return false;}budget.remaining=100000;budget.token=ctx.cursor;if arms!=0 as *BootNode{budget.token=arms.token;}return pm_complete(ctx,rows,pm_type(ctx,ty),budget,0);
+}
+fn pm_value_copy(ctx:*BootContext,source:*BootNode)->*BootNode{
+ if source==0 as *BootNode{return source;}let node:*BootNode=boot_alloc(ctx,size_of(BootNode)) as *BootNode;if node==0 as *BootNode{return node;}
+ memcpy(node as *void,source as *void,size_of(BootNode));node.id=boot_id(ctx);node.next=0 as *BootNode;node.left=pm_value_copy(ctx,source.left);return node;
+}
+pub fn pm_projection(ctx:*BootContext,subject:*BootNode,variant:*BootNode,field:*BootNode)->*BootNode{
+ let value:*BootNode=boot_node(ctx,BN_ENUM_FIELD,subject.token);if ctx.failed{return value;}
+ value.left=pm_value_copy(ctx,subject);value.decl=field;value.aux=variant.ty;value.value=variant.value;value.ty=field.ty;return value;
+}
+fn pm_equal(ctx:*BootContext,left:*BootNode,right:*BootNode)->*BootNode{
+ let value:*BootNode=boot_node(ctx,BN_BINARY,left.token);if ctx.failed{return value;}value.op=BT_EQ;value.ty=boot_type(ctx,BY_BOOL);value.left=left;value.right=right;return value;
+}
+pub fn pm_test(ctx:*BootContext,pattern:*BootNode,subject:*BootNode)->*BootNode{
+ if pm_irrefutable(pattern){let yes:*BootNode=boot_node(ctx,BN_BOOL,pattern.token);if !ctx.failed{yes.ty=boot_type(ctx,BY_BOOL);yes.value=1;}return yes;}
+ if pattern.op==PM_LITERAL{return pm_equal(ctx,pm_value_copy(ctx,subject),pattern.left);}
+ let tag:*BootNode=boot_node(ctx,BN_ENUM_TAG,pattern.token);let number:*BootNode=boot_node(ctx,BN_INT,pattern.token);if ctx.failed{return 0 as *BootNode;}
+ tag.left=pm_value_copy(ctx,subject);tag.ty=boot_type(ctx,BY_U32);number.ty=tag.ty;number.value=pattern.decl.value;
+ let mut condition:*BootNode=pm_equal(ctx,tag,number);let mut child:*BootNode=pattern.params;let mut field:*BootNode=pattern.decl.params;
+ while child!=0 as *BootNode&&!ctx.failed{
+  if !pm_irrefutable(child){
+   let test:*BootNode=pm_test(ctx,child,pm_projection(ctx,subject,pattern.decl,field));let both:*BootNode=boot_node(ctx,BN_BINARY,child.token);if ctx.failed{return 0 as *BootNode;}
+   both.op=BT_AND;both.ty=boot_type(ctx,BY_BOOL);both.left=condition;both.right=test;condition=both;
+  }child=child.next;field=field.next;
+ }return condition;
+}
