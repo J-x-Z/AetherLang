@@ -7,6 +7,9 @@ use host_posix::boot_errno_target;
 use emitter::boot_emit;
 use emitter_llvm::{boot_emit_llvm,boot_llvm_supported};
 use native_driver::*;
+use lsp_server::boot_lsp;
+use lsp_buffer::ls_problem;
+use lsp_cli::{boot_symbols,boot_json_diagnostic};
 
 extern "C" {
  fn realpath(path:*u8,resolved:*u8)->*u8;
@@ -66,10 +69,12 @@ fn boot_default_library(ctx:*BootContext,invoked:*u8)->bool {
 }
 fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8)->bool {
  let mut i:i32=1;let mut native:bool=false;let mut format:i32=0;let mut backend:i32=0;
- let mut check_command:bool=false;let mut positional:bool=false;let mut sysroot:*u8=0 as *u8;
+ let mut optimization:bool=false;let mut check_command:bool=false;let mut positional:bool=false;let mut sysroot:*u8=0 as *u8;
  cmd.optimize="-O0";cmd.objects=boot_alloc(ctx,(argc as u64)*(size_of(*u8) as u64)) as **u8;
  if ctx.failed {return false;}
- if i<argc && strcmp(argv[i],"build")==0 {native=true;i=i+1;}
+ if i<argc && strcmp(argv[i],"lsp")==0 {cmd.lsp=true;i=i+1;}
+ else if i<argc && strcmp(argv[i],"symbols")==0 {cmd.symbols=true;cmd.check=true;i=i+1;}
+ else if i<argc && strcmp(argv[i],"build")==0 {native=true;i=i+1;}
  else if i<argc && strcmp(argv[i],"check")==0 {cmd.check=true;check_command=true;i=i+1;}
  while i<argc {
   let arg:*u8=argv[i];i=i+1;
@@ -84,7 +89,7 @@ fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8)->boo
     if strcmp(arg,"--emit-llvm")==0 {format=2;}
     if strcmp(arg,"--emit-obj")==0 {format=3;}
    } else if arg[1]==79 {
-    let mut level:*u8=arg+2;
+    optimization=true;let mut level:*u8=arg+2;
     if level[0]==0 {if i>=argc{return boot_arguments_error(ctx,"-O requires a level");}level=argv[i];i=i+1;}
     cmd.optimize=boot_optimization(level);
     if cmd.optimize==0 as *u8 {return boot_arguments_error(ctx,"expected optimization level 0..3");}
@@ -99,7 +104,8 @@ fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8)->boo
      return boot_arguments_error(ctx,"unknown command option");
     }
     let value:*u8=argv[i];i=i+1;
-    if strcmp(arg,"-I")==0 {if !boot_project_root(ctx,value){return false;}}
+    if strcmp(arg,"--error-format")==0 {if cmd.json_errors||strcmp(value,"json")!=0{return boot_arguments_error(ctx,"expected one --error-format json");}cmd.json_errors=true;}
+    else if strcmp(arg,"-I")==0 {if !boot_project_root(ctx,value){return false;}}
     else if strcmp(arg,"--module")==0 {if !boot_project_map(ctx,value){return false;}}
     else if strcmp(arg,"--sysroot")==0 {
      if sysroot!=0 as *u8 {return boot_arguments_error(ctx,"duplicate --sysroot");}sysroot=value;
@@ -124,6 +130,9 @@ fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8)->boo
    cmd.input=arg;
   }
  }
+ if cmd.lsp{
+  if cmd.input!=0 as *u8||cmd.output!=0 as *u8||cmd.check||format!=0||backend!=0||cmd.object_count!=0||optimization||cmd.json_errors{return boot_arguments_error(ctx,"lsp accepts only source search options");}
+ }else{
  if cmd.input==0 as *u8 {return boot_arguments_error(ctx,"expected input.aeth");}
  ctx.path=cmd.input;
  cmd.object=format==3;cmd.native=cmd.object || (native && format==0);
@@ -134,6 +143,7 @@ fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8)->boo
  }
  if format==1 && backend==2 || format==2 && backend==1 {return boot_arguments_error(ctx,"output format conflicts with selected backend");}
  cmd.llvm=format==2 || (cmd.native && backend!=1) || (cmd.check && (backend==2 || (check_command && backend==0)));
+ }
  let paths:*u8=getenv("AETHER_PATH");
  if paths!=0 as *u8 {
   let mut begin:u64=0;let mut end:u64=0;
@@ -181,12 +191,19 @@ fn boot_generate(ctx:*BootContext,cmd:*BootCommand)->bool {
 pub fn boot_driver(argc:i32,argv:**u8)->i32 {
  let ctx:*BootContext=boot_context_new(0 as *u8,0,"aether-core");
  if ctx==0 as *BootContext {return 1;}
+ if argc>1&&(strcmp(argv[1],"lsp")==0||strcmp(argv[1],"symbols")==0){ctx.quiet=true;}
+ let mut scan:i32=1;let mut json_errors:bool=false;while scan<argc{if strcmp(argv[scan],"--")==0{break;}if strcmp(argv[scan],"--error-format")==0&&scan+1<argc&&strcmp(argv[scan+1],"json")==0{json_errors=true;ctx.quiet=true;}scan=scan+1;}
  let cmd:*BootCommand=boot_alloc(ctx,size_of(BootCommand) as u64) as *BootCommand;
  let mut ok:bool=cmd!=0 as *BootCommand && boot_parse_command(ctx,cmd,argc,argv);
+ if ok&&cmd.lsp{let status:i32=boot_lsp(ctx);boot_context_free(ctx);return status;}
+ if ctx.quiet&&!json_errors&&!ok&&(cmd==0 as *BootCommand||!cmd.symbols)&&ctx.diagnostic_message!=0 as *u8{ls_problem(ctx.diagnostic_message);}
  if ok {ok=boot_project(ctx,cmd.input) && boot_check(ctx);}
  if ok && ctx.uses_errno {ok=boot_errno_target(ctx);}
  if ok && cmd.llvm {ok=boot_llvm_supported(ctx);}
+ if ok&&cmd.symbols{ok=boot_symbols(ctx);}
  if ok && !cmd.check {ok=boot_generate(ctx,cmd);}
+ if !ok&&json_errors{boot_json_diagnostic(ctx);}
+ else if !ok&&cmd!=0 as *BootCommand&&cmd.symbols&&ctx.diagnostic_message!=0 as *u8{ls_problem(ctx.diagnostic_message);}
  boot_context_free(ctx);
  if ok {return 0;}return 1;
 }

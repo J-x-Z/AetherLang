@@ -1,0 +1,33 @@
+// Structured CLI diagnostics and workspace symbols share the LSP's source facts.
+use model::*;use runtime::*;use lsp_model::*;use lsp_buffer::*;use lsp_index::*;use lsp_analysis::*;
+fn lc_offset(ctx:*BootContext,token:*BootToken)->u64{
+ let module:*BootModule=ls_module(ctx,token.path);if module==0 as *BootModule{return 0;}let mut at:u64=0;let mut line:i32=1;
+ while at<module.length&&line<token.line{if module.source[at]==10{line=line+1;}at=at+1;}
+ let end:u64=at+(token.column-1) as u64;if end>module.length{return module.length;}return end;
+}
+fn lc_location(out:*LspBuffer,ctx:*BootContext,token:*BootToken){
+ if token==0 as *BootToken{ls_text(out,"null");return;}let offset:u64=lc_offset(ctx,token);let range:LspRange=ls_token_range(ctx,token);
+ ls_text(out,"{\"file\":");ls_cstring(out,token.path);ls_text(out,",\"start\":");ls_number(out,offset as i64);ls_text(out,",\"end\":");ls_number(out,(offset+token.length) as i64);
+ ls_text(out,",\"line\":");ls_number(out,token.line as i64);ls_text(out,",\"column\":");ls_number(out,token.column as i64);ls_text(out,",\"end_line\":");ls_number(out,(range.end_line+1) as i64);ls_text(out,",\"end_column\":");ls_number(out,(token.column as u64+token.length) as i64);ls_text(out,",\"utf16_column\":");ls_number(out,range.column as i64);ls_text(out,",\"end_utf16_column\":");ls_number(out,range.end_column as i64);ls_char(out,125);
+}
+pub fn boot_json_diagnostic(ctx:*BootContext)->bool{
+ let out:*LspBuffer=ls_buffer_new();if out==0 as *LspBuffer{return false;}ls_text(out,"{\"code\":\"CORE\",\"severity\":\"error\",\"message\":");let mut message:*u8=ctx.diagnostic_message;if message==0 as *u8{message="compiler failed";}ls_cstring(out,message);ls_text(out,",\"location\":");lc_location(out,ctx,ctx.diagnostic_token);ls_text(out,"}\n");let ok:bool=!out.failed&&ls_write_all(2,out.data,out.length);ls_buffer_free(out);return ok;
+}
+fn lc_kind(node:*BootNode)->*u8{if node.kind==BN_FN{return "function";}if node.kind==BN_STRUCT{return "struct";}if node.kind==BN_ENUM{return "enum";}if node.kind==BN_VARIANT{return "variant";}if node.kind==BN_FIELD{return "field";}if node.kind==BN_PARAM{return "parameter";}if node.kind==BN_CONST{return "constant";}if node.kind==BN_STATIC{return "static";}if node.kind==BN_ALIAS{return "type";}return "variable";}
+fn lc_find(first:*LspSymbol,decl:*BootNode)->*LspSymbol{let mut item:*LspSymbol=first;while item!=0 as *LspSymbol{if ls_same_symbol(item.decl,decl){return item;}item=item.next;}return 0 as *LspSymbol;}
+pub fn boot_symbols(ctx:*BootContext)->bool{
+ let arena:*BootContext=boot_context_new(0 as *u8,0,"symbols");if arena==0 as *BootContext{return false;}arena.quiet=true;
+ let index:*LspIndex=ls_index(arena,ctx);let out:*LspBuffer=ls_buffer_new();if arena.failed||out==0 as *LspBuffer{boot_context_free(arena);ls_buffer_free(out);return false;}
+ let mut symbols:*LspSymbol=0 as *LspSymbol;let mut entry:*LspOccurrence=index.first;let mut count:i64=0;
+ while entry!=0 as *LspOccurrence&&!arena.failed{
+  if lc_find(symbols,entry.decl)==0 as *LspSymbol{let symbol:*LspSymbol=boot_alloc(arena,size_of(LspSymbol)) as *LspSymbol;if !arena.failed{symbol.id=count;count=count+1;symbol.decl=entry.decl;symbol.token=ls_name_token(entry.decl);symbol.next=symbols;symbols=symbol;}}
+  entry=entry.next;
+ }
+ ls_text(out,"{\"symbols\":[");let mut symbol:*LspSymbol=symbols;let mut first:bool=true;
+ while symbol!=0 as *LspSymbol{
+  if symbol.token!=0 as *BootToken{if !first{ls_char(out,44);}first=false;ls_text(out,"{\"id\":");ls_number(out,symbol.id);ls_text(out,",\"name\":");ls_string(out,symbol.token.text,symbol.token.length);ls_text(out,",\"kind\":");ls_cstring(out,lc_kind(symbol.decl));ls_text(out,",\"type_name\":");let signature:*LspBuffer=ls_buffer_new();if signature==0 as *LspBuffer{out.failed=true;}else{ls_signature(signature,symbol.decl);ls_string(out,signature.data,signature.length);ls_buffer_free(signature);}ls_text(out,",\"definition\":");lc_location(out,ctx,symbol.token);ls_char(out,125);}symbol=symbol.next;
+ }
+ ls_text(out,"],\"references\":[");entry=index.first;first=true;
+ while entry!=0 as *LspOccurrence{if !entry.definition{let target:*LspSymbol=lc_find(symbols,entry.decl);if target!=0 as *LspSymbol{if !first{ls_char(out,44);}first=false;ls_text(out,"{\"symbol\":");ls_number(out,target.id);ls_text(out,",\"location\":");lc_location(out,ctx,entry.token);ls_char(out,125);}}entry=entry.next;}
+ ls_text(out,"]}\n");let ok:bool=!arena.failed&&!out.failed&&ls_write_all(1,out.data,out.length);ls_buffer_free(out);boot_context_free(arena);return ok;
+}

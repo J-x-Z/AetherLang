@@ -1,0 +1,80 @@
+use model::*;
+use runtime::*;
+use lsp_model::*;
+use lsp_buffer::*;
+use lsp_json::*;
+use lsp_utf16::*;
+extern "C"{fn realpath(path:*u8,resolved:*u8)->*u8;fn opendir(path:*u8)->*void;fn closedir(directory:*void)->i32;}
+fn lv_hex(c:u8)->i32{if c>=48&&c<=57{return (c-48) as i32;}if c>=65&&c<=70{return (c-55) as i32;}if c>=97&&c<=102{return (c-87) as i32;}return -1;}
+pub fn ls_path(arena:*BootContext,uri:*LspJson)->*u8{
+ if uri==0 as *LspJson||uri.kind!=LJ_STRING||uri.length<8||strncmp(uri.text,"file://",7)!=0{return 0 as *u8;}
+ let mut at:u64=7;if uri.length>=17&&strncmp(uri.text+at,"localhost/",10)==0{at=16;}
+ if uri.text[at]!=47{return 0 as *u8;}
+ let b:*LspBuffer=ls_buffer_new();if b==0 as *LspBuffer{return 0 as *u8;}
+ while at<uri.length&&!b.failed{
+  let mut value:u8=uri.text[at];at=at+1;
+  if value==37{if at+2>uri.length{b.failed=true;break;}let hi:i32=lv_hex(uri.text[at]);let lo:i32=lv_hex(uri.text[at+1]);if hi<0||lo<0{b.failed=true;break;}value=(hi*16+lo) as u8;at=at+2;}
+  if value==0{b.failed=true;break;}ls_char(b,value);
+ }
+ let mut scan:u64=0;let mut scalar:i32=0;while scan<b.length&&!b.failed{let size:u64=ls_utf8(b.data,b.length,scan,&mut scalar as *i32);if size==0{b.failed=true;break;}scan=scan+size;}
+ if b.failed||b.length>8192{ls_buffer_free(b);return 0 as *u8;}
+ let result:*u8=ls_canonical(arena,b.data,b.length);ls_buffer_free(b);return result;
+}
+// Resolve existing prefixes physically while retaining lexical suffixes for
+// newly created unsaved files/directories. No mkdir or temporary source writes.
+fn ls_canonical(arena:*BootContext,path:*u8,length:u64)->*u8{
+ let current:*LspBuffer=ls_buffer_new();if current==0 as *LspBuffer{return 0 as *u8;}ls_char(current,47);let mut at:u64=0;
+ while at<length&&!current.failed{
+  while at<length&&path[at]==47{at=at+1;}let start:u64=at;while at<length&&path[at]!=47{at=at+1;}let count:u64=at-start;
+  if count==0{break;}if count==1&&path[start]==46{continue;}
+  if count==2&&path[start]==46&&path[start+1]==46{
+   while current.length>1&&current.data[current.length-1]!=47{current.length=current.length-1;}if current.length>1{current.length=current.length-1;}current.data[current.length]=0;continue;
+  }
+  if current.length>1{ls_char(current,47);}ls_bytes(current,path+start,count);if current.failed{break;}
+  let resolved:*u8=realpath(current.data,0 as *u8);
+  if resolved!=0 as *u8{
+   current.length=0;ls_text(current,resolved);free(resolved as *void);
+   let mut next:u64=at;while next<length&&path[next]==47{next=next+1;}
+   if next<length{let directory:*void=opendir(current.data);if directory==0 as *void{current.failed=true;}else{closedir(directory);}}
+  }
+ }
+ let mut result:*u8=0 as *u8;if !current.failed&&current.length<=8192{result=boot_copy(arena,current.data,current.length);}ls_buffer_free(current);return result;
+}
+
+pub fn ls_uri(out:*LspBuffer,path:*u8){
+ let encoded:*LspBuffer=ls_buffer_new();if encoded==0 as *LspBuffer{out.failed=true;return;}ls_text(encoded,"file://");let hex:*u8="0123456789ABCDEF";let mut i:u64=0;
+ while path[i]!=0{let c:u8=path[i];if (c>=65&&c<=90)||(c>=97&&c<=122)||(c>=48&&c<=57)||c==47||c==45||c==95||c==46||c==126||c==58{ls_char(encoded,c);}else{ls_char(encoded,37);ls_char(encoded,hex[(c>>4) as u64]);ls_char(encoded,hex[(c&15) as u64]);}i=i+1;}
+ if encoded.failed{out.failed=true;}else{ls_string(out,encoded.data,encoded.length);}ls_buffer_free(encoded);
+}
+pub fn ls_document(server:*LspServer,path:*u8)->*BootOverlay{let mut d:*BootOverlay=server.documents;while d!=0 as *BootOverlay{if strcmp(d.path,path)==0{return d;}d=d.next;}return 0 as *BootOverlay;}
+pub fn ls_document_set(server:*LspServer,path:*u8,text:*u8,length:u64,version:i64)->bool{
+ let mut d:*BootOverlay=ls_document(server,path);let mut old:u64=0;if d!=0 as *BootOverlay{old=d.length;}else if server.document_count>=256{return false;}
+ if length>33554432-(server.document_bytes-old){return false;}
+ let copy:*u8=malloc(length+1) as *u8;if copy==0 as *u8{return false;}memcpy(copy as *void,text as *void,length);copy[length]=0;
+ if d==0 as *BootOverlay{
+  d=malloc(size_of(BootOverlay)) as *BootOverlay;if d==0 as *BootOverlay{free(copy as *void);return false;}memset(d as *void,0,size_of(BootOverlay));
+  let count:u64=strlen(path);d.path=malloc(count+1) as *u8;if d.path==0 as *u8{free(copy as *void);free(d as *void);return false;}memcpy(d.path as *void,path as *void,count+1);
+  d.next=server.documents;server.documents=d;server.document_count=server.document_count+1;
+ }
+ free(d.text as *void);d.text=copy;d.length=length;d.version=version;server.document_bytes=server.document_bytes-old+length;return true;
+}
+pub fn ls_document_close(server:*LspServer,path:*u8){
+ let mut d:*BootOverlay=server.documents;let mut previous:*BootOverlay=0 as *BootOverlay;
+ while d!=0 as *BootOverlay{if strcmp(d.path,path)==0{if previous==0 as *BootOverlay{server.documents=d.next;}else{previous.next=d.next;}server.document_count=server.document_count-1;server.document_bytes=server.document_bytes-d.length;free(d.text as *void);free(d.path as *void);free(d as *void);return;}previous=d;d=d.next;}
+}
+pub fn ls_document_change(server:*LspServer,path:*u8,changes:*LspJson,version:i64)->bool{
+ let doc:*BootOverlay=ls_document(server,path);if doc==0 as *BootOverlay{return false;}if version<=doc.version{return true;}
+ if changes==0 as *LspJson||changes.kind!=LJ_ARRAY{return false;}
+ let mut b:*LspBuffer=ls_buffer_new();if b==0 as *LspBuffer{return false;}ls_bytes(b,doc.text,doc.length);let mut item:*LspJson=changes.children;
+ while item!=0 as *LspJson&&!b.failed{
+  let text:*LspJson=ls_get(item,"text");if text==0 as *LspJson||text.kind!=LJ_STRING{b.failed=true;break;}
+  let range:*LspJson=ls_get(item,"range");let mut first:u64=0;let mut last:u64=b.length;
+  if range!=0 as *LspJson{
+   let start:*LspJson=ls_get(range,"start");let end:*LspJson=ls_get(range,"end");
+   let sl:i64=ls_integer(ls_get(start,"line"),-1);let sc:i64=ls_integer(ls_get(start,"character"),-1);let el:i64=ls_integer(ls_get(end,"line"),-1);let ec:i64=ls_integer(ls_get(end,"character"),-1);
+   if sl<0||sc<0||el<0||ec<0{b.failed=true;break;}first=ls_byte_position(b.data,b.length,sl,sc);last=ls_byte_position(b.data,b.length,el,ec);if first>last{b.failed=true;break;}
+  }
+  let replacement:*LspBuffer=ls_buffer_new();if replacement==0 as *LspBuffer{b.failed=true;break;}ls_bytes(replacement,b.data,first);ls_bytes(replacement,text.text,text.length);ls_bytes(replacement,b.data+last,b.length-last);ls_buffer_free(b);b=replacement;item=item.next;
+ }
+ let ok:bool=!b.failed&&ls_document_set(server,path,b.data,b.length,version);ls_buffer_free(b);return ok;
+}

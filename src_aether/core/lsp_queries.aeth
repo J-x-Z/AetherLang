@@ -1,0 +1,62 @@
+use model::*;use runtime::*;
+use lsp_model::*;use lsp_buffer::*;use lsp_json::*;use lsp_analysis::*;use lsp_index::*;use lsp_vfs::*;
+fn lq_add(arena:*BootContext,locations:**LspLocation,ctx:*BootContext,token:*BootToken){
+ let range:LspRange=ls_token_range(ctx,token);let mut prior:*LspLocation=*locations;
+ while prior!=0 as *LspLocation{if prior.range.line==range.line&&prior.range.column==range.column&&prior.range.end_column==range.end_column&&strcmp(prior.path,token.path)==0{return;}prior=prior.next;}
+ let entry:*LspLocation=boot_alloc(arena,size_of(LspLocation)) as *LspLocation;if arena.failed{return;}
+ entry.path=boot_copy(arena,token.path,strlen(token.path));entry.range=range;entry.next=*locations;*locations=entry;
+}
+fn lq_references(arena:*BootContext,locations:**LspLocation,ctx:*BootContext,index:*LspIndex,target:*BootNode,include:bool){
+ let mut item:*LspOccurrence=index.first;
+ while item!=0 as *LspOccurrence{if (include||!item.definition)&&ls_same_symbol(item.decl,target){lq_add(arena,locations,ctx,item.token);}item=item.next;}
+}
+fn lq_symbol(out:*LspBuffer,ctx:*BootContext,item:*LspOccurrence){
+ ls_text(out,"{\"name\":");ls_string(out,item.token.text,item.token.length);ls_text(out,",\"kind\":");ls_number(out,ls_symbol_kind(item.node) as i64);ls_text(out,",\"range\":");let range:LspRange=ls_token_range(ctx,item.token);ls_range(out,range);ls_text(out,",\"selectionRange\":");ls_range(out,range);ls_char(out,125);
+}
+fn lq_completion(out:*LspBuffer,node:*BootNode,label:*u8,first:*bool){
+ if label==0 as *u8||label[0]==64{return;}if !*first{ls_char(out,44);}*first=false;ls_text(out,"{\"label\":");ls_cstring(out,label);ls_text(out,",\"kind\":");let mut kind:i32=6;if node.kind==BN_FN{kind=3;}if node.kind==BN_STRUCT{kind=22;}if node.kind==BN_ENUM{kind=13;}ls_number(out,kind as i64);
+ let detail:*LspBuffer=ls_buffer_new();if detail!=0 as *LspBuffer{ls_signature(detail,node);ls_text(out,",\"detail\":");ls_string(out,detail.data,detail.length);ls_buffer_free(detail);}ls_char(out,125);
+}
+pub fn ls_query(server:*LspServer,arena:*BootContext,out:*LspBuffer,method:*LspJson,params:*LspJson,path:*u8){
+ let ctx:*BootContext=ls_analyze(server,path);if ctx==0 as *BootContext{ls_text(out,"null");return;}
+ let index:*LspIndex=ls_index(arena,ctx);if arena.failed{boot_context_free(ctx);ls_text(out,"null");return;}
+ let position:*LspJson=ls_get(params,"position");let line:i64=ls_integer(ls_get(position,"line"),0);let column:i64=ls_integer(ls_get(position,"character"),0);
+ let hit:*LspOccurrence=ls_at(ctx,index,path,line,column);
+ if ls_is(method,"textDocument/documentSymbol"){
+  ls_char(out,91);let mut entry:*LspOccurrence=index.first;let mut first:bool=true;let mut locations:*LspLocation=0 as *LspLocation;
+  while entry!=0 as *LspOccurrence{if entry.definition&&entry.node.origin==0 as *BootNode&&strcmp(entry.token.path,path)==0{
+   let old:*LspLocation=locations;lq_add(arena,&mut locations as **LspLocation,ctx,entry.token);if old!=locations{if !first{ls_char(out,44);}first=false;lq_symbol(out,ctx,entry);}
+  }entry=entry.next;}ls_char(out,93);
+ }else if ls_is(method,"textDocument/completion"){
+  ls_char(out,91);let mut first:bool=true;let module:*BootModule=ls_module(ctx,path);
+  if module!=0 as *BootModule{
+   let mut node:*BootNode=module.items;while node!=0 as *BootNode{if node.owner==module&&node.origin==0 as *BootNode{lq_completion(out,node,node.name,&mut first as *bool);}node=node.next;}
+   let mut imported:*BootImport=module.imports;
+   while imported!=0 as *BootImport{
+    if imported.symbol!=0 as *u8{let decl:*BootNode=boot_module_item(imported.target,imported.symbol);if decl!=0 as *BootNode{lq_completion(out,decl,imported.alias,&mut first as *bool);}}
+    else if imported.wildcard{let mut exported:*BootNode=imported.target.items;while exported!=0 as *BootNode{if exported.owner==imported.target&&boot_exported(exported){lq_completion(out,exported,exported.name,&mut first as *bool);}exported=exported.next;}}
+    imported=imported.next;
+   }
+  }ls_char(out,93);
+ }else if hit==0 as *LspOccurrence{
+  if ls_is(method,"textDocument/references"){ls_text(out,"[]");}else{ls_text(out,"null");}
+ }else if ls_is(method,"textDocument/definition"){
+  let token:*BootToken=ls_name_token(ls_original(hit.decl));if token==0 as *BootToken{ls_text(out,"null");}else{ls_location(out,token.path,ls_token_range(ctx,token));}
+ }else if ls_is(method,"textDocument/hover"){
+  let signature:*LspBuffer=ls_buffer_new();if signature==0 as *LspBuffer{ls_text(out,"null");}else{ls_signature(signature,hit.decl);ls_text(out,"{\"contents\":{\"kind\":\"plaintext\",\"value\":");ls_string(out,signature.data,signature.length);ls_text(out,"},\"range\":");ls_range(out,ls_token_range(ctx,hit.token));ls_char(out,125);ls_buffer_free(signature);}
+ }else{
+  let include:bool=ls_is_bool_true(ls_get(ls_get(params,"context"),"includeDeclaration"));let mut locations:*LspLocation=0 as *LspLocation;
+  lq_references(arena,&mut locations as **LspLocation,ctx,index,hit.decl,include);
+  let mut doc:*BootOverlay=server.documents;
+  while doc!=0 as *BootOverlay&&!arena.failed{
+   if strcmp(doc.path,path)!=0{
+    let other:*BootContext=ls_analyze(server,doc.path);
+    if other!=0 as *BootContext{let other_index:*LspIndex=ls_index(arena,other);if !arena.failed{lq_references(arena,&mut locations as **LspLocation,other,other_index,hit.decl,include);}boot_context_free(other);}
+   }doc=doc.next;
+  }
+  ls_char(out,91);let mut location:*LspLocation=locations;let mut first:bool=true;
+  while location!=0 as *LspLocation{if !first{ls_char(out,44);}first=false;ls_location(out,location.path,location.range);location=location.next;}ls_char(out,93);
+ }
+ boot_context_free(ctx);
+}
+fn ls_is_bool_true(node:*LspJson)->bool{return node!=0 as *LspJson&&node.kind==LJ_BOOL&&strcmp(node.text,"true")==0;}

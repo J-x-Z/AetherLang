@@ -1,7 +1,8 @@
 use model::*;
 pub fn boot_error(ctx:*BootContext,token:*BootToken,message:*u8) {
  if ctx.failed {return;}
- ctx.failed=true;
+ ctx.failed=true;ctx.diagnostic_token=token;ctx.diagnostic_message=message;
+ if ctx.quiet{return;}
  let mut line:i32=1;let mut column:i32=1;
  let mut path:*u8=ctx.path;
  if token!=0 as *BootToken {line=token.line;column=token.column;if token.path!=(0 as *u8) {path=token.path;}}
@@ -221,4 +222,11 @@ pub fn boot_raw_fields(ty:*BootType,depth:i32)->bool{
  if ty.kind==BY_OWN||ty.kind==BY_ARRAY||ty.kind==BY_ALIAS{return boot_raw_fields(ty.inner,depth+1);}
  if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{if boot_raw_fields(field.ty,depth+1){return true;}field=field.next;}}
  return false;
+}
+
+// A borrowed snapshot list is owned by the editor session, never this arena.
+pub fn boot_overlay(ctx:*BootContext,path:*u8)->*BootOverlay{
+ let mut doc:*BootOverlay=ctx.overlays;
+ while doc!=0 as *BootOverlay{if strcmp(doc.path,path)==0{return doc;}doc=doc.next;}
+ return 0 as *BootOverlay;
 }

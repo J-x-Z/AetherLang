@@ -1,0 +1,42 @@
+use model::*;
+use runtime::*;
+use lsp_model::*;
+use lsp_buffer::*;
+extern "C"{fn read(fd:i32,data:*u8,count:u64)->i64;}
+// A frame owns its byte buffer. Null with eof=true is a clean transport EOF.
+pub fn ls_read_frame(eof:*bool)->*LspBuffer{
+ *eof=false;let header:*LspBuffer=ls_buffer_new();if header==0 as *LspBuffer{return header;}
+ let mut line_start:u64=0;let mut content:u64=0;let mut found:bool=false;let mut complete:bool=false;
+ while header.length<4096{
+  let mut byte:u8=0;let n:i64=read(0,&mut byte as *u8,1);
+  if n<0&&__errno_get()==4{continue;}
+  if n<=0{if n==0&&header.length==0{*eof=true;}else{ls_problem("truncated LSP header");}ls_buffer_free(header);return 0 as *LspBuffer;}
+  ls_char(header,byte);if header.failed{break;}
+  if byte==10{
+   let mut end:u64=header.length-1;if end>line_start&&header.data[end-1]==13{end=end-1;}
+   if end==line_start{complete=true;break;}
+   let mut at:u64=line_start;while at<end&&header.data[at]!=58{at=at+1;}
+   if at==end{ls_problem("invalid LSP header");ls_buffer_free(header);return 0 as *LspBuffer;}
+   let key:*u8="content-length";let mut matches:bool=at-line_start==14;let mut i:u64=0;
+   while matches&&i<14{let mut c:u8=header.data[line_start+i];if c>=65&&c<=90{c=c+32;}if c!=key[i]{matches=false;}i=i+1;}
+   if matches{
+    if found{ls_problem("duplicate Content-Length");ls_buffer_free(header);return 0 as *LspBuffer;}found=true;at=at+1;
+    while at<end&&(header.data[at]==32||header.data[at]==9){at=at+1;}
+    let start:u64=at;
+    while at<end&&header.data[at]>=48&&header.data[at]<=57{
+     let digit:u64=(header.data[at]-48) as u64;if content>(16777216-digit)/10{ls_problem("LSP message exceeds 16 MiB");ls_buffer_free(header);return 0 as *LspBuffer;}content=content*10+digit;at=at+1;
+    }
+    if at==start{ls_problem("invalid Content-Length");ls_buffer_free(header);return 0 as *LspBuffer;}
+    while at<end&&(header.data[at]==32||header.data[at]==9){at=at+1;}
+    if at!=end{ls_problem("invalid Content-Length");ls_buffer_free(header);return 0 as *LspBuffer;}
+   }
+   line_start=header.length;
+  }
+ }
+ ls_buffer_free(header);
+ if !complete||!found{ls_problem("missing Content-Length or oversized LSP header");return 0 as *LspBuffer;}
+ let body:*LspBuffer=ls_buffer_new();if body==0 as *LspBuffer{return body;}
+ body.data=malloc(content+1) as *u8;if body.data==0 as *u8{ls_buffer_free(body);return 0 as *LspBuffer;}body.capacity=content+1;
+ while body.length<content{let n:i64=read(0,body.data+body.length,content-body.length);if n<0&&__errno_get()==4{continue;}if n<=0{ls_problem("truncated LSP body");ls_buffer_free(body);return 0 as *LspBuffer;}body.length=body.length+n as u64;}
+ body.data[body.length]=0;return body;
+}

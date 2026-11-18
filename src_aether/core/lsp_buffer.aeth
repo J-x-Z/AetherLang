@@ -1,0 +1,33 @@
+use model::*;
+use runtime::*;
+use lsp_model::*;
+extern "C"{fn realloc(pointer:*void,size:u64)->*void;fn write(fd:i32,data:*u8,count:u64)->i64;}
+pub fn ls_buffer_new()->*LspBuffer{let b:*LspBuffer=malloc(size_of(LspBuffer)) as *LspBuffer;if b!=0 as *LspBuffer{memset(b as *void,0,size_of(LspBuffer));}return b;}
+pub fn ls_buffer_free(b:*LspBuffer){if b!=0 as *LspBuffer{free(b.data as *void);free(b as *void);}}
+pub fn ls_bytes(b:*LspBuffer,data:*u8,length:u64){
+ if b.failed{return;}if length>16777216-b.length{b.failed=true;return;}
+ let need:u64=b.length+length+1;
+ if need>b.capacity{let mut capacity:u64=b.capacity;if capacity==0{capacity=256;}while capacity<need{capacity=capacity*2;}let fresh:*u8=realloc(b.data as *void,capacity) as *u8;if fresh==0 as *u8{b.failed=true;return;}b.data=fresh;b.capacity=capacity;}
+ if length!=0{memcpy((b.data+b.length) as *void,data as *void,length);}b.length=b.length+length;b.data[b.length]=0;
+}
+pub fn ls_text(b:*LspBuffer,text:*u8){ls_bytes(b,text,strlen(text));}
+pub fn ls_char(b:*LspBuffer,value:u8){let mut byte:u8=value;ls_bytes(b,&mut byte as *u8,1);}
+pub fn ls_number(b:*LspBuffer,value:i64){let text:*u8=malloc(32) as *u8;if text==0 as *u8{b.failed=true;return;}let n:i32=snprintf(text,32,"%lld",value);if n<0||n>=32{b.failed=true;}else{ls_bytes(b,text,n as u64);}free(text as *void);}
+pub fn ls_string(b:*LspBuffer,text:*u8,length:u64){
+ ls_char(b,34);let mut i:u64=0;
+ while i<length&&!b.failed{let value:u8=text[i];
+  if value==34||value==92{ls_char(b,92);ls_char(b,value);}
+  else if value<32{ls_text(b,"\\u00");let hex:*u8="0123456789abcdef";ls_char(b,hex[(value>>4) as u64]);ls_char(b,hex[(value&15) as u64]);}
+  else{ls_char(b,value);}i=i+1;
+ }
+ ls_char(b,34);
+}
+pub fn ls_cstring(b:*LspBuffer,text:*u8){ls_string(b,text,strlen(text));}
+pub fn ls_write_all(fd:i32,data:*u8,length:u64)->bool{
+ let mut at:u64=0;while at<length{let n:i64=write(fd,data+at,length-at);if n<0&&__errno_get()==4{continue;}if n<=0{return false;}at=at+n as u64;}return true;
+}
+pub fn ls_send(b:*LspBuffer)->bool{
+ if b.failed{return false;}let header:*u8=malloc(64) as *u8;if header==0 as *u8{return false;}
+ let size:i32=snprintf(header,64,"Content-Length: %llu\r\n\r\n",b.length);let ok:bool=size>0&&size<64&&ls_write_all(1,header,size as u64)&&ls_write_all(1,b.data,b.length);free(header as *void);return ok;
+}
+pub fn ls_problem(message:*u8){ls_write_all(2,"aether-core lsp: ",17);ls_write_all(2,message,strlen(message));ls_write_all(2,"\n",1);}

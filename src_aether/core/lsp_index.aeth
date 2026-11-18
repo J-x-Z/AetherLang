@@ -1,0 +1,60 @@
+use model::*;
+use runtime::*;
+use lsp_model::*;
+use lsp_buffer::*;
+use lsp_analysis::*;
+fn li_declaration(node:*BootNode)->bool{return node.kind==BN_FN||node.kind==BN_STRUCT||node.kind==BN_ENUM||node.kind==BN_VARIANT||node.kind==BN_CONST||node.kind==BN_STATIC||node.kind==BN_ALIAS||node.kind==BN_PARAM||node.kind==BN_LET||(node.kind==BN_FIELD&&node.left==0 as *BootNode);}
+pub fn ls_original(node:*BootNode)->*BootNode{let mut result:*BootNode=node;let mut depth:i32=0;while result!=0 as *BootNode&&result.origin!=0 as *BootNode&&depth<128{result=result.origin;depth=depth+1;}return result;}
+pub fn ls_name_token(node:*BootNode)->*BootToken{
+ let mut token:*BootToken=node.token;if token==0 as *BootToken{return token;}
+ if token.kind==46{token=token.next;}
+ if li_declaration(node){
+  if token.kind==BT_IDENT&&(strcmp(token.text,"fn")==0||strcmp(token.text,"struct")==0||strcmp(token.text,"enum")==0||strcmp(token.text,"let")==0||strcmp(token.text,"const")==0||strcmp(token.text,"static")==0||strcmp(token.text,"type")==0){token=token.next;if token!=0 as *BootToken&&token.kind==BT_IDENT&&strcmp(token.text,"mut")==0{token=token.next;}}
+ }else{
+  // The parser retains the first source token of a qualified expression.
+  while token!=0 as *BootToken&&token.next!=0 as *BootToken&&token.next.kind==58&&token.next.next!=0 as *BootToken&&token.next.next.kind==58&&token.next.next.next!=0 as *BootToken&&token.next.next.next.kind==BT_IDENT{token=token.next.next.next;}
+ }
+ if token==0 as *BootToken||token.kind!=BT_IDENT{return 0 as *BootToken;}return token;
+}
+fn li_record(arena:*BootContext,index:*LspIndex,node:*BootNode,decl:*BootNode,definition:bool){
+ if decl==0 as *BootNode||index.count>=262144{return;}
+ if decl.kind!=BN_FN&&decl.name!=0 as *u8&&decl.name[0]==64{return;}let token:*BootToken=ls_name_token(node);if token==0 as *BootToken||token.path==0 as *u8{return;}
+ // Hidden lowered locals have source tokens, but are not source declarations.
+ if definition&&node.name!=0 as *u8&&node.name[0]==64&&node.kind!=BN_FN{return;}
+ let entry:*LspOccurrence=boot_alloc(arena,size_of(LspOccurrence)) as *LspOccurrence;if entry==0 as *LspOccurrence{return;}
+ entry.node=node;entry.decl=decl;entry.token=token;entry.definition=definition;entry.next=index.first;index.first=entry;index.count=index.count+1;
+}
+fn li_walk(arena:*BootContext,index:*LspIndex,nodes:*BootNode,depth:i32){
+ if depth>512||arena.failed{return;}let mut node:*BootNode=nodes;
+ while node!=0 as *BootNode&&!arena.failed{
+  if li_declaration(node){li_record(arena,index,node,node,true);}
+  else if node.kind==BN_IDENT||node.kind==BN_CALL||node.kind==BN_MEMBER||node.kind==BN_FIELD||node.kind==BN_ENUM_VALUE{li_record(arena,index,node,node.decl,false);}
+  li_walk(arena,index,node.left,depth+1);li_walk(arena,index,node.right,depth+1);li_walk(arena,index,node.third,depth+1);li_walk(arena,index,node.body,depth+1);li_walk(arena,index,node.params,depth+1);node=node.next;
+ }
+}
+pub fn ls_index(arena:*BootContext,ctx:*BootContext)->*LspIndex{
+ let index:*LspIndex=boot_alloc(arena,size_of(LspIndex)) as *LspIndex;if index==0 as *LspIndex{return index;}if ctx.program!=0 as *BootNode{li_walk(arena,index,ctx.program.body,0);}return index;
+}
+pub fn ls_at(ctx:*BootContext,index:*LspIndex,path:*u8,line:i64,column:i64)->*LspOccurrence{
+ let mut item:*LspOccurrence=index.first;
+ while item!=0 as *LspOccurrence{if strcmp(item.token.path,path)==0{let range:LspRange=ls_token_range(ctx,item.token);if range.line as i64==line&&column>=range.column as i64&&column<range.end_column as i64{return item;}}item=item.next;}return 0 as *LspOccurrence;
+}
+pub fn ls_same_symbol(a:*BootNode,b:*BootNode)->bool{
+ let x:*BootToken=ls_name_token(ls_original(a));let y:*BootToken=ls_name_token(ls_original(b));
+ return x!=0 as *BootToken&&y!=0 as *BootToken&&x.line==y.line&&x.column==y.column&&strcmp(x.path,y.path)==0;
+}
+pub fn ls_type(out:*LspBuffer,ty:*BootType,depth:i32){
+ if ty==0 as *BootType{ls_text(out,"?");return;}if depth>64{ls_text(out,"...");return;}
+ if ty.kind==BY_PTR{ls_char(out,42);ls_type(out,ty.inner,depth+1);return;}
+ if ty.kind==BY_REF||ty.kind==BY_MUTREF{ls_char(out,38);if ty.kind==BY_MUTREF{ls_text(out,"mut ");}ls_type(out,ty.inner,depth+1);return;}
+ if ty.kind==BY_ARRAY{ls_char(out,91);ls_type(out,ty.inner,depth+1);ls_text(out,"; ");ls_number(out,ty.extent as i64);ls_char(out,93);return;}
+ if ty.name!=0 as *u8{ls_text(out,ty.name);if ty.arguments!=0 as *BootTypeArgument{ls_char(out,60);let mut arg:*BootTypeArgument=ty.arguments;let mut first:bool=true;while arg!=0 as *BootTypeArgument{if !first{ls_text(out,", ");}first=false;ls_type(out,arg.ty,depth+1);arg=arg.next;}ls_char(out,62);}return;}
+ let mut name:*u8="?";
+ if ty.kind==BY_VOID{name="()";}if ty.kind==BY_BOOL{name="bool";}if ty.kind==BY_I8{name="i8";}if ty.kind==BY_U8{name="u8";}if ty.kind==BY_I16{name="i16";}if ty.kind==BY_U16{name="u16";}if ty.kind==BY_I32{name="i32";}if ty.kind==BY_U32{name="u32";}if ty.kind==BY_I64{name="i64";}if ty.kind==BY_U64{name="u64";}if ty.kind==BY_F32{name="f32";}if ty.kind==BY_F64{name="f64";}ls_text(out,name);
+}
+pub fn ls_signature(out:*LspBuffer,node:*BootNode){
+ let token:*BootToken=ls_name_token(ls_original(node));if token==0 as *BootToken{ls_text(out,"?");return;}
+ if node.kind==BN_FN{ls_text(out,"fn ");ls_bytes(out,token.text,token.length);ls_char(out,40);let mut param:*BootNode=node.params;let mut first:bool=true;while param!=0 as *BootNode{if !first{ls_text(out,", ");}first=false;ls_text(out,param.name);ls_text(out,": ");ls_type(out,param.ty,0);param=param.next;}ls_text(out,") -> ");ls_type(out,node.ty,0);return;}
+ ls_bytes(out,token.text,token.length);ls_text(out,": ");ls_type(out,node.ty,0);
+}
+pub fn ls_symbol_kind(node:*BootNode)->i32{if node.kind==BN_FN{return 12;}if node.kind==BN_STRUCT{return 23;}if node.kind==BN_ENUM{return 10;}if node.kind==BN_FIELD{return 8;}if node.kind==BN_CONST{return 14;}return 13;}

@@ -1,0 +1,66 @@
+use model::*;
+use runtime::*;
+use project::*;
+use semantic::boot_check;
+use lsp_model::*;
+use lsp_buffer::*;
+use lsp_utf16::*;
+use lsp_vfs::*;
+pub fn ls_analyze(server:*LspServer,path:*u8)->*BootContext{
+ let ctx:*BootContext=boot_context_new(0 as *u8,0,path);if ctx==0 as *BootContext{return ctx;}
+ ctx.quiet=true;ctx.overlays=server.documents;ctx.roots=server.config.roots;ctx.mapped=server.config.mapped;
+ if boot_project(ctx,path){boot_check(ctx);}return ctx;
+}
+pub fn ls_module(ctx:*BootContext,path:*u8)->*BootModule{
+ let mut module:*BootModule=ctx.modules;while module!=0 as *BootModule{if strcmp(module.path,path)==0{return module;}module=module.next;}return 0 as *BootModule;
+}
+pub fn ls_token_range(ctx:*BootContext,token:*BootToken)->LspRange{
+ let mut result:LspRange=LspRange{line:0,column:0,end_line:0,end_column:0};
+ if token==0 as *BootToken{return result;}result.line=token.line-1;result.end_line=result.line;
+ let module:*BootModule=ls_module(ctx,token.path);
+ if module!=0 as *BootModule{result.column=ls_column(module.source,module.length,token.line,token.column);result.end_column=ls_column(module.source,module.length,token.line,token.column+token.length as i32);}
+ else{result.column=token.column-1;result.end_column=result.column+token.length as i32;}
+ return result;
+}
+pub fn ls_range(out:*LspBuffer,range:LspRange){
+ ls_text(out,"{\"start\":{\"line\":");ls_number(out,range.line as i64);ls_text(out,",\"character\":");ls_number(out,range.column as i64);ls_text(out,"},\"end\":{\"line\":");ls_number(out,range.end_line as i64);ls_text(out,",\"character\":");ls_number(out,range.end_column as i64);ls_text(out,"}}");
+}
+pub fn ls_location(out:*LspBuffer,path:*u8,range:LspRange){ls_text(out,"{\"uri\":");ls_uri(out,path);ls_text(out,",\"range\":");ls_range(out,range);ls_char(out,125);}
+fn la_file(arena:*BootContext,first:**LspFileDiagnostics,path:*u8)->*LspFileDiagnostics{
+ let mut node:*LspFileDiagnostics=*first;while node!=0 as *LspFileDiagnostics{if strcmp(node.path,path)==0{return node;}node=node.next;}
+ node=boot_alloc(arena,size_of(LspFileDiagnostics)) as *LspFileDiagnostics;if node!=0 as *LspFileDiagnostics{node.path=boot_copy(arena,path,strlen(path));node.next=*first;*first=node;}return node;
+}
+fn la_same_range(a:LspRange,b:LspRange)->bool{return a.line==b.line&&a.column==b.column&&a.end_line==b.end_line&&a.end_column==b.end_column;}
+pub fn ls_free_published(server:*LspServer){let mut p:*LspPath=server.published;while p!=0 as *LspPath{let next:*LspPath=p.next;free(p.path as *void);free(p as *void);p=next;}server.published=0 as *LspPath;}
+pub fn ls_diagnostics(server:*LspServer,arena:*BootContext)->bool{
+ let mut files:*LspFileDiagnostics=0 as *LspFileDiagnostics;let mut previous:*LspPath=server.published;
+ while previous!=0 as *LspPath{la_file(arena,&mut files as **LspFileDiagnostics,previous.path);previous=previous.next;}
+ let mut doc:*BootOverlay=server.documents;
+ while doc!=0 as *BootOverlay&&!arena.failed{
+  let current:*LspFileDiagnostics=la_file(arena,&mut files as **LspFileDiagnostics,doc.path);if arena.failed{break;}current.active=true;
+  let ctx:*BootContext=ls_analyze(server,doc.path);if ctx==0 as *BootContext{boot_error(arena,0 as *BootToken,"out of memory");break;}
+  if ctx.failed{
+   let token:*BootToken=ctx.diagnostic_token;let mut path:*u8=ctx.path;if token!=0 as *BootToken&&token.path!=0 as *u8{path=token.path;}
+   let file:*LspFileDiagnostics=la_file(arena,&mut files as **LspFileDiagnostics,path);
+   if !arena.failed{
+    file.active=true;let range:LspRange=ls_token_range(ctx,token);let mut old:*LspDiagnostic=file.diagnostics;let mut duplicate:bool=false;
+    while old!=0 as *LspDiagnostic{if la_same_range(old.range,range)&&strcmp(old.message,ctx.diagnostic_message)==0{duplicate=true;}old=old.next;}
+    if !duplicate{let item:*LspDiagnostic=boot_alloc(arena,size_of(LspDiagnostic)) as *LspDiagnostic;if !arena.failed{item.message=boot_copy(arena,ctx.diagnostic_message,strlen(ctx.diagnostic_message));item.range=range;item.next=file.diagnostics;file.diagnostics=item;}}
+   }
+  }
+  boot_context_free(ctx);doc=doc.next;
+ }
+ if arena.failed{return false;}ls_free_published(server);let mut file:*LspFileDiagnostics=files;
+ while file!=0 as *LspFileDiagnostics{
+  let out:*LspBuffer=ls_buffer_new();if out==0 as *LspBuffer{return false;}
+  ls_text(out,"{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":");ls_uri(out,file.path);ls_text(out,",\"diagnostics\":[");
+  let mut item:*LspDiagnostic=file.diagnostics;let mut first:bool=true;
+  while item!=0 as *LspDiagnostic{if !first{ls_char(out,44);}first=false;ls_text(out,"{\"range\":");ls_range(out,item.range);ls_text(out,",\"severity\":1,\"code\":\"CORE\",\"source\":\"aether-core\",\"message\":");ls_cstring(out,item.message);ls_char(out,125);item=item.next;}
+  ls_text(out,"]}}");let sent:bool=ls_send(out);ls_buffer_free(out);if !sent{return false;}
+  if file.active{
+   let path:*LspPath=malloc(size_of(LspPath)) as *LspPath;if path==0 as *LspPath{return false;}let size:u64=strlen(file.path);path.path=malloc(size+1) as *u8;if path.path==0 as *u8{free(path as *void);return false;}memcpy(path.path as *void,file.path as *void,size+1);path.next=server.published;server.published=path;
+  }
+  file=file.next;
+ }
+ return true;
+}

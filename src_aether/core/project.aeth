@@ -25,15 +25,21 @@ pub fn boot_project_join(ctx:*BootContext,directory:*u8,name:*u8,suffix:*u8)->*u
  memcpy((path+a+b+1) as *void,suffix as *void,c);path[a+b+c+1]=0;return path;
 }
 fn boot_script_path(path:*u8)->bool{let n:u64=strlen(path);return n>=4&&strcmp(path+(n-4),".ath")==0;}
+fn boot_source_realpath(ctx:*BootContext,path:*u8)->*u8{
+ let resolved:*u8=realpath(path,0 as *u8);if resolved!=0 as *u8{return resolved;}
+ let doc:*BootOverlay=boot_overlay(ctx,path);if doc==0 as *BootOverlay{return 0 as *u8;}
+ let n:u64=strlen(path);let copy:*u8=malloc(n+1) as *u8;
+ if copy!=0 as *u8{memcpy(copy as *void,path as *void,n+1);}return copy;
+}
 fn boot_project_candidate(ctx:*BootContext,directory:*u8,name:*u8)->*u8 {
  let path:*u8=boot_project_join(ctx,directory,name,".aeth");if path==(0 as *u8) {return path;}
- let mut resolved:*u8=realpath(path,0 as *u8);
+ let mut resolved:*u8=boot_source_realpath(ctx,path);
  if resolved==(0 as *u8) {
   let nested:*u8=boot_project_join(ctx,directory,name,"/mod.aeth");if nested==(0 as *u8) {return nested;}
-  resolved=realpath(nested,0 as *u8);
+  resolved=boot_source_realpath(ctx,nested);
  }
  if resolved==(0 as *u8) {
-  let script:*u8=boot_project_join(ctx,directory,name,".ath");if ctx.failed{return 0 as *u8;}resolved=realpath(script,0 as *u8);
+  let script:*u8=boot_project_join(ctx,directory,name,".ath");if ctx.failed{return 0 as *u8;}resolved=boot_source_realpath(ctx,script);
  }
  if resolved==(0 as *u8) {return resolved;}
  let result:*u8=boot_copy(ctx,resolved,strlen(resolved));free(resolved as *void);return result;
@@ -70,6 +76,13 @@ pub fn boot_project_root(ctx:*BootContext,path:*u8)->bool {
  return true;
 }
 fn boot_project_read(ctx:*BootContext,module:*BootModule,token:*BootToken)->bool {
+ let snapshot:*BootOverlay=boot_overlay(ctx,module.path);
+ if snapshot!=0 as *BootOverlay{
+  if snapshot.length>33554432-ctx.source_total{boot_error(ctx,token,"source graph must be at most 32 MiB");return false;}
+  module.length=snapshot.length;module.source=boot_copy(ctx,snapshot.text,snapshot.length);
+  if ctx.failed{return false;}ctx.source_total=ctx.source_total+module.length;return true;
+ }
+
  let file:*void=fopen(module.path,"rb");if file==(0 as *void) {boot_error(ctx,token,"cannot open module source");return false;}
  if fseek(file,0,2)!=0 {fclose(file);boot_error(ctx,token,"cannot seek module source");return false;}
  let measured:i64=ftell(file);
@@ -194,7 +207,7 @@ fn boot_expand_module(ctx:*BootContext,module:*BootModule,script:bool,depth:i32)
  if script{if !boot_script_parse(ctx){return 0 as *BootModule;}}else{if !boot_parse(ctx){return 0 as *BootModule;}}module.items=ctx.program.body;module.state=2;return module;
 }
 pub fn boot_project(ctx:*BootContext,path:*u8)->bool {
- let canonical:*u8=realpath(path,0 as *u8);if canonical==(0 as *u8) {boot_error(ctx,0 as *BootToken,"cannot resolve input source");return false;}
+ let canonical:*u8=boot_source_realpath(ctx,path);if canonical==(0 as *u8) {boot_error(ctx,0 as *BootToken,"cannot resolve input source");return false;}
  let owned:*u8=boot_copy(ctx,canonical,strlen(canonical));free(canonical as *void);if owned==(0 as *u8) {return false;}
  let root:*BootModule=boot_project_load(ctx,owned,0,0 as *BootToken);if root==(0 as *BootModule) {return false;}
  boot_project_context(ctx,root);ctx.cursor=root.tokens;

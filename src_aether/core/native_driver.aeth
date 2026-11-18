@@ -16,7 +16,7 @@ extern "C" {
  fn access(path:*u8,mode:i32)->i32;
 }
 pub struct BootCommand {
- input:*u8, output:*u8, llvm:bool, native:bool, object:bool, check:bool,
+ input:*u8, output:*u8, lsp:bool, symbols:bool, json_errors:bool, llvm:bool, native:bool, object:bool, check:bool,
  optimize:*u8, objects:**u8, object_count:i32
 }
 pub fn boot_sibling(ctx:*BootContext,output:*u8)->*u8 {

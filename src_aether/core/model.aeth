@@ -73,7 +73,9 @@ pub struct BootNode {
  third:*BootNode,body:*BootNode,params:*BootNode,next:*BootNode,owner:*BootModule,lookup:*BootModule,llvm_value:i32,generics:*BootNode,origin:*BootNode
 }
 pub struct BootBinding { name:*u8,node:*BootNode,depth:i32,next:*BootBinding }
+pub struct BootOverlay {path:*u8,text:*u8,length:u64,version:i64,next:*BootOverlay}
 pub struct BootContext {
+ overlays:*BootOverlay,quiet:bool,diagnostic_token:*BootToken,diagnostic_message:*u8,
  arena:*BootArena,allocated:u64,source:*u8,length:u64,path:*u8,
  tokens:*BootToken,cursor:*BootToken,types:*BootType,program:*BootNode,
  failed:bool,next_id:i32,depth:i32,bindings:*BootBinding,

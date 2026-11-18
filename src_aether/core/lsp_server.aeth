@@ -1,0 +1,59 @@
+// Native protocol server: every query uses the same parsed and checked source
+// graph as the compiler. Open documents are borrowed in-memory VFS snapshots.
+use model::*;use runtime::*;use project::*;
+use lsp_model::*;use lsp_buffer::*;use lsp_json::*;use lsp_io::*;use lsp_vfs::*;use lsp_analysis::*;use lsp_queries::*;
+fn ls_response(out:*LspBuffer,id:*LspJson){ls_text(out,"{\"jsonrpc\":\"2.0\",\"id\":");ls_json_emit(out,id);}
+fn ls_error(id:*LspJson,code:i64,message:*u8)->bool{
+ let out:*LspBuffer=ls_buffer_new();if out==0 as *LspBuffer{return false;}ls_response(out,id);ls_text(out,",\"error\":{\"code\":");ls_number(out,code);ls_text(out,",\"message\":");ls_cstring(out,message);ls_text(out,"}}");let ok:bool=ls_send(out);ls_buffer_free(out);return ok;
+}
+fn ls_handle(server:*LspServer,arena:*BootContext,message:*LspJson)->bool{
+ let id:*LspJson=ls_get(message,"id");let method:*LspJson=ls_get(message,"method");let params:*LspJson=ls_get(message,"params");
+ if message.kind!=LJ_OBJECT||method==0 as *LspJson||method.kind!=LJ_STRING||(id!=0 as *LspJson&&id.kind!=LJ_STRING&&id.kind!=LJ_NUMBER&&id.kind!=LJ_NULL){return ls_error(0 as *LspJson,-32600,"invalid JSON-RPC request");}
+ let notification:bool=ls_is(method,"initialized")||ls_is(method,"exit")||ls_is(method,"$/cancelRequest")||ls_is(method,"$/setTrace")||ls_is(method,"textDocument/didSave")||ls_is(method,"textDocument/didOpen")||ls_is(method,"textDocument/didChange")||ls_is(method,"textDocument/didClose");
+ if notification&&id!=0 as *LspJson{return ls_error(id,-32600,"notification method must not carry an id");}
+ if server.shutdown{if id!=0 as *LspJson{return ls_error(id,-32600,"server has shut down");}return true;}
+ if ls_is(method,"initialized")||ls_is(method,"$/cancelRequest")||ls_is(method,"$/setTrace"){return true;}
+ if ls_is(method,"textDocument/didSave"){return ls_diagnostics(server,arena);}
+ if ls_is(method,"textDocument/didOpen")||ls_is(method,"textDocument/didChange")||ls_is(method,"textDocument/didClose"){
+  let document:*LspJson=ls_get(params,"textDocument");let path:*u8=ls_path(arena,ls_get(document,"uri"));let mut ok:bool=path!=0 as *u8;
+  if ok{
+   if ls_is(method,"textDocument/didClose"){ls_document_close(server,path);}
+   else if ls_is(method,"textDocument/didOpen"){
+    let text:*LspJson=ls_get(document,"text");ok=text!=0 as *LspJson&&text.kind==LJ_STRING;
+    if ok{ok=ls_document_set(server,path,text.text,text.length,ls_integer(ls_get(document,"version"),0));}
+   }else{
+    let doc:*BootOverlay=ls_document(server,path);ok=doc!=0 as *BootOverlay;
+    if ok{let mut version:i64=doc.version;if version<9223372036854775807{version=version+1;}version=ls_integer(ls_get(document,"version"),version);ok=ls_document_change(server,path,ls_get(params,"contentChanges"),version);}
+   }
+  }
+  if !ok{if id!=0 as *LspJson{return ls_error(id,-32602,"invalid document update or document budget exceeded");}ls_problem("invalid document update or document budget exceeded");return true;}
+  return ls_diagnostics(server,arena);
+ }
+ if id==0 as *LspJson{return true;}
+ if ls_is(method,"initialize")&&server.initialized{return ls_error(id,-32600,"server is already initialized");}
+ let out:*LspBuffer=ls_buffer_new();if out==0 as *LspBuffer{return false;}ls_response(out,id);ls_text(out,",\"result\":");
+ if ls_is(method,"initialize"){
+  server.initialized=true;let root:*u8=ls_path(arena,ls_get(params,"rootUri"));
+  if root!=0 as *u8{let entry:*BootRoot=boot_alloc(server.config,size_of(BootRoot)) as *BootRoot;if entry==0 as *BootRoot{ls_buffer_free(out);return false;}entry.path=boot_copy(server.config,root,strlen(root));if server.config.failed{ls_buffer_free(out);return false;}entry.next=server.config.roots;server.config.roots=entry;}
+  ls_text(out,"{\"capabilities\":{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":1},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"documentSymbolProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\":\",\".\"]}},\"serverInfo\":{\"name\":\"aether-core\",\"version\":\"1\"}}");
+ }else if ls_is(method,"shutdown"){server.shutdown=true;ls_text(out,"null");}
+ else if ls_is(method,"textDocument/hover")||ls_is(method,"textDocument/definition")||ls_is(method,"textDocument/references")||ls_is(method,"textDocument/documentSymbol")||ls_is(method,"textDocument/completion"){
+  let path:*u8=ls_path(arena,ls_get(ls_get(params,"textDocument"),"uri"));if path==0 as *u8{ls_buffer_free(out);return ls_error(id,-32602,"expected canonical file URI");}
+  ls_query(server,arena,out,method,params,path);
+ }else{ls_buffer_free(out);return ls_error(id,-32601,"method not found");}
+ ls_char(out,125);let ok:bool=!arena.failed&&ls_send(out);ls_buffer_free(out);return ok;
+}
+pub fn boot_lsp(config:*BootContext)->i32{
+ let server:*LspServer=malloc(size_of(LspServer)) as *LspServer;if server==0 as *LspServer{return 1;}memset(server as *void,0,size_of(LspServer));server.config=config;let mut status:i32=0;
+ while true{
+  let mut eof:bool=false;let body:*LspBuffer=ls_read_frame(&mut eof as *bool);if body==0 as *LspBuffer{if !eof{status=1;}break;}
+  let arena:*BootContext=boot_context_new(0 as *u8,0,"lsp");if arena==0 as *BootContext{ls_buffer_free(body);status=1;break;}arena.quiet=true;
+  let message:*LspJson=ls_json_parse(arena,body.data,body.length);
+  if arena.failed{let ok:bool=ls_error(0 as *LspJson,-32700,arena.diagnostic_message);boot_context_free(arena);ls_buffer_free(body);if !ok{status=1;break;}continue;}
+  if message.kind==LJ_OBJECT&&ls_get(message,"id")==0 as *LspJson&&ls_is(ls_get(message,"method"),"exit"){
+   if !server.shutdown{status=1;ls_problem("exit received before shutdown");}boot_context_free(arena);ls_buffer_free(body);break;
+  }
+  let ok:bool=ls_handle(server,arena,message);boot_context_free(arena);ls_buffer_free(body);if !ok{status=1;break;}
+ }
+ while server.documents!=0 as *BootOverlay{ls_document_close(server,server.documents.path);}ls_free_published(server);free(server as *void);return status;
+}

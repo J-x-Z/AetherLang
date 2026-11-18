@@ -1,0 +1,113 @@
+use model::*;
+use runtime::*;
+use lsp_model::*;
+use lsp_buffer::*;
+use lsp_utf16::*;
+extern "C"{fn memcmp(a:*void,b:*void,n:u64)->i32;}
+fn lj_error(p:*LspParser,text:*u8){boot_error(p.arena,0 as *BootToken,text);}
+fn lj_peek(p:*LspParser)->i32{if p.position>=p.length{return -1;}return p.text[p.position] as i32;}
+fn lj_space(p:*LspParser){while p.position<p.length{let c:i32=lj_peek(p);if c!=32&&c!=9&&c!=10&&c!=13{break;}p.position=p.position+1;}}
+fn lj_node(p:*LspParser,kind:i32)->*LspJson{
+ p.nodes=p.nodes+1;if p.nodes>262144{lj_error(p,"JSON node limit exceeds 262144");return 0 as *LspJson;}
+ let n:*LspJson=boot_alloc(p.arena,size_of(LspJson)) as *LspJson;if n!=0 as *LspJson{n.kind=kind;}return n;
+}
+fn lj_hex(c:i32)->i32{if c>=48&&c<=57{return c-48;}if c>=65&&c<=70{return c-55;}if c>=97&&c<=102{return c-87;}return -1;}
+fn lj_u16(p:*LspParser)->i32{
+ let mut result:i32=0;let mut i:i32=0;
+ while i<4{let digit:i32=lj_hex(lj_peek(p));if digit<0{lj_error(p,"JSON Unicode escape needs four hexadecimal digits");return -1;}result=result*16+digit;p.position=p.position+1;i=i+1;}return result;
+}
+fn lj_string(p:*LspParser)->*LspJson{
+ if lj_peek(p)!=34{lj_error(p,"expected JSON string");return 0 as *LspJson;}p.position=p.position+1;
+ let b:*LspBuffer=ls_buffer_new();if b==0 as *LspBuffer{lj_error(p,"out of memory");return 0 as *LspJson;}
+ let mut closed:bool=false;
+ while p.position<p.length&&!p.arena.failed&&!b.failed{
+  let c:i32=lj_peek(p);p.position=p.position+1;
+  if c==34{closed=true;break;}
+  if c<32{lj_error(p,"unescaped control byte in JSON string");break;}
+  if c==92{
+   let escape:i32=lj_peek(p);if escape<0{lj_error(p,"truncated JSON escape");break;}p.position=p.position+1;let mut scalar:i32=escape;
+   if escape==110{scalar=10;}else if escape==114{scalar=13;}else if escape==116{scalar=9;}else if escape==98{scalar=8;}else if escape==102{scalar=12;}
+   else if escape==117{
+    scalar=lj_u16(p);if p.arena.failed{break;}
+    if scalar>=55296&&scalar<=56319{
+     if lj_peek(p)!=92{lj_error(p,"high surrogate needs a JSON low surrogate");break;}p.position=p.position+1;
+     if lj_peek(p)!=117{lj_error(p,"high surrogate needs a JSON low surrogate");break;}p.position=p.position+1;
+     let low:i32=lj_u16(p);if low<56320||low>57343{lj_error(p,"invalid JSON surrogate pair");break;}scalar=65536+(scalar-55296)*1024+(low-56320);
+    }else if scalar>=56320&&scalar<=57343{lj_error(p,"isolated JSON low surrogate");break;}
+   }else if escape!=34&&escape!=92&&escape!=47{lj_error(p,"unknown JSON escape");break;}
+   let mut bytes:[u8;4]=[0;4];let count:u64=ls_utf8_write(&mut bytes[0] as *u8,scalar);ls_bytes(b,&mut bytes[0] as *u8,count);
+  }else if c>=128{
+   let mut scalar:i32=0;let start:u64=p.position-1;let count:u64=ls_utf8(p.text,p.length,start,&mut scalar as *i32);
+   if count==0{lj_error(p,"invalid UTF-8 in JSON string");break;}ls_bytes(b,p.text+start,count);p.position=start+count;
+  }else{ls_char(b,c as u8);}
+ }
+ if !closed&&!p.arena.failed{lj_error(p,"unterminated JSON string");}
+ if b.failed&&!p.arena.failed{lj_error(p,"JSON string exceeds resource limit");}
+ let mut result:*LspJson=0 as *LspJson;
+ if !p.arena.failed{result=lj_node(p,LJ_STRING);if !p.arena.failed{result.length=b.length;let mut data:*u8=b.data;if b.length==0{data="";}result.text=boot_copy(p.arena,data,b.length);}}
+ ls_buffer_free(b);return result;
+}
+fn lj_digit(c:i32)->bool{return c>=48&&c<=57;}
+fn lj_number(p:*LspParser)->*LspJson{
+ let start:u64=p.position;if lj_peek(p)==45{p.position=p.position+1;}
+ if lj_peek(p)==48{p.position=p.position+1;}else{
+  if lj_peek(p)<49||lj_peek(p)>57{lj_error(p,"invalid JSON number");return 0 as *LspJson;}
+  while lj_digit(lj_peek(p)){p.position=p.position+1;}
+ }
+ if lj_peek(p)==46{p.position=p.position+1;if !lj_digit(lj_peek(p)){lj_error(p,"JSON fraction needs digits");return 0 as *LspJson;}while lj_digit(lj_peek(p)){p.position=p.position+1;}}
+ if lj_peek(p)==101||lj_peek(p)==69{
+  p.position=p.position+1;if lj_peek(p)==43||lj_peek(p)==45{p.position=p.position+1;}
+  if !lj_digit(lj_peek(p)){lj_error(p,"JSON exponent needs digits");return 0 as *LspJson;}while lj_digit(lj_peek(p)){p.position=p.position+1;}
+ }
+ let node:*LspJson=lj_node(p,LJ_NUMBER);if !p.arena.failed{node.length=p.position-start;node.text=boot_copy(p.arena,p.text+start,node.length);}return node;
+}
+fn lj_value(p:*LspParser)->*LspJson{
+ lj_space(p);p.depth=p.depth+1;if p.depth>128{lj_error(p,"JSON nesting exceeds 128");return 0 as *LspJson;}
+ let result:*LspJson=lj_value_inner(p);p.depth=p.depth-1;return result;
+}
+fn lj_value_inner(p:*LspParser)->*LspJson{
+ let kind:i32=lj_peek(p);if kind==34{return lj_string(p);}if kind==45||lj_digit(kind){return lj_number(p);}
+ if kind==91||kind==123{
+  p.position=p.position+1;let mut k:i32=LJ_ARRAY;let mut end:i32=93;if kind==123{k=LJ_OBJECT;end=125;}
+  let node:*LspJson=lj_node(p,k);if p.arena.failed{return node;}let mut tail:*LspJson=0 as *LspJson;lj_space(p);
+  if lj_peek(p)==end{p.position=p.position+1;return node;}
+  while !p.arena.failed{
+   let mut key:*LspJson=0 as *LspJson;
+   if k==LJ_OBJECT{key=lj_string(p);if p.arena.failed{break;}lj_space(p);if lj_peek(p)!=58{lj_error(p,"expected ':' after JSON key");break;}p.position=p.position+1;}
+   let child:*LspJson=lj_value(p);if p.arena.failed{break;}
+   if key!=0 as *LspJson{child.key=key.text;child.key_length=key.length;}
+   if tail==0 as *LspJson{node.children=child;}else{tail.next=child;}tail=child;lj_space(p);
+   if lj_peek(p)==end{p.position=p.position+1;return node;}
+   if lj_peek(p)!=44{lj_error(p,"expected JSON ',' or closing delimiter");break;}p.position=p.position+1;lj_space(p);
+  }
+  return 0 as *LspJson;
+ }
+ let mut word:*u8=0 as *u8;let mut k:i32=LJ_NULL;
+ if kind==110{word="null";}if kind==116{word="true";k=LJ_BOOL;}if kind==102{word="false";k=LJ_BOOL;}
+ if word==0 as *u8{lj_error(p,"expected JSON value");return 0 as *LspJson;}
+ let length:u64=strlen(word);if length>p.length-p.position||memcmp((p.text+p.position) as *void,word as *void,length)!=0{lj_error(p,"invalid JSON literal");return 0 as *LspJson;}
+ p.position=p.position+length;let node:*LspJson=lj_node(p,k);if !p.arena.failed{node.text=word;node.length=length;}return node;
+}
+pub fn ls_json_parse(arena:*BootContext,text:*u8,length:u64)->*LspJson{
+ let p:*LspParser=boot_alloc(arena,size_of(LspParser)) as *LspParser;if arena.failed{return 0 as *LspJson;}
+ p.arena=arena;p.text=text;p.length=length;let node:*LspJson=lj_value(p);lj_space(p);if !arena.failed&&p.position!=length{lj_error(p,"unexpected bytes after JSON value");}return node;
+}
+pub fn ls_get(node:*LspJson,name:*u8)->*LspJson{
+ if node==0 as *LspJson||node.kind!=LJ_OBJECT{return 0 as *LspJson;}let size:u64=strlen(name);let mut child:*LspJson=node.children;let mut result:*LspJson=0 as *LspJson;
+ while child!=0 as *LspJson{if child.key_length==size&&memcmp(child.key as *void,name as *void,size)==0{result=child;}child=child.next;}return result;
+}
+pub fn ls_is(node:*LspJson,name:*u8)->bool{return node!=0 as *LspJson&&node.kind==LJ_STRING&&node.length==strlen(name)&&memcmp(node.text as *void,name as *void,node.length)==0;}
+pub fn ls_integer(node:*LspJson,fallback:i64)->i64{
+ if node==0 as *LspJson||node.kind!=LJ_NUMBER{return fallback;}let mut at:u64=0;let mut negative:bool=false;if node.text[0]==45{negative=true;at=1;}
+ let mut value:u64=0;let mut maximum:u64=9223372036854775807;if negative{maximum=maximum+1;}
+ while at<node.length{let c:u8=node.text[at];if c<48||c>57{return fallback;}let digit:u64=(c-48) as u64;if value>(maximum-digit)/10{return fallback;}value=value*10+digit;at=at+1;}
+ if negative{return -(value as i64);}return value as i64;
+}
+pub fn ls_json_emit(b:*LspBuffer,node:*LspJson){
+ if node==0 as *LspJson||node.kind==LJ_NULL{ls_text(b,"null");return;}
+ if node.kind==LJ_STRING{ls_string(b,node.text,node.length);return;}
+ if node.kind==LJ_NUMBER||node.kind==LJ_BOOL{ls_bytes(b,node.text,node.length);return;}
+ let object:bool=node.kind==LJ_OBJECT;if object{ls_char(b,123);}else{ls_char(b,91);}let mut item:*LspJson=node.children;let mut first:bool=true;
+ while item!=0 as *LspJson{if !first{ls_char(b,44);}first=false;if object{ls_string(b,item.key,item.key_length);ls_char(b,58);}ls_json_emit(b,item);item=item.next;}
+ if object{ls_char(b,125);}else{ls_char(b,93);}
+}

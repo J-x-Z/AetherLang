@@ -1,0 +1,14 @@
+use model::*;
+pub const LJ_NULL:i32=0;pub const LJ_BOOL:i32=1;pub const LJ_NUMBER:i32=2;pub const LJ_STRING:i32=3;pub const LJ_ARRAY:i32=4;pub const LJ_OBJECT:i32=5;
+pub struct LspJson{kind:i32,text:*u8,length:u64,key:*u8,key_length:u64,children:*LspJson,next:*LspJson}
+pub struct LspParser{arena:*BootContext,text:*u8,length:u64,position:u64,depth:i32,nodes:u64}
+pub struct LspBuffer{data:*u8,length:u64,capacity:u64,failed:bool}
+pub struct LspPath{path:*u8,next:*LspPath}
+pub struct LspServer{config:*BootContext,documents:*BootOverlay,document_count:i32,document_bytes:u64,published:*LspPath,initialized:bool,shutdown:bool}
+pub struct LspRange{line:i32,column:i32,end_line:i32,end_column:i32}
+pub struct LspLocation{path:*u8,range:LspRange,next:*LspLocation}
+pub struct LspDiagnostic{message:*u8,range:LspRange,next:*LspDiagnostic}
+pub struct LspFileDiagnostics{path:*u8,active:bool,diagnostics:*LspDiagnostic,next:*LspFileDiagnostics}
+pub struct LspOccurrence{node:*BootNode,decl:*BootNode,token:*BootToken,definition:bool,next:*LspOccurrence}
+pub struct LspIndex{first:*LspOccurrence,count:u64}
+pub struct LspSymbol{decl:*BootNode,token:*BootToken,id:i64,next:*LspSymbol}
