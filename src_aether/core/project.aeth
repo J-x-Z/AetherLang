@@ -234,7 +234,8 @@ pub fn boot_project_output(ctx:*BootContext,path:*u8)->bool {
  return true;
 }
 
-fn boot_project_import(ctx:*BootContext,module:*BootModule,mut target:*BootModule,alias:*u8,mut symbol:*u8,wildcard:bool,exported:bool,token:*BootToken)->bool{
+fn boot_project_import(ctx:*BootContext,module:*BootModule,initial_target:*BootModule,alias:*u8,initial_symbol:*u8,wildcard:bool,exported:bool,token:*BootToken)->bool{
+ let mut target:*BootModule=initial_target;let mut symbol:*u8=initial_symbol;
  let mut previous:*BootImport=module.imports;let mut tail:*BootImport=0 as *BootImport;
  while previous!=(0 as *BootImport){if strcmp(previous.alias,alias)==0{boot_error(ctx,token,"duplicate import binding");return false;}tail=previous;previous=previous.next;}
  if symbol!=0 as *u8 {

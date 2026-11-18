@@ -827,6 +827,15 @@ impl LLVMCodeGen {
         let dst_kind = LLVMGetTypeKind(dest_ty);
         let unsigned = self.value_type(source).map(|t| Self::is_unsigned(&t)).unwrap_or(false);
         let name = c"".as_ptr();
+        // Converting to bool tests the numeric value, including NaN as nonzero.
+        // Truncating to i1 would incorrectly turn every even integer into false.
+        if *ty == IRType::Bool {
+            return match src_kind {
+                LLVMIntegerTypeKind => Ok(LLVMBuildICmp(self.builder, LLVMIntPredicate::LLVMIntNE, val, LLVMConstNull(src_ty), name)),
+                LLVMFloatTypeKind | LLVMDoubleTypeKind => Ok(LLVMBuildFCmp(self.builder, llvm_sys::LLVMRealPredicate::LLVMRealUNE, val, LLVMConstNull(src_ty), name)),
+                _ => Err(Error::CodeGen("unsupported conversion to bool".into())),
+            };
+        }
         Ok(match (src_kind, dst_kind) {
             (LLVMIntegerTypeKind, LLVMIntegerTypeKind) => {
                 if LLVMGetIntTypeWidth(dest_ty) < LLVMGetIntTypeWidth(src_ty) {

@@ -61,7 +61,7 @@ pub fn ls_document_set(server:*LspServer,path:*u8,text:*u8,length:u64,version:i6
  if length>33554432-(server.document_bytes-old){return false;}
  let copy:*u8=malloc(length+1) as *u8;if copy==0 as *u8{return false;}memcpy(copy as *void,text as *void,length);copy[length]=0;
  if d==0 as *BootOverlay{
-  d=malloc(size_of(BootOverlay)) as *BootOverlay;if d==0 as *BootOverlay{free(copy as *void);return false;}memset(d as *void,0,size_of(BootOverlay));
+  d=malloc((size_of(BootOverlay) as u64)) as *BootOverlay;if d==0 as *BootOverlay{free(copy as *void);return false;}memset(d as *void,0,(size_of(BootOverlay) as u64));
   let count:u64=strlen(path);d.path=malloc(count+1) as *u8;if d.path==0 as *u8{free(copy as *void);free(d as *void);return false;}memcpy(d.path as *void,path as *void,count+1);
   d.next=server.documents;server.documents=d;server.document_count=server.document_count+1;
  }

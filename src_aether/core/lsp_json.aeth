@@ -9,7 +9,7 @@ fn lj_peek(p:*LspParser)->i32{if p.position>=p.length{return -1;}return p.text[p
 fn lj_space(p:*LspParser){while p.position<p.length{let c:i32=lj_peek(p);if c!=32&&c!=9&&c!=10&&c!=13{break;}p.position=p.position+1;}}
 fn lj_node(p:*LspParser,kind:i32)->*LspJson{
  p.nodes=p.nodes+1;if p.nodes>262144{lj_error(p,"JSON node limit exceeds 262144");return 0 as *LspJson;}
- let n:*LspJson=boot_alloc(p.arena,size_of(LspJson)) as *LspJson;if n!=0 as *LspJson{n.kind=kind;}return n;
+ let n:*LspJson=boot_alloc(p.arena,(size_of(LspJson) as u64)) as *LspJson;if n!=0 as *LspJson{n.kind=kind;}return n;
 }
 fn lj_hex(c:i32)->i32{if c>=48&&c<=57{return c-48;}if c>=65&&c<=70{return c-55;}if c>=97&&c<=102{return c-87;}return -1;}
 fn lj_u16(p:*LspParser)->i32{
@@ -89,7 +89,7 @@ fn lj_value_inner(p:*LspParser)->*LspJson{
  p.position=p.position+length;let node:*LspJson=lj_node(p,k);if !p.arena.failed{node.text=word;node.length=length;}return node;
 }
 pub fn ls_json_parse(arena:*BootContext,text:*u8,length:u64)->*LspJson{
- let p:*LspParser=boot_alloc(arena,size_of(LspParser)) as *LspParser;if arena.failed{return 0 as *LspJson;}
+ let p:*LspParser=boot_alloc(arena,(size_of(LspParser) as u64)) as *LspParser;if arena.failed{return 0 as *LspJson;}
  p.arena=arena;p.text=text;p.length=length;let node:*LspJson=lj_value(p);lj_space(p);if !arena.failed&&p.position!=length{lj_error(p,"unexpected bytes after JSON value");}return node;
 }
 pub fn ls_get(node:*LspJson,name:*u8)->*LspJson{

@@ -34,7 +34,7 @@ fn ls_handle(server:*LspServer,arena:*BootContext,message:*LspJson)->bool{
  let out:*LspBuffer=ls_buffer_new();if out==0 as *LspBuffer{return false;}ls_response(out,id);ls_text(out,",\"result\":");
  if ls_is(method,"initialize"){
   server.initialized=true;let root:*u8=ls_path(arena,ls_get(params,"rootUri"));
-  if root!=0 as *u8{let entry:*BootRoot=boot_alloc(server.config,size_of(BootRoot)) as *BootRoot;if entry==0 as *BootRoot{ls_buffer_free(out);return false;}entry.path=boot_copy(server.config,root,strlen(root));if server.config.failed{ls_buffer_free(out);return false;}entry.next=server.config.roots;server.config.roots=entry;}
+  if root!=0 as *u8{let entry:*BootRoot=boot_alloc(server.config,(size_of(BootRoot) as u64)) as *BootRoot;if entry==0 as *BootRoot{ls_buffer_free(out);return false;}entry.path=boot_copy(server.config,root,strlen(root));if server.config.failed{ls_buffer_free(out);return false;}entry.next=server.config.roots;server.config.roots=entry;}
   ls_text(out,"{\"capabilities\":{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":1},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"documentSymbolProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\":\",\".\"]}},\"serverInfo\":{\"name\":\"aether-core\",\"version\":\"1\"}}");
  }else if ls_is(method,"shutdown"){server.shutdown=true;ls_text(out,"null");}
  else if ls_is(method,"textDocument/hover")||ls_is(method,"textDocument/definition")||ls_is(method,"textDocument/references")||ls_is(method,"textDocument/documentSymbol")||ls_is(method,"textDocument/completion"){
@@ -44,7 +44,7 @@ fn ls_handle(server:*LspServer,arena:*BootContext,message:*LspJson)->bool{
  ls_char(out,125);let ok:bool=!arena.failed&&ls_send(out);ls_buffer_free(out);return ok;
 }
 pub fn boot_lsp(config:*BootContext)->i32{
- let server:*LspServer=malloc(size_of(LspServer)) as *LspServer;if server==0 as *LspServer{return 1;}memset(server as *void,0,size_of(LspServer));server.config=config;let mut status:i32=0;
+ let server:*LspServer=malloc((size_of(LspServer) as u64)) as *LspServer;if server==0 as *LspServer{return 1;}memset(server as *void,0,(size_of(LspServer) as u64));server.config=config;let mut status:i32=0;
  while true{
   let mut eof:bool=false;let body:*LspBuffer=ls_read_frame(&mut eof as *bool);if body==0 as *LspBuffer{if !eof{status=1;}break;}
   let arena:*BootContext=boot_context_new(0 as *u8,0,"lsp");if arena==0 as *BootContext{ls_buffer_free(body);status=1;break;}arena.quiet=true;

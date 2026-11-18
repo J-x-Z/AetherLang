@@ -3,7 +3,7 @@ use lsp_model::*;use lsp_buffer::*;use lsp_json::*;use lsp_analysis::*;use lsp_i
 fn lq_add(arena:*BootContext,locations:**LspLocation,ctx:*BootContext,token:*BootToken){
  let range:LspRange=ls_token_range(ctx,token);let mut prior:*LspLocation=*locations;
  while prior!=0 as *LspLocation{if prior.range.line==range.line&&prior.range.column==range.column&&prior.range.end_column==range.end_column&&strcmp(prior.path,token.path)==0{return;}prior=prior.next;}
- let entry:*LspLocation=boot_alloc(arena,size_of(LspLocation)) as *LspLocation;if arena.failed{return;}
+ let entry:*LspLocation=boot_alloc(arena,(size_of(LspLocation) as u64)) as *LspLocation;if arena.failed{return;}
  entry.path=boot_copy(arena,token.path,strlen(token.path));entry.range=range;entry.next=*locations;*locations=entry;
 }
 fn lq_references(arena:*BootContext,locations:**LspLocation,ctx:*BootContext,index:*LspIndex,target:*BootNode,include:bool){

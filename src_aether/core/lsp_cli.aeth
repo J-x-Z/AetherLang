@@ -20,7 +20,7 @@ pub fn boot_symbols(ctx:*BootContext)->bool{
  let index:*LspIndex=ls_index(arena,ctx);let out:*LspBuffer=ls_buffer_new();if arena.failed||out==0 as *LspBuffer{boot_context_free(arena);ls_buffer_free(out);return false;}
  let mut symbols:*LspSymbol=0 as *LspSymbol;let mut entry:*LspOccurrence=index.first;let mut count:i64=0;
  while entry!=0 as *LspOccurrence&&!arena.failed{
-  if lc_find(symbols,entry.decl)==0 as *LspSymbol{let symbol:*LspSymbol=boot_alloc(arena,size_of(LspSymbol)) as *LspSymbol;if !arena.failed{symbol.id=count;count=count+1;symbol.decl=entry.decl;symbol.token=ls_name_token(entry.decl);symbol.next=symbols;symbols=symbol;}}
+  if lc_find(symbols,entry.decl)==0 as *LspSymbol{let symbol:*LspSymbol=boot_alloc(arena,(size_of(LspSymbol) as u64)) as *LspSymbol;if !arena.failed{symbol.id=count;count=count+1;symbol.decl=entry.decl;symbol.token=ls_name_token(entry.decl);symbol.next=symbols;symbols=symbol;}}
   entry=entry.next;
  }
  ls_text(out,"{\"symbols\":[");let mut symbol:*LspSymbol=symbols;let mut first:bool=true;

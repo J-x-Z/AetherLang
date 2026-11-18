@@ -28,7 +28,7 @@ pub fn ls_range(out:*LspBuffer,range:LspRange){
 pub fn ls_location(out:*LspBuffer,path:*u8,range:LspRange){ls_text(out,"{\"uri\":");ls_uri(out,path);ls_text(out,",\"range\":");ls_range(out,range);ls_char(out,125);}
 fn la_file(arena:*BootContext,first:**LspFileDiagnostics,path:*u8)->*LspFileDiagnostics{
  let mut node:*LspFileDiagnostics=*first;while node!=0 as *LspFileDiagnostics{if strcmp(node.path,path)==0{return node;}node=node.next;}
- node=boot_alloc(arena,size_of(LspFileDiagnostics)) as *LspFileDiagnostics;if node!=0 as *LspFileDiagnostics{node.path=boot_copy(arena,path,strlen(path));node.next=*first;*first=node;}return node;
+ node=boot_alloc(arena,(size_of(LspFileDiagnostics) as u64)) as *LspFileDiagnostics;if node!=0 as *LspFileDiagnostics{node.path=boot_copy(arena,path,strlen(path));node.next=*first;*first=node;}return node;
 }
 fn la_same_range(a:LspRange,b:LspRange)->bool{return a.line==b.line&&a.column==b.column&&a.end_line==b.end_line&&a.end_column==b.end_column;}
 pub fn ls_free_published(server:*LspServer){let mut p:*LspPath=server.published;while p!=0 as *LspPath{let next:*LspPath=p.next;free(p.path as *void);free(p as *void);p=next;}server.published=0 as *LspPath;}
@@ -45,7 +45,7 @@ pub fn ls_diagnostics(server:*LspServer,arena:*BootContext)->bool{
    if !arena.failed{
     file.active=true;let range:LspRange=ls_token_range(ctx,token);let mut old:*LspDiagnostic=file.diagnostics;let mut duplicate:bool=false;
     while old!=0 as *LspDiagnostic{if la_same_range(old.range,range)&&strcmp(old.message,ctx.diagnostic_message)==0{duplicate=true;}old=old.next;}
-    if !duplicate{let item:*LspDiagnostic=boot_alloc(arena,size_of(LspDiagnostic)) as *LspDiagnostic;if !arena.failed{item.message=boot_copy(arena,ctx.diagnostic_message,strlen(ctx.diagnostic_message));item.range=range;item.next=file.diagnostics;file.diagnostics=item;}}
+    if !duplicate{let item:*LspDiagnostic=boot_alloc(arena,(size_of(LspDiagnostic) as u64)) as *LspDiagnostic;if !arena.failed{item.message=boot_copy(arena,ctx.diagnostic_message,strlen(ctx.diagnostic_message));item.range=range;item.next=file.diagnostics;file.diagnostics=item;}}
    }
   }
   boot_context_free(ctx);doc=doc.next;
@@ -58,7 +58,7 @@ pub fn ls_diagnostics(server:*LspServer,arena:*BootContext)->bool{
   while item!=0 as *LspDiagnostic{if !first{ls_char(out,44);}first=false;ls_text(out,"{\"range\":");ls_range(out,item.range);ls_text(out,",\"severity\":1,\"code\":\"CORE\",\"source\":\"aether-core\",\"message\":");ls_cstring(out,item.message);ls_char(out,125);item=item.next;}
   ls_text(out,"]}}");let sent:bool=ls_send(out);ls_buffer_free(out);if !sent{return false;}
   if file.active{
-   let path:*LspPath=malloc(size_of(LspPath)) as *LspPath;if path==0 as *LspPath{return false;}let size:u64=strlen(file.path);path.path=malloc(size+1) as *u8;if path.path==0 as *u8{free(path as *void);return false;}memcpy(path.path as *void,file.path as *void,size+1);path.next=server.published;server.published=path;
+   let path:*LspPath=malloc((size_of(LspPath) as u64)) as *LspPath;if path==0 as *LspPath{return false;}let size:u64=strlen(file.path);path.path=malloc(size+1) as *u8;if path.path==0 as *u8{free(path as *void);return false;}memcpy(path.path as *void,file.path as *void,size+1);path.next=server.published;server.published=path;
   }
   file=file.next;
  }

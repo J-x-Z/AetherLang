@@ -16,9 +16,9 @@ pub fn pm_covers(left:*BootNode,right:*BootNode,depth:i32)->bool{
   while a!=0 as *BootNode&&b!=0 as *BootNode{if !pm_covers(a,b,depth+1){return false;}a=a.next;b=b.next;}return a==0 as *BootNode&&b==0 as *BootNode;
  }return false;
 }
-fn pm_column(ctx:*BootContext,pattern:*BootNode)->*PmColumn{let col:*PmColumn=boot_alloc(ctx,size_of(PmColumn)) as *PmColumn;if col!=0 as *PmColumn{col.pattern=pattern;}return col;}
-fn pm_type(ctx:*BootContext,ty:*BootType)->*PmType{let col:*PmType=boot_alloc(ctx,size_of(PmType)) as *PmType;if col!=0 as *PmType{col.ty=ty;}return col;}
-fn pm_row(ctx:*BootContext,columns:*PmColumn,next:*PmRow)->*PmRow{let row:*PmRow=boot_alloc(ctx,size_of(PmRow)) as *PmRow;if row!=0 as *PmRow{row.columns=columns;row.next=next;}return row;}
+fn pm_column(ctx:*BootContext,pattern:*BootNode)->*PmColumn{let col:*PmColumn=boot_alloc(ctx,(size_of(PmColumn) as u64)) as *PmColumn;if col!=0 as *PmColumn{col.pattern=pattern;}return col;}
+fn pm_type(ctx:*BootContext,ty:*BootType)->*PmType{let col:*PmType=boot_alloc(ctx,(size_of(PmType) as u64)) as *PmType;if col!=0 as *PmType{col.ty=ty;}return col;}
+fn pm_row(ctx:*BootContext,columns:*PmColumn,next:*PmRow)->*PmRow{let row:*PmRow=boot_alloc(ctx,(size_of(PmRow) as u64)) as *PmRow;if row!=0 as *PmRow{row.columns=columns;row.next=next;}return row;}
 fn pm_complete(ctx:*BootContext,rows:*PmRow,types:*PmType,budget:*PmBudget,depth:i32)->bool{
  if ctx.failed{return false;}if budget.remaining==0||depth>256{boot_error(ctx,budget.token,"pattern coverage complexity exceeds limit");return false;}budget.remaining-=1;
  if types==0 as *PmType{return rows!=0 as *PmRow;}if rows==0 as *PmRow{return false;}
@@ -57,11 +57,11 @@ fn pm_complete(ctx:*BootContext,rows:*PmRow,types:*PmType,budget:*PmBudget,depth
 pub fn pm_exhaustive(ctx:*BootContext,ty:*BootType,arms:*BootNode)->bool{
  let mut rows:*PmRow=0 as *PmRow;let mut arm:*BootNode=arms;
  while arm!=0 as *BootNode&&!ctx.failed{if arm.right==0 as *BootNode{rows=pm_row(ctx,pm_column(ctx,arm.left),rows);}arm=arm.next;}
- let budget:*PmBudget=boot_alloc(ctx,size_of(PmBudget)) as *PmBudget;if ctx.failed{return false;}budget.remaining=100000;budget.token=ctx.cursor;if arms!=0 as *BootNode{budget.token=arms.token;}return pm_complete(ctx,rows,pm_type(ctx,ty),budget,0);
+ let budget:*PmBudget=boot_alloc(ctx,(size_of(PmBudget) as u64)) as *PmBudget;if ctx.failed{return false;}budget.remaining=100000;budget.token=ctx.cursor;if arms!=0 as *BootNode{budget.token=arms.token;}return pm_complete(ctx,rows,pm_type(ctx,ty),budget,0);
 }
 fn pm_value_copy(ctx:*BootContext,source:*BootNode)->*BootNode{
- if source==0 as *BootNode{return source;}let node:*BootNode=boot_alloc(ctx,size_of(BootNode)) as *BootNode;if node==0 as *BootNode{return node;}
- memcpy(node as *void,source as *void,size_of(BootNode));node.id=boot_id(ctx);node.next=0 as *BootNode;node.left=pm_value_copy(ctx,source.left);return node;
+ if source==0 as *BootNode{return source;}let node:*BootNode=boot_alloc(ctx,(size_of(BootNode) as u64)) as *BootNode;if node==0 as *BootNode{return node;}
+ memcpy(node as *void,source as *void,(size_of(BootNode) as u64));node.id=boot_id(ctx);node.next=0 as *BootNode;node.left=pm_value_copy(ctx,source.left);return node;
 }
 pub fn pm_projection(ctx:*BootContext,subject:*BootNode,variant:*BootNode,field:*BootNode)->*BootNode{
  let value:*BootNode=boot_node(ctx,BN_ENUM_FIELD,subject.token);if ctx.failed{return value;}

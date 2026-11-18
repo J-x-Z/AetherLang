@@ -37,7 +37,7 @@ for backend in args.backends:
 
 # Assignment evaluates the place and its old value before the RHS and yields
 # Unit. Pointer updates use element strides and preserve narrow offset signs.
-for fixture in [source.with_name('compound.aeth'),source.parent.parent/'script/compound.ath',
+for fixture in [source.with_name('bool_casts.aeth'),source.with_name('compound.aeth'),source.parent.parent/'script/compound.ath',
                 source.parent.parent/'bootstrap/container_values.aeth']:
     run(f'{fixture.name}/check', [compiler,'check',fixture])
     for backend in args.backends:

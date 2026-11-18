@@ -1404,7 +1404,8 @@ impl SemanticAnalyzer {
                     
                     // Int to Int
                     (ResolvedType::Primitive(p1), ResolvedType::Primitive(p2)) 
-                        if (p1.is_integer() || p1.is_float()) && (p2.is_integer() || p2.is_float()) => true,
+                        if (p1.is_integer() || p1.is_float() || *p1 == PrimitiveType::Bool)
+                            && (p2.is_integer() || p2.is_float() || *p2 == PrimitiveType::Bool) => true,
                     
                     // Int to Pointer
                     (ResolvedType::Primitive(p), ResolvedType::Pointer(_)) => {

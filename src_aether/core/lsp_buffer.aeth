@@ -3,7 +3,7 @@ use model::*;
 use runtime::*;
 use lsp_model::*;
 extern "C"{fn realloc(pointer:*void,size:u64)->*void;}
-pub fn ls_buffer_new()->*LspBuffer{let b:*LspBuffer=malloc(size_of(LspBuffer)) as *LspBuffer;if b!=0 as *LspBuffer{memset(b as *void,0,size_of(LspBuffer));}return b;}
+pub fn ls_buffer_new()->*LspBuffer{let b:*LspBuffer=malloc((size_of(LspBuffer) as u64)) as *LspBuffer;if b!=0 as *LspBuffer{memset(b as *void,0,(size_of(LspBuffer) as u64));}return b;}
 pub fn ls_buffer_free(b:*LspBuffer){if b!=0 as *LspBuffer{free(b.data as *void);free(b as *void);}}
 pub fn ls_bytes(b:*LspBuffer,data:*u8,length:u64){
  if b.failed{return;}if length>16777216-b.length{b.failed=true;return;}
