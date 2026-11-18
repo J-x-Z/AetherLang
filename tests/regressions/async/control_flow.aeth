@@ -7,6 +7,8 @@ fn ticket(n:i32)->own Ticket { live+=1;unsafe { Ticket{id:n} as own Ticket } }
 fn until(n:i32)->bool {tests+=1;return n<5;}
 fn odd(n:i32)->bool {branch_tests+=1;return (n%2)==1;}
 async fn child(n:i32)->i32 { await yield_now();return n*10; }
+async fn terminal_loop()->i32 {loop {await yield_now();return 17;}}
+async fn terminal_while()->i32 {while true {await yield_now();return 19;}}
 async fn compute(stop:i32)->i32 {
     let mut i:i32=0;
     let mut sum:i32=0;
@@ -40,5 +42,11 @@ fn main()->i32 {
     match other.poll(){Pending()=>{},_=>{return 10;}}
     other.cancel();
     if live!=0{return 11;}
+    let mut first:_=terminal_loop();
+    match first.poll(){Pending()=>{},_=>{return 12;}}
+    match first.poll(){Ready(17)=>{},_=>{return 13;}}
+    let mut second:_=terminal_while();
+    match second.poll(){Pending()=>{},_=>{return 14;}}
+    match second.poll(){Ready(19)=>{},_=>{return 15;}}
     return 0;
 }
