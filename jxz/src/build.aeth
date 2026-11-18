@@ -113,20 +113,31 @@ pub fn compile_source(cfg: *Config, source: *u8, output: *u8, release: bool, loc
     return status;
 }
 
-pub fn language_server() -> i32 {
+// All three analysis commands resolve locked modules without linking or fetching.
+pub fn analyze_project(command:*u8, override_source:*u8) -> i32 {
     let mut cfg:Config=config_load();
     let mut args:CompilerArgs=compiler_args_new();
+    let mut source:*u8=override_source;
+    let mut owned:*u8=0 as *u8;
     let mut status:i32=1;
     if cfg.valid {
         if dependencies_resolve_modules(&mut cfg as *Config) {
-            let ok:bool=compiler_begin(&mut args as *CompilerArgs,"lsp")
-                && compiler_module_arguments(&mut cfg as *Config,&mut args as *CompilerArgs)
-                && compiler_arg(&mut args as *CompilerArgs,0 as *u8);
-            if ok {
-                status=host_execute(args.values.data);
-            } else { config_error("jxz: cannot allocate language server arguments"); }
-        } else { config_error("jxz: cannot resolve language server project"); }
+            let mut ok:bool=compiler_begin(&mut args as *CompilerArgs,command)
+                && compiler_module_arguments(&mut cfg as *Config,&mut args as *CompilerArgs);
+            let lsp:bool=strcmp(command,"lsp")==0;
+            if !lsp {
+                if source==0 as *u8 { source=cfg.main_file; }
+                if source==0 as *u8 { owned=path_join(cfg.src_dir,"main.aeth"); source=owned; }
+                ok=ok && source!=0 as *u8 && compiler_option(&mut args as *CompilerArgs,"--error-format","json")
+                    && compiler_option(&mut args as *CompilerArgs,"--",source);
+            }
+            if ok && compiler_arg(&mut args as *CompilerArgs,0 as *u8) {
+                let failure:*u8=if lsp { "jxz: cannot execute language server" } else { "jxz: cannot execute compiler" };
+                status=host_execute(args.values.data,failure);
+            } else { config_error("jxz: cannot allocate analysis arguments"); }
+        } else { config_error("jxz: cannot resolve analysis project"); }
     }
+    free(owned as *void);
     compiler_args_free(&mut args as *CompilerArgs);
     config_free(&mut cfg as *Config);
     return status;

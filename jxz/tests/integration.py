@@ -107,6 +107,23 @@ sys.exit(23)
         self.assertEqual([value for flag, value in pairs if flag == '-I'], modules)
         self.assertEqual([value for flag, value in pairs if flag == '--link-object'], objects)
 
+    def test_analysis_uses_configured_entry_and_modules_without_artifacts(self):
+        self.manifest(source='nested/start.aeth')
+        self.build_settings("module_paths=['module roots']\nlink_objects=['not-built.o']")
+        self.source("module roots/math.aeth", "pub fn answer()->i32{7}")
+        self.source("nested/start.aeth", "use math::answer; fn main()->i32{answer()}")
+        self.source("-bad.aeth", "fn main()->i32{return true;}")
+        before = set(self.root.rglob("*"))
+        self.assertEqual(self.run_jxz("check").stdout, "")
+        index = json.loads(self.run_jxz("symbols").stdout)
+        symbol, = [s for s in index["symbols"] if s["name"] == "answer"]
+        self.assertTrue(any(r["symbol"] == symbol["id"] for r in index["references"]))
+        for action in ("check", "symbols"):
+            diagnostic = self.run_jxz(action, "-bad.aeth", expected=1)
+            self.assertEqual(diagnostic.stdout, "")
+            self.assertEqual(Path(json.loads(diagnostic.stderr)["location"]["file"]).name, "-bad.aeth")
+        self.assertEqual(set(self.root.rglob("*")), before)
+
     def test_lsp_project_graph_definitions_unsaved_edits_and_clean_shutdown(self):
         shared = self.local_library('deps/shared Ω', 'shared_math', 'pub fn base()->i32{7}')
         library = self.local_library('deps/library Ω', 'library', dependencies="shared_math={path='../shared Ω'}")

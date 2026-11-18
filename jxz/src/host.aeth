@@ -76,7 +76,7 @@ pub fn host_arguments(argc:i32,argv:**u8,count:*i32)->**u8{*count=argc;return ar
 pub fn host_finish(argc:i32,argv:**u8){}
 pub fn host_description()->*u8{return "Local commands use the native POSIX host.";}
 pub fn host_program_name(name:*u8)->*u8{let n:u64=strlen(name);let p:*u8=malloc(n+1) as *u8;if p!=0 as *u8{memcpy(p as *void,name as *void,n+1);}return p;}
-pub fn host_execute(args:**u8)->i32{execvp(args[0],args);let error:i32=host_errno();perror("jxz: cannot execute language server");return if error==2{127}else{126};}
+pub fn host_execute(args:**u8,failure:*u8)->i32{execvp(args[0],args);let error:i32=host_errno();perror(failure);return if error==2{127}else{126};}
 pub fn host_error(message:*u8){write(2,message as *void,strlen(message));write(2,"\n" as *void,1);}
 pub fn host_regular(path:*u8,lock:*void)->bool{
  let args:[*u8;9]=["find","-P",path,"-maxdepth","0","-type","f","-print0",0 as *u8];

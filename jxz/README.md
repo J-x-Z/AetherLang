@@ -24,6 +24,15 @@ can select `llvm` or `c` explicitly. `AETHC` selects the compiler executable and
 `CC` selects its linker/C compiler; neither accepts shell text or flag strings.
 Compiler diagnostics and nonzero exit codes are preserved. `run` returns the program's exit status (or 128 + terminating signal).
 
+### Machine-readable project analysis
+
+Run `jxz check [file]` or `jxz symbols [file]` in the manifest directory. Both
+select the build entry by default, resolve the same locked modules as the
+language server and skip native link inputs. A successful check is silent.
+Symbols are JSON on stdout. Compiler diagnostics are JSON on stderr with exit
+status 1. Project configuration errors are reported on stderr. For paged
+source queries from an MCP client, see the [local server](../docs/MCP.md).
+
 ### Editor language server
 
 Run `jxz lsp` with the directory containing `Jxz.toml` as the working directory.

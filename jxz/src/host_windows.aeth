@@ -127,7 +127,7 @@ pub fn process_run(args:**u8,stdout_path:*u8)->i32{
  let mut output:*void=0 as *void;if stdout_path!=0 as *u8{let p:*u16=win_wide(stdout_path);if p==0 as *u16{return 1;}output=CreateFileW(p,1073741824,1,0 as *void,2,128,0 as *void);free(p as *void);if output==(-1 as i64) as *void{return 1;}}
  let child:*WinProcess=spawn(args,output);let error:i32=host_errno();if output!=0 as *void{CloseHandle(output);}if child==0 as *WinProcess{return if error==2{127}else{126};}return wait_process(child);
 }
-pub fn host_execute(args:**u8)->i32{let child:*WinProcess=spawn(args,0 as *void);if child==0 as *WinProcess{let error:i32=host_errno();host_error("jxz: cannot execute language server");return if error==2{127}else{126};}return wait_process(child);}
+pub fn host_execute(args:**u8,failure:*u8)->i32{let child:*WinProcess=spawn(args,0 as *void);if child==0 as *WinProcess{let error:i32=host_errno();host_error(failure);return if error==2{127}else{126};}return wait_process(child);}
 pub fn host_capture(args:**u8,limit:u64,lock:*void)->Result<Vec<u8>,i32>{
  let mut reader:*void=0 as *void;let mut writer:*void=0 as *void;if CreatePipe(&mut reader as **void,&mut writer as **void,0 as *void,0)==0{return Result::Err(1);}
  if lock!=0 as *void&&!host_inherit(lock,true){CloseHandle(reader);CloseHandle(writer);return Result::Err(1);}
