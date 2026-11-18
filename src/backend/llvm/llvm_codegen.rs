@@ -691,9 +691,9 @@ impl LLVMCodeGen {
                     // Create inline asm value
                     let asm_val = LLVMGetInlineAsm(
                         asm_func_ty,
-                        template_c.as_ptr() as *mut i8,
+                        template_c.as_ptr(),
                         template.len(),
-                        constraints_c.as_ptr() as *mut i8,
+                        constraints_c.as_ptr(),
                         constraints_str.len(),
                         1,  // has_side_effects
                         0,  // is_align_stack
@@ -946,7 +946,7 @@ impl LLVMCodeGen {
     /// Verify the generated module
     fn verify_module(&self) -> Result<()> {
         unsafe {
-            let mut error_msg: *mut i8 = ptr::null_mut();
+            let mut error_msg = ptr::null_mut();
             let result = LLVMVerifyModule(
                 self.module,
                 LLVMVerifierFailureAction::LLVMReturnStatusAction,
@@ -974,7 +974,7 @@ impl LLVMCodeGen {
             LLVMSetTarget(self.module, triple.as_ptr());
             
             let mut target: LLVMTargetRef = ptr::null_mut();
-            let mut error_msg: *mut i8 = ptr::null_mut();
+            let mut error_msg = ptr::null_mut();
             
             if LLVMGetTargetFromTriple(triple.as_ptr(), &mut target, &mut error_msg) != 0 {
                 let msg = if error_msg.is_null() {
@@ -1068,7 +1068,7 @@ impl LLVMCodeGen {
             let target_machine = self.target_machine;
             // Emit to memory buffer
             let mut mem_buf: LLVMMemoryBufferRef = ptr::null_mut();
-            let mut error_msg: *mut i8 = ptr::null_mut();
+            let mut error_msg = ptr::null_mut();
             
             let result = LLVMTargetMachineEmitToMemoryBuffer(
                 target_machine,
