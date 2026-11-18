@@ -125,7 +125,11 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
  if ctx.failed||ctx.program==(0 as *BootNode)||ctx.output==(0 as *void){return false;}
  if !boot_choose_namespace(ctx){return false;}
  let mut item:*BootNode=ctx.program.body;
- ll_text(ctx,"; Aether Core direct LLVM IR (64-bit host ABI)\n");ll_intrinsics(ctx);
+ if ctx.bare_x86_64{
+  ll_text(ctx,"target triple = \"x86_64-unknown-none\"\n");
+  ll_text(ctx,"target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n");
+ }else{ll_text(ctx,"; Aether Core direct LLVM IR (64-bit host ABI)\n");}
+ ll_intrinsics(ctx);
  if ctx.uses_errno && !ctx.errno_declared {fprintf(ctx.output,"declare ptr @%s()\n",ctx.errno_name);}
  let mut ty:*BootType=ctx.types;
  while ty!=(0 as *BootType){
@@ -159,7 +163,7 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
  item=ctx.program.body;
  while item!=(0 as *BootNode)&&!ctx.failed{
   if item.kind==BN_FN&&(item.flags&2)==0&&item.generics==(0 as *BootNode){
-   ctx.function=item;ctx.llvm_serial=0;ctx.llvm_break=0;ctx.llvm_continue=0;ll_signature(ctx,item);ll_text(ctx," {\n");ll_label(ctx,0);
+   ctx.function=item;ctx.llvm_serial=0;ctx.llvm_break=0;ctx.llvm_continue=0;ll_signature(ctx,item);ll_definition_attrs(ctx);ll_text(ctx," {\n");ll_label(ctx,0);
    ll_allocas(ctx,item.params);ll_allocas(ctx,item.body);
    let mut param:*BootNode=item.params;while param!=(0 as *BootNode){if param.ty.kind!=BY_VOID{ll_store_op(ctx);ll_type(ctx,param.ty);fprintf(ctx.output," %%arg%d, ptr %%v%d\n",param.id,param.id);}param=param.next;}
    ll_statement(ctx,item.body);
@@ -170,7 +174,7 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
  item=ctx.program.body;
  while item!=(0 as *BootNode){
   if item.kind==BN_FN&&(item.flags&2)==0&&!ctx.no_main&&item.owner==ctx.root_module&&strcmp(item.name,"main")==0{
-   ll_text(ctx,"define i32 @main(i32 %argc, ptr %argv) {\nentry:\n  ");if item.ty.kind!=BY_VOID{ll_text(ctx,"%result = ");}
+   ll_text(ctx,"define i32 @main(i32 %argc, ptr %argv)");ll_definition_attrs(ctx);ll_text(ctx," {\nentry:\n  ");if item.ty.kind!=BY_VOID{ll_text(ctx,"%result = ");}
    ll_text(ctx,"call ");ll_return_type(ctx,item.ty);ll_text(ctx," ");ll_function(ctx,item);ll_text(ctx,"(");if item.params!=(0 as *BootNode){ll_text(ctx,"i32 %argc, ptr %argv");}ll_text(ctx,")\n");
    if item.ty.kind==BY_VOID{ll_text(ctx,"  ret i32 0\n}");}else{ll_text(ctx,"  ret i32 %result\n}");}ll_text(ctx,"\n");
   }item=item.next;

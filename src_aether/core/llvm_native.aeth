@@ -123,7 +123,7 @@ fn ll_return_native(ctx:*BootContext,s:*BootNativeSlot,value:i32){
 }
 pub fn ll_export_wrapper(ctx:*BootContext,node:*BootNode){
  let sig:*BootNativeSignature=boot_abi_signature(ctx,node);if ctx.failed{return;}
- ctx.llvm_serial=0;ll_text(ctx,"define ");ll_native_declaration(ctx,node,sig);ll_text(ctx," {\nentry:\n");
+ ctx.llvm_serial=0;ll_text(ctx,"define ");ll_native_declaration(ctx,node,sig);ll_definition_attrs(ctx);ll_text(ctx," {\nentry:\n");
  let mut s:*BootNativeSlot=sig.params;
  while s!=0 as *BootNativeSlot{
   if s.mode==ABI_PARTS{

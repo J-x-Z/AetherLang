@@ -28,6 +28,16 @@ pub fn boot_tool_path(ctx:*BootContext,path:*u8)->*u8 {
  }
  return normalized;
 }
+// The host PE/Mach-O verifier is deliberately independent of the cross target.
+fn boot_bare_object(path:*u8)->bool {
+ let file:*void=fopen(path,"rb");if file==0 as *void{return false;}
+ let mut h:[u8;64]=[0;64];
+ let count:u64=fread(&mut h[0] as *u8 as *void,1,64,file);
+ let status:i32=fclose(file);
+ return count==64 && status==0 && h[0]==127 && h[1]==69 && h[2]==76 && h[3]==70
+  && h[4]==2 && h[5]==1 && h[6]==1 && h[16]==1 && h[17]==0
+  && h[18]==62 && h[19]==0 && h[20]==1 && h[52]==64 && h[53]==0;
+}
 pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bool {
  let stage:*u8=boot_sibling(ctx,options.output);
  let args:**u8=boot_alloc(ctx,((options.object_count as u64)+(options.library_count as u64)+16)*(size_of(*u8) as u64)) as **u8;
@@ -37,7 +47,7 @@ pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bo
  if close(descriptor)!=0 {perror("aether-core: close output");remove(stage);return false;}
  let mut cc:*u8=options.cc;if cc==0 as *u8{cc=platform_env(ctx,"CC");}let mut n:i32=0;
  if cc!=0 as *u8 && cc[0]!=0 {args[n]=cc;}else{args[n]="clang";}
- n=n+1;args[n]=options.optimize;n=n+1;args[n]="-x";n=n+1;
+ n=n+1;if ctx.bare_x86_64{args[n]="--target=x86_64-unknown-none";n=n+1;}args[n]=options.optimize;n=n+1;args[n]="-x";n=n+1;
  if options.llvm {args[n]="ir";}else{args[n]="c";}n=n+1;
  if !options.llvm {args[n]="-std=c11";n=n+1;}
  args[n]=boot_tool_path(ctx,source);n=n+1;
@@ -55,7 +65,10 @@ pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bo
  }
  args[n]="-o";n=n+1;args[n]=boot_tool_path(ctx,stage);n=n+1;args[n]=0 as *u8;
  let mut ok:bool=!ctx.failed && platform_run_tool(args);
- if ok && !platform_valid_image(stage,options.object) {ok=false;boot_error(ctx,ctx.cursor,"host compiler produced an invalid native output");}
+ if ok{
+  if ctx.bare_x86_64{ok=boot_bare_object(stage);}else{ok=platform_valid_image(stage,options.object);}
+  if !ok{boot_error(ctx,ctx.cursor,"host compiler produced an invalid native output");}
+ }
  if ok && !options.object && access(stage,1)!=0 {ok=false;perror("aether-core: output is not executable");}
  if ok && rename(stage,options.output)!=0 {ok=false;perror("aether-core: replace output");}
  if !ok {remove(stage);}
@@ -77,6 +90,7 @@ pub fn boot_optimize_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->
  args[0]=cc;args[1]=options.optimize;args[2]="-x";args[3]="ir";
  args[4]="-S";args[5]="-emit-llvm";args[6]=boot_tool_path(ctx,source);
  args[7]="-o";args[8]=boot_tool_path(ctx,stage);args[9]=0 as *u8;
+ if ctx.bare_x86_64{args[9]="--target=x86_64-unknown-none";args[10]=0 as *u8;}
  let mut ok:bool=!ctx.failed&&platform_run_tool(args);
  if ok{
   let output:*void=fopen(stage,"rb");

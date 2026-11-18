@@ -18,6 +18,7 @@ pub fn boot_abi_needed(fn_node:*BootNode)->bool{
 }
 pub fn boot_abi_target(ctx:*BootContext,node:*BootNode)->bool{
  if ctx.native_abi!=0{return true;}
+ if ctx.bare_x86_64{ctx.native_abi=2;return true;}
  let info:*u8=boot_host_info(ctx);if ctx.failed{return false;}
  if strcmp(info,"Darwin")==0{
   if strcmp(info+1024,"arm64")==0{ctx.native_abi=1;}

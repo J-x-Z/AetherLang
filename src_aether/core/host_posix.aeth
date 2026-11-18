@@ -2,6 +2,7 @@
 use model::*;use runtime::*;use host_platform::platform_info;
 pub fn boot_host_info(ctx:*BootContext)->*u8{if ctx.host_info==0 as *u8{ctx.host_info=platform_info(ctx);}return ctx.host_info;}
 pub fn boot_errno_target(ctx:*BootContext)->bool {
+ if ctx.bare_x86_64{boot_error(ctx,ctx.cursor,"errno is a hosted intrinsic and has no bare-metal accessor");return false;}
  if ctx.errno_name!=0 as *u8 {return true;}
  let info:*u8=boot_host_info(ctx);if ctx.failed{return false;}
  if strcmp(info,"Darwin")==0 {ctx.errno_name="__error";}

@@ -5,6 +5,9 @@ use memory_volatile::vm_function;
 extern "C" {fn strtod(text:*u8,end:**u8)->f64;}
 // Direct opaque-pointer LLVM IR utilities. No LLVM/Rust emitter is invoked.
 pub fn ll_text(ctx:*BootContext,text:*u8){fputs(text,ctx.output);}
+pub fn ll_definition_attrs(ctx:*BootContext){
+ if ctx.bare_x86_64{ll_text(ctx," noredzone");}
+}
 pub fn ll_id(ctx:*BootContext)->i32{ctx.llvm_serial=ctx.llvm_serial+1;return ctx.llvm_serial;}
 pub fn ll_type(ctx:*BootContext,ty:*BootType){
  if ty.kind==BY_OWN{ll_type(ctx,ty.inner);return;}

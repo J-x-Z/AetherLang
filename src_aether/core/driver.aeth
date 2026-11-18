@@ -89,6 +89,17 @@ fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8,regul
   let arg:*u8=argv[i];i=i+1;
   if !positional && strcmp(arg,"--")==0 {positional=true;continue;}
   if !positional && arg[0]==45 {
+   if strcmp(arg,"--target")==0 || strncmp(arg,"--target=",9)==0 {
+    let mut target:*u8=0 as *u8;
+    if arg[8]==61 {target=arg+9;}
+    else {
+     if i>=argc {return boot_arguments_error(ctx,"--target requires a target triple");}
+     target=argv[i];i=i+1;
+    }
+    if ctx.bare_x86_64 {return boot_arguments_error(ctx,"duplicate --target");}
+    if strcmp(target,"x86_64-unknown-none")!=0{return boot_arguments_error(ctx,"supported cross target: x86_64-unknown-none");}
+    ctx.bare_x86_64=true;continue;
+   }
    if strcmp(arg,"-q")==0 || strcmp(arg,"--quiet")==0 {continue;}
    if strcmp(arg,"--check")==0 {
     if cmd.check || native {return boot_arguments_error(ctx,"conflicting check or build command");}
@@ -147,6 +158,9 @@ fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8,regul
    cmd.input=arg;
   }
  }
+ if ctx.bare_x86_64 && (cmd.lsp || cmd.symbols || backend==1 || format==1 || (!cmd.check && format!=2 && format!=3)) {
+  return boot_arguments_error(ctx,"bare-metal target supports LLVM check, --emit-llvm or --emit-obj");
+ }
  if cmd.lsp{
   if cmd.input!=0 as *u8||cmd.output!=0 as *u8||cmd.check||format!=0||backend!=0||cmd.object_count!=0||optimization||cmd.json_errors{return boot_arguments_error(ctx,"lsp accepts only source search options");}
  }else{
@@ -159,7 +173,7 @@ fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8,regul
   if regular{cmd.output=boot_default_output(ctx,cmd.input,format);if ctx.failed{return false;}}else if native && format==0 {cmd.output="a.out";if platform_windows(){cmd.output="a.exe";}}else{return boot_arguments_error(ctx,"generation requires -o output");}
  }
  if format==1 && backend==2 || format==2 && backend==1 {return boot_arguments_error(ctx,"output format conflicts with selected backend");}
- cmd.llvm=format==2 || (cmd.native && backend!=1) || (cmd.check && (backend==2 || (check_command && backend==0)));
+ cmd.llvm=ctx.bare_x86_64 || format==2 || (cmd.native && backend!=1) || (cmd.check && (backend==2 || (check_command && backend==0)));
  }
  let paths:*u8=platform_env(ctx,"AETHER_PATH");
  if paths!=0 as *u8 {
@@ -217,7 +231,7 @@ fn boot_compiler_entry(argc:i32,argv:**u8,regular:bool)->i32 {
  if argc==2 && (strcmp(argv[1],"--version")==0 || strcmp(argv[1],"-V")==0){printf("aethc 0.1.0 (self-hosted)\n");return 0;}
  if argc==2 && (strcmp(argv[1],"--help")==0 || strcmp(argv[1],"-h")==0){
   printf("Usage: aethc [build|check] SOURCE [-I DIR] [--backend llvm|c] [-O0..3] [-o FILE]\n");
-  printf("       [--emit-c|--emit-llvm|--emit-obj] [--link-object FILE] [-l LIB] [--cc CC]\n");return 0;
+  printf("       [--emit-c|--emit-llvm|--emit-obj] [--target x86_64-unknown-none] [--link-object FILE] [-l LIB] [--cc CC]\n");return 0;
  }
  let ctx:*BootContext=boot_context_new(0 as *u8,0,"aether-core");
  if ctx==0 as *BootContext {return 1;}
@@ -227,7 +241,9 @@ fn boot_compiler_entry(argc:i32,argv:**u8,regular:bool)->i32 {
  let cmd:*BootCommand=boot_alloc(ctx,size_of(BootCommand) as u64) as *BootCommand;
  let mut ok:bool=cmd!=0 as *BootCommand && boot_parse_command(ctx,cmd,argc,argv,regular);
  if ok&&cmd.lsp{let status:i32=boot_lsp(ctx);boot_context_free(ctx);return status;}
- if ok {ok=boot_project(ctx,cmd.input) && boot_check(ctx);}
+ if ok {ok=boot_project(ctx,cmd.input);}
+ if ok && ctx.bare_x86_64 && !ctx.no_std {ok=boot_arguments_error(ctx,"bare-metal target requires a root #![no_std]");}
+ if ok {ok=boot_check(ctx);}
  if ok && ctx.uses_errno {ok=boot_errno_target(ctx);}
  if ok && cmd.llvm {ok=boot_llvm_supported(ctx);}
  if ok&&cmd.symbols{ok=boot_symbols(ctx);}
