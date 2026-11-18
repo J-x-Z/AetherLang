@@ -3,6 +3,7 @@ use model::*;
 use runtime::*;
 use project::*;
 use semantic::boot_check;
+use host_posix::boot_errno_target;
 use emitter::boot_emit;
 use emitter_llvm::{boot_emit_llvm,boot_llvm_supported};
 use native_driver::*;
@@ -181,6 +182,7 @@ pub fn boot_driver(argc:i32,argv:**u8)->i32 {
  let cmd:*BootCommand=boot_alloc(ctx,size_of(BootCommand) as u64) as *BootCommand;
  let mut ok:bool=cmd!=0 as *BootCommand && boot_parse_command(ctx,cmd,argc,argv);
  if ok {ok=boot_project(ctx,cmd.input) && boot_check(ctx);}
+ if ok && ctx.uses_errno {ok=boot_errno_target(ctx);}
  if ok && cmd.llvm {ok=boot_llvm_supported(ctx);}
  if ok && !cmd.check {ok=boot_generate(ctx,cmd);}
  boot_context_free(ctx);

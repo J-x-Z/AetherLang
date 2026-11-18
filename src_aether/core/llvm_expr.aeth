@@ -54,6 +54,10 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
    if value==0{ll_text(ctx,"poison");}else{ll_reg(ctx,value);}ll_text(ctx,", ");ll_value(ctx,field.ty,element);fprintf(ctx.output,", %d\n",ll_field_index(node.ty,field.decl));value=next;field=field.next;
   }return value;
  }
+ if node.kind==BN_ERRNO {
+  let location:i32=ll_id(ctx);ll_begin(ctx,location);fprintf(ctx.output,"call ptr @%s()\n",ctx.errno_name);
+  ll_begin(ctx,id);fprintf(ctx.output,"load i32, ptr %%r%d\n",location);return id;
+ }
  if node.kind==BN_ALIGNOF{ll_begin(ctx,id);fprintf(ctx.output,"add i64 0, %llu\n",node.aux.layout_align);return id;}
  if node.kind==BN_VALUE{
   let saved:*BootNode=ctx.value_target;let saved_yield:i32=ctx.llvm_yield;

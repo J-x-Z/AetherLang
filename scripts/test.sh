@@ -46,6 +46,7 @@ done
 
 python3 tests/bootstrap_core.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-core" --backend "$bootstrap_backend"
 if clang --version >/dev/null 2>&1; then
+    python3 tests/bootstrap_errno.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-errno"
     python3 tests/bootstrap_driver.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --jxz "$CARGO_TARGET_DIR/jxz-$bootstrap_backend" --work-dir "$CARGO_TARGET_DIR/bootstrap-driver"
     python3 tests/bootstrap_llvm.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-llvm" --cc clang
 fi

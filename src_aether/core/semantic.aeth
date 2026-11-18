@@ -186,6 +186,7 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   }
   return node.ty;
  }
+ if kind==BN_ERRNO {ctx.uses_errno=true;node.ty=boot_type(ctx,BY_I32);return node.ty;}
  if kind==BN_SIZEOF||kind==BN_ALIGNOF {
   if !boot_type_valid(ctx,node.aux,node.token,false) { return 0 as *BootType; }
   if !boot_layout(ctx,node.aux,0,node.token){return 0 as *BootType;}

@@ -41,6 +41,7 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
  if !boot_choose_namespace(ctx){return false;}
  let mut item:*BootNode=ctx.program.body;
  ll_text(ctx,"; Aether Core direct LLVM IR (64-bit host ABI)\n");ll_intrinsics(ctx);
+ if ctx.uses_errno && !ctx.errno_declared {fprintf(ctx.output,"declare ptr @%s()\n",ctx.errno_name);}
  let mut ty:*BootType=ctx.types;
  while ty!=(0 as *BootType){
   if ty.kind==BY_STRUCT{

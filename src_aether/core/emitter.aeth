@@ -145,6 +145,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
   while field!=0 as *BootNode{boot_c_temp(ctx,node);boot_c_text(ctx,".");boot_c_field(ctx,field.decl);boot_c_text(ctx," = ");boot_c_temp(ctx,field.left);boot_c_text(ctx,";\n");field=field.next;}
   return;
  }
+ if node.kind==BN_ERRNO {boot_c_decl(ctx,node);boot_c_text(ctx,"errno;\n");return;}
  if node.kind==BN_ALIGNOF {boot_c_decl(ctx,node);boot_c_text(ctx,"(int64_t)_Alignof(");boot_c_type(ctx,node.aux);boot_c_text(ctx,");\n");return;}
  if node.kind==BN_VALUE{
   boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_temp(ctx,node);if node.ty.kind==BY_VOID{boot_c_text(ctx," = {}");}boot_c_text(ctx,";\n");
@@ -301,6 +302,7 @@ fn boot_emit_constant(ctx:*BootContext,node:*BootNode) {
 pub fn boot_emit(ctx:*BootContext)->bool {
  if ctx.failed||ctx.program==0 as *BootNode||ctx.output==0 as *void{return false;}
  if !boot_choose_namespace(ctx){return false;}
+ if ctx.uses_errno {boot_c_text(ctx,"#include <errno.h>\n");}
  boot_c_text(ctx,"/* Aether Core compiler output. */\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n");
  boot_c_text(ctx,"typedef struct {} ");boot_c_private(ctx,"unit");boot_c_text(ctx,";\n");
  boot_c_text(ctx,"static int64_t ");boot_c_private(ctx,"sdiv(");boot_c_text(ctx,"int64_t a,int64_t b,unsigned bits,int rem){if(!b)__builtin_trap();int64_t m=bits==64?INT64_MIN:-(INT64_C(1)<<(bits-1));if(a==m&&b==-1)__builtin_trap();return rem?a%b:a/b;}\n");

@@ -1,0 +1,25 @@
+// Native Core emits for its own host. The first utsname member is sysname on
+// both supported ABIs (Darwin 5x256 bytes, Linux 6x65). Retain no OS pointers.
+use model::*;
+use runtime::*;
+extern "C" {fn uname(info:*void)->i32;}
+pub fn boot_errno_target(ctx:*BootContext)->bool {
+ if ctx.errno_name!=0 as *u8 {return true;}
+ let info:*u8=boot_alloc(ctx,2048) as *u8;
+ if ctx.failed {return false;}
+ if uname(info as *void)!=0 {boot_error(ctx,ctx.cursor,"cannot identify native errno ABI");return false;}
+ if strcmp(info,"Darwin")==0 {ctx.errno_name="__error";}
+ else if strcmp(info,"Linux")==0 {ctx.errno_name="__errno_location";}
+ else {boot_error(ctx,ctx.cursor,"Core LLVM errno requires native Darwin or Linux");return false;}
+ let mut item:*BootNode=ctx.program.body;
+ while item!=0 as *BootNode {
+  if item.kind==BN_FN && (item.flags&2)!=0 && strcmp(item.name,ctx.errno_name)==0 {
+   if item.params!=0 as *BootNode || (item.flags&4)!=0 || item.ty.kind!=BY_PTR || item.ty.inner.kind!=BY_I32 {
+    boot_error(ctx,item.token,"foreign declaration conflicts with native errno ABI");return false;
+   }
+   ctx.errno_declared=true;
+  }
+  item=item.next;
+ }
+ return true;
+}

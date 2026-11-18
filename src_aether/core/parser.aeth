@@ -28,6 +28,7 @@ pub fn boot_p_reserved(text:*u8)->bool {
  if strcmp(text,"while")==0 || strcmp(text,"return")==0 || strcmp(text,"break")==0 || strcmp(text,"continue")==0 {return true;}
  if strcmp(text,"struct")==0 || strcmp(text,"extern")==0 || strcmp(text,"const")==0 || strcmp(text,"unsafe")==0 {return true;}
  if strcmp(text,"as")==0 || strcmp(text,"true")==0 || strcmp(text,"false")==0 || strcmp(text,"size_of")==0 || strcmp(text,"align_of")==0 {return true;}
+ if strcmp(text,"__errno_get")==0 {return true;}
  if strcmp(text,"pub")==0 || strcmp(text,"use")==0 || strcmp(text,"enum")==0 || strcmp(text,"impl")==0 {return true;}
  if strcmp(text,"for")==0 || strcmp(text,"loop")==0 || strcmp(text,"match")==0 || strcmp(text,"type")==0 {return true;}
  return false;
@@ -147,6 +148,11 @@ fn boot_p_primary(ctx:*BootContext)->*BootNode {
   if node==0 as *BootNode {return node;}
   if boot_p_word(ctx,"true") {node.value=1;}
   boot_p_advance(ctx);return node;
+ }
+ if boot_p_word(ctx,"__errno_get") {
+  boot_p_advance(ctx);
+  if !boot_p_expect(ctx,40,"__errno_get requires ()") || !boot_p_expect(ctx,41,"__errno_get takes no arguments") {return 0 as *BootNode;}
+  return boot_node(ctx,BN_ERRNO,token);
  }
  if boot_p_word(ctx,"size_of")||boot_p_word(ctx,"align_of") {
   let alignment:bool=boot_p_word(ctx,"align_of");boot_p_advance(ctx);
