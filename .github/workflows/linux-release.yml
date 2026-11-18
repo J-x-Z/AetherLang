@@ -31,10 +31,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install LLVM 21 for the native runner
         run: |
-          curl -fsS https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/aether-llvm.gpg
-          echo 'deb [signed-by=/usr/share/keyrings/aether-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' | sudo tee /etc/apt/sources.list.d/aether-llvm.list
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-21 llvm-21-dev libpolly-21-dev libclang-rt-21-dev
+          packages=(clang-21 llvm-21-dev libpolly-21-dev libclang-rt-21-dev)
+          if ! apt-get -s install "${packages[@]}" >/dev/null 2>&1; then
+            curl -fsS https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/aether-llvm.gpg
+            echo 'deb [signed-by=/usr/share/keyrings/aether-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' | sudo tee /etc/apt/sources.list.d/aether-llvm.list
+            sudo apt-get update
+          fi
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
       - name: Build, seal, relocate and exercise the archive
         run: |
           test "$(uname -m)" = "${{ matrix.arch }}"
