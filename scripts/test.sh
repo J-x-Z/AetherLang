@@ -49,9 +49,11 @@ test_quantum_templates() {
 compiler="$CARGO_TARGET_DIR/debug/aethc"
 if [ "$phase" != selfhost ]; then
     python3 "$root/scripts/test_build_paths.py"
+    python3 -B tests/mcp_protocol.py
     python3 tests/package_install.py --work-dir "$CARGO_TARGET_DIR/package-install"
     # $backends is an intentional list of fixed tokens selected above.
     python3 scripts/validate.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/validation" --backends $backends
+    python3 tests/array_indices.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/array-indices" --backends $backends
     for suite in dynamic_values closure_values async_runtime array_repeat aggregate_abi system_values global_linkage semantic_values runtime_foundation generic_runtime memory_runtime simd_values platform_intrinsics process_runtime math_values terminal_stats quantum_values cuda_bindings literal_escapes extern_definitions c_void_pointers install_output vec_alignment vec32 darwin_target freestanding target_layout interfaces_methods ffi_modules contracts legacy_runtime text_map host_builtins sha256 compute_runtime compute_applications compute_jit compute_planning; do
         python3 "tests/$suite.py" --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/$suite" --backends $backends
     done
@@ -66,6 +68,8 @@ if [ "$phase" != selfhost ]; then
         AETHER_BACKEND="$backend" python3 jxz/tests/integration.py --jxz "$jxz" --aethc "$compiler" --work-dir "$CARGO_TARGET_DIR/jxz-tests-$backend"
         python3 jxz/tests/registry.py --jxz "$jxz" --aethc "$compiler" --backend "$backend" --work-dir "$CARGO_TARGET_DIR/jxz-registry-$backend"
     done
+
+    python3 -B tests/mcp_queries.py --compiler "$compiler" --jxz "$CARGO_TARGET_DIR/jxz-$bootstrap_backend" --work-dir "$CARGO_TARGET_DIR/mcp-seed"
 
     test_quantum_templates "$compiler" "$CARGO_TARGET_DIR/quantum-templates" --backends $backends
 
@@ -89,6 +93,7 @@ if clang --version >/dev/null 2>&1; then
     native_compiler="$CARGO_TARGET_DIR/bootstrap-core/aethc-native"
     CC=clang python3 scripts/build_selfhost.py --seed "$CARGO_TARGET_DIR/bootstrap-core/stage4" \
         --work-dir "$CARGO_TARGET_DIR/regular-bootstrap" --output "$native_compiler"
+    python3 tests/array_indices.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-array-indices"
     if [ "${AETHER_TEST_QEMU:-0}" = 1 ]; then
         python3 tests/kernel_boot.py --selfhost "$native_compiler" --seed "$compiler" \
             --backends $backends --work-dir "$CARGO_TARGET_DIR/kernel-boot" --qemu
@@ -112,6 +117,7 @@ if clang --version >/dev/null 2>&1; then
     python3 tests/bootstrap_patterns.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-patterns" --sanitize
     python3 tests/bootstrap_hosted.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-hosted" --sanitize
     python3 tests/bootstrap_production.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-services"
+    python3 -B tests/mcp_queries.py --compiler "$native_compiler" --jxz "$CARGO_TARGET_DIR/jxz-$bootstrap_backend" --work-dir "$CARGO_TARGET_DIR/mcp-native"
     python3 tests/bootstrap_lsp.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-lsp"
     python3 tests/bootstrap_cli.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-cli"
     if [ "$bootstrap_backend" = llvm ]; then

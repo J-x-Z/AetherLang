@@ -57,6 +57,12 @@ Use a separate `CARGO_TARGET_DIR` to keep both executables. Set
 textual IR emitted by that seed. The stable packages use LLVM 21.
 [Measurements and compatibility](docs/UPGRADE.md#llvm-21-与-23-的迁移决定)
 
+## Query code from an AI client
+
+The development toolchain includes a local stdio MCP server for project checks,
+definitions, references and paged symbol search. It accepts both Script and
+Core and uses JXZ to resolve project dependencies. [Configure the server](docs/MCP.md)
+
 ## Work with data in the terminal
 
 The streaming regression example reads a file or stdin, selects two named

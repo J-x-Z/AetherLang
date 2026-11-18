@@ -6,8 +6,10 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -29,6 +31,12 @@ def package(version, tools=None):
         path.write_text(f'#!/bin/sh\necho {version}\n')
         path.chmod(0o755)
         artifacts.append(dict(name=name, sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+    if tools is None:
+        for name in ('tools/mcp/aether_mcp.py', 'tools/mcp/queries.py'):
+            dest = base / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(root / name, dest)
+            artifacts.append(dict(name=name, sha256=hashlib.sha256(dest.read_bytes()).hexdigest()))
     module = base / 'stdlib/vec.aeth'
     module.write_text(version)
     manifest = dict(release_id=version, platform=dict(system=platform.system(), machine=platform.machine()),
@@ -71,6 +79,26 @@ invoke('killed-before-activation', two, -signal.SIGKILL, {**os.environ, 'PYTHONP
 check('one')
 invoke('recover-and-upgrade', two)
 check('two')
+# Run the installed adapter with no PATH tools and a fresh writable project.
+# The manifest project exercises discovery of both packaged executables.
+project = work / 'sample project'
+project.mkdir()
+(project / 'Jxz.toml').write_text('[package]\nname = "sample"\n')
+messages = [
+    dict(id=1, method='initialize', params=dict(protocolVersion='2025-11-25', capabilities={},
+         clientInfo=dict(name='package-test', version='1'))),
+    dict(method='notifications/initialized'),
+    dict(id=2, method='tools/call', params=dict(name='aether_check', arguments={})),
+]
+wire = ''.join(json.dumps({'jsonrpc':'2.0', **msg})+'\n' for msg in messages)
+adapter = prefix / 'bin/tools/mcp/aether_mcp.py'
+r = subprocess.run([sys.executable, adapter, '--root', project], input=wire, capture_output=True,
+                   text=True, timeout=10, env={**os.environ, 'PATH': ''})
+assert r.returncode == 0, r.stderr
+response = json.loads(r.stdout.splitlines()[1])['result']
+assert not response['isError'] and response['structuredContent']['compiler'] == 'two', response
+assert not (adapter.parent / '__pycache__').exists()
+records.append(dict(label='installed-mcp-both-bundled-drivers', exit=r.returncode))
 invoke('idempotent', two)
 check('two')
 installed = (prefix / 'bin/aethc').resolve()

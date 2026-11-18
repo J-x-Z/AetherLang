@@ -52,7 +52,14 @@ has_snapshot_fixture = bool(subprocess.check_output(
     ['git', 'ls-tree', '--name-only', commit, '--', snapshot_fixture], cwd=repo))
 if has_snapshot_fixture:
     suite_files.append(snapshot_fixture)
-paths = ['src_aether/core', 'jxz/src', 'stdlib', *suite_files]
+# Pack only the adapter from the requested revision. Old releases predate MCP.
+mcp_files = ['tools/mcp/aether_mcp.py', 'tools/mcp/queries.py']
+frozen_mcp = subprocess.check_output(
+    ['git', 'ls-tree', '--name-only', commit, '--', *mcp_files], cwd=repo, text=True
+).splitlines()
+if frozen_mcp and set(frozen_mcp) != set(mcp_files):
+    sys.exit('Incomplete MCP adapter in the requested revision')
+paths = ['src_aether/core', 'jxz/src', 'stdlib', *suite_files, *frozen_mcp]
 archive = subprocess.check_output(['git', 'archive', '--format=tar', commit, *paths], cwd=repo)
 with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
     for item in tar:
@@ -119,7 +126,7 @@ try:
         shutil.copy2(windows_stdio, stage/'stdlib/stdio_binary.aeth')
     shutil.copytree(cross['compiler'][0]/'source',stage/'source/core')
     shutil.copytree(cross['jxz'][0]/'source',stage/'source/jxz')
-    for path in suite_files:
+    for path in [*suite_files, *frozen_mcp]:
         dest=stage/path;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source/path,dest)
     # These packaging/acceptance wrappers are hashed independently of the frozen
     # language source, so a later packaging fix never mislabels its source commit.
