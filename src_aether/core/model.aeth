@@ -71,7 +71,7 @@ pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=3
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
 pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
-pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool,is_alias:bool,expression:*BootNode,callable:*BootNode,is_tuple:bool,dynamic_contract:*BootType,dynamic_mutable:bool,dynamic_methods:*BootNode,async_frame:bool }
+pub struct BootType { volatile_access:bool,kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool,is_alias:bool,expression:*BootNode,callable:*BootNode,is_tuple:bool,dynamic_contract:*BootType,dynamic_mutable:bool,dynamic_methods:*BootNode,async_frame:bool }
 pub struct BootCallEdge {callee:*BootNode,next:*BootCallEdge}
 pub struct BootNode {
  host_effect:i32,effect_explicit:bool,effect_limit:i32,effect_bits:i32,calls:*BootCallEdge,
@@ -109,3 +109,5 @@ pub struct BootTypeBinding{formal:*BootType,actual:*BootType,next:*BootTypeBindi
 pub struct BootInstance{source:*BootNode,arguments:*BootTypeArgument,function:*BootNode,next:*BootInstance}
 
 pub const BN_MEMORY:i32=59;
+
+pub const BF_VOLATILE:i32=4194304;

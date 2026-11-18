@@ -1,6 +1,7 @@
 use model::*;
 use native_abi::boot_abi_needed;
 use runtime::*;
+use memory_volatile::vm_function;
 extern "C" {fn strtod(text:*u8,end:**u8)->f64;}
 // Direct opaque-pointer LLVM IR utilities. No LLVM/Rust emitter is invoked.
 pub fn ll_text(ctx:*BootContext,text:*u8){fputs(text,ctx.output);}
@@ -54,13 +55,15 @@ pub fn ll_literal(ctx:*BootContext,node:*BootNode,ty:*BootType){
  }
  ll_integer(ctx,node.value,ty);
 }
-pub fn ll_load(ctx:*BootContext,ty:*BootType,pointer:i32)->i32{
+pub fn ll_load(ctx:*BootContext,ty:*BootType,pointer:i32)->i32{return ll_load_access(ctx,ty,pointer,vm_function(ctx));}
+pub fn ll_load_access(ctx:*BootContext,ty:*BootType,pointer:i32,qualified:bool)->i32{
  if ty.kind==BY_VOID{return ll_unit(ctx);}
- let id:i32=ll_id(ctx);ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,ty);fprintf(ctx.output,", ptr %%r%d, align 1\n",pointer);return id;
+ let id:i32=ll_id(ctx);ll_begin(ctx,id);if qualified{ll_text(ctx,"load volatile ");}else{ll_text(ctx,"load ");}ll_type(ctx,ty);fprintf(ctx.output,", ptr %%r%d, align 1\n",pointer);return id;
 }
-pub fn ll_store(ctx:*BootContext,ty:*BootType,value:i32,pointer:i32){
+pub fn ll_store(ctx:*BootContext,ty:*BootType,value:i32,pointer:i32){ll_store_access(ctx,ty,value,pointer,vm_function(ctx));}
+pub fn ll_store_access(ctx:*BootContext,ty:*BootType,value:i32,pointer:i32,qualified:bool){
  if ty.kind==BY_VOID{return;}
- ll_text(ctx,"  store ");ll_value(ctx,ty,value);fprintf(ctx.output,", ptr %%r%d, align 1\n",pointer);
+ if qualified{ll_text(ctx,"  store volatile ");}else{ll_text(ctx,"  store ");}ll_value(ctx,ty,value);fprintf(ctx.output,", ptr %%r%d, align 1\n",pointer);
 }
 pub fn ll_field_index(ty:*BootType,field:*BootNode)->i32{
  let mut index:i32=0;let mut item:*BootNode=ty.fields;
@@ -127,3 +130,6 @@ pub fn ll_allocas(ctx:*BootContext,node:*BootNode){
   ll_allocas(ctx,item.left);ll_allocas(ctx,item.right);ll_allocas(ctx,item.body);ll_allocas(ctx,item.third);ll_allocas(ctx,item.params);item=item.next;
  }
 }
+
+pub fn ll_store_op(ctx:*BootContext){if vm_function(ctx){ll_text(ctx,"  store volatile ");}else{ll_text(ctx,"  store ");}}
+pub fn ll_load_op(ctx:*BootContext){if vm_function(ctx){ll_text(ctx,"load volatile ");}else{ll_text(ctx,"load ");}}

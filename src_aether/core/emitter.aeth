@@ -2,6 +2,7 @@ use model::*;
 use const_eval::ce_decode_float;
 use runtime::*;
 use memory::bm_c_order;
+use memory_volatile::*;
 use type_model::boot_type_concrete;
 // Typed AST -> C11. Every effectful operand is sequenced into a temporary;
 // assignment evaluates its place first, calls evaluate arguments left-to-right.
@@ -124,18 +125,21 @@ fn boot_c_place_decl(ctx:*BootContext,node:*BootNode){
 fn boot_read_place(ctx:*BootContext,node:*BootNode){
  boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_temp(ctx,node);boot_c_text(ctx,";\n");
  if node.ty.kind!=BY_VOID{
+  if vm_access(ctx,node){boot_c_temp(ctx,node);boot_c_text(ctx," = ");boot_c_volatile_place(ctx,node);boot_c_text(ctx,";\n");return;}
   boot_c_text(ctx,"__builtin_memcpy(&");boot_c_temp(ctx,node);boot_c_text(ctx,",");boot_c_place(ctx,node);
   boot_c_text(ctx,",sizeof(");boot_c_temp(ctx,node);boot_c_text(ctx,"));\n");
  }
 }
 fn boot_write_place(ctx:*BootContext,place:*BootNode,value:*BootNode){
+ if place.ty.kind==BY_VOID{return;}
+ if vm_access(ctx,place){boot_c_volatile_place(ctx,place);boot_c_text(ctx," = ");boot_c_temp(ctx,value);boot_c_text(ctx,";\n");return;}
  boot_c_text(ctx,"__builtin_memcpy(");boot_c_place(ctx,place);boot_c_text(ctx,",&");boot_c_temp(ctx,value);
  boot_c_text(ctx,",sizeof(");boot_c_temp(ctx,value);boot_c_text(ctx,"));\n");
 }
 fn boot_emit_place(ctx:*BootContext,node:*BootNode) {
  if ctx.failed{return;}
  if node.kind==BN_IDENT {
-  boot_c_place_decl(ctx,node);boot_c_text(ctx," = &");boot_c_binding(ctx,node.decl);boot_c_text(ctx,";\n");return;
+  boot_c_place_decl(ctx,node);boot_c_text(ctx," = (void*)&");boot_c_binding(ctx,node.decl);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_UNARY&&node.op==42 {
   boot_emit_expr(ctx,node.left);boot_c_place_decl(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
@@ -176,7 +180,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
  }
  if node.kind==BN_BOOL {boot_c_decl(ctx,node);if node.value==0{boot_c_text(ctx,"false");}else{boot_c_text(ctx,"true");}boot_c_text(ctx,";\n");return;}
  if node.kind==BN_STRING {boot_c_decl(ctx,node);boot_c_string(ctx,node.token);boot_c_text(ctx,";\n");return;}
- if node.kind==BN_IDENT {boot_c_decl(ctx,node);boot_c_binding(ctx,node.decl);boot_c_text(ctx,";\n");return;}
+ if node.kind==BN_IDENT {if vm_function(ctx)&&node.decl.kind!=BN_CONST{boot_emit_place(ctx,node);boot_read_place(ctx,node);return;}boot_c_decl(ctx,node);boot_c_binding(ctx,node.decl);boot_c_text(ctx,";\n");return;}
  if node.kind==BN_ARRAY||node.kind==BN_REPEAT{
   let mut element:*BootNode=node.params;
   if node.kind==BN_REPEAT{boot_emit_expr(ctx,node.left);}else{while element!=0 as *BootNode{boot_emit_expr(ctx,element);element=element.next;}}
@@ -286,8 +290,8 @@ fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
   boot_c_text(ctx,"}\n");return;
  }
  if node.kind==BN_LET {
-  if node.left==0 as *BootNode{boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx,";\n");return;}
-  boot_emit_expr(ctx,node.left);boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
+  if node.left==0 as *BootNode{boot_c_type(ctx,node.ty);if vm_function(ctx){boot_c_text(ctx," volatile");}boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx,";\n");return;}
+  boot_emit_expr(ctx,node.left);boot_c_type(ctx,node.ty);if vm_function(ctx){boot_c_text(ctx," volatile");}boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_HALT{if node.op==1{boot_c_text(ctx,"__builtin_trap();\n");}else{boot_c_text(ctx,"__builtin_unreachable();\n");}return;}
  if node.kind==BN_ASSIGN {
@@ -325,7 +329,7 @@ fn boot_emit_signature(ctx:*BootContext,node:*BootNode) {
  let mut param:*BootNode=node.params;
  if param==0 as *BootNode{boot_c_text(ctx,"void");}
  while param!=0 as *BootNode{
-  boot_c_type(ctx,param.ty);boot_c_text(ctx," ");boot_c_binding(ctx,param);param=param.next;
+  boot_c_type(ctx,param.ty);if (node.flags&BF_VOLATILE)!=0{boot_c_text(ctx," volatile");}boot_c_text(ctx," ");boot_c_binding(ctx,param);param=param.next;
   if param!=0 as *BootNode{boot_c_text(ctx,",");}
  }
  if (node.flags&4)!=0{boot_c_text(ctx,",...");}boot_c_text(ctx,")");
@@ -408,6 +412,7 @@ fn boot_emit_constant(ctx:*BootContext,node:*BootNode) {
  boot_c_text(ctx,";\n");
 }
 pub fn boot_emit(ctx:*BootContext)->bool {
+ ctx.function=0 as *BootNode;
  if ctx.failed||ctx.program==0 as *BootNode||ctx.output==0 as *void{return false;}
  if !boot_choose_namespace(ctx){return false;}
  if ctx.uses_errno {boot_c_text(ctx,"#include <errno.h>\n");}
@@ -431,7 +436,7 @@ pub fn boot_emit(ctx:*BootContext)->bool {
  while item!=0 as *BootNode{if item.kind==BN_FN&&item.generics==(0 as *BootNode){boot_emit_signature(ctx,item);boot_c_text(ctx,";\n");}item=item.next;}
  item=ctx.program.body;
  while item!=0 as *BootNode{
-  if item.kind==BN_FN&&(item.flags&2)==0&&item.generics==(0 as *BootNode){boot_emit_signature(ctx,item);boot_c_text(ctx," ");boot_emit_stmt(ctx,item.body);}
+  if item.kind==BN_FN&&(item.flags&2)==0&&item.generics==(0 as *BootNode){ctx.function=item;boot_emit_signature(ctx,item);boot_c_text(ctx," ");boot_emit_stmt(ctx,item.body);ctx.function=0 as *BootNode;}
   item=item.next;
  }
  item=ctx.program.body;
@@ -485,4 +490,9 @@ fn boot_c_memory(ctx:*BootContext,node:*BootNode) {
   }
  }
  boot_c_text(ctx,";\n");if node.ty.kind==BY_VOID{boot_c_decl(ctx,node);boot_c_text(ctx,"{};\n");}
+}
+
+fn boot_c_volatile_place(ctx:*BootContext,node:*BootNode){
+ boot_c_text(ctx,"((volatile struct __attribute__((packed)) { ");boot_c_type(ctx,node.ty);
+ boot_c_text(ctx," value; }*)");boot_c_place(ctx,node);boot_c_text(ctx,")->value");
 }

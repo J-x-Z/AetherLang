@@ -7,6 +7,7 @@ use tuple_model::*;
 use pattern_model::*;
 use hosted::*;
 use memory::*;
+use memory_volatile::*;
 use methods::*;
 use borrow::boot_borrow_check;
 use owned::{boot_own_lower,boot_owned_call_temps};
@@ -172,7 +173,7 @@ pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*Boo
  if !ctx.failed&&actual!=0 as *BootType&&actual.kind==BY_NEVER&&expected!=0 as *BootType{return expected;}
  // Shared reborrowing preserves the origin while restricting permissions; it
  // never changes the declaration's own canonical type or creates a raw pointer.
- if !ctx.failed&&actual!=0 as *BootType&&expected!=0 as *BootType&&actual.kind==BY_MUTREF&&expected.kind==BY_REF&&actual.inner==expected.inner{
+ if !ctx.failed&&actual!=0 as *BootType&&expected!=0 as *BootType&&actual.kind==BY_MUTREF&&expected.kind==BY_REF&&actual.inner==expected.inner&&actual.volatile_access==expected.volatile_access{
   node.ty=expected;return expected;
  }
  return actual;
@@ -375,7 +376,7 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
   if node.op==38 {
    if !boot_place_addressable(ctx,node.left) { return 0 as *BootType; }
    if (node.flags&1)!=0 && !boot_place_writable(ctx,node.left) { return 0 as *BootType; }
-   node.ty=boot_ref_type(ctx,operand,(node.flags&1)!=0);return node.ty;
+   let mut ref_kind:i32=BY_REF;if (node.flags&1)!=0{ref_kind=BY_MUTREF;}node.ty=vm_indirect(ctx,operand,ref_kind,vm_place(node.left));return node.ty;
   }
   if node.op==42 {
    if !boot_indirect(operand) { boot_error(ctx,node.token,"dereference requires a pointer or reference");return 0 as *BootType; }

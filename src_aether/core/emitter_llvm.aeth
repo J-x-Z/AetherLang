@@ -159,9 +159,9 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
  item=ctx.program.body;
  while item!=(0 as *BootNode)&&!ctx.failed{
   if item.kind==BN_FN&&(item.flags&2)==0&&item.generics==(0 as *BootNode){
-   ctx.llvm_serial=0;ctx.llvm_break=0;ctx.llvm_continue=0;ll_signature(ctx,item);ll_text(ctx," {\n");ll_label(ctx,0);
+   ctx.function=item;ctx.llvm_serial=0;ctx.llvm_break=0;ctx.llvm_continue=0;ll_signature(ctx,item);ll_text(ctx," {\n");ll_label(ctx,0);
    ll_allocas(ctx,item.params);ll_allocas(ctx,item.body);
-   let mut param:*BootNode=item.params;while param!=(0 as *BootNode){ll_text(ctx,"  store ");ll_type(ctx,param.ty);fprintf(ctx.output," %%arg%d, ptr %%v%d\n",param.id,param.id);param=param.next;}
+   let mut param:*BootNode=item.params;while param!=(0 as *BootNode){if param.ty.kind!=BY_VOID{ll_store_op(ctx);ll_type(ctx,param.ty);fprintf(ctx.output," %%arg%d, ptr %%v%d\n",param.id,param.id);}param=param.next;}
    ll_statement(ctx,item.body);
    if !ctx.llvm_terminated{if item.ty.kind==BY_VOID{ll_text(ctx,"  ret void\n");}else{ll_text(ctx,"  unreachable\n");}}
    ll_text(ctx,"}\n");if (item.flags&BF_EXPORT)!=0 && boot_abi_needed(item){ll_export_wrapper(ctx,item);}

@@ -49,8 +49,8 @@ pub fn ls_same_symbol(a:*BootNode,b:*BootNode)->bool{
 }
 pub fn ls_type(out:*LspBuffer,ty:*BootType,depth:i32){
  if ty==0 as *BootType{ls_text(out,"?");return;}if depth>64{ls_text(out,"...");return;}
- if ty.kind==BY_PTR{ls_char(out,42);ls_type(out,ty.inner,depth+1);return;}
- if ty.kind==BY_REF||ty.kind==BY_MUTREF{ls_char(out,38);if ty.kind==BY_MUTREF{ls_text(out,"mut ");}ls_type(out,ty.inner,depth+1);return;}
+ if ty.kind==BY_PTR{ls_char(out,42);if ty.volatile_access{ls_text(out,"volatile ");}ls_type(out,ty.inner,depth+1);return;}
+ if ty.kind==BY_REF||ty.kind==BY_MUTREF{ls_char(out,38);if ty.kind==BY_MUTREF{ls_text(out,"mut ");}if ty.volatile_access{ls_text(out,"volatile ");}ls_type(out,ty.inner,depth+1);return;}
  if ty.kind==BY_ARRAY{ls_char(out,91);ls_type(out,ty.inner,depth+1);ls_text(out,"; ");ls_number(out,ty.extent as i64);ls_char(out,93);return;}
  if ty.kind==BY_STRUCT&&ty.is_tuple{
   ls_char(out,40);let mut field:*BootNode=ty.fields;let mut count:i32=0;

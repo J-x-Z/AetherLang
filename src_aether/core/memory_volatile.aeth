@@ -1,0 +1,26 @@
+// A qualifier belongs to the pointer/reference's pointee, not to the address
+// value. Copies, aliases, generic substitutions and projected addresses retain
+// it. An explicit raw-pointer cast is the only way to erase it.
+use model::*;
+use runtime::*;
+pub fn vm_indirect(ctx:*BootContext,inner:*BootType,kind:i32,qualified:bool)->*BootType {
+ let mut ty:*BootType=ctx.types;
+ while ty!=0 as *BootType{if ty.kind==kind&&ty.inner==inner&&ty.volatile_access==qualified{return ty;}ty=ty.next;}
+ let created:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;
+ if created==0 as *BootType{return created;}
+ created.kind=kind;created.inner=inner;created.volatile_access=qualified;created.complete=true;
+ created.id=boot_id(ctx);created.next=ctx.types;ctx.types=created;return created;
+}
+pub fn vm_place(node:*BootNode)->bool {
+ if node==0 as *BootNode{return false;}
+ if node.kind==BN_UNARY&&node.op==42{return node.left.ty.volatile_access;}
+ if node.kind==BN_MEMBER||node.kind==BN_INDEX{
+  if boot_indirect(node.left.ty){return node.left.ty.volatile_access;}
+  return vm_place(node.left);
+ }
+ return false;
+}
+pub fn vm_function(ctx:*BootContext)->bool {
+ return ctx.function!=0 as *BootNode&&(ctx.function.flags&BF_VOLATILE)!=0;
+}
+pub fn vm_access(ctx:*BootContext,node:*BootNode)->bool{return vm_function(ctx)||vm_place(node);}

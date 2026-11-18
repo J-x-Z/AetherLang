@@ -65,7 +65,7 @@ pub fn boot_check_effects(ctx:*BootContext)->bool{
      if other!=f && (other.flags&2)!=0 && other.kind==BN_FN && strcmp(other.name,f.name)==0{boot_effect_edge(ctx,f,other);}
      other=other.next;
     }
-   }else{boot_effect_walk(ctx,f,f.body,FX_READ);}
+   }else{if (f.flags&BF_VOLATILE)!=0{f.effect_bits=f.effect_bits|FX_READ|FX_WRITE;}boot_effect_walk(ctx,f,f.body,FX_READ);}
   }
   f=f.next;
  }

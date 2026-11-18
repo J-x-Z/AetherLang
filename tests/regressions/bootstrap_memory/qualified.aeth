@@ -1,0 +1,27 @@
+#![no_std]
+type Register=*volatile u32;
+struct Holder<T>{pointer:*volatile T}
+fn identity<T>(value:T)->T{return value;}
+fn read<T>(pointer:*volatile T)->T{return *pointer;}
+fn address(pointer:*volatile [u32;2])->Register{return &mut (*pointer)[1] as Register;}
+#[no_mangle] @volatile fn local_storage(pointer:*u32)->u32 {
+ let mut value:u32=*pointer;value+=1;*pointer=value;return value;
+}
+#[no_mangle] fn qualified_two(pointer:Register)->u32 {return *pointer+*pointer;}
+#[no_mangle] fn qualified_unit(pointer:*volatile ()) {let value:()=*pointer;*pointer=value;}
+// Internal aggregate return: this does not claim a foreign array ABI.
+fn qualified_pair(pointer:*volatile [u32;2])->[u32;2] {return *pointer;}
+fn main()->i32{
+ let mut raw:u32=20;let pointer:Register=&mut raw as Register;
+ let holder:Holder<u32>=Holder{pointer:identity(pointer)};
+ if read(holder.pointer)!=20{return 1;}
+ let mut values:[u32;2]=[3,4];let array:*volatile [u32;2]=&mut values as *volatile [u32;2];
+ let projected:Register=address(array);*projected+=1;
+ if values[1]!=5{return 2;}
+ let shifted:Register=((&mut values as *[u32;2]) as Register)+1;*shifted+=2;
+ if read(shifted)!=7{return 3;}
+ let pair:[u32;2]=qualified_pair(array);if pair[0]!=3||pair[1]!=7{return 4;}
+ if local_storage(&mut raw as *u32)!=21||qualified_two(pointer)!=42{return 5;}
+ let erased:*u32=pointer as *u32;if *erased!=21{return 6;}
+ qualified_unit(1 as *volatile ());return 0;
+}

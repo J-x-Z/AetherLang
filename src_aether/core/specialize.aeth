@@ -15,7 +15,7 @@ pub fn boot_infer_type(ctx:*BootContext,formal:*BootType,actual:*BootType,bindin
   }
   boot_error(ctx,token,"unbound generic type parameter");return false;
  }
- if (boot_indirect(formal)||formal.kind==BY_OWN)&&formal.kind==actual.kind{return boot_infer_type(ctx,formal.inner,actual.inner,bindings,token,depth+1);}
+ if (boot_indirect(formal)||formal.kind==BY_OWN)&&formal.kind==actual.kind{if formal.volatile_access!=actual.volatile_access{boot_error(ctx,token,"generic volatile qualifier mismatch");return false;}return boot_infer_type(ctx,formal.inner,actual.inner,bindings,token,depth+1);}
  if formal.kind==BY_ARRAY&&actual.kind==BY_ARRAY{
   if !boot_infer_type(ctx,formal.inner,actual.inner,bindings,token,depth+1){return false;}
   if actual.expression!=0 as *BootNode{return true;}

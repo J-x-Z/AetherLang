@@ -44,7 +44,7 @@ pub fn boot_type(ctx:*BootContext,kind:i32)->*BootType {
 }
 pub fn boot_ptr_type(ctx:*BootContext,inner:*BootType)->*BootType {
  let mut ty:*BootType=ctx.types;
- while ty!=0 as *BootType {if ty.kind==BY_PTR && ty.inner==inner {return ty;}ty=ty.next;}
+ while ty!=0 as *BootType {if ty.kind==BY_PTR && ty.inner==inner && !ty.volatile_access {return ty;}ty=ty.next;}
  let created:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;
  if created==0 as *BootType {return created;}
  created.kind=BY_PTR;created.id=boot_id(ctx);created.inner=inner;created.complete=true;
@@ -225,7 +225,7 @@ pub fn boot_ref_type(ctx:*BootContext,inner:*BootType,mutable:bool)->*BootType {
  if inner.kind==BY_DYN_MARKER{return boot_dynamic_type(ctx,inner.inner,mutable);}
  let mut kind:i32=BY_REF;if mutable{kind=BY_MUTREF;}
  let mut ty:*BootType=ctx.types;
- while ty!=0 as *BootType{if ty.kind==kind&&ty.inner==inner{return ty;}ty=ty.next;}
+ while ty!=0 as *BootType{if ty.kind==kind&&ty.inner==inner&&!ty.volatile_access{return ty;}ty=ty.next;}
  let created:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;if created==0 as *BootType{return created;}
  created.kind=kind;created.id=boot_id(ctx);created.inner=inner;created.complete=true;created.next=ctx.types;ctx.types=created;return created;
 }

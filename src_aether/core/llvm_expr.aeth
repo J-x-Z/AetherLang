@@ -4,6 +4,7 @@ use llvm_native::ll_native_call;
 use emitter::boot_storage_name;
 use runtime::*;
 use memory::bm_ll_order;
+use memory_volatile::*;
 use llvm_common::*;
 pub fn ll_place(ctx:*BootContext,node:*BootNode)->i32{
  let id:i32=ll_id(ctx);
@@ -42,7 +43,7 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
   let value:i32=ll_expr(ctx,node.left);let tag:i32=ll_id(ctx);ll_begin(ctx,tag);ll_text(ctx,"extractvalue ");ll_value(ctx,node.left.ty,value);ll_text(ctx,", 0\n");return tag;
  }
  if node.kind==BN_ENUM_FIELD{
-  let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  store ");ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", ptr %%enum%d\n",node.id);
+  let value:i32=ll_expr(ctx,node.left);ll_store_op(ctx);ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", ptr %%enum%d\n",node.id);
   let payload:i32=ll_id(ctx);ll_begin(ctx,payload);ll_text(ctx,"getelementptr ");ll_type(ctx,node.left.ty);fprintf(ctx.output,", ptr %%enum%d, i32 0, i32 1\n",node.id);
   let field:i32=ll_id(ctx);ll_begin(ctx,field);ll_text(ctx,"getelementptr ");ll_type(ctx,node.aux);fprintf(ctx.output,", ptr %%r%d, i32 0, i32 %d\n",payload,ll_field_index(node.aux,node.decl));return ll_load(ctx,node.ty,field);
  }
@@ -51,19 +52,19 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
  let id:i32=ll_id(ctx);
  if node.kind==BN_STRING{ll_begin(ctx,id);fprintf(ctx.output,"getelementptr [%llu x i8], ptr @a%d_str%d, i64 0, i64 0\n",node.token.length+1,ctx.c_namespace,node.id);return id;}
  if node.kind==BN_IDENT{
-  if node.decl.kind==BN_CONST{ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr @a%d_c%d\n",ctx.c_namespace,node.decl.id);return id;}
-  return ll_load(ctx,node.ty,ll_place(ctx,node));
+  if node.decl.kind==BN_CONST{ll_begin(ctx,id);ll_load_op(ctx);ll_type(ctx,node.ty);fprintf(ctx.output,", ptr @a%d_c%d\n",ctx.c_namespace,node.decl.id);return id;}
+  return ll_load_access(ctx,node.ty,ll_place(ctx,node),vm_access(ctx,node));
  }
  if node.kind==BN_ARRAY||node.kind==BN_REPEAT{return ll_array_value(ctx,node);}
  if node.kind==BN_INDEX&&node.left.ty.kind==BY_ARRAY&&!boot_place_form(node.left){
-  let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  store ");ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", ptr %%arr%d\n",node.id);
+  let value:i32=ll_expr(ctx,node.left);ll_store_op(ctx);ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", ptr %%arr%d\n",node.id);
   let index:i32=ll_expr(ctx,node.right);let wide:i32=ll_cast(ctx,index,node.right.ty,boot_type(ctx,BY_I64));ll_array_bound(ctx,wide,node.left.ty.extent);
   ll_begin(ctx,id);ll_text(ctx,"getelementptr ");ll_type(ctx,node.left.ty);fprintf(ctx.output,", ptr %%arr%d, i64 0, i64 %%r%d\n",node.id,wide);return ll_load(ctx,node.ty,id);
  }
  if node.kind==BN_STRUCT_VALUE && node.ty.union_layout{
-  let field:*BootNode=node.params;let value:i32=ll_expr(ctx,field.left);ll_text(ctx,"  store ");ll_type(ctx,node.ty);fprintf(ctx.output," zeroinitializer, ptr %%union%d\n",node.id);
-  ll_text(ctx,"  store ");ll_value(ctx,field.ty,value);fprintf(ctx.output,", ptr %%union%d, align 1\n",node.id);
-  ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%union%d\n",node.id);return id;
+  let field:*BootNode=node.params;let value:i32=ll_expr(ctx,field.left);ll_store_op(ctx);ll_type(ctx,node.ty);fprintf(ctx.output," zeroinitializer, ptr %%union%d\n",node.id);
+  ll_store_op(ctx);ll_value(ctx,field.ty,value);fprintf(ctx.output,", ptr %%union%d, align 1\n",node.id);
+  ll_begin(ctx,id);ll_load_op(ctx);ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%union%d\n",node.id);return id;
  }
  if node.kind==BN_STRUCT_VALUE{
   let mut field:*BootNode=node.params;let mut value:i32=0;
@@ -84,20 +85,20 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
   ctx.value_target=node;ctx.llvm_yield=ll_id(ctx);let finish:i32=ctx.llvm_yield;ll_statement(ctx,node.body);
   if !ctx.llvm_terminated{if node.ty.kind==BY_VOID{ll_jump(ctx,finish);}else{ll_text(ctx,"  unreachable\n");}}ll_label(ctx,finish);
   ctx.value_target=saved;ctx.llvm_yield=saved_yield;if node.ty.kind==BY_VOID{return ll_unit(ctx);}
-  ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%yield%d\n",node.id);return id;
+  ll_begin(ctx,id);ll_load_op(ctx);ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%yield%d\n",node.id);return id;
  }
  if node.kind==BN_SIZEOF{
   let address:i32=ll_id(ctx);ll_begin(ctx,address);ll_text(ctx,"getelementptr ");ll_type(ctx,node.aux);ll_text(ctx,", ptr null, i64 1\n");
   ll_begin(ctx,id);fprintf(ctx.output,"ptrtoint ptr %%r%d to i64\n",address);return id;
  }
  if node.kind==BN_MEMBER && node.left.ty.kind==BY_STRUCT && node.left.ty.union_layout{
-  let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  store ");ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", ptr %%union%d\n",node.id);
-  ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%union%d, align 1\n",node.id);return id;
+  let value:i32=ll_expr(ctx,node.left);ll_store_op(ctx);ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", ptr %%union%d\n",node.id);
+  ll_begin(ctx,id);ll_load_op(ctx);ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%union%d, align 1\n",node.id);return id;
  }
  if node.kind==BN_MEMBER&&node.left.ty.kind==BY_STRUCT{
   let value:i32=ll_expr(ctx,node.left);ll_begin(ctx,id);ll_text(ctx,"extractvalue ");ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", %d\n",ll_field_index(node.left.ty,node.decl));return id;
  }
- if node.kind==BN_MEMBER||node.kind==BN_INDEX||(node.kind==BN_UNARY&&node.op==42){return ll_load(ctx,node.ty,ll_place(ctx,node));}
+ if node.kind==BN_MEMBER||node.kind==BN_INDEX||(node.kind==BN_UNARY&&node.op==42){return ll_load_access(ctx,node.ty,ll_place(ctx,node),vm_access(ctx,node));}
  if node.kind==BN_UNARY&&node.op==38{return ll_place(ctx,node.left);}
  if node.kind==BN_UNARY{
   let value:i32=ll_expr(ctx,node.left);ll_begin(ctx,id);
@@ -212,7 +213,7 @@ fn ll_array_value(ctx:*BootContext,node:*BootNode)->i32{
    ll_store(ctx,node.ty.inner,value,place);index=index+1;item=item.next;
   }
  }
- let result:i32=ll_id(ctx);ll_begin(ctx,result);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%arr%d\n",node.id);return result;
+ let result:i32=ll_id(ctx);ll_begin(ctx,result);ll_load_op(ctx);ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%arr%d\n",node.id);return result;
 }
 
 // Statements and expressions recurse through value blocks in one emission module.
@@ -221,16 +222,16 @@ pub fn ll_statement(ctx:*BootContext,node:*BootNode){
  if node.kind==BN_BLOCK{let mut item:*BootNode=node.body;while item!=(0 as *BootNode)&&!ctx.llvm_terminated{ll_statement(ctx,item);item=item.next;}return;}
  if node.kind==BN_LET{
   if node.left==0 as *BootNode{return;}
-  let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  store ");ll_value(ctx,node.ty,value);fprintf(ctx.output,", ptr %%v%d\n",node.id);return;
+  let value:i32=ll_expr(ctx,node.left);if node.ty.kind!=BY_VOID{ll_store_op(ctx);ll_value(ctx,node.ty,value);fprintf(ctx.output,", ptr %%v%d\n",node.id);}return;
  }
  if node.kind==BN_HALT{if node.op==1{ll_text(ctx,"  call void @llvm.trap()\n");}ll_text(ctx,"  unreachable\n");ctx.llvm_terminated=true;return;}
  if node.kind==BN_ASSIGN{
-  let place:i32=ll_place(ctx,node.left);let mut previous:i32=0;if node.op!=0{previous=ll_load(ctx,node.left.ty,place);}
+  let place:i32=ll_place(ctx,node.left);let mut previous:i32=0;if node.op!=0{previous=ll_load_access(ctx,node.left.ty,place,vm_access(ctx,node.left));}
   let mut value:i32=ll_expr(ctx,node.right);if node.op!=0{value=ll_binary_values(ctx,node,previous,value);}
-  ll_store(ctx,node.left.ty,value,place);return;
+  ll_store_access(ctx,node.left.ty,value,place,vm_access(ctx,node.left));return;
  }
  if node.kind==BN_YIELD{
-  let value:i32=ll_expr(ctx,node.left);if node.left.ty.kind!=BY_VOID{ll_text(ctx,"  store ");ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", ptr %%yield%d\n",ctx.value_target.id);}ll_jump(ctx,ctx.llvm_yield);return;
+  let value:i32=ll_expr(ctx,node.left);if node.left.ty.kind!=BY_VOID{ll_store_op(ctx);ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", ptr %%yield%d\n",ctx.value_target.id);}ll_jump(ctx,ctx.llvm_yield);return;
  }
  if node.kind==BN_EXPR{ll_expr(ctx,node.left);return;}
  if node.kind==BN_RETURN{
@@ -256,7 +257,7 @@ pub fn ll_statement(ctx:*BootContext,node:*BootNode){
 
 fn ll_enum_value(ctx:*BootContext,node:*BootNode)->i32{
  let mut arg:*BootNode=node.params;while arg!=0 as *BootNode{ll_expr(ctx,arg);arg=arg.next;}
- ll_text(ctx,"  store ");ll_type(ctx,node.ty);fprintf(ctx.output," zeroinitializer, ptr %%enum%d\n",node.id);
+ ll_store_op(ctx);ll_type(ctx,node.ty);fprintf(ctx.output," zeroinitializer, ptr %%enum%d\n",node.id);
  let tag:i32=ll_id(ctx);ll_begin(ctx,tag);ll_text(ctx,"getelementptr ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%enum%d, i32 0, i32 0\n",node.id);
  fprintf(ctx.output,"  store i32 %lld, ptr %%r%d\n",node.decl.value,tag);
  let payload:i32=ll_id(ctx);ll_begin(ctx,payload);ll_text(ctx,"getelementptr ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%enum%d, i32 0, i32 1\n",node.id);
@@ -265,7 +266,7 @@ fn ll_enum_value(ctx:*BootContext,node:*BootNode)->i32{
   let pointer:i32=ll_id(ctx);ll_begin(ctx,pointer);ll_text(ctx,"getelementptr ");ll_type(ctx,node.decl.ty);fprintf(ctx.output,", ptr %%r%d, i32 0, i32 %d\n",payload,index);
   ll_store(ctx,field.ty,arg.llvm_value,pointer);arg=arg.next;field=field.next;index=index+1;
  }
- let result:i32=ll_id(ctx);ll_begin(ctx,result);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%enum%d\n",node.id);return result;
+ let result:i32=ll_id(ctx);ll_begin(ctx,result);ll_load_op(ctx);ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%enum%d\n",node.id);return result;
 }
 
 fn ll_memory(ctx:*BootContext,node:*BootNode)->i32 {

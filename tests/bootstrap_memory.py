@@ -28,8 +28,8 @@ def run(name,command,status=0,diagnostic=None,quiet=False):
  return r
 mem=root/'tests/regressions/memory';extra=root/'tests/regressions/bootstrap_memory'
 run('pthread-platform',[cc,'-std=c11','-O2','-pthread','-c',mem/'pthreads.c','-o',w/'pthreads.o'])
-for name in ['operations','threaded','values']:
- source=(extra if name=='values' else mem)/(name+'.aeth')
+for name in ['operations','threaded','values','qualified','typed_volatile']:
+ source=(root/'tests/regressions/system' if name=='typed_volatile' else extra if name in ('values','qualified') else mem)/(name+'.aeth')
  run(name+'-check',[compiler,'check',source,'-I',root/'stdlib'])
  for backend in ['c','llvm']:
   for level in [0,2]:
@@ -41,6 +41,14 @@ for name in ['operations','threaded','values']:
 for name,message in [('load_release','order'),('store_acquire','order'),('fence_relaxed','order'),('cas_stronger_failure','order'),('runtime_order','compile-time'),('wrong_pointer_width','type mismatch')]:
  run(name,[compiler,'check',mem/'invalid'/(name+'.aeth')],status=1,diagnostic=message)
 invalid={
+ 'dynamic-qualifier':('interface V{fn read(self:&Self)->u32;}struct R{value:u32}impl V for R{fn read(self:&Self)->u32{self.value}}fn main(){let p:*volatile R=0 as *volatile R;let q:&dyn V=&*p as &dyn V;}','volatile qualifier'),
+ 'drop-qualifier':('fn main(){let p:*volatile u32=0 as *volatile u32;let q:*u32=p;}','type mismatch'),
+ 'generic-qualifier':('fn plain<T>(p:*T)->T{*p}fn main(){let p:*volatile u32=0 as *volatile u32;let n:u32=plain(p);}','qualifier'),
+ 'projected-qualifier':('struct Bank{value:u32}fn main(){let p:*volatile Bank=0 as *volatile Bank;let q:&mut u32=&mut p.value;}','type mismatch'),
+ 'pure-annotation':('@volatile fn f()->u32 pure{1}fn main(){}','effect'),
+ 'annotation-eof':('#![no_main] @volatile','declaration'),
+ 'annotation-static':('@volatile static X:u32=0;fn main(){}','function'),
+ 'duplicate-annotation':('@volatile @volatile fn f(){}fn main(){}','duplicate'),
  'reserved-function':('fn __atomic_load_u32(p:*u32)->u32{0}fn main(){}','reserved'),
  'reserved-extern':('extern "C"{fn __atomic_store_u8(p:*u8,v:u8);}fn main(){}','reserved'),
  'reserved-binding':('fn main(){let __volatile_read_u8:i32=0;}','reserved'),
@@ -74,9 +82,25 @@ for backend in ['c','llvm']:
  patterns=([r'load volatile i8\b',r'store volatile i64\b',r'atomicrmw add\b',r'atomicrmw sub\b',r'cmpxchg[^\n]*acq_rel acquire',r'load atomic[^\n]*acquire',r'store atomic[^\n]*release',r'fence seq_cst',r'fence acquire',r'fence release'] if backend=='llvm' else [r'__atomic_load_n\(',r'__atomic_store_n\(',r'__atomic_fetch_add\(',r'__atomic_fetch_sub\(',r'__atomic_compare_exchange_n\(',r'volatile struct __attribute__\(\(packed\)\)'])
  missing=[pattern for pattern in patterns if not re.search(pattern,text)]
  record(backend+'-real-memory-instructions',not missing,missing=missing)
+typed_ir=w/'qualified.ll'
+run('qualified-emit',[compiler,'build',extra/'qualified.aeth','--emit-llvm','-o',typed_ir])
+text=typed_ir.read_text()
+def body(name):
+ match=re.search(r'(?ms)^define[^\n]*@'+name+r'\(.*?^}',text)
+ record(name+'-present',match is not None)
+ return match[0]
+record('qualified-two-preserved',len(re.findall(r'load volatile i32\b',body('qualified_two')))==2)
+local=body('local_storage')
+record('annotated-storage',all(re.search(pattern,local) for pattern in [r'store volatile ptr',r'load volatile ptr',r'store volatile i32',r'load volatile i32']))
+# The zero-sized pointee has no memory access even for an arbitrary sentinel.
+unit=body('qualified_unit')
+record('unit-no-volatile-access',not re.search(r'(load|store) volatile',unit))
 if a.sanitize:
  emitted=w/'values-sanitized.c'
  run('sanitize-emit',[compiler,'build',extra/'values.aeth','--emit-c','-o',emitted])
  run('sanitize-build',[cc,'-O1','-fsanitize=address,undefined','-fno-sanitize-recover=all',emitted,'-o',w/'values-sanitized'])
  run('sanitize-run',[w/'values-sanitized'],quiet=True)
+ for name in ['typed_volatile','qualified']:
+  source=(root/'tests/regressions/system' if name=='typed_volatile' else extra)/(name+'.aeth');emitted=w/(name+'-san.c');exe=w/(name+'-san')
+  run(name+'-san-emit',[compiler,'build',source,'--emit-c','-o',emitted]);run(name+'-san-build',[cc,'-O1','-fsanitize=address,undefined','-fno-sanitize-recover=all',emitted,'-o',exe]);run(name+'-san-run',[exe],quiet=True)
 print(f'{len(rows)} memory checks passed')

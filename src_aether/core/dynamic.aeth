@@ -87,6 +87,7 @@ pub fn boot_dynamic_check(ctx:*BootContext)->bool{
  return !ctx.failed;
 }
 pub fn boot_dynamic_cast(ctx:*BootContext,node:*BootNode,source:*BootType,target:*BootType)->bool{
+ if source.volatile_access{boot_error(ctx,node.token,"dynamic conversion cannot erase a volatile qualifier");return false;}
  if !boot_reference(source)||(target.dynamic_mutable&&source.kind!=BY_MUTREF){boot_error(ctx,node.token,"dynamic conversion requires a checked reference with matching mutability");return false;}
  let mut variant:*BootNode=target.fields;while variant!=0 as *BootNode{if variant.aux==source.inner{
   let value:*BootNode=node.left;value.ty=variant.params.ty;value.next=0 as *BootNode;node.kind=BN_ENUM_VALUE;node.name=variant.name;node.decl=variant;node.ty=target;node.params=value;node.left=0 as *BootNode;return true;
