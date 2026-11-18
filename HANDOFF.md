@@ -2,7 +2,7 @@
 
 ## 本地开发版本
 
-源码在 `/Volumes/WINDOWS/work/AetherLang` 的 `work/aetherlang-upgrade`。最初起点 `aceff15`，本次续做起点 `4cb768c`，macOS/Linux 双宿主冻结为 `423e664`，16 比特异构运行时为 `10355a4`，基础整体验收源码为 `f84e9d4`，自举的静态存储与原生导出至 `8d17061`。用 `git log -1 --oneline` 查看工作树当前提交。完整任务与历史复现见 [主线任务](MAINLINE_TASKS.md)，历次版本见 [升级报告](docs/UPGRADE.md)。
+源码在 `/Volumes/WINDOWS/work/AetherLang` 的 `work/aetherlang-upgrade`。最初起点 `aceff15`，本次续做起点 `4cb768c`，macOS/Linux 双宿主冻结为 `423e664`，16 比特异构运行时为 `10355a4`，基础整体验收源码为 `f84e9d4`，自举共享语义与 JXZ 项目链至 `5951201`。用 `git log -1 --oneline` 查看工作树当前提交。完整任务与历史复现见 [主线任务](MAINLINE_TASKS.md)，历次版本见 [升级报告](docs/UPGRADE.md)。
 
 ## 构建与验收
 
@@ -30,4 +30,6 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 AETHER_CUDAQ_BRIDGE="$WORK/cudaq/libaethe
 
 ## 下一项具体任务
 
-T25 已分别提交动态接口（`e08aa2a`）与协作 async（`0d06551`），联合用例覆盖正在挂起的任务恢复后调用动态接口、闭包及 const generic。T26 以外置 `$WORK/t26-errno/stage2` 为已验证的上一代，自 Aether 源码迁移泛型、枚举、Script 入口和系统存储，直接编译 JXZ 源码。新匹配版本以实际编译和运行判定。T29 在这些改动落地后进行最终打包与联合验收。
+主线已验收 27/29 项。T25 的四种能力联合测试至 `d7bac32`。T26 的上一代种子、固定点和项目运行分别见 `$WORK/t26-{abi,language-integrated,project-lsp}`。`8cfd1a1` 用独立 C 调用端和被调用端验证了 Apple arm64 与 x86_64 SysV 的原生聚合 ABI。`b55a11e` 可对两种源表示检查引用、实例化枚举及方法、传播错误、生成 C/LLVM，并从仓库 JXZ 源码构建 JXZ。该 JXZ 在两后端完成含三包依赖、失效重建、Unicode 参数、失败状态和清理的 42 项命令。相邻代 LLVM IR SHA-256 为 `36c05defcc8adcdda3f972169e2bcd3cc2b7f585e76dceb4b080421364cd188d`。`497bd70` 补上文件模块、内联模块及缺失对象路径，`5951201` 修复所有 match 分支均退出时对函数返回的误判。
+
+接下来在同一自举源码上联合验证紧凑布局、所有者析构、常量泛型和 JXZ 调用的语言服务。用生成的 JXZ 和自举编译器一起跑 jxz/tests/integration.py；T29 待 T26 的共享程序、完整固定点与双宿主归档验收后更新。

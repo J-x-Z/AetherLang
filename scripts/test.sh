@@ -46,6 +46,10 @@ done
 
 python3 tests/bootstrap_core.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-core" --backend "$bootstrap_backend"
 if clang --version >/dev/null 2>&1; then
+    for suite in bootstrap_script bootstrap_methods; do
+        CC=clang python3 "tests/$suite.py" --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" \
+            --sanitized-compiler "$CARGO_TARGET_DIR/bootstrap-core/stage2-sanitized" --work-dir "$CARGO_TARGET_DIR/$suite"
+    done
     CC=clang python3 tests/bootstrap_enums.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-enums" --sanitize
     CC=clang python3 tests/bootstrap_jxz.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-jxz"
     CC=clang python3 tests/core_references.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/core-references"

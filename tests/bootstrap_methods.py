@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
 """Inherent/generic methods use the shared self-hosted signatures and checked references."""
-import argparse,hashlib,json,os,shutil,subprocess
+import argparse,hashlib,json,os,shutil,subprocess,tempfile
 from pathlib import Path
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--seed',type=Path,required=True);p.add_argument('--work-dir',type=Path,required=True);p.add_argument('--no-sanitize',action='store_true');a=p.parse_args()
-r=Path(__file__).resolve().parent.parent;w=a.work_dir.resolve();w.mkdir(parents=True,exist_ok=True);source=w/'source';assert not source.exists(),'use a fresh work directory'
-shutil.copytree(r/'src_aether/core',source);fixtures=w/'fixtures';shutil.copytree(r/'tests/regressions/bootstrap/methods',fixtures);lib=w/'stdlib';shutil.copytree(r/'stdlib',lib)
+p=argparse.ArgumentParser(description=__doc__);mode=p.add_mutually_exclusive_group(required=True)
+mode.add_argument('--seed',type=Path,help='Aether seed: run the independent self-compilation fixed point')
+mode.add_argument('--compiler',type=Path,help='Reuse an already validated compiler; run language cases only')
+p.add_argument('--sanitized-compiler',type=Path,help='Reuse the outer pipeline sanitizer compiler')
+p.add_argument('--work-dir',type=Path,required=True);p.add_argument('--no-sanitize',action='store_true');a=p.parse_args()
+r=Path(__file__).resolve().parent.parent;base=a.work_dir.resolve();base.mkdir(parents=True,exist_ok=True);w=Path(tempfile.mkdtemp(prefix='run-',dir=base));(base/'latest.json').write_text(json.dumps({'run_dir':str(w),'results':str(w/'results.json')},indent=2));source=w/'source'
+if a.seed:shutil.copytree(r/'src_aether/core',source)
+compiler_input=(a.seed or a.compiler).resolve()
+(w/'compiler.json').write_text(json.dumps({'mode':'seed' if a.seed else 'compiler','path':str(compiler_input),'sha256':hashlib.sha256(compiler_input.read_bytes()).hexdigest(),'sanitized_compiler':str(a.sanitized_compiler.resolve()) if a.sanitized_compiler else None},indent=2))
+fixtures=w/'fixtures';shutil.copytree(r/'tests/regressions/bootstrap/methods',fixtures);lib=w/'stdlib';shutil.copytree(r/'stdlib',lib)
 (w/'sources.json').write_text(json.dumps({str(x.relative_to(w)):hashlib.sha256(x.read_bytes()).hexdigest() for directory in [source,fixtures,lib] for x in sorted(directory.rglob('*')) if x.is_file()},indent=2))
 env={**os.environ,'TMPDIR':str(w),'UBSAN_OPTIONS':'halt_on_error=1','ASAN_OPTIONS':'detect_stack_use_after_return=1'};records=[]
 def run(label,args,status=0,contains=None):
  q=subprocess.run(list(map(str,args)),capture_output=True,env=env,timeout=180);out=q.stdout.decode(errors='replace');err=q.stderr.decode(errors='replace');records.append(dict(label=label,args=list(map(str,args)),status=q.returncode,stdout=out,stderr=err));(w/'results.json').write_text(json.dumps(records,indent=2));assert q.returncode==status,(label,q.returncode,out,err)
  if contains:assert contains in out+err,(label,out,err)
  return q
-main=source/'main.aeth';s1=w/'stage1';s2=w/'stage2';s3=w/'stage3'
-run('Aether seed builds methods',[a.seed.resolve(),'build',main,'--backend','c','-O2','-o',s1]);run('methods self LLVM stage2',[s1,'build',main,'--backend','llvm','-O2','-o',s2]);run('methods self LLVM stage3',[s2,'build',main,'--backend','llvm','-O2','-o',s3])
-for stage in [s2,s3]:run(stage.name+'/IR',[stage,main,'--emit-llvm','-o',w/(stage.name+'.ll')])
-assert (w/'stage2.ll').read_bytes()==(w/'stage3.ll').read_bytes(),'LLVM self compiler fixed point mismatch'
+main=source/'main.aeth'
+if a.seed:
+ s1=w/'stage1';s2=w/'stage2';s3=w/'stage3'
+ run('Aether seed builds methods',[compiler_input,'build',main,'--backend','c','-O2','-o',s1]);run('methods self LLVM stage2',[s1,'build',main,'--backend','llvm','-O2','-o',s2]);run('methods self LLVM stage3',[s2,'build',main,'--backend','llvm','-O2','-o',s3])
+ for stage in [s2,s3]:run(stage.name+'/IR',[stage,main,'--emit-llvm','-o',w/(stage.name+'.ll')])
+ assert (w/'stage2.ll').read_bytes()==(w/'stage3.ll').read_bytes(),'LLVM self compiler fixed point mismatch'
+else:s3=compiler_input
 for name in ['values.aeth','modules.aeth','statistics.aeth','script.ath']:
  path=fixtures/name;run(name+'/check',[s3,'check',path,'-I',lib])
  for b in ['c','llvm']:
@@ -39,9 +49,12 @@ negative={
  'temporary_escape':(base+'fn main(){let reference:&i64=Box::new(7).get_ref();let value:i64=*reference;}','reference-valued block'),
  'live_borrow':(base+'fn main(){let mut value:Box<i64>=Box::new(7);let reference:&i64=value.get_ref();value.set(8);let copied:i64=*reference;}','live reference loan'),
 }
-if not a.no_sanitize:
+san=None
+if not a.no_sanitize and a.sanitized_compiler:san=a.sanitized_compiler.resolve()
+if not a.no_sanitize and a.seed and san is None:
  c=w/'compiler.c';san=w/'compiler-san';run('compiler/san/emit',[s3,main,'--emit-c','-o',c]);run('compiler/san/build',['clang','-x','c','-std=c11','-O1','-fsanitize=address,undefined',c,'-o',san])
 for name,(text,message) in negative.items():
  path=w/(name+'.aeth');path.write_text(text);run(name+'/reject',[s3,'check',path,'-I',fixtures],1,message)
- if not a.no_sanitize:run(name+'/san-reject',[san,'check',path,'-I',fixtures],1,message)
-print(f'{len(records)} methods checks passed; LLVM self-host fixed point; {w/"results.json"}')
+ if san:run(name+'/san-reject',[san,'check',path,'-I',fixtures],1,message)
+phase='LLVM self-host fixed point' if a.seed else 'reused compiler; language cases only'
+print(f'{len(records)} methods checks passed; {phase}; {w/"results.json"}')

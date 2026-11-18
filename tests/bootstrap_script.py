@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """Aether-built Script frontend: frozen self compilation and ordinary native semantics."""
-import argparse,hashlib,json,os,shutil,subprocess
+import argparse,hashlib,json,os,shutil,subprocess,tempfile
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--seed',type=Path,required=True,help='Existing Aether-built Core compiler, not Rust aethc')
+mode=p.add_mutually_exclusive_group(required=True)
+mode.add_argument('--seed',type=Path,help='Aether-built seed: run the independent self-compilation fixed point')
+mode.add_argument('--compiler',type=Path,help='Reuse an already validated compiler; run language cases only')
+p.add_argument('--sanitized-compiler',type=Path,help='Reuse the outer pipeline sanitizer compiler for input checking')
 p.add_argument('--work-dir',type=Path,required=True)
 p.add_argument('--core-source',type=Path,help='Optional frozen Core source directory for coordinated development')
 p.add_argument('--backends',nargs='+',choices=['c','llvm'],default=['c','llvm'])
 p.add_argument('--no-sanitize',action='store_true')
-a=p.parse_args();repo=Path(__file__).resolve().parent.parent;work=a.work_dir.resolve();work.mkdir(parents=True,exist_ok=True)
-snapshot=work/'source';assert not snapshot.exists(),'use a fresh work dir to preserve the previous source evidence';shutil.copytree(a.core_source or repo/'src_aether/core',snapshot)
+a=p.parse_args();repo=Path(__file__).resolve().parent.parent;base=a.work_dir.resolve();base.mkdir(parents=True,exist_ok=True)
+work=Path(tempfile.mkdtemp(prefix='run-',dir=base));(base/'latest.json').write_text(json.dumps({'run_dir':str(work),'results':str(work/'results.json')},indent=2))
+snapshot=work/'source'
+if a.seed:shutil.copytree(a.core_source or repo/'src_aether/core',snapshot)
+compiler_input=(a.seed or a.compiler).resolve()
+(work/'compiler.json').write_text(json.dumps({'mode':'seed' if a.seed else 'compiler','path':str(compiler_input),'sha256':hashlib.sha256(compiler_input.read_bytes()).hexdigest(),'sanitized_compiler':str(a.sanitized_compiler.resolve()) if a.sanitized_compiler else None},indent=2))
 fixtures=work/'fixtures'
 for directory in ['tests/regressions/script','tests/regressions/bootstrap/script']:
  shutil.copytree(repo/directory,fixtures/directory)
@@ -26,12 +33,15 @@ def run(label,args,expected=0,output=None,contains=None):
  if output is not None:assert r.stdout==output,(label,r.stdout,output)
  if contains:assert contains in r.stdout+r.stderr,(label,r.stdout,r.stderr)
  return r
-main=snapshot/'main.aeth';s1=work/'stage1';s2=work/'stage2';s3=work/'stage3'
-run('Aether seed builds Script frontend',[a.seed.resolve(),'build',main,'--backend','c','-O2','-o',s1])
-run('new frontend self compiles LLVM stage2',[s1,'build',main,'--backend','llvm','-O2','-o',s2])
-run('LLVM stage2 self compiles stage3',[s2,'build',main,'--backend','llvm','-O2','-o',s3])
-for stage in [s2,s3]:run(stage.name+'/self emit',[stage,main,'--emit-llvm','-o',work/(stage.name+'.ll')])
-assert (work/'stage2.ll').read_bytes()==(work/'stage3.ll').read_bytes(),'self-hosted Script compiler LLVM fixed point mismatch'
+main=snapshot/'main.aeth'
+if a.seed:
+ s1=work/'stage1';s2=work/'stage2';s3=work/'stage3'
+ run('Aether seed builds Script frontend',[compiler_input,'build',main,'--backend','c','-O2','-o',s1])
+ run('new frontend self compiles LLVM stage2',[s1,'build',main,'--backend','llvm','-O2','-o',s2])
+ run('LLVM stage2 self compiles stage3',[s2,'build',main,'--backend','llvm','-O2','-o',s3])
+ for stage in [s2,s3]:run(stage.name+'/self emit',[stage,main,'--emit-llvm','-o',work/(stage.name+'.ll')])
+ assert (work/'stage2.ll').read_bytes()==(work/'stage3.ll').read_bytes(),'self-hosted Script compiler LLVM fixed point mismatch'
+else:s3=compiler_input
 cases={fixtures/f'tests/regressions/script/{name}.ath':expected for name,expected in [('compute','338350\n25\n'),('branches','quoted: "Aether"\\path\n'),('float_math','3.25\n'),('compound',''),('loop_hygiene',''),('param_hygiene',''),('nested_hygiene','')]}
 cases[fixtures/'examples/hello.ath']='Hello from Script!\n'
 cases[fixtures/'tests/regressions/literals/script.ath']='common:\n\r\t\\\"\'\n\x1b\n\x1b[31mred\x1b[0m\nAAAFA1'+'\nAé中😀'+chr(0x10ffff)+'\nraw:é中😀\nnul:\n'
@@ -42,10 +52,14 @@ for source,expected in cases.items():
  for b in a.backends:
   for o in [0,2]:
    exe=work/f'{source.stem}-{b}-{o}';run(f'{source.stem}/{b}/{o}/build',[s3,'build',source,'--backend',b,f'-O{o}','-o',exe]);run(f'{source.stem}/{b}/{o}/run',[exe],output=expected)
+san=None
 if not a.no_sanitize:
- source=work/'compiler.c';san=work/'stage-sanitized'
- run('san/compiler emit',[s3,main,'--emit-c','-o',source]);run('san/compiler build',['clang','-x','c','-std=c11','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',source,'-o',san])
- for source in cases:run(source.stem+'/san-check',[san,'check',source])
+ if a.sanitized_compiler:san=a.sanitized_compiler.resolve()
+ elif a.seed:
+  source=work/'compiler.c';san=work/'stage-sanitized'
+  run('san/compiler emit',[s3,main,'--emit-c','-o',source]);run('san/compiler build',['clang','-x','c','-std=c11','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',source,'-o',san])
+ if san:
+  for source in cases:run(source.stem+'/san-check',[san,'check',source])
  source=work/'control.c';exe=work/'control-san';run('san/app emit',[s3,fixtures/'tests/regressions/bootstrap/script/control.ath','--emit-c','-o',source]);run('san/app build',['clang','-std=c11','-O1','-fsanitize=address,undefined',source,'-o',exe]);run('san/app run',[exe],output='')
 negative={
  'one_branch':('def main():\n    if True:\n        value = 1\n    return value\n','before assignment'),
@@ -63,5 +77,6 @@ negative={
 }
 for name,(text,message) in negative.items():
  source=work/(name+'.ath');source.write_text(text);run(name+'/reject',[s3,'check',source,'-I',fixtures/'tests/regressions/bootstrap/script'],1,contains=message)
- if not a.no_sanitize:run(name+'/san-reject',[san,'check',source,'-I',fixtures/'tests/regressions/bootstrap/script'],1,contains=message)
-print(f'{len(records)} Script bootstrap checks passed; LLVM self-compile fixed point; {work/"results.json"}')
+ if san:run(name+'/san-reject',[san,'check',source,'-I',fixtures/'tests/regressions/bootstrap/script'],1,contains=message)
+phase='LLVM self-compile fixed point' if a.seed else 'reused compiler; language cases only'
+print(f'{len(records)} Script bootstrap checks passed; {phase}; {work/"results.json"}')
