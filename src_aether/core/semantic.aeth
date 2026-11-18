@@ -1,6 +1,7 @@
 use model::*;
 use runtime::*;
 use type_model::*;
+use specialize::*;
 // Core v1 type and scope checker, executed by every bootstrap stage.
 // Raw pointers are a manual memory boundary. No borrow-checking claim is made.
 extern "C" { fn strtod(text:*u8,end:**u8)->f64; }
@@ -34,13 +35,34 @@ fn boot_bind(ctx:*BootContext,node:*BootNode)->bool {
  binding.name=node.name;binding.node=node;binding.depth=ctx.depth;
  binding.next=ctx.bindings;ctx.bindings=binding;return true;
 }
-fn boot_type_valid(ctx:*BootContext,ty:*BootType,token:*BootToken,allow_void:bool)->bool {
- if ty==(0 as *BootType) { boot_error(ctx,token,"missing type");return false; }
- if ty.kind==BY_STRUCT && !ty.complete { boot_error(ctx,token,"unknown struct type");return false; }
- if ty.kind==BY_PTR { return boot_type_valid(ctx,ty.inner,token,true); }
- if ty.kind==BY_ARRAY {if !boot_type_valid(ctx,ty.inner,token,false){return false;}return boot_layout(ctx,ty,0,token);}
+fn boot_type_shape(ctx:*BootContext,ty:*BootType,token:*BootToken,abstract:bool,depth:i32)->bool{
+ if ty==(0 as *BootType){boot_error(ctx,token,"missing type");return false;}
+ if depth>256{boot_error(ctx,token,"type validation nesting exceeds 256");return false;}
+ if abstract&&boot_type_concrete(ty,0){return boot_type_valid(ctx,ty,token,true);}
+ if ty.kind==BY_PARAMETER{if abstract{return true;}boot_error(ctx,token,"unresolved generic parameter");return false;}
+ if ty.kind==BY_TEMPLATE{boot_error(ctx,token,"generic type requires explicit arguments or an initializer context");return false;}
+ if ty.kind==BY_APPLICATION{
+  if !abstract{boot_error(ctx,token,"unresolved generic type arguments");return false;}
+  let mut arg:*BootTypeArgument=ty.arguments;while arg!=(0 as *BootTypeArgument){if !boot_type_shape(ctx,arg.ty,token,true,depth+1){return false;}arg=arg.next;}return true;
+ }
+ if ty.checked&&!abstract{return true;}
+ if ty.kind==BY_STRUCT&&!ty.complete{boot_error(ctx,token,"unknown struct type");return false;}
+ if !abstract{ty.checked=true;}
+ if ty.kind==BY_PTR{return boot_type_shape(ctx,ty.inner,token,abstract,depth+1);}
+ if ty.kind==BY_ARRAY{
+  if !boot_type_shape(ctx,ty.inner,token,abstract,depth+1){return false;}
+  if abstract{return true;}return boot_layout(ctx,ty,0,token);
+ }
+ if ty.kind==BY_STRUCT{
+  let mut field:*BootNode=ty.fields;while field!=(0 as *BootNode){if !boot_type_shape(ctx,field.ty,field.token,abstract,depth+1){return false;}field=field.next;}
+  if !abstract{if !boot_struct_finite(ctx,ty,0 as *BootTypeTrail,token){return false;}return boot_layout(ctx,ty,0,token);}
+ }
  return true;
 }
+fn boot_type_valid(ctx:*BootContext,ty:*BootType,token:*BootToken,allow_void:bool)->bool {
+ return boot_type_shape(ctx,ty,token,false,0);
+}
+
 fn boot_struct_finite(ctx:*BootContext,ty:*BootType,trail:*BootTypeTrail,token:*BootToken)->bool {
  if ty.kind==BY_ARRAY{return boot_struct_finite(ctx,ty.inner,trail,token);}
  if ty.kind!=BY_STRUCT { return true; }
@@ -115,7 +137,7 @@ fn boot_place_addressable(ctx:*BootContext,node:*BootNode)->bool {
  if node.kind==BN_UNARY && node.op==42 { return true; }
  boot_error(ctx,node.token,"address requires a place");return false;
 }
-fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType {
+pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType {
  if ctx.failed || node==(0 as *BootNode) { return 0 as *BootType; }
  let kind:i32=node.kind;
  if kind==BN_INT {
@@ -168,6 +190,7 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   node.ty=boot_array_type(ctx,element,node.value as u64);if !boot_type_valid(ctx,node.ty,node.token,false){return 0 as *BootType;}return node.ty;
  }
  if kind==BN_STRUCT_VALUE {
+  if node.ty.kind==BY_TEMPLATE&&expected!=(0 as *BootType)&&expected.base==node.ty{node.ty=expected;}
   if !boot_type_valid(ctx,node.ty,node.token,false) || node.ty.kind!=BY_STRUCT {boot_error(ctx,node.token,"struct initializer requires a struct type");return 0 as *BootType;}
   let mut argument:*BootNode=node.params;
   while argument!=(0 as *BootNode){
@@ -190,7 +213,7 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
  if kind==BN_SIZEOF||kind==BN_ALIGNOF {
   if !boot_type_valid(ctx,node.aux,node.token,false) { return 0 as *BootType; }
   if !boot_layout(ctx,node.aux,0,node.token){return 0 as *BootType;}
-  node.ty=boot_type(ctx,BY_I64);return node.ty;
+  node.ty=boot_type(ctx,BY_U64);return node.ty;
  }
  if kind==BN_CAST {
   let target:*BootType=node.ty;
@@ -255,10 +278,11 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   boot_error(ctx,node.token,"invalid unary operands");return 0 as *BootType;
  }
  if kind==BN_CALL {
-  let function:*BootNode=boot_lookup(ctx,node.name,node.lookup,node.token);
+  let mut function:*BootNode=boot_lookup(ctx,node.name,node.lookup,node.token);
   if function==(0 as *BootNode) { boot_error(ctx,node.token,"unknown function");return 0 as *BootType; }
   if function.kind!=BN_FN { boot_error(ctx,node.token,"called name is not a function");return 0 as *BootType; }
   if node.lookup==(0 as *BootModule) && boot_find_binding(ctx,node.name,node.token)!=(0 as *BootNode) { boot_error(ctx,node.token,"value binding shadows function name");return 0 as *BootType; }
+  if function.generics!=(0 as *BootNode){function=boot_check_generic_call(ctx,node,function,expected);if ctx.failed{return 0 as *BootType;}}
   node.decl=function;
   let mut param:*BootNode=function.params;let mut arg:*BootNode=node.params;
   while param!=(0 as *BootNode) {
@@ -278,16 +302,18 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   node.ty=function.ty;return node.ty;
  }
  if kind==BN_BINARY {
-  let op:i32=node.op;
+  let op:i32=node.op;let mut operand_context:*BootType=expected;
+  if op==BT_EQ||op==BT_NE||op==60||op==62||op==BT_LE||op==BT_GE{operand_context=0 as *BootType;}
+  if op==BT_AND||op==BT_OR{operand_context=boot_type(ctx,BY_BOOL);}
   let mut left:*BootType=0 as *BootType;let mut right:*BootType=0 as *BootType;
   // Contextual literals inherit their nonliteral peer's type. Checking types
   // does not change runtime evaluation order, which belongs to the emitter.
   if boot_literal_number(node.left) && !boot_literal_number(node.right) {
-   right=boot_check_expr(ctx,node.right,expected);
+   right=boot_check_expr(ctx,node.right,operand_context);
    if ctx.failed { return 0 as *BootType; }
    left=boot_check_expr(ctx,node.left,right);
   } else {
-   left=boot_check_expr(ctx,node.left,expected);
+   left=boot_check_expr(ctx,node.left,operand_context);
    if ctx.failed { return 0 as *BootType; }
    let mut hint:*BootType=left;
    if left.kind==BY_PTR { hint=0 as *BootType; }
@@ -425,7 +451,7 @@ fn boot_constant_checked(ctx:*BootContext,node:*BootNode)->bool {
 }
 fn boot_check_entry(ctx:*BootContext,item:*BootNode)->bool {
  if strcmp(item.name,"main")!=0 { return true; }
- if (item.flags&2)!=0 {boot_error(ctx,item.token,"main requires a non-foreign i32 or void signature");return false;}
+ if (item.flags&2)!=0||item.generics!=(0 as *BootNode) {boot_error(ctx,item.token,"main requires a non-foreign i32 or void signature");return false;}
  if item.owner!=ctx.root_module {return true;}
  if (item.flags&2)!=0 || (item.flags&4)!=0 || (item.ty.kind!=BY_I32 && item.ty.kind!=BY_VOID) {
   boot_error(ctx,item.token,"main requires a non-foreign i32 or void signature");return false;
@@ -457,6 +483,18 @@ pub fn boot_check(ctx:*BootContext)->bool {
    if prior.owner==item.owner && strcmp(prior.name,item.name)==0 { boot_error(ctx,item.token,"duplicate top-level name");return false; }
    if prior.kind==BN_FN && item.kind==BN_FN && (prior.flags&2)!=0 && (item.flags&2)!=0 && strcmp(prior.name,item.name)==0 && !boot_foreign_same(prior,item) {boot_error(ctx,item.token,"incompatible cross-module foreign declarations");return false;}
    prior=prior.next;
+  }
+  if item.generics!=(0 as *BootNode){
+   if item.kind==BN_FN&&!boot_check_entry(ctx,item){return false;}
+   if item.kind==BN_FN&&!boot_type_shape(ctx,item.ty,item.token,true,0){return false;}
+   let mut field:*BootNode=item.params;if item.kind==BN_STRUCT{field=item.body;}
+   let first:*BootNode=field;
+   while field!=(0 as *BootNode){
+    if !boot_type_shape(ctx,field.ty,field.token,true,0){return false;}
+    let mut previous:*BootNode=first;while previous!=field{if strcmp(previous.name,field.name)==0{boot_error(ctx,field.token,"duplicate generic declaration member");return false;}previous=previous.next;}
+    field=field.next;
+   }
+   item=item.next;continue;
   }
   if item.kind==BN_STRUCT {
    let mut field:*BootNode=item.body;
@@ -506,11 +544,12 @@ pub fn boot_check(ctx:*BootContext)->bool {
    if !boot_constant_checked(ctx,item.left) { return false; }
    item.value=item.left.value;
   }
-  if item.kind==BN_FN && (item.flags&2)==0 {
+  if item.kind==BN_FN && (item.flags&2)==0 && item.generics==(0 as *BootNode) {
+   if !boot_type_valid(ctx,item.ty,item.token,true){return false;}
    if item.ty.kind!=BY_VOID{boot_value_tail(item.body,BN_RETURN);}
    ctx.function=item;ctx.depth=0;ctx.loop_depth=0;ctx.bindings=0 as *BootBinding;
    let mut param:*BootNode=item.params;
-   while param!=(0 as *BootNode) { if !boot_bind(ctx,param) { return false; } param=param.next; }
+   while param!=(0 as *BootNode) { if !boot_type_valid(ctx,param.ty,param.token,false){return false;}if !boot_bind(ctx,param) { return false; } param=param.next; }
    boot_check_statement(ctx,item.body);
    if !ctx.failed && item.ty.kind!=BY_VOID && (boot_flow(item.body)&1)!=0 { boot_error(ctx,item.token,"function may finish without returning a value"); }
    ctx.bindings=0 as *BootBinding;ctx.function=0 as *BootNode;
@@ -518,4 +557,43 @@ pub fn boot_check(ctx:*BootContext)->bool {
   item=item.next;
  }
  return !ctx.failed;
+}
+
+fn boot_check_generic_call(ctx:*BootContext,node:*BootNode,function:*BootNode,expected:*BootType)->*BootNode{
+ let bindings:*BootTypeBinding=boot_type_bindings(ctx,function.generics);if ctx.failed{return 0 as *BootNode;}
+ if expected!=(0 as *BootType)&&!boot_infer_type(ctx,function.ty,expected,bindings,node.token,0){return 0 as *BootNode;}
+ let mut pass:i32=0;
+ while pass<2&&!ctx.failed{
+  let mut param:*BootNode=function.params;let mut arg:*BootNode=node.params;
+  while param!=(0 as *BootNode)&&arg!=(0 as *BootNode){
+   // Infer from typed operands before contextual numeric literals.
+   let contextual:bool=boot_contextual_expr(ctx,arg);
+   if pass==1||!contextual{
+    let hint:*BootType=boot_generic_hint(ctx,param.ty,bindings,arg.token);if ctx.failed{return 0 as *BootNode;}
+    let actual:*BootType=boot_check_expr(ctx,arg,hint);if ctx.failed{return 0 as *BootNode;}
+    if !boot_infer_type(ctx,param.ty,actual,bindings,arg.token,0){return 0 as *BootNode;}
+   }
+   param=param.next;arg=arg.next;
+  }
+  if param!=(0 as *BootNode)||arg!=(0 as *BootNode){boot_error(ctx,node.token,"generic function value argument count mismatch");return 0 as *BootNode;}
+  pass=pass+1;
+ }
+ return boot_function_instance(ctx,function,bindings,node.token);
+}
+
+fn boot_contextual_tail(ctx:*BootContext,node:*BootNode)->bool{
+ if node==(0 as *BootNode){return false;}
+ if node.kind==BN_BLOCK{let mut last:*BootNode=node.body;if last==(0 as *BootNode){return false;}while last.next!=(0 as *BootNode){last=last.next;}return boot_contextual_tail(ctx,last);}
+ if node.kind==BN_IF{return boot_contextual_tail(ctx,node.body)&&boot_contextual_tail(ctx,node.third);}
+ if node.kind==BN_YIELD{return boot_contextual_expr(ctx,node.left);}
+ return node.kind==BN_RETURN||node.kind==BN_WHILE;
+}
+fn boot_contextual_expr(ctx:*BootContext,node:*BootNode)->bool{
+ if boot_literal_number(node){return true;}
+ if node.kind==BN_ARRAY{let mut value:*BootNode=node.params;while value!=(0 as *BootNode){if !boot_contextual_expr(ctx,value){return false;}value=value.next;}return true;}
+ if node.kind==BN_REPEAT{return boot_contextual_expr(ctx,node.left);}
+ if node.kind==BN_VALUE{return boot_contextual_tail(ctx,node.body);}
+ if node.kind==BN_STRUCT_VALUE&&node.ty.kind==BY_TEMPLATE{return true;}
+ if node.kind==BN_CALL&&node.params==(0 as *BootNode){let function:*BootNode=boot_lookup(ctx,node.name,node.lookup,node.token);return function!=(0 as *BootNode)&&function.generics!=(0 as *BootNode);}
+ return false;
 }

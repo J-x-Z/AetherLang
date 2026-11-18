@@ -30,7 +30,7 @@ positive = {
     'scalar_and_pointer_casts': 'fn f(value:f64,p:*u8)->i32{let n:i32=value as i32;let q:*i32=p as *i32;let bits:u64=q as u64;return n+(bits as i32);}fn main()->i32{return 0;}',
     'address_and_index': 'fn main()->i32{let mut value:i32=1;let pointer:*i32=&mut value;pointer[0]=2;return value-2;}',
     'foreign_varargs': 'extern "C"{fn printf(format:*u8,...)->i32;}fn main()->i32{printf("%d %f",1,2.0);return 0;}',
-    'sizeof_forward': 'struct A{next:*A,value:i32}fn main()->i32{let bytes:i64=size_of(A);return 0;}',
+    'sizeof_forward': 'struct A{next:*A,value:i32}fn main()->i32{let bytes:usize=size_of(A);return 0;}',
 }
 # These bytes are an independent Unicode/ASCII oracle, including embedded NUL.
 # The same program is executed below so acceptance alone cannot hide bad UTF-8
@@ -73,6 +73,7 @@ negative = {
     'too_many_arguments': ('fn f()->i32{return 0;}fn main()->i32{return f(1);}', 'too many'),
     'bad_return_type': ('fn main()->i32{return true;}', 'type mismatch'),
     'bare_value_return': ('fn main()->i32{return;}', 'return needs'),
+    'layout_unsigned_type': ('fn main(){let bytes:i64=size_of(i32);}', 'type mismatch'),
     'void_value_return': ('fn f(){return 1;}fn main()->i32{return 0;}', 'void function'),
     'missing_return': ('fn main()->i32{let value:i32=1;}', 'without returning'),
     'partial_return': ('fn f(x:bool)->i32{if x{return 1;}}fn main()->i32{return 0;}', 'without returning'),

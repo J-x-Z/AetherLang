@@ -128,7 +128,16 @@ escapes to a Unicode scalar such as `\u{e9}` (UTF-8 `c3 a9`), or write numeric
 Core still has no character-literal syntax. The semantic corpus includes
 native byte checks for UTF-8 boundaries, NUL, ASCII escapes, and raw Unicode.
 
-The bootstrap compiler still rejects generics, enums, methods,
+Generic structs and functions with type parameters are instantiated as distinct
+concrete layouts and function bodies. Calls infer types from result annotations
+and typed arguments before contextual literals; missing or conflicting
+information is an error. Nested instances, recursive pointer structures, Unit
+payloads, array arguments and recursive generic functions use the same rules.
+Each instantiated body is checked and emitted normally; as in the primary
+compiler, unused function templates do not establish body type correctness.
+Trait bounds, const parameters and generic aliases are not supported yet.
+
+The bootstrap compiler still rejects enums, methods,
 references, attributes and other syntax outside this subset. These features
 remain available in the primary compiler. The Core compiler targets the
 existing 64-bit host C ABI; its `usize`/`isize` and libc declarations do not yet

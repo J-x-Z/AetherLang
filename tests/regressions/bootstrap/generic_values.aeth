@@ -1,0 +1,37 @@
+extern "C"{fn puts(s:*u8)->i32;fn malloc(size:usize)->*void;fn free(p:*void);}
+struct Box<T>{value:T}
+struct Link<T>{value:T,next:*Link<T>}
+fn identity<T>(value:T)->T{value}
+fn make<T>(value:T)->Box<T>{Box{value:value}}
+fn read<T>(value:*Box<T>)->T{value.value}
+fn nested<T>(value:T)->Box<Box<T>>{Box{value:make(value)}}
+fn recursive<T>(depth:i32,value:T)->T{if depth==0{return value;}recursive(depth-1,value)}
+fn choose<T>(a:T,b:T)->T{a}
+fn first<T>(values:[T;2],fallback:T)->T{values[0]}
+fn byte()->u8{4}
+fn width<T>(a:T,b:T)->usize{size_of(T)}
+fn array_width<T>(a:[T;2],b:T)->usize{size_of(T)}
+fn null<T>()->*T{0 as *T}
+fn link_new<T>(value:T)->*Link<T>{
+ let pointer:*Link<T>=malloc(size_of(Link<T>) as usize) as *Link<T>;
+ if pointer!=0 as *Link<T>{pointer.value=value;pointer.next=0 as *Link<T>;}pointer
+}
+fn main()->i32{
+ let a:Box<i64>=make(42);let b:Box<u8>=make(7);
+ if read(&a as *Box<i64>)!=42||read(&b as *Box<u8>)!=7{return 1;}
+ let x:Box<Box<i32>>=nested(9);if x.value.value!=9{return 2;}
+ let unit:()=identity(());let c:Box<()>=make(unit);if size_of(Box<()>)!=0{return 3;}
+ let literal:i32=identity(5);if literal!=5||recursive(10,41)!=41{return 4;}
+ let explicit:Box<i32>=Box{value:6};if explicit.value!=6{return 5;}
+ let link:Link<i32>=Link{value:11,next:0 as *Link<i32>};if link.value!=11{return 6;}
+ let small:u8=7;let from_array:u8=first([2,3],small);if from_array!=2{return 13;}
+ if width(1,byte())!=1||array_width([1,2],small)!=1||width(if true{1}else{2},small)!=1{return 16;}
+ let from_call:u8=choose(1,byte());if from_call!=1{return 14;}
+ let from_block:u8=choose(if true{1}else{2},small);if from_block!=1{return 15;}let inferred:u8=choose(1,small);if inferred!=1{return 7;}
+ let pointer:*Link<i64>=link_new(123);if pointer==0 as *Link<i64>{return 8;}
+ let empty:*Link<i64>=null();if empty!=0 as *Link<i64>{return 9;}
+ let actual:i64=pointer.value;free(pointer as *void);if actual!=123{return 10;}
+ let array:Box<[u8;3]>=make([1,2,3]);if array.value[2]!=3{return 11;}
+ if size_of(Box<u8>)!=1||size_of(Box<i64>)!=8||size_of(Box<[u8;3]>)!=3{return 12;}
+ puts("generics=ok");return 0;
+}

@@ -64,7 +64,7 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
  }
  item=ctx.program.body;
  while item!=(0 as *BootNode)&&!ctx.failed{
-  if item.kind==BN_FN&&(item.flags&2)==0{
+  if item.kind==BN_FN&&(item.flags&2)==0&&item.generics==(0 as *BootNode){
    ctx.llvm_serial=0;ctx.llvm_break=0;ctx.llvm_continue=0;ll_signature(ctx,item);ll_text(ctx," {\n");ll_label(ctx,0);
    ll_allocas(ctx,item.params);ll_allocas(ctx,item.body);
    let mut param:*BootNode=item.params;while param!=(0 as *BootNode){ll_text(ctx,"  store ");ll_type(ctx,param.ty);fprintf(ctx.output," %%arg%d, ptr %%v%d\n",param.id,param.id);param=param.next;}

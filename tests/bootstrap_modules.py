@@ -147,7 +147,28 @@ positive('block-values', {'main.aeth':(root/'tests/regressions/bootstrap/block_v
 positive('unit-values', {'main.aeth':(root/'tests/regressions/bootstrap/unit_values.aeth').read_text()},
          expected='unit-values=ok\n',levels=('0','2'))
 
+positive('generic-values', {'main.aeth':(root/'tests/regressions/bootstrap/generic_values.aeth').read_text()},
+         expected='generics=ok\n',levels=('0','2'))
+positive('generic-module-identity', {
+ 'main.aeth':'use a::{Box,make,get};use b;use b::make as other;fn main()->i32{let a:Box<i32>=make(42);let b:b::Box<u8>=other(7);if get(a)!=42||b.value!=7{return 1;}return 0;}',
+ 'a.aeth':'fn private(x:i32)->i32{x+1}pub struct Box<T>{value:T}pub fn make<T>(value:T)->Box<T>{let n:i32=private(0);Box{value:value}}pub fn get<T>(box:Box<T>)->T{box.value}',
+ 'b.aeth':'fn private(x:i32)->i32{x+10}pub struct Box<T>{value:T}pub fn make<T>(value:T)->Box<T>{Box{value:value}}'},levels=('0','2'))
+
 bad = {
+ 'generic-inference-missing': ({'main.aeth':'fn null<T>()->*T{0 as *T}fn main(){null();}'}, 'cannot infer all'),
+ 'generic-inference-conflict': ({'main.aeth':'fn same<T>(a:T,b:T)->T{a}fn main(){let a:i32=1;let b:u8=2;same(a,b);}'}, 'conflicting generic'),
+ 'generic-body-type': ({'main.aeth':'fn wrong<T>(value:T)->i32{value}fn main(){let x:i32=wrong(true);}'}, 'type mismatch'),
+ 'generic-body-name': ({'main.aeth':'fn wrong<T>(value:T)->T{absent}fn main(){let x:i32=wrong(1);}'}, 'unknown value name'),
+ 'generic-type-arity': ({'main.aeth':'struct Box<T>{value:T}fn main(){let p:*Box<i32,u8>=0 as *Box<i32,u8>;}'}, 'argument count'),
+ 'generic-duplicate-parameter': ({'main.aeth':'fn bad<T,T>(x:T)->T{x}fn main(){}'}, 'duplicate generic parameter'),
+ 'generic-duplicate-field': ({'main.aeth':'struct Bad<T>{x:T,x:i32}fn main(){}'}, 'duplicate generic declaration'),
+ 'generic-unknown-field': ({'main.aeth':'struct Bad<T>{x:Missing,y:T}fn main(){}'}, 'unknown struct type'),
+ 'generic-recursive-value': ({'main.aeth':'struct Bad<T>{x:Bad<T>,y:T}fn main(){let p:*Bad<i32>=0 as *Bad<i32>;}'}, 'recursive struct'),
+ 'generic-layout-overflow': ({'main.aeth':'struct Box<T>{x:T}fn main(){let p:*Box<[i64;1152921504606846976]>=0 as *Box<[i64;1152921504606846976]>;}'}, 'array object exceeds'),
+ 'generic-main': ({'main.aeth':'fn main<T>()->i32{0}'}, 'main requires'),
+ 'generic-foreign': ({'main.aeth':'extern "C"{fn f<T>(value:T);}fn main(){}'}, 'foreign generic'),
+ 'generic-literal-range': ({'main.aeth':'fn id<T>(value:T)->T{value}fn main(){let x:u8=id(256);}'}, 'outside its type range'),
+ 'generic-nominal': ({'main.aeth':'use a;use b;fn main(){let a:a::Box<i32>=a::Box{value:1};b::take(a);}', 'a.aeth':'pub struct Box<T>{value:T}', 'b.aeth':'pub struct Box<T>{value:T}pub fn take<T>(value:Box<T>){}'}, 'generic argument type mismatch'),
  'foreign-unit-parameter': ({'main.aeth':'extern "C"{fn foreign(value:());}fn main(){}'}, 'foreign unit parameter ABI'),
  'unit-arithmetic': ({'main.aeth':'fn main(){let x:()=()+();}'}, 'invalid binary operands'),
  'value-missing-else': ({'main.aeth':'fn main(){let flag:bool=false;let x:i32=if flag{1};}'}, 'without yielding'),

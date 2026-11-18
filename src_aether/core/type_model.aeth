@@ -10,6 +10,7 @@ pub fn boot_array_type(ctx:*BootContext,inner:*BootType,count:u64)->*BootType {
 pub fn boot_normal_type(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->*BootType {
  if ty==(0 as *BootType)||ctx.failed{return ty;}
  if depth>256{boot_error(ctx,token,"cyclic or excessively deep type alias");return 0 as *BootType;}
+ if ty.kind==BY_APPLICATION{return boot_expand_type(ctx,ty,depth+1,token);}
  if ty.kind==BY_ALIAS{return boot_normal_type(ctx,ty.inner,depth+1,token);}
  if ty.kind==BY_PTR||ty.kind==BY_ARRAY{
   let inner:*BootType=boot_normal_type(ctx,ty.inner,depth+1,token);if inner==(0 as *BootType){return inner;}
@@ -100,4 +101,77 @@ pub fn boot_value_tail(node:*BootNode,kind:i32){
  }
  if node.kind==BN_IF{boot_value_tail(node.body,kind);boot_value_tail(node.third,kind);return;}
  if node.kind==BN_EXPR&&(node.flags&16)!=0{node.kind=kind;}
+}
+
+pub fn boot_type_arguments_same(a:*BootTypeArgument,b:*BootTypeArgument)->bool{
+ let mut left:*BootTypeArgument=a;let mut right:*BootTypeArgument=b;
+ while left!=(0 as *BootTypeArgument)&&right!=(0 as *BootTypeArgument){if left.ty!=right.ty{return false;}left=left.next;right=right.next;}
+ return left==(0 as *BootTypeArgument)&&right==(0 as *BootTypeArgument);
+}
+pub fn boot_type_argument(ctx:*BootContext,ty:*BootType)->*BootTypeArgument{
+ let arg:*BootTypeArgument=boot_alloc(ctx,size_of(BootTypeArgument) as u64) as *BootTypeArgument;if arg!=(0 as *BootTypeArgument){arg.ty=ty;}return arg;
+}
+pub fn boot_apply_type(ctx:*BootContext,base:*BootType,arguments:*BootTypeArgument)->*BootType{
+ let mut existing:*BootType=ctx.types;
+ while existing!=(0 as *BootType){if existing.base==base&&boot_type_arguments_same(existing.arguments,arguments){return existing;}existing=existing.next;}
+ let ty:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;if ty==(0 as *BootType){return ty;}
+ ty.kind=BY_APPLICATION;ty.id=boot_id(ctx);ty.name=base.name;ty.owner=base.owner;ty.base=base;ty.arguments=arguments;
+ ty.next=ctx.types;ctx.types=ty;return ty;
+}
+pub fn boot_type_concrete(ty:*BootType,depth:i32)->bool{
+ if ty==(0 as *BootType)||depth>256{return false;}
+ if ty.kind==BY_PARAMETER||ty.kind==BY_TEMPLATE||ty.kind==BY_APPLICATION{return false;}
+ if ty.kind==BY_PTR||ty.kind==BY_ARRAY{return boot_type_concrete(ty.inner,depth+1);}return true;
+}
+pub fn boot_type_bindings(ctx:*BootContext,parameters:*BootNode)->*BootTypeBinding{
+ let mut result:*BootTypeBinding=0 as *BootTypeBinding;let mut tail:*BootTypeBinding=0 as *BootTypeBinding;let mut parameter:*BootNode=parameters;
+ while parameter!=(0 as *BootNode){
+  let binding:*BootTypeBinding=boot_alloc(ctx,size_of(BootTypeBinding) as u64) as *BootTypeBinding;if binding==(0 as *BootTypeBinding){return result;}
+  binding.formal=parameter.ty;if tail==(0 as *BootTypeBinding){result=binding;}else{tail.next=binding;}tail=binding;parameter=parameter.next;
+ }return result;
+}
+pub fn boot_substitute_type(ctx:*BootContext,ty:*BootType,bindings:*BootTypeBinding,depth:i32,token:*BootToken)->*BootType{
+ if ctx.failed||ty==(0 as *BootType){return ty;}if depth>256{boot_error(ctx,token,"generic type nesting exceeds 256");return 0 as *BootType;}
+ if ty.kind==BY_PARAMETER{let mut binding:*BootTypeBinding=bindings;while binding!=(0 as *BootTypeBinding){if binding.formal==ty&&binding.actual!=(0 as *BootType){return binding.actual;}binding=binding.next;}return ty;}
+ if ty.kind==BY_ALIAS{return boot_substitute_type(ctx,ty.inner,bindings,depth+1,token);}
+ if ty.kind==BY_PTR||ty.kind==BY_ARRAY{
+  let inner:*BootType=boot_substitute_type(ctx,ty.inner,bindings,depth+1,token);if inner==(0 as *BootType){return inner;}
+  if ty.kind==BY_PTR{return boot_ptr_type(ctx,inner);}return boot_array_type(ctx,inner,ty.extent);
+ }
+ if ty.kind==BY_APPLICATION{
+  let mut args:*BootTypeArgument=0 as *BootTypeArgument;let mut tail:*BootTypeArgument=0 as *BootTypeArgument;let mut old:*BootTypeArgument=ty.arguments;
+  while old!=(0 as *BootTypeArgument){
+   let arg:*BootTypeArgument=boot_type_argument(ctx,boot_substitute_type(ctx,old.ty,bindings,depth+1,token));if ctx.failed{return 0 as *BootType;}
+   if tail==(0 as *BootTypeArgument){args=arg;}else{tail.next=arg;}tail=arg;old=old.next;
+  }
+  return boot_normal_type(ctx,boot_apply_type(ctx,ty.base,args),depth+1,token);
+ }
+ return ty;
+}
+fn boot_expand_type(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->*BootType{
+ let base:*BootType=ty.base;
+ if base.kind!=BY_TEMPLATE||!base.complete{boot_error(ctx,token,"type arguments require a defined generic type");return 0 as *BootType;}
+ let mut parameter:*BootNode=base.parameters;let mut actual:*BootTypeArgument=ty.arguments;
+ let mut arguments:*BootTypeArgument=0 as *BootTypeArgument;let mut tail:*BootTypeArgument=0 as *BootTypeArgument;let mut concrete:bool=true;
+ while parameter!=(0 as *BootNode)&&actual!=(0 as *BootTypeArgument){
+  let value:*BootType=boot_normal_type(ctx,actual.ty,depth+1,token);if ctx.failed{return 0 as *BootType;}
+  if !boot_type_concrete(value,0){concrete=false;}
+  let arg:*BootTypeArgument=boot_type_argument(ctx,value);if ctx.failed{return 0 as *BootType;}
+  if tail==(0 as *BootTypeArgument){arguments=arg;}else{tail.next=arg;}tail=arg;
+  parameter=parameter.next;actual=actual.next;
+ }
+ if parameter!=(0 as *BootNode)||actual!=(0 as *BootTypeArgument){boot_error(ctx,token,"generic type argument count mismatch");return 0 as *BootType;}
+ let instance:*BootType=boot_apply_type(ctx,base,arguments);if !concrete||instance.kind!=BY_APPLICATION{return instance;}
+ // Publish the nominal identity before fields, so Node<T> may point to itself.
+ instance.kind=BY_STRUCT;instance.complete=true;
+ let bindings:*BootTypeBinding=boot_type_bindings(ctx,base.parameters);let mut binding:*BootTypeBinding=bindings;actual=arguments;
+ while binding!=(0 as *BootTypeBinding){binding.actual=actual.ty;binding=binding.next;actual=actual.next;}
+ let mut source:*BootNode=base.fields;let mut last:*BootNode=0 as *BootNode;
+ while source!=(0 as *BootNode)&&!ctx.failed{
+  let field:*BootNode=boot_node(ctx,BN_FIELD,source.token);if field==(0 as *BootNode){return 0 as *BootType;}
+  field.owner=source.owner;field.name=source.name;field.flags=source.flags;
+  field.ty=boot_substitute_type(ctx,source.ty,bindings,depth+1,source.token);field.ty=boot_normal_type(ctx,field.ty,depth+1,source.token);
+  if last==(0 as *BootNode){instance.fields=field;}else{last.next=field;}last=field;source=source.next;
+ }
+ return instance;
 }

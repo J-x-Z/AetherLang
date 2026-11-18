@@ -71,7 +71,7 @@ fn boot_p_type_inner(ctx:*BootContext)->*BootType {
   if !boot_p_expect(ctx,58,"expected :: in imported type") {return 0 as *BootType;}
   lookup=boot_import_module(ctx,name,token); if lookup==(0 as *BootModule) {return 0 as *BootType;}
   let member:*BootToken=boot_p_name(ctx);if member==(0 as *BootToken) {return 0 as *BootType;}name=member.text;
-  return boot_resolve_type(ctx,name,lookup,token);
+  return boot_p_type_apply(ctx,boot_resolve_type(ctx,name,lookup,token));
  }
  if strcmp(name,"void")==0 {return boot_type(ctx,BY_VOID);}
  if strcmp(name,"bool")==0 {return boot_type(ctx,BY_BOOL);}
@@ -85,7 +85,7 @@ fn boot_p_type_inner(ctx:*BootContext)->*BootType {
  if strcmp(name,"u64")==0 || strcmp(name,"usize")==0 {return boot_type(ctx,BY_U64);}
  if strcmp(name,"f32")==0 {return boot_type(ctx,BY_F32);}
  if strcmp(name,"f64")==0 {return boot_type(ctx,BY_F64);}
- return boot_resolve_type(ctx,name,0 as *BootModule,token);
+ return boot_p_type_apply(ctx,boot_resolve_type(ctx,name,0 as *BootModule,token));
 }
 fn boot_p_bp(kind:i32)->i32 {
  if kind==BT_OR {return 1;}
@@ -386,6 +386,8 @@ fn boot_p_function(ctx:*BootContext,foreign:bool)->*BootNode {
  let node:*BootNode=boot_node(ctx,BN_FN,token);
  if node==0 as *BootNode {return node;}
  node.name=name.text;
+ let saved_parameters:*BootNode=ctx.type_parameters;node.generics=boot_p_type_parameters(ctx);ctx.type_parameters=node.generics;
+ if foreign&&node.generics!=(0 as *BootNode){boot_error(ctx,name,"foreign generic functions are not supported");return 0 as *BootNode;}
  if foreign {node.flags=2;}
  if !boot_p_expect(ctx,40,"expected '(' after function name") {return 0 as *BootNode;}
  let mut tail:*BootNode=0 as *BootNode;
@@ -419,7 +421,7 @@ fn boot_p_function(ctx:*BootContext,foreign:bool)->*BootNode {
   if boot_p_kind(ctx)==123 {boot_error(ctx,ctx.cursor,"foreign function requires ';', not a body");return 0 as *BootNode;}
   boot_p_take(ctx,59);
  } else {node.body=boot_p_block(ctx);}
- return node;
+ ctx.type_parameters=saved_parameters;return node;
 }
 fn boot_p_struct(ctx:*BootContext)->*BootNode {
  let token:*BootToken=ctx.cursor;boot_p_advance(ctx);
@@ -431,6 +433,8 @@ fn boot_p_struct(ctx:*BootContext)->*BootNode {
  let node:*BootNode=boot_node(ctx,BN_STRUCT,token);
  if node==0 as *BootNode {return node;}
  node.name=name.text;node.ty=ty;
+ let saved_parameters:*BootNode=ctx.type_parameters;node.generics=boot_p_type_parameters(ctx);ctx.type_parameters=node.generics;
+ if node.generics!=(0 as *BootNode){ty.kind=BY_TEMPLATE;ty.parameters=node.generics;}
  if !boot_p_expect(ctx,123,"expected '{' after struct name") {return 0 as *BootNode;}
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed && boot_p_kind(ctx)!=125 {
@@ -448,7 +452,7 @@ fn boot_p_struct(ctx:*BootContext)->*BootNode {
   if !boot_p_take(ctx,44) {break;}
  }
  if !boot_p_expect(ctx,125,"expected '}' after fields") {return 0 as *BootNode;}
- ty.fields=node.body;ty.complete=true;return node;
+ ty.fields=node.body;ty.complete=true;ctx.type_parameters=saved_parameters;return node;
 }
 fn boot_p_constant(ctx:*BootContext)->*BootNode {
  let token:*BootToken=ctx.cursor;boot_p_advance(ctx);
@@ -547,4 +551,45 @@ fn boot_p_array_value(ctx:*BootContext)->*BootNode{
   if !boot_p_take(ctx,44){break;}
  }
  if !boot_p_expect(ctx,93,"expected ']' after array value"){return 0 as *BootNode;}node.value=count;return node;
+}
+
+// In a type argument context >> and >= end a type list one byte at a time.
+fn boot_p_type_close(ctx:*BootContext)->bool{
+ if boot_p_take(ctx,62){return true;}
+ let token:*BootToken=ctx.cursor;let kind:i32=boot_p_kind(ctx);let mut remainder:i32=0;
+ if kind==BT_SHR{remainder=62;}if kind==BT_GE{remainder=61;}if kind==BT_ASSIGN_BASE+BT_SHR{remainder=BT_GE;}
+ if remainder==0{return false;}
+ let rest:*BootToken=boot_alloc(ctx,size_of(BootToken) as u64) as *BootToken;if rest==(0 as *BootToken){return false;}
+ memcpy(rest as *void,token as *void,size_of(BootToken) as u64);rest.kind=remainder;rest.text=token.text+1;rest.length=token.length-1;rest.column=token.column+1;ctx.cursor=rest;return true;
+}
+fn boot_p_type_arguments(ctx:*BootContext)->*BootTypeArgument{
+ if !boot_p_expect(ctx,60,"expected '<' before type arguments"){return 0 as *BootTypeArgument;}
+ let mut result:*BootTypeArgument=0 as *BootTypeArgument;let mut tail:*BootTypeArgument=0 as *BootTypeArgument;
+ while !ctx.failed{
+  let ty:*BootType=boot_p_type(ctx);if ty==(0 as *BootType){return result;}
+  let arg:*BootTypeArgument=boot_type_argument(ctx,ty);if ctx.failed{return result;}
+  if tail==(0 as *BootTypeArgument){result=arg;}else{tail.next=arg;}tail=arg;
+  if boot_p_type_close(ctx){return result;}
+  if !boot_p_expect(ctx,44,"expected ',' or '>' in type arguments"){return result;}
+  if boot_p_type_close(ctx){return result;}
+ }return result;
+}
+fn boot_p_type_apply(ctx:*BootContext,base:*BootType)->*BootType{
+ if base==(0 as *BootType)||boot_p_kind(ctx)!=60{return base;}
+ let args:*BootTypeArgument=boot_p_type_arguments(ctx);if ctx.failed{return 0 as *BootType;}return boot_apply_type(ctx,base,args);
+}
+fn boot_p_type_parameters(ctx:*BootContext)->*BootNode{
+ if !boot_p_take(ctx,60){return 0 as *BootNode;}
+ let mut result:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;let mut count:i32=0;
+ while !ctx.failed{
+  let name:*BootToken=boot_p_name(ctx);if name==(0 as *BootToken){return result;}
+  let mut previous:*BootNode=result;while previous!=(0 as *BootNode){if strcmp(previous.name,name.text)==0{boot_error(ctx,name,"duplicate generic parameter");return result;}previous=previous.next;}
+  count=count+1;if count>64{boot_error(ctx,name,"generic parameter count exceeds 64");return result;}
+  let parameter:*BootNode=boot_node(ctx,BN_TYPE_PARAMETER,name);let ty:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;if ctx.failed{return result;}
+  ty.kind=BY_PARAMETER;ty.id=boot_id(ctx);ty.name=name.text;ty.owner=ctx.module;ty.next=ctx.types;ctx.types=ty;parameter.ty=ty;parameter.name=name.text;
+  if tail==(0 as *BootNode){result=parameter;}else{tail.next=parameter;}tail=parameter;
+  if boot_p_type_close(ctx){return result;}
+  if !boot_p_expect(ctx,44,"expected ',' or '>' in generic parameters"){return result;}
+  if boot_p_type_close(ctx){return result;}
+ }return result;
 }
