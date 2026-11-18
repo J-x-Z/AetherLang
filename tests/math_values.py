@@ -35,6 +35,9 @@ source = root / 'tensor_autodiff.aeth'
 run('math/check', [compiler, 'check', source])
 outputs = []
 for backend in args.backends:
+    libm = work / f'hosted-libm-{backend}'
+    run(f'libm/{backend}/build', [compiler, 'build', root / 'hosted_libm.aeth', '--backend', backend, '-O2', '-o', libm])
+    run(f'libm/{backend}/run', [libm])
     for opt in [0, 2]:
         executable = work / f'math-{backend}-O{opt}'
         run(f'math/{backend}/O{opt}/build', [compiler, 'build', source, '--backend', backend, f'-O{opt}', '-o', executable])

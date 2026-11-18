@@ -307,6 +307,10 @@ fn native_compile(cli: &Cli, target: &EffectiveTarget, input: &Path, output: &Pa
             }
             command.args(&cli.link_object);
             for library in &cli.link_library { command.arg(format!("-l{}", library)); }
+            if !ir.no_std && cli.linker_script.is_none() && is_linux_target(&target.triple) {
+                // GNU ld resolves libm after the generated and user-supplied objects.
+                command.arg("-lm");
+            }
         }
         if let Some(script) = &cli.linker_script { command.arg("-T").arg(script).arg("-nostdlib"); }
         match command.output() {
@@ -344,6 +348,12 @@ struct EffectiveTarget {
     pass_target: bool,
     macos_deployment: Option<String>,
     sdk: Option<PathBuf>,
+}
+
+fn is_linux_target(target: &str) -> bool {
+    use target_lexicon::{OperatingSystem, Triple};
+    let triple = if target == "native" { Some(target_lexicon::HOST) } else { target.parse::<Triple>().ok() };
+    triple.is_some_and(|triple| triple.operating_system == OperatingSystem::Linux)
 }
 
 fn deployment_version(value: &str) -> Result<String, String> {
