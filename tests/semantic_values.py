@@ -35,6 +35,30 @@ for backend in args.backends:
         result = run(f'legal/{backend}/O{opt}/run', [executable])
         assert result.stdout == '' and result.stderr == ''
 
+# Assignment evaluates the place and its old value before the RHS and yields
+# Unit. Pointer updates use element strides and preserve narrow offset signs.
+for fixture in [source.with_name('compound.aeth'),source.parent.parent/'script/compound.ath',
+                source.parent.parent/'bootstrap/container_values.aeth']:
+    run(f'{fixture.name}/check', [compiler,'check',fixture])
+    for backend in args.backends:
+        for opt in (0,2,3):
+            binary=work/f'{fixture.name}-{backend}-O{opt}'
+            run(f'{fixture.name}/{backend}/O{opt}/build',[compiler,fixture,'--backend',backend,f'-O{opt}','-o',binary])
+            execution=run(f'{fixture.name}/{backend}/O{opt}/run',[binary])
+            expected='containers=ok\n' if fixture.name=='container_values.aeth' else ''
+            assert execution.stdout==expected and not execution.stderr
+for filename,text in {
+    'float-and.aeth':'fn main(){let mut x:f64=1.0;x&=1.0;}',
+    'immutable.aeth':'fn main(){let x:i32=1;x<<=2;}',
+    'uninitialized.aeth':'fn main(){let mut x:u8;x|=2;}',
+    'uninitialized.ath':'def main():\n    x += 1\n    return 0\n',
+    'mutation-in-pure.aeth':'fn bad(p:*u32) pure { *p^=2; }fn main(){}',
+}.items():
+    path=work/('compound-'+filename);path.write_text(text)
+    checked=run(filename+'/reject',[compiler,'check','--error-format','json',path],success=False)
+    built=run(filename+'/reject build',[compiler,'build','--error-format','json',path,'--backend','c','-o',work/'invalid-assignment'],success=False)
+    assert json.loads(checked.stderr)==json.loads(built.stderr)
+
 negative = {
     'uninitialized': 'fn main()->i32{let value:i32;value}',
     'partial_branch': 'fn f(b:bool)->i32{let value:i32;if b{value=1;}value}fn main()->i32{f(false)}',

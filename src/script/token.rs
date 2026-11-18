@@ -38,7 +38,8 @@ pub enum TokenKind {
     Plus,       // +
     Minus,      // -
     Star,       // *
-    Percent,
+    Percent, BitAnd, BitOr, BitXor, Shl, Shr,
+    Compound(crate::frontend::ast::CompoundOp),
     Slash,      // /
     Eq,         // =
     EqEq,       // ==

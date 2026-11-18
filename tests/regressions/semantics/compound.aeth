@@ -1,0 +1,33 @@
+struct Slot { word: u16 }
+static mut TRACE: i32 = 0;
+fn index() -> usize { TRACE = TRACE * 10 + 1; return 0; }
+fn mask(p:*Slot) -> u16 {
+    TRACE = TRACE * 10 + 2;
+    p.word = 0xffff;
+    return 0x00ff;
+}
+fn main() -> i32 {
+    let mut slots: [Slot;1] = [Slot{word:0x1234}];
+    let raw:*Slot = &mut slots[0] as *Slot;
+    let done:() = (slots[index()].word &= mask(raw));
+    if TRACE != 12 || slots[0].word != 0x34 { return 1; }
+    slots[0].word |= 0x100; slots[0].word ^= 0x10;
+    slots[0].word <<= 4; slots[0].word >>= 4; slots[0].word %= 19;
+    if slots[0].word != 7 { return 2; }
+    let mut s:i8 = -7; s >>= 9;
+    if s != -4 { return 3; }
+    let mut data:[i32;256] = [0;256];
+    let start:*i32 = &mut data[0] as *i32;
+    let mut pointer:*i32 = start;
+    let big:u8 = 255;
+    pointer += big;
+    *pointer = 43;
+    pointer -= 2 as i8;
+    *pointer = 9;
+    let back:i8 = -3;
+    pointer += back;
+    if pointer != start + (250 as u8) { return 4; }
+    if data[255] != 43 || data[253] != 9 { return 5; }
+    if (start+big)-(big) != start { return 6; }
+    return 0;
+}

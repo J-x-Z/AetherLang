@@ -376,11 +376,15 @@ impl Parser {
     fn parse_expr_stmt(&mut self) -> Result<Stmt, String> {
         let left = self.parse_expr()?;
         
-        if self.match_kind(TokenKind::Eq) {
+        let operator = self.peek().kind.clone();
+        if matches!(operator, TokenKind::Eq | TokenKind::Compound(_)) {
+            self.advance();
+            let compound = match operator { TokenKind::Compound(op) => Some(op), _ => None };
             let right = self.parse_expr()?;
             self.consume(TokenKind::Newline, "Expected Newline")?;
             let span = left.span_owned();
             Ok(Stmt::Assign(AssignStmt {
+                compound,
                 target: left,
                 value: right,
                 span,
@@ -411,9 +415,12 @@ impl Parser {
                 TokenKind::EqEq => (3, BinOp::Eq), TokenKind::NotEq => (3, BinOp::Ne),
                 TokenKind::Lt => (4, BinOp::Lt), TokenKind::LtEq => (4, BinOp::Le),
                 TokenKind::Gt => (4, BinOp::Gt), TokenKind::GtEq => (4, BinOp::Ge),
-                TokenKind::Plus => (5, BinOp::Add), TokenKind::Minus => (5, BinOp::Sub),
-                TokenKind::Star => (6, BinOp::Mul), TokenKind::Slash => (6, BinOp::Div),
-                TokenKind::Percent => (6, BinOp::Mod), _ => break,
+                TokenKind::BitOr => (5, BinOp::BitOr), TokenKind::BitXor => (6, BinOp::BitXor),
+                TokenKind::BitAnd => (7, BinOp::BitAnd),
+                TokenKind::Shl => (8, BinOp::Shl), TokenKind::Shr => (8, BinOp::Shr),
+                TokenKind::Plus => (9, BinOp::Add), TokenKind::Minus => (9, BinOp::Sub),
+                TokenKind::Star => (10, BinOp::Mul), TokenKind::Slash => (10, BinOp::Div),
+                TokenKind::Percent => (10, BinOp::Mod), _ => break,
             };
             if precedence < minimum { break; }
             self.advance();

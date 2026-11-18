@@ -1530,14 +1530,7 @@ impl<'a> Flow<'a> {
                 op,
                 right,
                 span,
-            } if matches!(
-                op,
-                BinOp::Assign
-                    | BinOp::AddAssign
-                    | BinOp::SubAssign
-                    | BinOp::MulAssign
-                    | BinOp::DivAssign
-            ) =>
+            } if op.is_assignment() =>
             {
                 let Some(address) = self.address(left, live)? else {
                     return Ok(None);

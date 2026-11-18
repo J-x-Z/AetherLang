@@ -959,10 +959,7 @@ impl Parser {
             let op = Self::token_to_binop(&op_token.kind)?;
 
             // Right-associative for assignment
-            let next_bp = if matches!(
-                op,
-                BinOp::Assign | BinOp::AddAssign | BinOp::SubAssign | BinOp::MulAssign | BinOp::DivAssign
-            ) {
+            let next_bp = if op.is_assignment() {
                 bp
             } else {
                 bp + 1
@@ -2256,10 +2253,16 @@ impl Parser {
             TokenKind::Shl => Ok(BinOp::Shl),
             TokenKind::Shr => Ok(BinOp::Shr),
             TokenKind::Eq => Ok(BinOp::Assign),
-            TokenKind::PlusEq => Ok(BinOp::AddAssign),
-            TokenKind::MinusEq => Ok(BinOp::SubAssign),
-            TokenKind::StarEq => Ok(BinOp::MulAssign),
-            TokenKind::SlashEq => Ok(BinOp::DivAssign),
+            TokenKind::PlusEq => Ok(BinOp::Compound(CompoundOp::Add)),
+            TokenKind::MinusEq => Ok(BinOp::Compound(CompoundOp::Sub)),
+            TokenKind::StarEq => Ok(BinOp::Compound(CompoundOp::Mul)),
+            TokenKind::SlashEq => Ok(BinOp::Compound(CompoundOp::Div)),
+            TokenKind::PercentEq => Ok(BinOp::Compound(CompoundOp::Mod)),
+            TokenKind::AndEq => Ok(BinOp::Compound(CompoundOp::BitAnd)),
+            TokenKind::OrEq => Ok(BinOp::Compound(CompoundOp::BitOr)),
+            TokenKind::CaretEq => Ok(BinOp::Compound(CompoundOp::BitXor)),
+            TokenKind::ShlEq => Ok(BinOp::Compound(CompoundOp::Shl)),
+            TokenKind::ShrEq => Ok(BinOp::Compound(CompoundOp::Shr)),
             _ => Err(Error::InvalidOperator { span: Span::dummy() }),
         }
     }

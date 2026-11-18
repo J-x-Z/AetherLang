@@ -610,85 +610,30 @@ impl IRGenerator {
                 if matches!(op, ast::BinOp::And | ast::BinOp::Or) {
                     return self.generate_short_circuit(left, *op, right);
                 }
-                if matches!(op, ast::BinOp::Assign | ast::BinOp::AddAssign | ast::BinOp::SubAssign | ast::BinOp::MulAssign | ast::BinOp::DivAssign) {
-                    // Resolve the address first and exactly once. In particular,
-                    // p[next()] = value must neither load p[next()] nor call next twice.
+                if op.is_assignment() {
+                    // Capture the place and its old value before evaluating the RHS.
                     let (address, ty) = self.generate_place(left)?;
-                    let old_value = if *op == ast::BinOp::Assign { None }
-                        else { Some(self.load_address(address.clone(), ty.clone())) };
-                    let value = self.generate_expr(right)?;
-                    let mut value = self.coerce_value(value, &ty);
-                    if let Some(old) = old_value {
-                        let operation = match op {
-                            ast::BinOp::AddAssign => IRBinOp::Add,
-                            ast::BinOp::SubAssign => IRBinOp::Sub,
-                            ast::BinOp::MulAssign => IRBinOp::Mul,
-                            ast::BinOp::DivAssign => IRBinOp::Div,
-                            _ => unreachable!(),
-                        };
-                        let dest = self.alloc_register();
-                        self.emit_current_with_type(Instruction::BinOp { dest, op: operation, left: old, right: value }, ty.unqualified().clone());
-                        value = Value::Register(dest);
-                    }
+                    let old = match op {
+                        ast::BinOp::Compound(operation) => {
+                            Some((operation.binary(), self.load_address(address.clone(), ty.clone())))
+                        }
+                        _ => None,
+                    };
+                    let rhs = self.generate_expr(right)?;
+                    if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
+                    let value = match old {
+                        Some((operation, old)) => self.binary_values(operation, old, rhs)?,
+                        None => self.coerce_value(rhs, &ty),
+                    };
                     self.transfer_owned_value(&value);
                     self.initialize_owned_place(&address);
-                    self.emit_current(Instruction::Store { ptr: address, value: value.clone() });
-                    return Ok(value);
+                    self.emit_current(Instruction::Store { ptr: address, value });
+                    return Ok(Value::Unit);
                 }
-                let left_val = self.generate_expr(left)?;
-                let right_val = self.generate_expr(right)?;
-
-                // Check for pointer arithmetic: ptr + offset or ptr - offset
-                let left_ty = self.require_value_type(&left_val)?;
-                if let IRType::Ptr(inner) = &left_ty {
-                    if *op == ast::BinOp::Add || *op == ast::BinOp::Sub {
-                        // This is pointer arithmetic, use GEP instead of add
-                        let dest = self.alloc_register();
-                        let offset_val = if *op == ast::BinOp::Sub {
-                            // For subtraction, negate the offset
-                            let neg_dest = self.alloc_register();
-                            let zero = Value::Constant(Constant::Int(0));
-                            self.emit_current_with_type(Instruction::BinOp {
-                                dest: neg_dest,
-                                op: IRBinOp::Sub,
-                                left: zero,
-                                right: right_val.clone(),
-                            }, IRType::I64);
-                            Value::Register(neg_dest)
-                        } else {
-                            right_val
-                        };
-                        
-                        self.emit_current_with_type(Instruction::GetElementPtr {
-                            dest,
-                            ptr: left_val,
-                            index: offset_val,
-                            elem_ty: (**inner).clone(),
-                        }, IRType::Ptr(inner.clone()));
-                        
-                        return Ok(Value::Register(dest));
-                    }
-                }
-                
-                let ir_op = self.ast_binop_to_ir(*op);
-                let dest = self.alloc_register();
-                
-                let unified_right = self.coerce_value(right_val, &left_ty);
-
-                // Result of binary op is usually primitive or bool (I64/Bool)
-                let res_ty = match ir_op {
-                    IRBinOp::Eq | IRBinOp::Ne | IRBinOp::Lt | IRBinOp::Le | IRBinOp::Gt | IRBinOp::Ge => IRType::Bool,
-                    _ => left_ty,
-                };
-
-                self.emit_current_with_type(Instruction::BinOp {
-                    dest,
-                    op: ir_op,
-                    left: left_val,
-                    right: unified_right,
-                }, res_ty);
-                
-                Ok(Value::Register(dest))
+                let lhs = self.generate_expr(left)?;
+                let rhs = self.generate_expr(right)?;
+                if self.get_current_terminator().is_some() { return Ok(Value::Unit); }
+                self.binary_values(*op, lhs, rhs)
             }
 
             Expr::Unary { op, expr: inner, .. } => {
@@ -1449,8 +1394,38 @@ impl IRGenerator {
         None
     }
     
-    fn ast_binop_to_ir(&self, op: ast::BinOp) -> IRBinOp {
-        match op {
+    fn binary_values(&mut self, op: ast::BinOp, lhs: Value, rhs: Value) -> Result<Value> {
+        let ty = self.require_value_type(&lhs)?;
+        let dest = self.alloc_register();
+        if let IRType::Ptr(element) = &ty {
+            if matches!(op, ast::BinOp::Add | ast::BinOp::Sub) {
+                let index_type = Self::pointer_integer(self.pointer_width(), true);
+                let mut index = self.coerce_value(rhs, &index_type);
+                if op == ast::BinOp::Sub {
+                    let negative = self.alloc_register();
+                    self.emit_current_with_type(Instruction::UnaryOp {
+                        dest: negative, op: UnaryOp::Neg, value: index,
+                    }, index_type);
+                    index = Value::Register(negative);
+                }
+                self.emit_current_with_type(Instruction::GetElementPtr {
+                    dest, ptr: lhs, index, elem_ty: (**element).clone(),
+                }, ty);
+                return Ok(Value::Register(dest));
+            }
+        }
+        let op = self.ast_binop_to_ir(op)?;
+        let rhs = self.coerce_value(rhs, &ty);
+        let result = match op {
+            IRBinOp::Eq | IRBinOp::Ne | IRBinOp::Lt | IRBinOp::Le | IRBinOp::Gt | IRBinOp::Ge => IRType::Bool,
+            _ => ty,
+        };
+        self.emit_current_with_type(Instruction::BinOp { dest, op, left: lhs, right: rhs }, result);
+        Ok(Value::Register(dest))
+    }
+
+    fn ast_binop_to_ir(&self, op: ast::BinOp) -> Result<IRBinOp> {
+        Ok(match op {
             ast::BinOp::Add => IRBinOp::Add,
             ast::BinOp::Sub => IRBinOp::Sub,
             ast::BinOp::Mul => IRBinOp::Mul,
@@ -1469,12 +1444,10 @@ impl IRGenerator {
             ast::BinOp::Shr => IRBinOp::Shr,
             ast::BinOp::BitAnd => IRBinOp::And,
             ast::BinOp::BitOr => IRBinOp::Or,
-            ast::BinOp::Assign 
-            | ast::BinOp::AddAssign 
-            | ast::BinOp::SubAssign
-            | ast::BinOp::MulAssign
-            | ast::BinOp::DivAssign => panic!("Assignment should be handled separately"),
-        }
+            ast::BinOp::Assign | ast::BinOp::Compound(_) => {
+                return Err(crate::utils::Error::CodeGen("assignment used as a binary value operator".into()));
+            }
+        })
     }
 
     fn lower_initializer(&self, initializer: &TypedInitializer) -> Result<IRInitializer> {

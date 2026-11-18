@@ -172,6 +172,11 @@ pub enum TokenKind {
     StarEq,
     /// /=
     SlashEq,
+    PercentEq,
+    AndEq,
+    OrEq,
+    CaretEq,
+    ShlEq,
     /// >>=
     ShrEq,
     /// =>
@@ -334,7 +339,8 @@ impl TokenKind {
         match self {
             // Assignment (lowest)
             TokenKind::Eq | TokenKind::PlusEq | TokenKind::MinusEq 
-                | TokenKind::StarEq | TokenKind::SlashEq => Some(1),
+                | TokenKind::StarEq | TokenKind::SlashEq | TokenKind::PercentEq | TokenKind::AndEq
+                | TokenKind::OrEq | TokenKind::CaretEq | TokenKind::ShlEq | TokenKind::ShrEq => Some(1),
             
             // Logical OR
             TokenKind::OrOr => Some(2),

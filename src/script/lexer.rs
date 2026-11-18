@@ -1,3 +1,4 @@
+use crate::frontend::ast::CompoundOp;
 use super::token::{Token, TokenKind, Span};
 
 pub struct Lexer {
@@ -97,6 +98,15 @@ impl Lexer {
         }
     }
 
+    fn update_or_operator(&mut self, op: CompoundOp, plain: TokenKind) -> Token {
+        if self.peek() == Some('=') {
+            self.advance();
+            self.make_token(TokenKind::Compound(op))
+        } else {
+            self.make_token(plain)
+        }
+    }
+
     pub fn next_token(&mut self) -> Token {
         // Debug
         // println!("next_token: start={:?}, pending={}, stack={:?}", self.at_line_start, self.pending_dedents, self.indent_stack);
@@ -182,19 +192,30 @@ impl Lexer {
             Some(c) if c.is_alphabetic() || c == '_' || c == '@' => self.identifier_or_keyword(),
             Some(c) if c.is_digit(10) => self.number(),
             Some('"') => self.string(),
-            Some('+') => { self.advance(); self.make_token(TokenKind::Plus) }
+            Some('+') => { self.advance(); self.update_or_operator(CompoundOp::Add, TokenKind::Plus) }
             Some('-') => {
                 self.advance();
                 if self.peek() == Some('>') {
                     self.advance();
                     self.make_token(TokenKind::Arrow)
                 } else {
-                    self.make_token(TokenKind::Minus)
+                    self.update_or_operator(CompoundOp::Sub, TokenKind::Minus)
                 }
             }
-            Some('%') => { self.advance(); self.make_token(TokenKind::Percent) }
+            Some('%') => { self.advance(); self.update_or_operator(CompoundOp::Mod, TokenKind::Percent) }
+            Some('&') => { self.advance(); self.update_or_operator(CompoundOp::BitAnd, TokenKind::BitAnd) }
+            Some('|') => { self.advance(); self.update_or_operator(CompoundOp::BitOr, TokenKind::BitOr) }
+            Some('^') => { self.advance(); self.update_or_operator(CompoundOp::BitXor, TokenKind::BitXor) }
             Some('<') | Some('>') | Some('!') => {
                 let first = self.advance().unwrap();
+                if first != '!' && self.peek() == Some(first) {
+                    self.advance();
+                    return if first == '<' {
+                        self.update_or_operator(CompoundOp::Shl, TokenKind::Shl)
+                    } else {
+                        self.update_or_operator(CompoundOp::Shr, TokenKind::Shr)
+                    };
+                }
                 let equal = if self.peek() == Some('=') { self.advance(); true } else { false };
                 self.make_token(match (first, equal) {
                     ('<', false) => TokenKind::Lt, ('<', true) => TokenKind::LtEq,
@@ -202,8 +223,8 @@ impl Lexer {
                     ('!', true) => TokenKind::NotEq, _ => TokenKind::Unknown(first),
                 })
             }
-            Some('*') => { self.advance(); self.make_token(TokenKind::Star) }
-            Some('/') => { self.advance(); self.make_token(TokenKind::Slash) }
+            Some('*') => { self.advance(); self.update_or_operator(CompoundOp::Mul, TokenKind::Star) }
+            Some('/') => { self.advance(); self.update_or_operator(CompoundOp::Div, TokenKind::Slash) }
             Some(':') => { self.advance(); self.make_token(TokenKind::Colon) }
             Some(',') => { self.advance(); self.make_token(TokenKind::Comma) }
             Some('.') => { self.advance(); self.make_token(TokenKind::Dot) }

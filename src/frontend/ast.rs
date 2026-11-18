@@ -753,10 +753,59 @@ pub enum BinOp {
     Shr,
     // Assignment
     Assign,
-    AddAssign,
-    SubAssign,
-    MulAssign,
-    DivAssign,
+    Compound(CompoundOp),
+}
+
+impl BinOp {
+    pub fn is_assignment(self) -> bool {
+        matches!(self, Self::Assign | Self::Compound(_))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompoundOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+}
+
+impl CompoundOp {
+    pub fn spelling(self) -> &'static str {
+        match self {
+            Self::Add => "+=",
+            Self::Sub => "-=",
+            Self::Mul => "*=",
+            Self::Div => "/=",
+            Self::Mod => "%=",
+            Self::BitAnd => "&=",
+            Self::BitOr => "|=",
+            Self::BitXor => "^=",
+            Self::Shl => "<<=",
+            Self::Shr => ">>=",
+        }
+    }
+
+    pub fn binary(self) -> BinOp {
+        match self {
+            Self::Add => BinOp::Add,
+            Self::Sub => BinOp::Sub,
+            Self::Mul => BinOp::Mul,
+            Self::Div => BinOp::Div,
+            Self::Mod => BinOp::Mod,
+            Self::BitAnd => BinOp::BitAnd,
+            Self::BitOr => BinOp::BitOr,
+            Self::BitXor => BinOp::BitXor,
+            Self::Shl => BinOp::Shl,
+            Self::Shr => BinOp::Shr,
+        }
+    }
 }
 
 /// Unary operator

@@ -39,6 +39,15 @@ impl Lexer {
         self.source.get(self.pos).copied()
     }
     
+    fn assignment_suffix(&mut self, plain: TokenKind, assignment: TokenKind) -> TokenKind {
+        if self.peek() == Some('=') {
+            self.advance();
+            assignment
+        } else {
+            plain
+        }
+    }
+
     /// Get the next character without advancing
     fn peek_next(&self) -> Option<char> {
         self.source.get(self.pos + 1).copied()
@@ -402,7 +411,7 @@ impl Lexer {
                     TokenKind::Slash
                 }
             }
-            '%' => TokenKind::Percent,
+            '%' => self.assignment_suffix(TokenKind::Percent, TokenKind::PercentEq),
             '=' => {
                 if self.peek() == Some('=') {
                     self.advance();
@@ -428,7 +437,7 @@ impl Lexer {
                     TokenKind::Le
                 } else if self.peek() == Some('<') {
                     self.advance();
-                    TokenKind::Shl
+                    self.assignment_suffix(TokenKind::Shl, TokenKind::ShlEq)
                 } else {
                     TokenKind::Lt
                 }
@@ -439,7 +448,7 @@ impl Lexer {
                     TokenKind::Ge
                 } else if self.peek() == Some('>') {
                     self.advance();
-                    TokenKind::Shr
+                    self.assignment_suffix(TokenKind::Shr, TokenKind::ShrEq)
                 } else {
                     TokenKind::Gt
                 }
@@ -449,7 +458,7 @@ impl Lexer {
                     self.advance();
                     TokenKind::AndAnd
                 } else {
-                    TokenKind::And
+                    self.assignment_suffix(TokenKind::And, TokenKind::AndEq)
                 }
             }
             '|' => {
@@ -457,10 +466,10 @@ impl Lexer {
                     self.advance();
                     TokenKind::OrOr
                 } else {
-                    TokenKind::Or
+                    self.assignment_suffix(TokenKind::Or, TokenKind::OrEq)
                 }
             }
-            '^' => TokenKind::Caret,
+            '^' => self.assignment_suffix(TokenKind::Caret, TokenKind::CaretEq),
             '.' => {
                 if self.peek() == Some('.') {
                     self.advance();

@@ -77,6 +77,7 @@ pub struct ReturnStmt {
 
 #[derive(Debug, Clone)]
 pub struct AssignStmt {
+    pub compound: Option<crate::frontend::ast::CompoundOp>,
     pub target: Expr,
     pub value: Expr,
     pub span: Span,
@@ -100,7 +101,7 @@ pub enum Expr {
 
 #[derive(Debug, Clone)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Mod,
+    Add, Sub, Mul, Div, Mod, BitAnd, BitOr, BitXor, Shl, Shr,
     Eq, Ne, Lt, Gt, Le, Ge,
     And, Or,
 }

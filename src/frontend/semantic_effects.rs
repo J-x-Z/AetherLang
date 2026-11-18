@@ -247,7 +247,7 @@ impl EffectWalker<'_> {
             Expr::Binary { left, op, right, .. } => {
                 let left_access = match op {
                     BinOp::Assign => Access::Write,
-                    BinOp::AddAssign | BinOp::SubAssign | BinOp::MulAssign | BinOp::DivAssign => Access::ReadWrite,
+                    BinOp::Compound(_) => Access::ReadWrite,
                     _ => Access::Read,
                 };
                 self.expr(left, left_access, visitor);

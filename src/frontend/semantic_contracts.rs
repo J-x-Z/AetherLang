@@ -6,7 +6,7 @@ fn contract_expression(expr: &Expr) -> Result<()> {
     while let Some(expr) = pending.pop() {
         match expr {
             Expr::Binary { left, op, right, .. } => {
-                if matches!(op, BinOp::Assign | BinOp::AddAssign | BinOp::SubAssign | BinOp::MulAssign | BinOp::DivAssign) {
+                if op.is_assignment() {
                     return Err(Error::EffectViolation { message: "contract predicates cannot assign values".into(), span: expr.span() });
                 }
                 pending.extend([left.as_ref(), right.as_ref()]);

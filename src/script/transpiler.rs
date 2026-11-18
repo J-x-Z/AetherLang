@@ -225,6 +225,15 @@ impl Transpiler {
     fn statement_inner(&mut self, statement: &Stmt) -> Result<()> {
         match statement {
             Stmt::Assign(assignment) => {
+                if let Some(op) = assignment.compound {
+                    if !matches!(&assignment.target, Expr::Identifier {..} | Expr::Index {..}) {
+                        return Err("compound assignment requires an initialized local or indexed place".into());
+                    }
+                    let target = self.expression(&assignment.target)?;
+                    let value = self.expression(&assignment.value)?;
+                    self.line(&format!("{} {} {};", target, op.spelling(), value));
+                    return Ok(());
+                }
                 if matches!(&assignment.target, Expr::Index {..}) {
                     let target = self.expression(&assignment.target)?;
                     let value = self.expression(&assignment.value)?;
@@ -370,6 +379,7 @@ impl Transpiler {
                     BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*", BinOp::Div => "/", BinOp::Mod => "%",
                     BinOp::Eq => "==", BinOp::Ne => "!=", BinOp::Lt => "<", BinOp::Le => "<=", BinOp::Gt => ">", BinOp::Ge => ">=",
                     BinOp::And => "&&", BinOp::Or => "||",
+                    BinOp::BitAnd => "&", BinOp::BitOr => "|", BinOp::BitXor => "^", BinOp::Shl => "<<", BinOp::Shr => ">>",
                 };
                 format!("({} {} {})", self.expression(left)?, operator, self.expression(right)?)
             }

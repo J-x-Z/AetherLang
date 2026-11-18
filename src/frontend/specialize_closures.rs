@@ -514,14 +514,7 @@ fn walk_free(
             walk_free(
                 left,
                 bound,
-                matches!(
-                    op,
-                    BinOp::Assign
-                        | BinOp::AddAssign
-                        | BinOp::SubAssign
-                        | BinOp::MulAssign
-                        | BinOp::DivAssign
-                ),
+                op.is_assignment(),
                 call_writes,
                 visit,
             );

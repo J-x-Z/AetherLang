@@ -1052,20 +1052,14 @@ impl SemanticAnalyzer {
 
 
             Expr::Binary { left, op, right, span } => {
-                if matches!(op, BinOp::Assign | BinOp::AddAssign | BinOp::SubAssign | BinOp::MulAssign | BinOp::DivAssign) {
+                if op.is_assignment() {
                     let left_ty = self.check_expr(left)?;
                     self.check_assignable(left)?;
-                    let right_ty = if matches!(left_ty, ResolvedType::Pointer(_)) && matches!(op, BinOp::AddAssign | BinOp::SubAssign) {
+                    let right_ty = if matches!(left_ty, ResolvedType::Pointer(_)) && matches!(op, BinOp::Compound(CompoundOp::Add | CompoundOp::Sub)) {
                         self.check_expr(right)?
                     } else { self.check_expected_expr(right, &left_ty)? };
-                    if *op != BinOp::Assign {
-                        let arithmetic = match op {
-                            BinOp::AddAssign => BinOp::Add,
-                            BinOp::SubAssign => BinOp::Sub,
-                            BinOp::MulAssign => BinOp::Mul,
-                            _ => BinOp::Div,
-                        };
-                        self.check_binary_op(&left_ty, arithmetic, &right_ty, *span)?;
+                    if let BinOp::Compound(operation) = op {
+                        self.check_binary_op(&left_ty, operation.binary(), &right_ty, *span)?;
                     }
                     return Ok(if left_ty == ResolvedType::NEVER || right_ty == ResolvedType::NEVER { ResolvedType::NEVER } else { ResolvedType::UNIT });
                 }
