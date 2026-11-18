@@ -82,6 +82,10 @@ try:
         '--core-source',package/'source/core','--cc',cc,'--work-dir',w/'compiler','--lsp-runner',package/'tests/bootstrap_lsp.py'],timeout=1800)
     run('jxz-native',[sys.executable,package/'jxz/tests/windows_native.py','--jxz',package/'jxz.exe',
         '--compiler',package/'aethc.exe','--cc',cc,'--work-dir',w/'jxz','--stdlib',package/'stdlib','--host-source',package/'source/jxz'],timeout=1200)
+    if 'tests/windows_csv.py' in names:
+        run('csv-native', [sys.executable, package/'tests/windows_csv.py',
+            '--compiler', package/'aethc.exe', '--cc', cc, '--sysroot', package,
+            '--work-dir', w/'csv'])
     report['status']='native Windows acceptance passed';save();print(w/'results.json')
 except BaseException as error:
     report.update(status='failed',error=str(error));save();print(w/'results.json',file=sys.stderr);raise

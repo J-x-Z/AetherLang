@@ -39,6 +39,14 @@ source.mkdir()
 paths = ['src_aether/core', 'jxz/src', 'stdlib', 'scripts/bootstrap_windows.py',
          'scripts/bootstrap_jxz_windows.py', 'scripts/windows_support.py',
          'tests/bootstrap_windows_native.py', 'tests/bootstrap_lsp.py', 'jxz/tests/windows_native.py']
+# Rebuilding a historical revision retains that revision's test payload.
+csv_files = ['tests/windows_csv.py', 'tests/regressions/platform/windows_stdio_binary.aeth',
+             'examples/analysis/regress.aeth']
+has_csv_suite = subprocess.check_output(
+    ['git', 'ls-tree', '--name-only', commit, '--', csv_files[0]], cwd=repo, text=True
+).strip() == csv_files[0]
+if has_csv_suite:
+    paths.extend(csv_files)
 archive = subprocess.check_output(['git', 'archive', '--format=tar', commit, *paths], cwd=repo)
 with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
     for item in tar:
@@ -106,7 +114,7 @@ try:
     shutil.copytree(cross['compiler'][0]/'source',stage/'source/core')
     shutil.copytree(cross['jxz'][0]/'source',stage/'source/jxz')
     for path in ['tests/bootstrap_windows_native.py','tests/bootstrap_lsp.py','jxz/tests/windows_native.py',
-                 'scripts/bootstrap_windows.py','scripts/bootstrap_jxz_windows.py','scripts/windows_support.py']:
+                 'scripts/bootstrap_windows.py','scripts/bootstrap_jxz_windows.py','scripts/windows_support.py'] + (csv_files if has_csv_suite else []):
         dest=stage/path;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source/path,dest)
     # These packaging/acceptance wrappers are hashed independently of the frozen
     # language source, so a later packaging fix never mislabels its source commit.
@@ -128,7 +136,8 @@ try:
             raise RuntimeError('unbundled runtime DLL dependencies: '+repr(unexpected))
     (stage/'README-WINDOWS.md').write_text('''# Windows x64 native acceptance bundle
 
-This bundle was cross-compiled and linked. It has **not run on Windows**.
+This x86-64 bundle contains a self-hosted Aether compiler and JXZ. Run the
+entry below on Windows to verify this copy with your native toolchain.
 Copy the whole directory to a writable local Windows x64 path (NTFS recommended).
 Do not copy just the EXEs: the adjacent stdlib and frozen test sources are required.
 
@@ -158,7 +167,8 @@ Windows suites serially. It stops at the first failure and preserves logs and
 `results.json`. Compiler tests include C/LLVM O0/O2, COFF, source diagnostics,
 output preservation, two native self-hosted stages, same-source LLVM fixed point
 and LSP. JXZ tests include local dependencies, build/run/test/clean, exit codes,
-locking, offline cache integrity and project LSP. `native_windows_executed` is
+locking, offline cache integrity and project LSP. Bundles with the CSV suite also
+verify streaming statistics through files and redirected standard input. `native_windows_executed` is
 recorded only by this Windows-native entry point; a cross-build is not acceptance.
 
 `manifest.json` records the source commit, selected-platform source hashes and PE
