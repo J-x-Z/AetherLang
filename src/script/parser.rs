@@ -111,6 +111,7 @@ impl Parser {
 
     fn parse_stmt_inner(&mut self) -> Result<Stmt, String> {
         match self.peek().kind {
+            TokenKind::From => self.parse_core_import(),
             TokenKind::Def | TokenKind::Comptime => self.parse_function_def(),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
@@ -131,6 +132,29 @@ impl Parser {
         }
     }
     
+    fn parse_core_import(&mut self)->Result<Stmt,String> {
+        let span=self.advance().span;
+        let mut path=Vec::new();
+        loop {
+            let TokenKind::Identifier(name)=self.peek().kind.clone() else {return Err("Core module path needs identifiers".into());};
+            self.advance();path.push(name);
+            if !self.match_kind(TokenKind::Dot) {break;}
+        }
+        self.consume(TokenKind::Import,"Expected import after Core module path")?;
+        let mut names=Vec::new();
+        loop {
+            let TokenKind::Identifier(name)=self.peek().kind.clone() else {return Err("Core import needs explicit names; wildcard import is not supported".into());};
+            self.advance();
+            let alias=if self.match_kind(TokenKind::As) {
+                let TokenKind::Identifier(alias)=self.peek().kind.clone() else {return Err("Expected import alias".into());};self.advance();alias
+            }else{name.clone()};
+            names.push((name,alias));
+            if !self.match_kind(TokenKind::Comma) {break;}
+        }
+        self.consume(TokenKind::Newline,"Expected newline after import")?;
+        Ok(Stmt::Import(CoreImport{path,names,span}))
+    }
+
     fn parse_function_def(&mut self) -> Result<Stmt, String> {
         let is_comptime = if self.peek().kind == TokenKind::Comptime {
             self.advance();

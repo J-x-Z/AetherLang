@@ -97,6 +97,7 @@ impl Specializer {
                 let Some(ty) = self.hint(expr) else {
                     return true;
                 };
+                if let Some(mutable)=self.dynamic_method_mutable(&ty,method) {return mutable;}
                 if let Some(field) = self.field_type(&ty, &method.name) {
                     if let Some(closure) = self.closure_info(&field) {
                         return closure.mutable;
@@ -245,7 +246,9 @@ impl Specializer {
                 capture_fields.get(&id.name).map(|field| Expr::Field {
                     expr: Box::new(Expr::Ident(Ident {
                         name: env_parameter.clone(),
-                        span: id.span,
+                        // The generated base and source field have different
+                        // canonical types. Their fact keys must not alias.
+                        span: Span::new(id.span.start,id.span.start,id.span.file_id),
                     })),
                     field: Ident {
                         name: field.clone(),

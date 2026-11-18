@@ -1,0 +1,32 @@
+from dynamic_api import Value, left, right, choose, choose_mut
+
+def run(obj: Dyn[Value], delta: int) -> int:
+    return obj.read() + delta
+
+def mutate(obj: DynMut[Value]) -> int:
+    return obj.add(3)
+
+def main():
+    first = left(3)
+    second = right(7)
+    total = 0
+    for index in range(2):
+        obj = choose(index == 0, ref(first), ref(second))
+        total = total + run(obj, 1)
+    if total != 19:
+        return 1
+    values = [choose(True, ref(first), ref(second)), choose(False, ref(first), ref(second))]
+    view = values[1].view()
+    if deref(view) != 7:
+        return 2
+    getter = lambda (): values[0].read()
+    if getter() != 3:
+        return 3
+    third = left(1)
+    fourth = right(2)
+    if mutate(choose_mut(False, ref_mut(third), ref_mut(fourth))) != 8:
+        return 4
+    if third.value != 1 or fourth.value != 8:
+        return 5
+    print("typed imports and dyn ok")
+    return 0

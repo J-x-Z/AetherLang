@@ -55,10 +55,20 @@ impl Session {
     }
     pub fn parse_for_target(path: &Path, source: String, search: ModuleSearch, overlays: HashMap<PathBuf, String>, target: &str) -> Result<Self, Diagnostic> {
         let width = crate::types::PointerWidth::for_target(target).map_err(Diagnostic::from)?;
+        let mut overlays=overlays;
         let (core, script_map) = if path.extension().is_some_and(|x| x == "ath") {
             let mut parser = crate::script::parser::Parser::new(&source);
             let module = parser.parse().map_err(|e| script_error(path, &source, "E1100", e))?;
             let mut transpiler = crate::script::transpiler::Transpiler::new().with_source_file(&path.to_string_lossy());
+            let (prelude,requested)=crate::script::transpiler::Transpiler::import_prelude(&module);
+            if !prelude.is_empty() {
+                let mut imported=Resolver::new(search.clone()).with_overlays(overlays.clone());
+                let imported_program=imported.resolve(path,prelude).map_err(|e|Self::make_diagnostic(&imported,None,&e))?;
+                transpiler=transpiler.with_core_imports(&imported_program,&imported.root_bindings,&requested,width).map_err(|e|script_error(path,&source,"E1101",e))?;
+                // Use exactly the declaration snapshots inspected above during
+                // final resolution, including editor overlays.
+                for file in imported.sources.into_iter().skip(1) {overlays.insert(file.path,file.text);}
+            }
             let core = transpiler.transpile(&module).map_err(|e| script_error(path, &source, "E1101", e))?;
             let map = SourceMap::new(source, &core, &transpiler.source_lines);
             (core, Some(map))
@@ -194,6 +204,27 @@ impl SourceMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typed_script_imports_use_editor_overlays_in_both_passes() {
+        // No on-disk module: metadata inference and final Core checking must
+        // both use the same unsaved editor snapshot.
+        let directory = std::env::temp_dir().join("aether-script-import-overlay");
+        let root = directory.join("main.ath");
+        let module = directory.join("values.aeth");
+        let source = "from values import supplied\ndef main():\n    if supplied() + 1 != 8:\n        return 1\n    return 0\n";
+        let snapshot = "pub fn supplied()->i64{7}";
+        let session = Session::parse(&root, source.into(), ModuleSearch::default(),
+            HashMap::from([(module.clone(), snapshot.into())])).unwrap();
+        session.check("native", false).unwrap();
+        assert_eq!(session.resolver.sources.len(), 2);
+        assert_eq!(session.resolver.sources[1].text, snapshot);
+        let session = Session::parse(&root, source.into(), ModuleSearch::default(),
+            HashMap::from([(module, "pub fn supplied()->bool{false}".into())])).unwrap();
+        let diagnostic = session.check("native", false).err().unwrap();
+        assert_eq!(diagnostic.code, "E2100");
+        assert_eq!(diagnostic.location.unwrap().line, 3);
+    }
+
     #[test]
     fn script_mapping_preserves_unicode_and_original_error_line() {
         let original = "def main():\n    print(\"你好\")\n    return True\n".to_string();

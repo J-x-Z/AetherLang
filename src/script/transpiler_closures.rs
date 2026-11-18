@@ -52,6 +52,9 @@ impl Transpiler {
         Ok(())
     }
     pub(super) fn check_named_callbacks(&self, name: &str, args: &[Expr]) -> Result<()> {
+        if let Some((params,_))=self.imported.functions.get(name) {
+            for (parameter,argument) in params.iter().zip(args) {self.check_callable_argument(parameter,argument)?;}
+        }
         if let Some(function) = self.definitions.get(name) {
             for (parameter, argument) in function.params.iter().zip(args) {
                 if let Some(hint) = &parameter.type_hint {
@@ -93,6 +96,7 @@ impl Transpiler {
         span: super::super::token::Span,
     ) -> Result<(ScriptType, String)> {
         let mut context = Transpiler::new();
+        context.imported = self.imported.clone();
         context.locals = self.locals.clone();
         context.assigned = self.assigned.clone();
         context.functions = self.functions.clone();

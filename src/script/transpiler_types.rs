@@ -18,6 +18,8 @@ impl fmt::Display for Dimension {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ScriptType {
+    Reference{mutable:bool,inner:Box<ScriptType>},
+    BorrowedInterface{name:String,mutable:bool},
     Callable {params:Vec<ScriptType>,result:Box<ScriptType>,identity:String,core:Option<String>},
     Scalar(String),
     Array(Box<ScriptType>, Dimension),
@@ -40,6 +42,8 @@ impl PartialEq<&str> for ScriptType {
 impl fmt::Display for ScriptType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Reference{mutable,inner}=>write!(f,"&{}{}",if *mutable {"mut "}else{""},inner),
+            Self::BorrowedInterface{name,mutable}=>write!(f,"&{}dyn {}",if *mutable {"mut "}else{""},name),
             Self::Callable {core,..} => write!(f,"{}",core.as_deref().unwrap_or("_")),
             Self::Scalar(n) => write!(f, "{n}"),
             Self::Array(element, length) => write!(f, "[{element}; {length}]"),
@@ -49,6 +53,8 @@ impl fmt::Display for ScriptType {
 impl ScriptType {
     pub fn as_str(&self) -> &str {
         match self {
+            Self::Reference{..}=>"Reference",
+            Self::BorrowedInterface{..}=>"Dyn",
             Self::Callable {..} => "Callable",
             Self::Scalar(name) => name,
             Self::Array(..) => "Array",
@@ -77,7 +83,8 @@ impl ScriptType {
     }
     fn substitute(&self, bindings: &HashMap<String, Dimension>) -> Result<Self> {
         Ok(match self {
-            Self::Scalar(_) | Self::Callable {..} => self.clone(),
+            Self::Reference{mutable,inner}=>Self::Reference{mutable:*mutable,inner:Box::new(inner.substitute(bindings)?)},
+            Self::BorrowedInterface{..}|Self::Scalar(_) | Self::Callable {..} => self.clone(),
             Self::Array(element, length) => Self::Array(
                 Box::new(element.substitute(bindings)?),
                 match length {
@@ -105,6 +112,14 @@ impl ScriptType {
 }
 impl Transpiler {
     pub(super) fn map_type(hint: &TypeHint) -> Result<ScriptType> {
+        if matches!(hint.name.as_str(),"Dyn"|"DynMut"|"Ref"|"RefMut") && hint.generics.len()==1 {
+            let inner=&hint.generics[0];
+            if matches!(hint.name.as_str(),"Dyn"|"DynMut") {
+                if !inner.generics.is_empty()||inner.const_value.is_some() {return Err("Dyn requires one non-generic imported interface".into());}
+                return Ok(ScriptType::BorrowedInterface{name:inner.name.clone(),mutable:hint.name=="DynMut"});
+            }
+            return Ok(ScriptType::Reference{mutable:hint.name=="RefMut",inner:Box::new(Self::map_type(inner)?)});
+        }
         if hint.name=="Callable" && !hint.generics.is_empty() {
             let mut types=hint.generics.iter().map(Self::map_type).collect::<Result<Vec<_>>>()?;
             let result=Box::new(types.pop().unwrap());
@@ -174,6 +189,7 @@ impl Transpiler {
         ))
     }
     pub(super) fn call_result_type(&self, name: &str, args: &[Expr]) -> Result<ScriptType> {
+        if let Some((_,ret))=self.imported.functions.get(name) {return Ok(ret.clone());}
         let function = self
             .definitions
             .get(name)

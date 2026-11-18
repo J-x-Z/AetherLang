@@ -1,0 +1,25 @@
+pub interface Value {
+    fn read(self:&Self)->i64 effect[read];
+    fn add(self:&mut Self,delta:i64)->i64 effect[read,write];
+    fn view(self:&Self)->&i64 effect[read];
+}
+pub struct Left {value:i64}
+pub struct Right {value:i64}
+impl Value for Left {
+    fn read(self:&Self)->i64 {self.value}
+    fn add(self:&mut Self,delta:i64)->i64 {self.value=self.value+delta;self.value}
+    fn view(self:&Self)->&i64 {&self.value}
+}
+impl Value for Right {
+    fn read(self:&Self)->i64 {self.value*2}
+    fn add(self:&mut Self,delta:i64)->i64 {self.value=self.value+delta*2;self.value}
+    fn view(self:&Self)->&i64 {&self.value}
+}
+pub fn left(seed:i64)->Left {Left{value:seed}}
+pub fn right(seed:i64)->Right {Right{value:seed}}
+pub fn choose(flag:bool,a:&Left,b:&Right)->&dyn Value {
+    if flag {a as &dyn Value} else {b as &dyn Value}
+}
+pub fn choose_mut(flag:bool,a:&mut Left,b:&mut Right)->&mut dyn Value {
+    if flag {a as &mut dyn Value} else {b as &mut dyn Value}
+}

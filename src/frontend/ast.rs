@@ -48,6 +48,8 @@ pub struct Program {
     pub module_owners: std::collections::HashMap<Span, usize>,
     /// Original C declaration selected by each resolved use, including reexports.
     pub foreign_uses: std::collections::HashMap<Span, Span>,
+    /// Source spellings reserved against compiler-created helper identities.
+    pub reserved_symbols: std::collections::HashSet<String>,
 }
 
 /// Top-level items
@@ -822,6 +824,8 @@ pub enum UnOp {
 /// Type representation
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
+    /// Unsized interface marker; only borrowed dyn types have a value layout.
+    Dyn(String, Span),
     /// Named type (i32, String)
     Named(String, Span),
     /// Generic type instantiation (Option<T>, Vec<i32>)
@@ -879,7 +883,7 @@ pub enum Type {
 impl Type {
     pub fn span(&self) -> Span {
         match self {
-            Type::Named(_, s) => *s,
+            Type::Dyn(_, s) | Type::Named(_, s) => *s,
             Type::Generic(_, _, s) => *s,
             Type::GenericWithArgs { span, .. } => *span,
             Type::Pointer(_, s) => *s,

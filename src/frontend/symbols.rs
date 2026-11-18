@@ -48,6 +48,7 @@ impl Builder<'_> {
     }
     fn type_name(&self, ty: &Type) -> String {
         match ty {
+            Type::Dyn(name, _) => format!("dyn {}",self.display_name(name)),
             Type::Named(name, _) => self.display_name(name), Type::Pointer(ty, _) => format!("*{}", self.type_name(ty)),
             Type::Ref { mutable, inner, .. } => format!("&{}{}", if *mutable { "mut " } else { "" }, self.type_name(inner)),
             Type::ArrayExpr {elem,..} => format!("[{}; const]", self.type_name(elem)),

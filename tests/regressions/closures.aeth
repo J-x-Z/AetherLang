@@ -58,5 +58,8 @@ fn main()->i32 {
     let make_counter:_=|| { ||->i64{base=base+1;base} };
     let mut isolated:_=make_counter();
     if isolated()!=100 {return 20;}
+    let buffer:[i64;2]=[4,8];
+    let captured_array:_=|index:i64|->i64{buffer[index]};
+    if captured_array(1)!=8 {return 21;}
     return 0;
 }

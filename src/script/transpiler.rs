@@ -12,9 +12,13 @@ type Result<T> = std::result::Result<T, String>;
 mod types;
 #[path="transpiler_closures.rs"]
 mod closures;
+#[path="transpiler_imports.rs"]
+mod imports;
+use imports::ImportedApi;
 use types::{ScriptType, Dimension};
 
 pub struct Transpiler {
+    imported:ImportedApi,
     output: String,
     pub source_lines: Vec<usize>,
     source_line: usize,
@@ -34,7 +38,7 @@ pub struct Transpiler {
 
 impl Transpiler {
     pub fn new() -> Self {
-        Self { output: String::new(), source_lines: Vec::new(), source_line: 1, indent: 0, source_file: None,
+        Self { imported:ImportedApi::default(), output: String::new(), source_lines: Vec::new(), source_line: 1, indent: 0, source_file: None,
             functions: HashMap::new(), locals: BTreeMap::new(), assigned: HashSet::new(),
             return_type: "void".into(), is_main: false, loop_depth: 0, temporary: 0, reserved_names: HashSet::new(), definitions: HashMap::new(), const_parameters: HashMap::new() }
     }
@@ -50,11 +54,13 @@ impl Transpiler {
         self.source_line = 1;
         self.indent = 0;
         self.functions.clear();
+        self.functions.extend(self.imported.functions.iter().map(|(n,(_,r))|(n.clone(),r.clone())));
         self.definitions.clear();
         self.temporary = 0;
         self.reserved_names.clear();
         self.reserve_source_names(module);
         for statement in &module.stmts {
+            if matches!(statement,Stmt::Import(_)) {continue;}
             let Stmt::FunctionDef(function) = statement else {
                 return Err("Script top-level statements must be function definitions".into());
             };
@@ -70,6 +76,10 @@ impl Transpiler {
         if let Some(source) = self.source_file.clone() {
             self.line(&format!("// Source: {}", source.replace(['\n', '\r'], " ")));
         }
+        for statement in &module.stmts {if let Stmt::Import(import)=statement {
+            self.source_line=import.span.line;
+            for (name,alias) in &import.names {self.line(&format!("use {}::{} as {};",import.path.join("::"),name,alias));}
+        }}
         self.line("extern \"C\" {");
         self.line("    fn puts(s: *u8) -> i32;");
         self.line("    fn printf(fmt: *u8, ...) -> i32;");
@@ -105,6 +115,7 @@ impl Transpiler {
                     self.reserved_names.insert(loop_.var.clone());
                     expressions.push(&loop_.iterable); statements.extend(&loop_.body);
                 }
+                Stmt::Import(import)=>{for (_,name) in &import.names {self.reserved_names.insert(name.clone());}},
                 Stmt::Pass | Stmt::Break | Stmt::Continue => {},
             }
         }
@@ -212,7 +223,7 @@ impl Transpiler {
 
     fn statement(&mut self, statement: &Stmt) -> Result<()> {
         self.source_line = match statement {
-            Stmt::FunctionDef(x) => x.span.line, Stmt::If(x) => x.span.line,
+            Stmt::Import(x)=>x.span.line, Stmt::FunctionDef(x) => x.span.line, Stmt::If(x) => x.span.line,
             Stmt::While(x) => x.span.line, Stmt::For(x) => x.span.line,
             Stmt::Return(x) => x.span.line, Stmt::Assign(x) => x.span.line,
             Stmt::Expr(x) => x.span().line, _ => self.source_line,
@@ -234,7 +245,7 @@ impl Transpiler {
                     self.line(&format!("{} {} {};", target, op.spelling(), value));
                     return Ok(());
                 }
-                if matches!(&assignment.target, Expr::Index {..}) {
+                if matches!(&assignment.target, Expr::Index {..}|Expr::FieldAccess{..}) {
                     let target = self.expression(&assignment.target)?;
                     let value = self.expression(&assignment.value)?;
                     self.line(&format!("{} = {};", target, value));
@@ -326,6 +337,7 @@ impl Transpiler {
                 self.line(if matches!(statement, Stmt::Break) { "break;" } else { "continue;" });
             }
             Stmt::Pass => {},
+            Stmt::Import(_) => return Err("Core imports must be at Script module scope".into()),
             Stmt::FunctionDef(_) => return Err("nested Script functions are not implemented".into()),
         }
         Ok(())
@@ -336,15 +348,22 @@ impl Transpiler {
             Expr::Lambda {params,ret_type,body,span} => self.lambda_parts(params,ret_type.as_ref(),body,*span)?.0,
             Expr::Integer { .. } => "i64".into(), Expr::Float { .. } => "f64".into(),
             Expr::Boolean { .. } => "bool".into(), Expr::String { .. } => "*u8".into(),
-            Expr::Identifier { name, .. } => self.locals.get(name).or_else(||self.const_parameters.get(name)).cloned().ok_or_else(|| format!("unknown Script variable '{}'", name))?,
+            Expr::Identifier { name, .. } => self.locals.get(name).or_else(||self.const_parameters.get(name)).or_else(||self.imported.values.get(name)).cloned().ok_or_else(|| format!("unknown Script variable '{}'", name))?,
             Expr::Unary { op: UnaryOp::Not, .. } => "bool".into(),
             Expr::Unary { expr, .. } => self.infer_type(expr)?,
             Expr::Binary { op: BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::And | BinOp::Or, .. } => "bool".into(),
             Expr::Binary { left, .. } => self.infer_type(left)?,
             Expr::Call { func, args, .. } => {
+                if let Some((ty,_))=self.reference_builtin(func,args)? {return Ok(ty);}
+                if let Expr::FieldAccess{target,field,..}=func.as_ref() {
+                    if let Some((params,ret))=self.imported_method(target,field)? {
+                        if params.len()!=args.len(){return Err("dynamic method argument count mismatch".into());}
+                        return Ok(ret);
+                    }
+                }
                 if let Some(result)=self.callable_result(func,args)? {return Ok(result);}
                 let Expr::Identifier { name, .. } = func.as_ref() else { return Err("Script calls require a named function or closure".into()); };
-                if name == "print" { "i32".into() }
+                if name == "print" && !self.functions.contains_key(name) { "i32".into() }
                 else if name == "repeat" && !self.functions.contains_key(name) { self.repeat_type(args)? }
                 else { self.call_result_type(name,args)? }
             }
@@ -358,7 +377,7 @@ impl Transpiler {
                 ScriptType::Array(element,_) => *element,
                 _ => return Err("Script indexing requires a fixed array".into()),
             },
-            Expr::FieldAccess { .. } => return Err("Script object fields are not implemented".into()),
+            Expr::FieldAccess {target,field,..} => self.imported_field(target,field)?,
         })
     }
 
@@ -366,7 +385,7 @@ impl Transpiler {
         Ok(match expr {
             Expr::Lambda {params,ret_type,body,span} => self.lambda_parts(params,ret_type.as_ref(),body,*span)?.1,
             Expr::Identifier { name, .. } => {
-                if !self.assigned.contains(name) { return Err(format!("Script variable '{}' may be used before assignment", name)); }
+                if !self.assigned.contains(name)&&!self.imported.values.contains_key(name) { return Err(format!("Script variable '{}' may be used before assignment", name)); }
                 name.clone()
             }
             Expr::Integer { value, .. } => value.to_string(),
@@ -384,6 +403,13 @@ impl Transpiler {
                 format!("({} {} {})", self.expression(left)?, operator, self.expression(right)?)
             }
             Expr::Call { func, args, .. } => {
+                if let Some((_,code))=self.reference_builtin(func,args)? {return Ok(code);}
+                if let Expr::FieldAccess{target,field,..}=func.as_ref() {
+                    if let Some((params,_))=self.imported_method(target,field)? {
+                        if params.len()!=args.len(){return Err("dynamic method argument count mismatch".into());}
+                        return Ok(format!("({}).{}({})",self.expression(target)?,field,args.iter().map(|a|self.expression(a)).collect::<Result<Vec<_>>>()?.join(", ")));
+                    }
+                }
                 if self.callable_result(func,args)?.is_some() {
                     return Ok(format!("({})({})",self.expression(func)?,args.iter().map(|arg|self.expression(arg)).collect::<Result<Vec<_>>>()?.join(", ")));
                 }
@@ -393,7 +419,7 @@ impl Transpiler {
                     self.repeat_type(args)?;
                     return Ok(format!("[{}; {}]",values[0],values[1]));
                 }
-                if name == "print" {
+                if name == "print" && !self.functions.contains_key(name) {
                     if args.len() != 1 { return Err("Script print takes exactly one argument".into()); }
                     let ty = self.infer_type(&args[0])?;
                     match ty.as_str() {
@@ -411,7 +437,7 @@ impl Transpiler {
             }
             Expr::List {elements,..} => format!("[{}]",elements.iter().map(|e|self.expression(e)).collect::<Result<Vec<_>>>()?.join(", ")),
             Expr::Index {target,index,..} => format!("({})[{}]",self.expression(target)?,self.expression(index)?),
-            Expr::FieldAccess { .. } => return Err("Script object fields are not implemented".into()),
+            Expr::FieldAccess {target,field,..} => {self.imported_field(target,field)?;format!("({}).{}",self.expression(target)?,field)},
         })
     }
 

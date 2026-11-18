@@ -2008,6 +2008,7 @@ impl SemanticAnalyzer {
             }),
             Type::Unit(_) => Ok(ResolvedType::unit()),
             Type::Never(_) => Ok(ResolvedType::never()),
+            Type::Dyn(_,span) => Err(Error::semantic_expected("E2407","dynamic interface lowering before semantic analysis",*span)),
             Type::Infer(span) => Err(Error::Expected("concrete type annotation; placeholder '_' inference is not implemented".into(), *span)),
             // Ownership identity survives resolution; flow checks actual transfers.
             Type::Owned { inner, ownership, span } => self.resolve_owned_type(inner, *ownership, *span),

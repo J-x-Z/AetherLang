@@ -1,0 +1,52 @@
+interface Value {
+    fn read(self:&Self)->i64 effect[read];
+    fn add(self:&mut Self,delta:i64)->i64 effect[read,write];
+    fn view(self:&Self)->&i64 effect[read];
+    fn sum(self:&Self,other:&dyn Value)->i64 effect[read];
+}
+struct First {value:i64}
+struct Second {value:i64}
+type FirstAlias=First;
+impl Value for FirstAlias {
+    fn read(self:&Self)->i64 {self.value}
+    fn add(self:&mut Self,delta:i64)->i64 {self.value=self.value+delta;self.value}
+    fn view(self:&Self)->&i64 {&self.value}
+    fn sum(self:&Self,other:&dyn Value)->i64 {self.value+other.read()}
+}
+impl Value for Second {
+    fn read(self:&Self)->i64 {self.value*2}
+    fn add(self:&mut Self,delta:i64)->i64 {self.value=self.value+delta*2;self.value}
+    fn view(self:&Self)->&i64 {&self.value}
+    fn sum(self:&Self,other:&dyn Value)->i64 {self.value+other.read()}
+}
+fn select(flag:bool,a:&First,b:&Second)->&dyn Value {
+    if flag {a as &dyn Value} else {b as &dyn Value}
+}
+fn select_mut(flag:bool,a:&mut First,b:&mut Second)->&mut dyn Value {
+    if flag {a as &mut dyn Value} else {b as &mut dyn Value}
+}
+fn inspect(value:&dyn Value)->&i64 {value.view()}
+fn main()->i32 {
+    let mut a:First=First{value:3};
+    let mut b:Second=Second{value:7};
+    {
+        let values:[&dyn Value;2]=[select(true,&a,&b),select(false,&a,&b)];
+        if values[0].read()!=3 || values[1].read()!=14 {return 1;}
+        if values[0].sum(values[1])!=17 {return 9;}
+        let view:&i64=inspect(values[1]);
+        if *view!=7 {return 2;}
+        let selected:&dyn Value=select(false,&a,&b);
+        let closure:_=||->i64{selected.read()};
+        if closure()!=14 {return 3;}
+    }
+    {
+        let mut selected:&mut dyn Value=select_mut(false,&mut a,&mut b);
+        if selected.add(3)!=13 {return 4;}
+        if selected.add(2)!=17 {return 5;}
+        let view:&i64=selected.view();
+        if *view!=17 {return 6;}
+    }
+    if a.value!=3 || b.value!=17 {return 7;}
+    if select(true,&a,&b).read()!=3 {return 8;}
+    return 0;
+}

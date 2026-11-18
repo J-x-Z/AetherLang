@@ -14,6 +14,9 @@ mod drop_templates;
 #[path = "specialize_closures.rs"]
 mod closures;
 use closures::ClosureInfo;
+#[path="specialize_dyn.rs"]
+mod dynamic;
+use dynamic::DynamicObject;
 use constants::*;
 use crate::types::PointerWidth;
 
@@ -34,6 +37,7 @@ struct Signature {
 struct Specializer {
     structs: HashMap<String, StructDef>,
     enums: HashMap<String, EnumDef>,
+    unions: HashMap<String, UnionDef>,
     functions: HashMap<String, Function>,
     aliases: HashMap<String, TypeAliasDef>,
     signatures: HashMap<String, Signature>,
@@ -57,6 +61,11 @@ struct Specializer {
     closure_impl_type: Option<Type>,
     closure_method_modes: HashMap<(String, String), bool>,
     closure_method_signatures: HashMap<(String, String), Signature>,
+    dynamic_interfaces: HashMap<String,InterfaceDef>,
+    dynamic_implementations: HashMap<String,Vec<ImplBlock>>,
+    dynamic_cache: HashMap<(String,bool),String>,
+    dynamic_objects: HashMap<String,DynamicObject>,
+    dynamic_functions: HashSet<String>,
 }
 
 impl Specializer {
@@ -64,6 +73,7 @@ impl Specializer {
         let mut this = Self {
             structs: HashMap::new(),
             enums: HashMap::new(),
+            unions: HashMap::new(),
             functions: HashMap::new(),
             aliases: HashMap::new(),
             signatures: HashMap::new(),
@@ -71,7 +81,7 @@ impl Specializer {
             generic_destructors: HashMap::new(),
             instances: HashMap::new(),
             function_bindings: HashMap::new(),
-            names: HashSet::new(),
+            names: program.reserved_symbols.clone(),
             output: Vec::new(),
             globals: Bindings::new(),
             locals: Bindings::new(),
@@ -84,6 +94,9 @@ impl Specializer {
             local_names: HashSet::new(),
             module_owners: program.module_owners.clone(),
             current_owner: 0,
+            dynamic_interfaces:program.items.iter().filter_map(|i|match i {Item::Trait(d)|Item::Interface(d)=>Some((d.name.name.clone(),d.clone())),_=>None}).collect(),
+            dynamic_implementations:{let mut m:HashMap<String,Vec<ImplBlock>>=HashMap::new();for i in &program.items {if let Item::Impl(b)=i {if let Some(t)=&b.interface {m.entry(t.name.clone()).or_default().push(b.clone());}}}m},
+            dynamic_cache:HashMap::new(),dynamic_objects:HashMap::new(),dynamic_functions:HashSet::new(),
             closure_impl_type: None,
             closure_method_signatures: program.items.iter().filter_map(|item| match item {Item::Impl(d)=>Some(d),_=>None}).flat_map(|d| d.methods.iter().map(|f| ((d.target.name.clone(),f.name.name.clone()),Signature {params:f.params.iter().map(|p|p.ty.clone()).collect(),ret:f.ret_type.clone().unwrap_or(Type::Unit(f.span))}))).collect(),
             closure_method_modes: program.items.iter().filter_map(|item| match item { Item::Impl(d) => Some(d), _ => None }).flat_map(|d| d.methods.iter().map(|f| ((d.target.name.clone(), f.name.name.clone()), matches!(f.params.first().map(|p| &p.ty), Some(Type::Ref {mutable:true,..}))))).collect(),
@@ -97,6 +110,10 @@ impl Specializer {
                 }
                 Item::Enum(d) => {
                     this.enums.insert(d.name.name.clone(), d.clone());
+                    Some(&d.name)
+                }
+                Item::Union(d) => {
+                    this.unions.insert(d.name.name.clone(), d.clone());
                     Some(&d.name)
                 }
                 Item::Function(d) => {
@@ -210,6 +227,18 @@ impl Specializer {
                     }
                     self.enums.insert(d.name.name.clone(), d.clone());
                 }
+                Item::Interface(d) | Item::Trait(d) => {
+                    // Interfaces are type declarations too: normalize their
+                    // parameter/result types just as concrete impl signatures.
+                    for method in &mut d.methods {
+                        for parameter in &mut method.params {
+                            parameter.ty = self.ty(&parameter.ty, &Bindings::new())?;
+                        }
+                        if let Some(result) = &mut method.ret_type {
+                            *result = self.ty(result, &Bindings::new())?;
+                        }
+                    }
+                }
                 Item::Union(d) => {
                     for field in &mut d.fields {
                         field.ty = self.ty(&field.ty, &Bindings::new())?;
@@ -237,6 +266,7 @@ impl Specializer {
                                 if let Some(t) = ret_type {
                                     *t = self.ty(t, &Bindings::new())?;
                                 }
+                                self.validate_dynamic_abi(params,ret_type.as_ref(),*span)?;
                                 self.signatures.insert(
                                     name.name.clone(),
                                     Signature {
@@ -247,6 +277,7 @@ impl Specializer {
                             }
                             ForeignItem::Static { name, ty, .. } => {
                                 *ty = self.ty(ty, &Bindings::new())?;
+                                if self.contains_dynamic(ty) {return Err(Error::semantic_expected("E2407","non-dynamic storage in a foreign declaration",name.span));}
                                 self.globals.insert(name.name.clone(), ty.clone());
                             }
                         }
@@ -260,6 +291,7 @@ impl Specializer {
                 }
                 Item::Static(d) => {
                     d.ty = self.ty(&d.ty, &Bindings::new())?;
+                    if d.annotations.iter().any(|a|a.name.name=="no_mangle")&&self.contains_dynamic(&d.ty) {return Err(Error::semantic_expected("E2407","non-dynamic storage in a C ABI export",d.span));}
                     self.globals.insert(d.name.name.clone(), d.ty.clone());
                 }
                 Item::Impl(d) => {
@@ -309,6 +341,7 @@ impl Specializer {
             inner_attrs: program.inner_attrs,
             module_owners: self.module_owners,
             foreign_uses: program.foreign_uses,
+            reserved_symbols:program.reserved_symbols,
         })
     }
 
@@ -319,6 +352,7 @@ impl Specializer {
         if let Some(t) = &mut f.ret_type {
             *t = self.ty(t, bindings)?;
         }
+        if f.annotations.iter().any(|a|a.name.name=="no_mangle") {self.validate_dynamic_abi(&f.params,f.ret_type.as_ref(),f.span)?;}
         self.signatures.insert(
             f.name.name.clone(),
             Signature {
@@ -330,6 +364,7 @@ impl Specializer {
     }
 
     fn function_body(&mut self, f: &mut Function) -> Result<()> {
+        if self.dynamic_functions.contains(&f.name.name) {return Ok(());}
         self.current_owner = self.module_owners.get(&f.span).copied().unwrap_or(0);
         self.local_names.clear();
         self.bindings = self
@@ -379,6 +414,11 @@ impl Specializer {
 
     fn ty_inner(&mut self, ty: &Type, bindings: &Bindings) -> Result<Type> {
         Ok(match ty {
+            Type::Dyn(_,span)=>return Err(Error::semantic_expected("E2407","a borrowed &dyn or &mut dyn interface type",*span)),
+            Type::Ref{mutable,inner,span,..} if matches!(inner.as_ref(),Type::Dyn(..)) => {
+                let Type::Dyn(interface,_) = inner.as_ref() else {unreachable!()};
+                self.dynamic_type(interface,*mutable,*span)?
+            }
             Type::Named(n, s) => {
                 if bindings.const_types.contains_key(n) {
                     return Err(problem("type parameter or named type, not a const parameter", *s));
@@ -785,12 +825,13 @@ impl Specializer {
             Expr::Deref { expr, .. } => {
                 Ok(self.expr(expr, None)?.and_then(|t| pointee(&t).cloned()))
             }
-            Expr::Cast { expr, ty, .. } => {
+            Expr::Cast { expr: operand, ty, .. } => {
                 *ty = self.ty(ty, &self.bindings.clone())?;
+                if self.dynamic_info(ty).is_some() {let target=ty.clone();return self.dynamic_cast(expr,&target);}
                 // Adoption only accepts this exact nominal payload. Forward its
                 // type, including const arguments, to struct-literal inference.
                 let payload = match &*ty { Type::Owned { inner, .. } => Some(inner.as_ref()), _ => None };
-                self.expr(expr, payload)?;
+                self.expr(operand, payload)?;
                 Ok(Some(ty.clone()))
             }
             Expr::Unary { expr, .. } => self.expr(expr, expected),
@@ -849,6 +890,9 @@ impl Specializer {
             }
             Expr::Match { expr, arms, .. } => {
                 let source = self.expr(expr, None)?;
+                if source.as_ref().and_then(|t|self.dynamic_info(t)).is_some() && arms.iter().any(|a|!matches!(a.pattern,Pattern::Wildcard{..}|Pattern::Binding{..})) {
+                    return Err(Error::semantic_expected("E2407","opaque dynamic interface methods, not implementation payload patterns",span));
+                }
                 let saved = self.locals.clone();
                 let saved_names = self.local_names.clone();
                 let mut result = expected.cloned();
@@ -1014,6 +1058,7 @@ impl Specializer {
             }
             Expr::MethodCall { expr: receiver, method, args, .. } => {
                 let source = self.expr(receiver, None)?;
+                if let Some(source) = source.as_ref().filter(|t|self.dynamic_info(t).is_some()) {return self.dynamic_call(expr,source);}
                 if let Some(field) = source.as_ref().and_then(|ty| self.field_type(ty, &method.name)) {
                     if let Some(info) = self.closure_info(&field).cloned() {
                         let call = Expr::Call {func:Box::new(Expr::Field {expr:receiver.clone(),field:method.clone(),span}),args:std::mem::take(args),span};
@@ -1590,6 +1635,7 @@ fn type_key(ty: &Type) -> String {
         ),
         Type::Unit(_) => "unit".to_string(),
         Type::Never(_) => "never".to_string(),
+        Type::Dyn(name,_) => format!("dyn_{name}"),
         Type::Infer(_) => "infer".to_string(),
         Type::Owned {
             inner, ownership, ..

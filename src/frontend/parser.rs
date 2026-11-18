@@ -214,7 +214,7 @@ impl Parser {
             items.push(self.parse_item()?);
         }
 
-        Ok(Program { items, inner_attrs, module_owners: Default::default(), foreign_uses: Default::default() })
+        Ok(Program { items, inner_attrs, module_owners: Default::default(), foreign_uses: Default::default(), reserved_symbols:self.tokens.iter().filter_map(|t|match &t.kind {TokenKind::Ident(n) if n.starts_with("__aeth_")=>Some(n.clone()),_=>None}).collect() })
     }
     
     /// Parse inner attribute: #![name]
@@ -734,6 +734,12 @@ impl Parser {
         if let TokenKind::Ident(name) = self.current_kind().clone() {
             self.advance();
             if name == "_" { return Ok(Type::Infer(start)); }
+            if name == "dyn" {
+                let interface=self.parse_type()?;
+                let end=interface.span();
+                let Type::Named(name,_) = interface else {return Err(Error::semantic_expected("E2407","one non-generic interface after dyn",end));};
+                return Ok(Type::Dyn(name,start.merge(&end)));
+            }
             let mut ty_name = name;
             while self.consume(&TokenKind::ColonColon) {
                 ty_name.push_str("::");

@@ -63,6 +63,8 @@ impl ModuleSearch {
 }
 
 pub struct Resolver {
+    /// Public/imported source spellings visible in the root module.
+    pub root_bindings:HashMap<String,String>,
     pub sources: Vec<SourceFile>,
     search: ModuleSearch,
     loaded: HashMap<PathBuf, Exports>,
@@ -79,7 +81,7 @@ pub struct Resolver {
 
 impl Resolver {
     pub fn new(search: ModuleSearch) -> Self {
-        Self { sources: vec![], search, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, module_owners: HashMap::new(), foreign_uses: HashMap::new(), entrypoint_enabled: true, overlays: HashMap::new(), namespace: "__aeth_m".into(), source_identifiers: HashSet::new() }
+        Self { root_bindings:HashMap::new(), sources: vec![], search, loaded: HashMap::new(), loading: vec![], items: vec![], next_module: 0, module_owners: HashMap::new(), foreign_uses: HashMap::new(), entrypoint_enabled: true, overlays: HashMap::new(), namespace: "__aeth_m".into(), source_identifiers: HashSet::new() }
     }
 
     pub fn with_overlays(mut self, overlays: HashMap<PathBuf, String>) -> Self {
@@ -100,6 +102,7 @@ impl Resolver {
         // graph with a fresh namespace, using the text snapshots already read.
         // Ordinary source keeps the established __aeth_mN_ spelling.
         loop {
+            self.root_bindings.clear();
             self.sources.clear();
             self.loaded.clear();
             self.loading.clear();
@@ -152,7 +155,7 @@ impl Resolver {
         });
         // Foreign declarations are compared after semantic alias resolution.
         // Comparing source spellings here rejects equivalent aliases.
-        Ok(Program { items: std::mem::take(&mut self.items), inner_attrs: attrs, module_owners: std::mem::take(&mut self.module_owners), foreign_uses: std::mem::take(&mut self.foreign_uses) })
+        Ok(Program { items: std::mem::take(&mut self.items), inner_attrs: attrs, module_owners: std::mem::take(&mut self.module_owners), foreign_uses: std::mem::take(&mut self.foreign_uses), reserved_symbols:self.source_identifiers.clone() })
     }
 
     fn parse(&mut self, path: &Path, text: String) -> Result<Program> {
@@ -283,6 +286,7 @@ impl Resolver {
         for (module, child) in &modules {
             qualified_names(module, child, &mut names);
         }
+        if root {self.root_bindings=names.iter().map(|(name,value)|(name.clone(),value.emitted.clone())).collect();}
         for mut item in items {
             if matches!(item, Item::Use(_) | Item::Module(_)) { continue; }
             Rewriter { names: &names, foreign_uses: &mut self.foreign_uses, modules: modules.keys().cloned().collect(), locals: HashSet::new(), type_locals: HashSet::new(), const_locals: HashSet::new(), normalize_main: root && self.entrypoint_enabled, zero_status_returns: false }.item(&mut item)?;
@@ -360,6 +364,7 @@ impl Rewriter<'_> {
     fn ident(&self, id: &mut Ident) { self.name(&mut id.name); }
     fn ty(&mut self, ty: &mut Type) -> Result<()> {
         match ty {
+            Type::Dyn(n, _) => { if !self.type_locals.contains(n) { self.name(n); } },
             Type::Named(n, _) => if !self.type_locals.contains(n) && !self.const_locals.contains(n) { self.name(n); },
             Type::Generic(n, args, _) => { if !self.type_locals.contains(n) { self.name(n); } for ty in args { self.ty(ty)?; } }
             Type::GenericWithArgs { name, args, .. } => { if !self.type_locals.contains(name) { self.name(name); } for arg in args { match arg { GenericArg::Type(t) => self.ty(t)?, GenericArg::Const(e) => self.expr(e)? } } }

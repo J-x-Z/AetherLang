@@ -327,7 +327,7 @@ impl<'a> Flow<'a> {
         self.function_key = self.analyzer.facts.method_signatures.get(&function.name.name)
             .map(|signature| signature.emitted_name.clone()).unwrap_or_else(|| function.name.name.clone());
         if let Some((target, _)) = function.name.name.rsplit_once("::") {
-            self.self_type = self.analyzer.declared_types.get(target).cloned();
+            self.self_type = Some(self.analyzer.resolve_type(&Type::Named(target.to_string(), function.name.span))?);
         }
         self.return_type = function
             .ret_type

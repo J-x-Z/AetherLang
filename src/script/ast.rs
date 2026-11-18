@@ -7,6 +7,7 @@ pub struct ScriptModule {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
+    Import(CoreImport),
     FunctionDef(FunctionDef),
     If(IfStmt),
     While(WhileStmt),
@@ -18,6 +19,13 @@ pub enum Stmt {
     Break,
     Continue,
     // Add ClassDef, Import, etc. later
+}
+
+#[derive(Debug, Clone)]
+pub struct CoreImport {
+    pub path:Vec<String>,
+    pub names:Vec<(String,String)>,
+    pub span:Span,
 }
 
 #[derive(Debug, Clone)]
