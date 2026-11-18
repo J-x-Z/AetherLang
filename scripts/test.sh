@@ -51,6 +51,8 @@ if clang --version >/dev/null 2>&1; then
         --work-dir "$CARGO_TARGET_DIR/regular-bootstrap" --output "$native_compiler"
     python3 tests/terminal_stats.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-terminal-stats"
     python3 tests/bootstrap_tuples.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-tuples" --sanitize
+    python3 tests/bootstrap_constants.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-constants" --sanitize
+    python3 tests/bootstrap_memory.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-memory" --sanitize
     python3 tests/bootstrap_patterns.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-patterns" --sanitize
     python3 tests/bootstrap_hosted.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-hosted" --sanitize
     python3 tests/bootstrap_cli.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-cli"

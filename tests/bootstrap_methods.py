@@ -46,7 +46,7 @@ negative={
  'static_instance':(base+'fn main(){let value:Box<i64>=Box::new(7);value.new(8);}','associated function requires'),
  'static_value':('struct A{x:i64}impl A{fn create()->i64{return 7;}}fn main(){let x:i64=A::create;}','parentheses'),
  'escape':(base+'fn leak()->&i64{let value:Box<i64>=Box::new(7);return value.get_ref();}fn main(){}','local storage'),
- 'temporary_escape':(base+'fn main(){let reference:&i64=Box::new(7).get_ref();let value:i64=*reference;}','reference-valued block'),
+ 'temporary_escape':(base+'fn main(){let reference:&i64=Box::new(7).get_ref();let value:i64=*reference;}','outlives its local storage'),
  'live_borrow':(base+'fn main(){let mut value:Box<i64>=Box::new(7);let reference:&i64=value.get_ref();value.set(8);let copied:i64=*reference;}','live reference loan'),
 }
 san=None
