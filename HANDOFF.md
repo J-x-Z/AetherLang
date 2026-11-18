@@ -18,7 +18,12 @@ python3 -B tests/mcp_queries.py --compiler "$prefix/aethc" --jxz "$prefix/jxz" -
 python3 -B tests/mcp_queries.py --compiler "$prefix/aethc-native" --jxz "$prefix/jxz" --work-dir "$cycle/recheck-native"
 ```
 
-Windows x64 的新 JXZ 已用 C、LLVM 两个后端在 O0/O2 交叉编译并链接。下一项具体任务是用这批源码构建的 Windows 包运行 `Test-Native.ps1`，其中包括完整的 MCP 协议与项目查询测试。下文多平台验收表所列的是已发布 0.1.0 的记录。
+Windows x64 开发包 `d7f119c` 已在 RTX 4060 笔记本上通过完整原生验收，覆盖双后端自举、LSP、JXZ、MCP 与 CSV。安装目录为 `D:\AetherLang`，NTFS 分配 2,630,896 字节。新终端可直接运行 `aethc`、`jxz` 和 `aether-mcp`。需要重跑时，在 PowerShell 中执行以下命令。详细记录保存在 `WORK/mcp-cycle/win4060/d7f119c0e7dbd09ed4593a0b05b81f4e8b04a835/native-receipts.zip`。下文多平台验收表对应已发布的 0.1.0。
+
+```powershell
+$python = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
+& D:\AetherLang\Test-Native.ps1 -Clang (Get-Command clang.exe).Source -Python $python -WorkDir D:\AetherLang-work\recheck
+```
 
 ## 本机重建
 

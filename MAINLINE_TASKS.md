@@ -176,4 +176,4 @@ Mac主机同时最多一个全量编译，Cargo并发沿用3；Linux宿主交付
 
 ## T30　本地 MCP 和机器可读性
 
-开发源码为 `84c270b`。四个 MCP 工具通过真实 JXZ、自定义清单及依赖、Script、泛型和诊断回归；两套编译器共用零基 UTF-16 协议。编译审计补齐固定数组边界与整数转 f32 的常量语义。macOS 的安装、自举及各项测量记录位于 `WORK/mcp-cycle`。本轮 Windows 证据覆盖 x64 交叉编译和链接，新的原生 MCP 测试入口已接入安装包。[配置与工具](docs/MCP.md) · [测试入口与后续工作](HANDOFF.md) · [实测变化](docs/UPGRADE.md)
+macOS 开发包为 `84c270b`。四个 MCP 工具通过真实 JXZ、自定义清单及依赖、Script、泛型和诊断回归。两套编译器共用零基 UTF-16 协议。编译审计补齐固定数组边界与整数转 f32 的常量语义。Windows x64 开发包 `d7f119c` 已通过同一组 MCP 查询、双后端自举及 JXZ 发布与恢复验收，并在安装后通过当前用户 PATH 启动验证。两端记录均在 `WORK/mcp-cycle`。[配置与工具](docs/MCP.md) · [测试入口与后续工作](HANDOFF.md) · [实测变化](docs/UPGRADE.md)
