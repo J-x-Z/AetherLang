@@ -2,7 +2,7 @@
 
 ## 本地开发版本
 
-源码在 `/Volumes/WINDOWS/work/AetherLang` 的 `work/aetherlang-upgrade`。最初起点 `aceff15`，本次续做起点 `4cb768c`，macOS/Linux 双宿主冻结为 `423e664`，16 比特异构运行时为 `10355a4`，本次基础代码验收提交为 `d31ea10`。用 `git log -1 --oneline` 查看工作树当前提交。完整任务与历史复现见 [主线任务](MAINLINE_TASKS.md)，历次版本见 [升级报告](docs/UPGRADE.md)。
+源码在 `/Volumes/WINDOWS/work/AetherLang` 的 `work/aetherlang-upgrade`。最初起点 `aceff15`，本次续做起点 `4cb768c`，macOS/Linux 双宿主冻结为 `423e664`，16 比特异构运行时为 `10355a4`，基础整体验收源码为 `f84e9d4`，原生子进程等待修正至 `5316467`。用 `git log -1 --oneline` 查看工作树当前提交。完整任务与历史复现见 [主线任务](MAINLINE_TASKS.md)，历次版本见 [升级报告](docs/UPGRADE.md)。
 
 ## 构建与验收
 
@@ -24,6 +24,10 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 AETHER_CUDAQ_BRIDGE="$WORK/cudaq/libaethe
 - `6b324f1`、`a90bd56` 是本机 native JIT 和已验证的磁盘缓存；`f0be8b8` 提供矩阵链规划及低秩分解。M4、RTX 3060、Fold6 Adreno 750 均有真实算子运行。16q 的数值、释放与 CUDA-Q SDK 记录在 `$OUT/q16`，最新上层应用在 `$WORK/compute-gpus-20261118`。
 - `66ccafc`、`ad869dd` 支持两种源表示的常量泛型与重复初值的单次求值，含 wasm32 执行。`57ed11c` 的 Core 可直接生成 C 和 LLVM，已编译本仓库 accumulator 与标准库消费者。四代固定点及独立用例在 `$WORK/t26-production/{c-final,llvm-final}`。
 
+- `451e2f8` 让两种表示的捕获闭包经过同一静态专门化；`f84e9d4` 统一二元运算及复合赋值，修复 LLVM 指针步长。闭包验收在 `$WORK/t25-closures/final7`；复合赋值有 121 项定向 CLI 检查。
+- 自举编译器能直接构建二进制和对象、使用 JXZ 精确模块映射、读 native errno。相邻代在 Mac/Linux 生成相同的 LLVM IR（`fa4016c`）。`ee987fb` 与 `5316467` 在两主机各通过 20 项 errno 与 47 项原生驱动验收，含两次连续中断后的子进程回收。证据在 `$WORK/{t26-native-driver,t26-errno,t26-wait}`。
+- `f84e9d4` 的完整 macOS 验收退出 0，日志 `$WORK/foundation-c36bd04/full.log`。CachyOS 的同提交打包、搬移和项目验收见 `$WORK/linux-mainline-20261118/c36bd04.log`；同版本再通过 27 项 JIT 与 123 项宿主内建命令。
+
 ## 下一项具体任务
 
-T25 正在补捕获闭包、动态接口和有真实挂起/取消行为的 async。T26 正在将固定数组、类型别名、循环、泛型及枚举传播接入可自编译的 Aether 前端，以现有 JXZ 项目为下一个真实消费者。T01 随能力更新冻结支持集；T20/T29 对合并后的固定提交进行独立复核、串行集成和打包。构建时请和同目录的其他工作协调全量 Cargo。
+T25 合并动态接口与协作 async，复验两者交叉影响。T26 以外置 `$WORK/t26-errno/stage2` 为已验证的上一代，自 Aether 源码迁移泛型、枚举、Script 入口和系统存储，直接编译 JXZ 源码。新匹配版本以实际编译和运行判定。T29 在这些改动落地后进行最终打包与联合验收。

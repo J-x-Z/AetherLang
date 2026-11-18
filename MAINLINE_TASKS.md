@@ -12,7 +12,7 @@ T01–T20保留本轮20项语言基础任务：让开发者能够安装工具链
 
 | 复现 | 已落实行为 | 提交与复验入口 |
 | --- | --- | --- |
-| P01、P02 | 非空 tuple 的嵌套、投影、传参和返回。闭包和函数值统一报 E2403；tuple 作为 C ABI 值报 E2404。 | `4a79406`，`WORK/tuple-values` |
+| P01、P02 | 非空 tuple 的嵌套、投影、传参和返回。捕获闭包已在 T25 实现静态调用；tuple 作为 C ABI 值报 E2404。 | `4a79406`，`WORK/tuple-values` |
 | P03、F04 | 接口签名、方法完整性、效果界限、冲突与模块私有性。 | `f0c8531`，`WORK/interfaces-methods/final` |
 | F01、F02、F05、B2、B3 | IR 与效果分析共用已解析 callee、投影和数值精度；修复 f32、Self、add。 | `07240d8`，`WORK/method-facts` |
 | F03、C01、C02 | Script 合成名称、Core 生成符号与完整 u64 转换；真实外部函数返回 99。 | `b62bb53`、`c5222a5`，`tests/bootstrap_core.py` |
@@ -78,6 +78,12 @@ Shell 追加的 N01–N05 分别为递归 Vec、Darwin 部署版本、转义、e
 | T23 | `6b324f1`、`a90bd56` 生成及验证真实 CPU native JIT，校验缓存、导出入口和总字节预算。`f0be8b8` 实现矩阵链规划和低秩分解。独立 Python 数值参照覆盖量化、稀疏、PDE、组合优化及梯度；额外在 RTX 3060、Adreno 750 用 C/LLVM O2 执行同组上层应用和规划。见 `WORK/compute-gpus-20261118`。 |
 | T25、T26 | `ad869dd` 让数组重复初值只求值一次。自举 `57ed11c` 已直接构建现有 accumulator 和标准库消费者，四代 C 验收 131 项，直接 LLVM 验收 104 项，见 `WORK/t26-production`。两项继续实施。 |
 | T28 | 关联 Shell 提交 `44b3da7` 修复短管道进程组设置竞态。Mac/Linux 各通过 14 个原有测试程序，在同一 Shell 实例执行 1,000 条管道并逐条核对输出。八次采样两端均为 6 fd。见 `WORK/shell-joint-20261118/group-acceptance.json`。 |
+
+### 基础冻结与自举驱动
+
+`f84e9d4` 在独立 Mac 源码快照完成 `scripts/test.sh llvm` 全流程，包含 OpenBLAS、Metal、QEMU、CUDA-Q SDK、JXZ 的 2 × (40 + 14) 项及 C/LLVM 自举的 131 和 105 项。CachyOS 同提交完成安装包搬移、双后端真实工作负载、JXZ 和 registry，另通过 27 项 JIT、123 条宿主接口检查。两个后端的复合赋值步长和求值顺序使用 `tests/semantic_values.py` 回归。报告见 `WORK/{foundation-c36bd04,linux-mainline-20261118,compound-assignment}`。
+
+`451e2f8` 的闭包由两种前端进入同一类型与静态分派路径。`1075cbf` 为自举加入 Unit 值，`fa4016c` 支持原生构建和 JXZ 精确依赖，`ee987fb`、`5316467` 新增原生 errno 与正确重试中断的等待。两主机分别通过 20 项 errno 与 47 项驱动检查，含真实项目运行。完整主编译器迁移继续按 T26 计。
 
 ## 执行顺序与并行边界
 

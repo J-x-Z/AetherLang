@@ -1,6 +1,6 @@
 # AetherLang 能力与验收入口
 
-两种源文件进入相同的语义检查和 IR。下表记录本地主线至 `d31ea10` 的实测能力。可安装的双宿主对照包固定于 `423e664`。任务状态见[主线任务](../MAINLINE_TASKS.md)。
+两种源文件进入相同的语义检查和 IR。下表记录本地主线基础冻结至 `f84e9d4` 的实测能力。可安装的双宿主对照包固定于 `423e664`。任务状态见[主线任务](../MAINLINE_TASKS.md)。
 
 | 能力 | 语法与检查 | 生成、链接和执行 | 可复现入口 |
 | --- | --- | --- | --- |
@@ -13,9 +13,9 @@
 | 数据与宿主库 | 带长度字节、严格 UTF-8、i64 字节键 Map、Option/Result 以及带 errno 的 POSIX 文件/目录/进程接口 | 文件中的 NUL、无效 UTF-8、短读、错误码、子进程和分配失败均有原生用例 | `tests/{text_map,runtime_foundation,process_runtime}.py` |
 | 数学与量子 | CPU f64 张量/反向 AD、标量 DAG、电路与状态向量，OpenBLAS、Metal、CUDA-Q 的接口各自独立 | 真实 CPU native JIT/vmap、低秩、稀疏、PDE、MaxCut；M4 Metal、RTX 3060 和 Adreno 750 Vulkan 运行上层程序与 16q，CUDA-Q QPP 有独立 SDK 验收 | `tests/{math_values,compute_jit,compute_planning,compute_applications,compute_runtime,cudaq_runtime}.py` |
 | 项目、编辑器与安装 | JXZ 本地依赖、精确版本注册表、锁定/离线缓存、项目级 LSP、可校验的整包安装 | 目录移动、子进程退出、并发和中断恢复均有回归 | `jxz/tests/integration.py`、`tests/package_install.py` |
-| 自举 | 13 模块 Core 读取真实模块图，在 Aether 中执行解析、检查、C 和直接 LLVM IR 输出 | C-only 与 LLVM 种子分别构建四代，分别核对 C 和 LLVM 固定点，编译未改的 accumulator 服务和标准库消费者。主编译器由 Rust 构建 | `tests/{bootstrap_core,bootstrap_llvm}.py` |
+| 自举 | Core 读取真实模块图，在 Aether 中执行解析、检查、C 和直接 LLVM IR 输出 | C-only 与 LLVM 种子分别构建四代，分别核对 C 和 LLVM 固定点，原生构建、对象输出及 JXZ 精确依赖映射；运行未改的 accumulator 服务和标准库消费者。主编译器由 Rust 构建 | `tests/{bootstrap_core,bootstrap_llvm}.py` |
 
-在此提交上，动态 trait、捕获闭包和 async 仍在 T25 实施。源级常量泛型已经可以在两种语法下运行。元组不能按值穿越 C ABI（E2404），嵌套聚合不接收 owner（E2405）；不支持的目标聚合 ABI 在检查阶段报告 E2407。
+捕获闭包支持具体环境和静态回调，见 `tests/closure_values.py`。在此基础提交上，动态 trait 与 async 仍在 T25 实施。源级常量泛型已经可以在两种语法下运行。元组不能按值穿越 C ABI（E2404），嵌套聚合不接收 owner（E2405）；不支持的目标聚合 ABI 在检查阶段报告 E2407。
 
 公开基础库按实际消费者分组。字节、文本、持有键的 Map 使用 `tests/text_map.py`，Vec、Option 和 Result 使用 `tests/{vec_alignment,vec32,generic_runtime}.py`；作用域包装见 `tests/owned_allocations.py`。文件、io、path、fd、process 与二进制接口由 `tests/{runtime_foundation,process_runtime}.py` 和 JXZ 验证；分配器、TOML 子集、标量图见 `tests/legacy_runtime.py`。LLVM/JNI/OpenBLAS 与硬件 SDK 各有宿主或设备依赖，见 `tests/ffi_modules.py` 及升级报告。仓库里的早期生成 `.c`、smoke/test 文件不作为公开标准库接口。
 
