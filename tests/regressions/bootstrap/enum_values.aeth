@@ -12,6 +12,7 @@ fn unit_chain(ok:bool)->Result<i64,i32>{unit(ok)?;Result::Ok(10)}
 fn guard(count:*i32,yes:bool)->bool{*count=*count+1;yes}
 fn choose(count:*i32)->Choice<i64>{*count=*count+1;Choice::Two(17,25)}
 fn identity<T>(v:T)->T{v}
+fn returned(value:Option<i64>)->i64{match value{Option::Some(n)=>{return n;},Option::None=>{return -1;}};}
 fn byte()->u8{7}
 fn choice_size<T>(value:Choice<T>)->usize{size_of(T)}
 fn main()->i32{
@@ -49,5 +50,6 @@ fn main()->i32{
  let payload:Mixed=Mixed::Bytes([3;24]);let total:u64=match payload{Mixed::Bytes(bytes)=>(bytes[0]+bytes[23]) as u64,_=>0};if total!=6{return 15;}
  let repeated:i64=identity(match source(true){Result::Ok(x)=>x,Result::Err(_)=>0});if repeated!=42{return 16;}
  if choice_size(Choice::Two(1,byte()))!=1{return 17;}
+ if returned(Option::Some(123))!=123||returned(Option::None)!=-1{return 18;}
  puts("enum-values=ok");return 0;
 }

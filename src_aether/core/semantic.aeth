@@ -772,7 +772,7 @@ fn boot_check_match(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTy
   }
   ctx.depth=ctx.depth-1;ctx.bindings=saved;arm=arm.next;
  }
- let result:*BootType=ctx.value_type;ctx.value_type=saved_value;if ctx.failed{return 0 as *BootType;}
+ let mut result:*BootType=ctx.value_type;ctx.value_type=saved_value;if ctx.failed{return 0 as *BootType;}
  if !wildcard{
   let mut variant:*BootNode=subject.fields;
   while variant!=0 as *BootNode{
@@ -780,7 +780,7 @@ fn boot_check_match(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTy
    if !found{boot_error(ctx,node.token,"non-exhaustive enum match");return 0 as *BootType;}variant=variant.next;
   }
  }
- if result==0 as *BootType{boot_error(ctx,node.token,"cannot infer type of a diverging match");return result;}
+ if result==0 as *BootType{result=boot_type(ctx,BY_VOID);}
  // Lower already-checked arms to ordinary scopes/conditions/yields. A guard's
  // payload bindings exist only after its tag test; a failed guard keeps trying.
  let block:*BootNode=boot_node(ctx,BN_BLOCK,node.token);if ctx.failed{return 0 as *BootType;}block.body=temporary;let mut last:*BootNode=temporary;
