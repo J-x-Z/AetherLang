@@ -1,0 +1,35 @@
+struct Guard { id:i32 }
+static mut released:i32=0;
+static mut evaluations:i32=0;
+fn guard(id:i32)->own Guard { unsafe {Guard{id:id} as own Guard} }
+@drop fn release(g:own Guard){released=released*10+g.id;}
+fn observe(i:i32)->i32{evaluations+=1;return i;}
+
+async fn scan()->i32{
+    let mut i:i32=0;
+    let mut sum:i32=0;
+    while i<6 {
+        i+=1;
+        let active:own Guard=guard(i);
+        match observe(i) {
+            2=>{let local:own Guard=guard(7);continue;},
+            4=>{let local:own Guard=guard(8);break;},
+            _=>{loop{sum+=1;break;}}
+        }
+        await yield_now();
+        sum+=active.id;
+    }
+    return sum;
+}
+
+fn main()->i32{
+    let mut task:_=scan();
+    match task.poll(){Pending()=>{},_=>{return 1;}}
+    if evaluations!=1||released!=0{return 2;}
+    match task.poll(){Pending()=>{},_=>{return 3;}}
+    if evaluations!=3||released!=172{return 4;}
+    match task.poll(){Ready(6)=>{},_=>{return 5;}}
+    if evaluations!=4||released!=172384{return 6;}
+    match task.poll(){Finished()=>{},_=>{return 7;}}
+    return 0;
+}

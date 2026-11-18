@@ -6,6 +6,7 @@ use type_model::*;
 use borrow_model::br_contains;
 use async_model::*;
 use async_text::*;
+use async_match_control::am_wrap;
 use lexer::boot_lex;
 use parser::boot_parse;
 fn as_task(state:*AsyncState,function:*BootNode)->*AsyncTask{let mut task:*AsyncTask=state.tasks;while task!=0 as *AsyncTask{if task.function==function{return task;}task=task.next;}return 0 as *AsyncTask;}
@@ -74,6 +75,10 @@ fn as_sequence(state:*AsyncState,first:*BootNode,entry:*AsyncPart,exit_to:*Async
  let mut item:*BootNode=first;let mut tail:*BootNode=0 as *BootNode;
  while item!=0 as *BootNode&&!ctx.failed{
   let next:*BootNode=item.next;item.next=0 as *BootNode;
+  if break_to!=0 as *AsyncPart && item.kind==BN_EXPR && item.left.kind==BN_MATCH &&
+     as_has_control(item,true) && !as_has_control(item,false){
+   item=am_wrap(ctx,item);if ctx.failed{return false;}
+  }
   let mut awaited:*BootNode=item.left;if item.kind==BN_ASSIGN{awaited=item.right;}
   if (item.kind==BN_LET||item.kind==BN_EXPR||item.kind==BN_ASSIGN)&&awaited!=0 as *BootNode&&awaited.kind==BN_AWAIT{
    if task.suspensions>=64{boot_error(ctx,item.token,"at most 64 async suspension points");return false;}

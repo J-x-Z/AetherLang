@@ -18,7 +18,7 @@ def run(label,cmd,expected=0,diagnostic=None):
  assert r.returncode==expected,f'{label}: {r.returncode}\n{r.stdout}\n{r.stderr}'
  if diagnostic: assert diagnostic in r.stderr,f'{label}: {r.stderr}'
  return r
-cases=['basic.aeth','combined.aeth','resources.aeth','interleave.aeth','modules.aeth','basic.ath','modules.ath','compositions.ath','aliases.ath','control_flow.aeth','control_flow.ath']
+cases=['basic.aeth','combined.aeth','resources.aeth','interleave.aeth','modules.aeth','basic.ath','modules.ath','compositions.ath','aliases.ath','control_flow.aeth','control_flow.ath','match_control.aeth']
 for case in cases:
  run(f'{case}/check',[compiler,'check',root/case,'--sysroot',repo])
  for backend in a.backends:

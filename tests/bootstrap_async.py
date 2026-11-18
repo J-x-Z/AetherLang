@@ -9,7 +9,7 @@ def run(command,status=0,stdout=None):
  records.append(dict(command=command,status=r.returncode,expected=status,stdout=r.stdout,stderr=r.stderr));(work/'results.json').write_text(json.dumps(dict(compiler_sha256=hashlib.sha256(a.compiler.read_bytes()).hexdigest(),seed_sha256=hashlib.sha256(a.seed.read_bytes()).hexdigest(),checks=records),indent=2));assert r.returncode==status,records[-1]
  if stdout is not None:assert r.stdout==stdout and not r.stderr,records[-1]
  return r
-for name in ['basic.aeth','combined.aeth','resources.aeth','interleave.aeth','modules.aeth','basic.ath','modules.ath','compositions.ath','aliases.ath','control_flow.aeth','control_flow.ath']:
+for name in ['basic.aeth','combined.aeth','resources.aeth','interleave.aeth','modules.aeth','basic.ath','modules.ath','compositions.ath','aliases.ath','control_flow.aeth','control_flow.ath','match_control.aeth']:
  source=fixtures/name;run([a.seed,'check',source,'-I',repo/'stdlib']);run([a.compiler,'check',source,'-I',repo/'stdlib'])
  for backend in ['c','llvm']:
   emitted=work/(name+('.c' if backend=='c' else '.ll'));run([a.compiler,source,'-I',repo/'stdlib','--emit-'+backend,'-o',emitted])

@@ -1,0 +1,57 @@
+// A suspension-free match executes once with its original pattern bindings.
+// Record an escaping jump there, then take the async edge outside the arms.
+use model::*;
+use runtime::*;
+use async_text::at_name;
+
+fn am_flag(ctx:*BootContext,token:*BootToken,name:*u8)->*BootNode{
+ let n:*BootNode=boot_node(ctx,BN_IDENT,token);if !ctx.failed{n.name=name;}return n;
+}
+fn am_value(ctx:*BootContext,token:*BootToken,value:i32)->*BootNode{
+ let n:*BootNode=boot_node(ctx,BN_CONST_VALUE,token);
+ if !ctx.failed{n.ty=boot_type(ctx,BY_I32);n.value=value as i64;}return n;
+}
+fn am_rewrite(ctx:*BootContext,first:*BootNode,name:*u8)->i32{
+ let mut used:i32=0;let mut n:*BootNode=first;
+ while n!=0 as *BootNode&&!ctx.failed{
+  if n.kind==BN_BREAK||n.kind==BN_CONTINUE{
+   let code:i32=if n.kind==BN_BREAK{1}else{2};used=used|code;
+   let assign:*BootNode=boot_node(ctx,BN_ASSIGN,n.token);
+   let leave:*BootNode=boot_node(ctx,BN_BREAK,n.token);if ctx.failed{return 0;}
+   assign.left=am_flag(ctx,n.token,name);assign.right=am_value(ctx,n.token,code);
+   assign.next=leave;n.kind=BN_BLOCK;n.body=assign;
+  }else if n.kind!=BN_CLOSURE{
+   used=used|am_rewrite(ctx,n.left,name)|am_rewrite(ctx,n.right,name)|am_rewrite(ctx,n.third,name)|am_rewrite(ctx,n.params,name);
+   if n.kind!=BN_WHILE && n.kind!=BN_RANGE_FOR{used=used|am_rewrite(ctx,n.body,name);}
+  }
+  n=n.next;
+ }
+ return used;
+}
+pub fn am_wrap(ctx:*BootContext,original:*BootNode)->*BootNode{
+ let token:*BootToken=original.token;let name:*u8=at_name(ctx,"match_exit");
+ let used:i32=am_rewrite(ctx,original,name);
+ if used==0||ctx.failed{return original;}
+ let block:*BootNode=boot_node(ctx,BN_BLOCK,token);
+ let flag:*BootNode=boot_node(ctx,BN_LET,token);
+ let once:*BootNode=boot_node(ctx,BN_WHILE,token);
+ let body:*BootNode=boot_node(ctx,BN_BLOCK,token);
+ let yes:*BootNode=boot_node(ctx,BN_BOOL,token);if ctx.failed{return original;}
+ block.body=flag;flag.name=name;flag.flags=1;flag.ty=boot_type(ctx,BY_I32);
+ flag.left=am_value(ctx,token,0);flag.next=once;
+ yes.value=1;once.left=yes;once.body=body;body.body=original;
+ original.next=boot_node(ctx,BN_BREAK,token);
+ let mut tail:*BootNode=once;let mut code:i32=1;
+ while code<=2&&!ctx.failed{
+  if (used&code)!=0{
+   let branch:*BootNode=boot_node(ctx,BN_IF,token);
+   let cond:*BootNode=boot_node(ctx,BN_BINARY,token);
+   let action:*BootNode=boot_node(ctx,BN_BLOCK,token);if ctx.failed{return original;}
+   cond.op=BT_EQ;cond.left=am_flag(ctx,token,name);cond.right=am_value(ctx,token,code);
+   action.body=boot_node(ctx,if code==1{BN_BREAK}else{BN_CONTINUE},token);
+   branch.left=cond;branch.body=action;tail.next=branch;tail=branch;
+  }
+  code+=1;
+ }
+ return block;
+}

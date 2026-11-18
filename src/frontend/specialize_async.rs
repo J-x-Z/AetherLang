@@ -3,6 +3,8 @@
 //! generated frame transfers are unsafe. Empty/Full slots never fabricate T.
 use super::*;
 use crate::frontend::{lexer::Lexer, parser::Parser};
+#[path = "async_match_control.rs"]
+mod match_control;
 
 pub(super) const AWAIT: &str = "@async_await";
 #[derive(Clone)]
@@ -567,7 +569,10 @@ impl<'a> Builder<'a> {
     ) -> Result<Option<usize>> {
         let mut flows = true;
         let count = stmts.len();
-        for (n, stmt) in stmts.into_iter().enumerate() {
+        for (n, mut stmt) in stmts.into_iter().enumerate() {
+            if loops.is_some() {
+                match_control::wrap(self, &mut stmt)?;
+            }
             if self.segments.len() > 1024 {
                 return Err(invalid(
                     "at most 1024 async control-flow blocks",
