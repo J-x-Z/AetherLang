@@ -37,18 +37,36 @@ fn write_message(output:&mut impl Write,value:&Value)->Result<(),String>{
     output.write_all(&body).and_then(|_|output.flush()).map_err(|e|e.to_string())
 }
 fn path_from_uri(uri:&str)->Option<PathBuf>{
-    let encoded=uri.strip_prefix("file://")?;
-    let encoded=encoded.strip_prefix("localhost/").map(|s|format!("/{s}")).unwrap_or_else(||encoded.into());
+    let (host, tail) = uri.strip_prefix("file://")?.split_once('/')?;
+    let local = host.is_empty() || host.eq_ignore_ascii_case("localhost");
+    #[cfg(windows)]
+    let encoded = if local { tail.to_owned() } else { format!("//{host}/{tail}") };
+    #[cfg(not(windows))]
+    let encoded = if local { format!("/{tail}") } else { return None; };
     let mut bytes=Vec::new();let input=encoded.as_bytes();let mut i=0;
     while i<input.len(){if input[i]==b'%' {let pair=std::str::from_utf8(input.get(i+1..i+3)?).ok()?;bytes.push(u8::from_str_radix(pair,16).ok()?);i+=3;}else{bytes.push(input[i]);i+=1;}}
     let path=String::from_utf8(bytes).ok()?;
-    #[cfg(windows)] let path=path.strip_prefix('/').unwrap_or(&path).to_string();
     Some(Resolver::source_path(Path::new(&path)))
+}
+// Windows canonicalize returns extended-length drive or UNC paths. A file URI
+// uses the DOS drive spelling, or the server as its authority for a share.
+#[cfg(any(windows, test))]
+fn windows_uri_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    if let Some(share) = path.strip_prefix("//?/UNC/") {
+        return share.to_owned();
+    }
+    let path = path.strip_prefix("//?/").unwrap_or(&path);
+    if let Some(share) = path.strip_prefix("//") {
+        return share.to_owned();
+    }
+    format!("/{path}")
 }
 fn uri_from_path(path:&str)->String{
     let mut uri=String::from("file://");
-    #[cfg(windows)] uri.push('/');
-    for byte in path.replace('\\',"/").bytes(){if byte.is_ascii_alphanumeric() || b"/-_.~:".contains(&byte){uri.push(byte as char);}else{uri.push_str(&format!("%{:02X}",byte));}}
+    #[cfg(windows)]
+    let path = windows_uri_path(path);
+    for byte in path.bytes(){if byte.is_ascii_alphanumeric() || b"/-_.~:".contains(&byte){uri.push(byte as char);}else{uri.push_str(&format!("%{:02X}",byte));}}
     uri
 }
 fn range(loc:&Location)->Value{json!({"start":{"line":loc.line-1,"character":loc.utf16_column},"end":{"line":loc.end_line-1,"character":loc.end_utf16_column}})}
@@ -164,6 +182,30 @@ impl Server {
 #[cfg(test)]
 mod tests{
     use super::*;
-    #[test]fn utf16_position_and_file_uri_round_trip(){let text="a😀中x";assert_eq!(byte_at(text,&json!({"line":0,"character":3})),5);let path="/tmp/你好 space.aeth";assert_eq!(path_from_uri(&uri_from_path(path)).unwrap(),PathBuf::from(path));}
+    #[test]
+    fn utf16_position_and_file_uri_round_trip() {
+        assert_eq!(byte_at("a😀中x", &json!({"line":0,"character":3})), 5);
+        let name = format!("aether-lsp-{}-你好 😀%.aeth", std::process::id());
+        let path = std::env::temp_dir().join(name);
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+        drop(file);
+        let canonical = std::fs::canonicalize(&path).unwrap();
+        let uri = uri_from_path(canonical.to_str().unwrap());
+        let decoded = path_from_uri(&uri);
+        std::fs::remove_file(path).unwrap();
+        assert!(uri.ends_with("%E4%BD%A0%E5%A5%BD%20%F0%9F%98%80%25.aeth"), "{uri}");
+        assert!(!uri.starts_with("file://///%3F/"), "{uri}");
+        assert_eq!(decoded.as_deref(), Some(canonical.as_path()));
+    }
+
+    #[test]
+    fn windows_drive_and_unc_uri_spellings() {
+        for drive in [r"C:\src\a.aeth", r"\\?\C:\src\a.aeth"] {
+            assert_eq!(windows_uri_path(drive), "/C:/src/a.aeth");
+        }
+        for share in [r"\\server\share\a.aeth", r"\\?\UNC\server\share\a.aeth"] {
+            assert_eq!(windows_uri_path(share), "server/share/a.aeth");
+        }
+    }
     #[test]fn frames_use_byte_length(){let value=json!({"text":"你好"});let mut bytes=vec![];write_message(&mut bytes,&value).unwrap();assert_eq!(read_message(&mut io::Cursor::new(bytes)).unwrap().unwrap(),value);}
 }
