@@ -99,7 +99,8 @@ finally:
 if not a.no_sanitize:
  csource=w/'host-sanitized.c';binary=w/'host-sanitized'
  run('emit sanitizer host',[compiler,source,'--sysroot',r,'--emit-c','-o',csource])
- run('sanitizer host build',[cc,'-std=c11','-O0','-gline-tables-only','-fno-omit-frame-pointer','-fsanitize=address,undefined',csource,r/'runtime/compute/jit.c',r/'runtime/compute/loader.c',*link,'-o',binary])
+ # The instrumented host hashes the entire debug compiler on each lookup.
+ run('sanitizer host build',[cc,'-std=c11','-O1','-gline-tables-only','-fno-omit-frame-pointer','-fsanitize=address,undefined',csource,r/'runtime/compute/jit.c',r/'runtime/compute/loader.c',*link,'-o',binary])
  # A real compiler adapter adds instrumentation to both generated C object and
  # dynamic library. Runtime still executes argv; it never constructs a shell.
  adapter=w/'asan-cc';adapter.write_text('#!'+sys.executable+'\nimport os,sys\nos.execv('+repr(str(cc))+','+repr([str(cc),'-fsanitize=address,undefined'])+'+sys.argv[1:])\n');adapter.chmod(0o755)
