@@ -278,8 +278,7 @@ pub fn clean_project() -> i32 {
         if !clean_file(cfg.target_dir, ".jxz-test\0" as *u8) { status = 1; }
         if !clean_file(cfg.target_dir, ".jxz-test-list\0" as *u8) { status = 1; }
         // Only remove an empty directory: unrelated files and source C survive.
-        rmdir(cfg.target_dir);
-        if !output_unlock(lock) { status = 1; }
+        if !host_unlock_and_prune(cfg.target_dir,lock) { status = 1; }
     }
     config_free(&cfg as *Config);
     return status;

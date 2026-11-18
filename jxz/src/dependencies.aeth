@@ -254,7 +254,7 @@ pub fn dependencies_record(cfg:*Config,directory:*u8)->bool {
         else {
             if host_marker_create("JXZ-PATH-DEPS-1",owner)!=0 { ok=false; }
             else {
-                let file:*void=fopen(temporary,"wx");
+                let file:*void=fopen(temporary,"wbx");
                 if file==(0 as *void) { ok=false; }
                 else {
                     ok=fwrite(cfg.dependency_record.data as *void,1,cfg.dependency_record.len,file)==cfg.dependency_record.len;

@@ -26,6 +26,18 @@ pub fn host_lock(directory: *u8) -> *void {
     return handle;
 }
 pub fn host_unlock(handle: *void) -> bool { return closedir(handle) == 0; }
+pub fn host_unlock_and_prune(path:*u8,handle:*void)->bool {
+    rmdir(path);
+    return host_unlock(handle);
+}
+pub fn host_empty_locked(path:*u8,lock:*void)->bool {
+    let mut entries:Vec<u8>=match host_list(path,0,4194304,lock) {
+        Result::Ok(v)=>v,Result::Err(_)=>{return false;},
+    };
+    let empty:bool=entries.len==0;
+    vec_free(&mut entries as *Vec<u8>);
+    return empty;
+}
 pub fn host_inherit(handle: *void, inherit: bool) -> bool {
     // Only compiler/linker children retain the lock after exec. If JXZ is
     // killed, recovery waits for these writers; user programs never inherit it.

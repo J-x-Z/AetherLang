@@ -175,7 +175,7 @@ fn prepare(transaction: *Publication, name: *u8) -> bool {
     // SIGKILL. Before this syscall the new directory is empty and recoverable.
     if host_marker_create("JXZ-BUILD-1\0" as *u8, transaction.owner) != 0 { return false; }
     let mut ok: bool = true;
-    let output: *void = fopen(transaction.records, "wx\0" as *u8);
+    let output: *void = fopen(transaction.records, "wbx\0" as *u8);
     if output == (0 as *void) { return false; }
     let mut found: bool = false;
     let had_record: i32 = presence(transaction.record);
@@ -197,7 +197,7 @@ fn prepare(transaction: *Publication, name: *u8) -> bool {
     }
     if had_output == 1 && link(transaction.output, transaction.old_output) != 0 { return false; }
     if had_record == 1 && link(transaction.record, transaction.old_record) != 0 { return false; }
-    let journal: *void = fopen(transaction.journal, "wx\0" as *u8);
+    let journal: *void = fopen(transaction.journal, "wbx\0" as *u8);
     if journal == (0 as *void) { return false; }
     ok = fputc(if had_output == 1 { 49 } else { 48 }, journal) >= 0;
     if fputc(if had_record == 1 { 49 } else { 48 }, journal) < 0 || fputc(10, journal) < 0 || fputs(name, journal) < 0 || fputc(10, journal) < 0 { ok = false; }

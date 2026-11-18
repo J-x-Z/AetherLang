@@ -92,9 +92,7 @@ fn initialize(registry:*Registry)->bool {
     let marker:*u8=path_join(registry.cache,".jxz-cache"); if marker==(0 as *u8) { return false; }
     let state:i32=presence(marker); let mut ok:bool=state==1 && marker_matches(marker,registry.cache_lock);
     if state==0 && !registry.readonly {
-        let mut found:Vec<u8>=match host_list(registry.cache,0,4194304,registry.cache_lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ free(marker as *void); return false; }, };
-        if found.len==0 { ok=host_marker_create("JXZ-CACHE-1",marker)==0; }
-        vec_free(&mut found as *Vec<u8>);
+        if host_empty_locked(registry.cache,registry.cache_lock) { ok=host_marker_create("JXZ-CACHE-1",marker)==0; }
     }
     free(marker as *void);
     if !ok { config_error("jxz: unrecognized registry cache directory; preserving its contents"); return false; }

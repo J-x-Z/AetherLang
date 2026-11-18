@@ -59,10 +59,32 @@ pub fn link(old:*u8,new:*u8)->i32{let a:*u16=win_wide(old);let b:*u16=win_wide(n
 pub fn mkdtemp(path:*u8)->*u8{let n:u64=strlen(path);if n<6||strcmp(path+n-6,"XXXXXX")!=0{return 0 as *u8;}let mut tries:i32=0;let alphabet:*u8="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
  while tries<128{let mut bits:u64=0;if BCryptGenRandom(0 as *void,&mut bits as *u64 as *u8,8,2)!=0{return 0 as *u8;}let mut i:u64=0;while i<6{path[n-6+i]=alphabet[bits&63];bits=bits>>6;i=i+1;}if mkdir(path,448)==0{return path;}if host_errno()!=17{return 0 as *u8;}tries=tries+1;}win_errno(17);return 0 as *u8;
 }
-// Attribute-only access does not participate in Windows share restrictions.
-// FILE_ADD_FILE supplies write intent; FILE_SHARE_READ permits enumeration.
-// https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-createfilew
-pub fn host_lock(path:*u8)->*void{let p:*u16=win_wide(path);if p==0 as *u16{return 0 as *void;}let h:*void=CreateFileW(p,130,1,0 as *void,3,33554432,0 as *void);let e:u32=GetLastError();free(p as *void);if h==(-1 as i64) as *void{win_error_code(e);host_error("jxz: directory busy or cannot be locked");return 0 as *void;}return h;}
+// A directory sharing denial also blocks the owner's hard links and atomic
+// renames. Exclusively create a child that NTFS removes on the last handle
+// close, including when a compiler outlives a killed JXZ process.
+fn host_lock_name()->*u8 { return ".jxz-directory-lock"; }
+pub fn host_lock(path:*u8)->*void {
+    let name:*u8=path_join(path,host_lock_name());
+    if name==0 as *u8 { return 0 as *void; }
+    let wide:*u16=win_wide(name);
+    free(name as *void);
+    if wide==0 as *u16 { return 0 as *void; }
+    let handle:*void=CreateFileW(wide,65536,0,0 as *void,1,67108864,0 as *void);
+    let error:u32=GetLastError();
+    free(wide as *void);
+    if handle==(-1 as i64) as *void {
+        win_error_code(error);
+        host_error("jxz: directory busy or cannot be locked");
+        return 0 as *void;
+    }
+    return handle;
+}
+pub fn host_unlock_and_prune(path:*u8,handle:*void)->bool {
+    if !host_unlock(handle) { return false; }
+    // A competing owner or unrelated file makes RemoveDirectoryW fail.
+    rmdir(path);
+    return true;
+}
 pub fn host_unlock(handle:*void)->bool{return CloseHandle(handle)!=0;}
 pub fn host_inherit(handle:*void,inherit:bool)->bool{return SetHandleInformation(handle,1,if inherit{1}else{0})!=0;}
 // Atomically publish a complete regular marker without symlink privilege.
@@ -133,6 +155,18 @@ fn enumerate(path:*u8,mode:i32,limit:u64,bytes:*Vec<u8>,depth:i32,visited:*u64)-
  if FindClose(handle)==0{ok=false;}free(data as *void);return ok;
 }
 pub fn host_list(path:*u8,mode:i32,limit:u64,lock:*void)->Result<Vec<u8>,i32>{let mut bytes:Vec<u8>=vec_new();let mut visited:u64=0;if !directory_exists(path)||host_symbolic(path)||!enumerate(path,mode,limit,&mut bytes as *Vec<u8>,0,&mut visited as *u64){vec_free(&mut bytes as *Vec<u8>);return Result::Err(1);}return Result::Ok(bytes);}
+
+pub fn host_empty_locked(path:*u8,lock:*void)->bool {
+    let mut entries:Vec<u8>=match host_list(path,0,4194304,lock) {
+        Result::Ok(v)=>v,Result::Err(_)=>{return false;},
+    };
+    let name:*u8=path_join(path,host_lock_name());
+    let empty:bool=name!=0 as *u8 && entries.len==strlen(name)+1
+        && strcmp(entries.data,name)==0;
+    free(name as *void);
+    vec_free(&mut entries as *Vec<u8>);
+    return empty;
+}
 
 pub fn host_discover(list:*u8,lock:*void)->i32{
  let mut bytes:Vec<u8>=match host_list("tests",3,4194304,lock){Result::Ok(x)=>x,Result::Err(_)=>{return 1;}};
