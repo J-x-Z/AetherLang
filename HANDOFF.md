@@ -1,6 +1,6 @@
 # AetherLang 工程交接
 
-macOS/Linux 已验收宿主包冻结于 `13941f6`。Windows 11 x64 原生验收包冻结于 `98402df`。最新功能提交为 `d22a1d9`，裸机 ABI 定向回归为 `5f895ca`。工作树在 `/Volumes/WINDOWS/work/AetherLang`，分支为 `work/aetherlang-upgrade`。原始起点是 `aceff15`，本次续做起点是 `4cb768c`。用 `git log -1 --oneline` 查看包含交付文档的当前提交。仓库保持私有，提交保存在本地。[主线任务](MAINLINE_TASKS.md) · [升级报告及测量](docs/UPGRADE.md)
+macOS/Linux 已验收宿主包冻结于 `13941f6`。Windows 11 x64 原生验收包冻结于 `98402df`。裸机栈约定修复于 `d22a1d9`，最新内核用例及构建入口是 `c7ab3ab`。工作树在 `/Volumes/WINDOWS/work/AetherLang`，分支为 `work/aetherlang-upgrade`。原始起点是 `aceff15`，本次续做起点是 `4cb768c`。用 `git log -1 --oneline` 查看包含交付文档的当前提交。仓库保持私有，提交保存在本地。[主线任务](MAINLINE_TASKS.md) · [升级报告及测量](docs/UPGRADE.md)
 
 ## 重建
 
@@ -44,4 +44,13 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 OPENBLAS_LIBRARY=/opt/homebrew/opt/openbl
 python3 tests/freestanding.py --compiler "$WORK/kernel-readback-20261118/aethc-527387d" --backends c llvm --qemu --work-dir "$WORK/kernel-recheck"
 ```
 
-本机复验结果在 `$WORK/kernel-readback-20261118/final/results.json`。若继续做内核，下一项是让常规自举编译器接受显式裸机目标与机器入口，使用同一套 x86-64 QEMU 用例核验。此后再接入内核自己的分配器和 panic 入口。公开发布和远端推送仍待维护者决定。
+中断入口复验在 `$WORK/kernel-readback-20261118/final/results.json`。用自举 C 后端构建可启动的页帧池镜像并与 Rust 种子 C/LLVM 对照：
+
+```sh
+python3 tests/kernel_boot.py --selfhost "$WORK/releases/aetherlang-macos-472e6fd/aethc-native" \
+  --seed "$WORK/kernel-readback-20261118/aethc-527387d" --work-dir "$WORK/kernel-pages-recheck" --qemu
+```
+
+仅验证自举 C 路线时可省略 `--seed`。`$WORK/kernel-pages-20261118/verified-8293b4a.json` 记录 O0/O2 六个页帧池镜像和四个原有中断镜像的 QEMU 结果。自举编译器从 Aether 发射 C，Clang 进行 x86-64 交叉编译。直接 LLVM 交叉编译使用 Rust 种子。两路的栈和寄存器设置见[升级报告](docs/UPGRADE.md#aether-写内核的实际边界)。
+
+若继续内核基础，下一项是把独立的周期定时器接到普通 Aether 工作循环，在 QEMU 里检验持续运行和中断返回。真实固件、板上设备或实际中断延迟进入验收时再安排硬件。公开发布和远端推送仍待维护者决定。
