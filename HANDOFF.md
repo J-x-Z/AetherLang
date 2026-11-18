@@ -2,7 +2,7 @@
 
 ## 本地开发版本
 
-源码在 `/Volumes/WINDOWS/work/AetherLang` 的 `work/aetherlang-upgrade`。最初起点 `aceff15`，本次续做起点 `4cb768c`，macOS/Linux 双宿主冻结为 `423e664`，16 比特异构运行时为 `10355a4`，基础整体验收源码为 `f84e9d4`，原生子进程等待修正至 `5316467`。用 `git log -1 --oneline` 查看工作树当前提交。完整任务与历史复现见 [主线任务](MAINLINE_TASKS.md)，历次版本见 [升级报告](docs/UPGRADE.md)。
+源码在 `/Volumes/WINDOWS/work/AetherLang` 的 `work/aetherlang-upgrade`。最初起点 `aceff15`，本次续做起点 `4cb768c`，macOS/Linux 双宿主冻结为 `423e664`，16 比特异构运行时为 `10355a4`，基础整体验收源码为 `f84e9d4`，自举的静态存储与原生导出至 `8d17061`。用 `git log -1 --oneline` 查看工作树当前提交。完整任务与历史复现见 [主线任务](MAINLINE_TASKS.md)，历次版本见 [升级报告](docs/UPGRADE.md)。
 
 ## 构建与验收
 
@@ -18,7 +18,7 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 AETHER_CUDAQ_BRIDGE="$WORK/cudaq/libaethe
 
 ## 本地可复现进展
 
-- 双宿主现有安装包固定 `423e664`。Shell 的联验提交为 `44b3da7`，Mac/Linux 各自通过 14 个测试程序及 1,000 次同会话短管道。证据在 `$WORK/shell-joint-20261118/group-acceptance.json`。
+- 双宿主基础安装包在 `$WORK/releases/aetherlang-{macos,linux}-c36bd04`。Shell 专用的对照包固定 `423e664`。Shell 的联验提交为 `44b3da7`，Mac/Linux 各自通过 14 个测试程序及 1,000 次同会话短管道。证据在 `$WORK/shell-joint-20261118/group-acceptance.json`。
 - 主编译器 `9edda38`、`c379133` 共享已检查签名、类型及局部/全局存储身份，`c13f93f` 新增 x86_64 SysV 聚合 ABI。大型 JXZ 的生成 C 峰值 RSS 从 300,302,336 B 降为 84,508,672 B，输出逐字节相同。数据在 `$WORK/typed-ir-performance-20261118`。
 - `b243b72` 对 Vec、fd、Tensor、量子 lease 实施类型化析构。原生六组与消毒器均通过，独立复核了实参中途失败和返回所有者。`d31ea10` 保留 JXZ 的目录错误，C/LLVM 各 40 项通过。
 - `6b324f1`、`a90bd56` 是本机 native JIT 和已验证的磁盘缓存；`f0be8b8` 提供矩阵链规划及低秩分解。M4、RTX 3060、Fold6 Adreno 750 均有真实算子运行。16q 的数值、释放与 CUDA-Q SDK 记录在 `$OUT/q16`，最新上层应用在 `$WORK/compute-gpus-20261118`。
@@ -30,4 +30,4 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 AETHER_CUDAQ_BRIDGE="$WORK/cudaq/libaethe
 
 ## 下一项具体任务
 
-T25 合并动态接口与协作 async，复验两者交叉影响。T26 以外置 `$WORK/t26-errno/stage2` 为已验证的上一代，自 Aether 源码迁移泛型、枚举、Script 入口和系统存储，直接编译 JXZ 源码。新匹配版本以实际编译和运行判定。T29 在这些改动落地后进行最终打包与联合验收。
+T25 已分别提交动态接口（`e08aa2a`）与协作 async（`0d06551`），联合用例覆盖正在挂起的任务恢复后调用动态接口、闭包及 const generic。T26 以外置 `$WORK/t26-errno/stage2` 为已验证的上一代，自 Aether 源码迁移泛型、枚举、Script 入口和系统存储，直接编译 JXZ 源码。新匹配版本以实际编译和运行判定。T29 在这些改动落地后进行最终打包与联合验收。

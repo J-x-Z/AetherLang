@@ -1,6 +1,6 @@
 # AetherLang 能力与验收入口
 
-两种源文件进入相同的语义检查和 IR。下表记录本地主线基础冻结至 `f84e9d4` 的实测能力。可安装的双宿主对照包固定于 `423e664`。任务状态见[主线任务](../MAINLINE_TASKS.md)。
+两种源文件进入相同的语义检查和 IR。下表记录本地主线基础冻结至 `f84e9d4` 的实测能力。双宿主基础包也固定于 `f84e9d4`，Shell 联验包固定于 `423e664`。任务状态见[主线任务](../MAINLINE_TASKS.md)。
 
 | 能力 | 语法与检查 | 生成、链接和执行 | 可复现入口 |
 | --- | --- | --- | --- |
@@ -15,7 +15,15 @@
 | 项目、编辑器与安装 | JXZ 本地依赖、精确版本注册表、锁定/离线缓存、项目级 LSP、可校验的整包安装 | 目录移动、子进程退出、并发和中断恢复均有回归 | `jxz/tests/integration.py`、`tests/package_install.py` |
 | 自举 | Core 读取真实模块图，在 Aether 中执行解析、检查、C 和直接 LLVM IR 输出 | C-only 与 LLVM 种子分别构建四代，分别核对 C 和 LLVM 固定点，原生构建、对象输出及 JXZ 精确依赖映射；运行未改的 accumulator 服务和标准库消费者。主编译器由 Rust 构建 | `tests/{bootstrap_core,bootstrap_llvm}.py` |
 
-捕获闭包支持具体环境和静态回调，见 `tests/closure_values.py`。在此基础提交上，动态 trait 与 async 仍在 T25 实施。源级常量泛型已经可以在两种语法下运行。元组不能按值穿越 C ABI（E2404），嵌套聚合不接收 owner（E2405）；不支持的目标聚合 ABI 在检查阶段报告 E2407。
+### 稳定基础语义
+
+整数运行时加、减、乘依目标位宽回绕，移位量按位宽取模；整除以零和有符号最小值除以 −1 产生 trap。浮点值按其声明精度计算，显式转换为整数时截断并饱和，NaN 转为零。短路运算仅在需要时求右值。函数实参从左至右求值，复合赋值先确定目标和旧值，再求一次右值。未初始化读取、借用局部值越过有效期和隐式复制 owner 均有检查。裸指针程序自行维护地址的有效性。Result 的 `?` 在 Err 路径提前返回，并清理已经获得的拥有资源。模块名按作用域解析，重名局部优先于导出的全局名。相关正反例见 `tests/{backend_regressions.rs,semantic_values.py,owned_cleanup.rs,aggregate_abi.py,interfaces_methods.py}`。
+
+目标相关符号在选定目标下检查。例如元组按值穿越 C ABI 报 E2404，嵌套聚合承载 owner 报 E2405，不支持的目标聚合 ABI 报 E2407。`a18bc69` 补上 errno 的目标检查，wasm32 使用无宿主 libc 的 errno 入口会报 E2407，原生调用约定或符号种类不符报 E2202。覆盖 Windows 与 Android 等交叉目标的检查或对象生成各有独立记录，见 `tests/platform_intrinsics.py`。
+
+### 高级语义增量
+
+`451e2f8` 的捕获闭包支持静态调用与组合，`66ccafc` 支持常量泛型。闭世界借用接口 `&dyn` / `&mut dyn` 在 `e08aa2a` 运行时分派，不透明标签与有效载荷留在 Aether 内。`0d06551` 的具体 async 任务持有帧，显式 poll 能得到 Pending、Ready、Finished，取消会释放活跃子任务及资源。当前只支持函数顶层的挂起点，以及非递归、非泛型、无跨挂起借用的帧。带 owner 的局部移动跨越后续挂起点受当前检查限制。运行例与拒绝用例见 `tests/{closure_values,dynamic_values,async_runtime,array_repeat}.py`。
 
 公开基础库按实际消费者分组。字节、文本、持有键的 Map 使用 `tests/text_map.py`，Vec、Option 和 Result 使用 `tests/{vec_alignment,vec32,generic_runtime}.py`；作用域包装见 `tests/owned_allocations.py`。文件、io、path、fd、process 与二进制接口由 `tests/{runtime_foundation,process_runtime}.py` 和 JXZ 验证；分配器、TOML 子集、标量图见 `tests/legacy_runtime.py`。LLVM/JNI/OpenBLAS 与硬件 SDK 各有宿主或设备依赖，见 `tests/ffi_modules.py` 及升级报告。仓库里的早期生成 `.c`、smoke/test 文件不作为公开标准库接口。
 
