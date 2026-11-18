@@ -57,3 +57,4 @@ jobs:
           path: |
             ${{ runner.temp }}/aether-release/artifacts/evidence/
             ${{ runner.temp }}/aether-release/bootstrap/**/results.json
+            ${{ runner.temp }}/aether-release/bootstrap/**/logs/*.stderr

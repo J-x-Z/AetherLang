@@ -163,7 +163,7 @@ fn as_restore_live(state:*AsyncState,head:*AsyncSlot){
  // Recreate lexical declaration order, including its reverse-drop order.
  let mut count:u64=0;let mut slot:*AsyncSlot=head;
  while slot!=0 as *AsyncSlot{count+=1;slot=slot.outer;}
- let ordered:**AsyncSlot=boot_alloc(state.ctx,count*size_of(*AsyncSlot)) as **AsyncSlot;
+ let ordered:**AsyncSlot=boot_alloc(state.ctx,count*(size_of(*AsyncSlot) as u64)) as **AsyncSlot;
  if state.ctx.failed{return;}
  let mut index:u64=count;slot=head;
  while slot!=0 as *AsyncSlot{index-=1;ordered[index]=slot;slot=slot.outer;}
