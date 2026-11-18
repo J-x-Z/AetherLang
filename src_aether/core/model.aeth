@@ -48,6 +48,7 @@ pub const BN_INDEX:i32=19; pub const BN_CAST:i32=20; pub const BN_SIZEOF:i32=21;
 pub const BN_INT:i32=22; pub const BN_FLOAT:i32=23; pub const BN_STRING:i32=24;
 pub const BN_IDENT:i32=25; pub const BN_BOOL:i32=26; pub const BN_CONST:i32=27;
 pub const BN_STRUCT_VALUE:i32=28; pub const BN_ARRAY:i32=29; pub const BN_REPEAT:i32=30; pub const BN_ALIAS:i32=31;
+pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=34;
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
 pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
@@ -65,7 +66,8 @@ pub struct BootContext {
  function:*BootNode,loop_depth:i32,output:*void,c_namespace:i32,
  module:*BootModule,root_module:*BootModule,modules:*BootModule,modules_tail:*BootModule,
  module_count:i32,source_total:u64,roots:*BootRoot,
- llvm_serial:i32,llvm_block:i32,llvm_break:i32,llvm_continue:i32,llvm_terminated:bool,parse_condition:bool
+ llvm_serial:i32,llvm_block:i32,llvm_break:i32,llvm_continue:i32,llvm_terminated:bool,parse_condition:bool,
+ value_type:*BootType,value_target:*BootNode,llvm_yield:i32
 }
 
 pub struct BootImport { alias:*u8,symbol:*u8,target:*BootModule,wildcard:bool,token:*BootToken,next:*BootImport }

@@ -72,6 +72,7 @@ pub fn boot_layout(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->bo
 // are consumed by their own loop, and unreachable statements do not add exits.
 pub fn boot_flow(node:*BootNode)->i32{
  if node==(0 as *BootNode){return 1;}
+ if node.kind==BN_YIELD{return 16;}
  if node.kind==BN_RETURN{return 2;}if node.kind==BN_BREAK{return 4;}if node.kind==BN_CONTINUE{return 8;}
  if node.kind==BN_BLOCK{
   let mut result:i32=1;let mut item:*BootNode=node.body;

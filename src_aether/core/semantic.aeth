@@ -144,6 +144,13 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   if node.decl==(0 as *BootNode) { boot_error(ctx,node.token,"unknown value name");return 0 as *BootType; }
   node.ty=node.decl.ty;return node.ty;
  }
+ if kind==BN_VALUE{
+  let saved:*BootType=ctx.value_type;ctx.value_type=expected;boot_check_statement(ctx,node.body);
+  let result:*BootType=ctx.value_type;ctx.value_type=saved;if ctx.failed{return 0 as *BootType;}
+  if (boot_flow(node.body)&1)!=0{boot_error(ctx,node.token,"value block may finish without yielding a value");return 0 as *BootType;}
+  if result==(0 as *BootType){boot_error(ctx,node.token,"cannot infer a value type from a diverging block");return 0 as *BootType;}
+  node.ty=result;return result;
+ }
  if kind==BN_ARRAY||kind==BN_REPEAT{
   let mut element:*BootType=0 as *BootType;
   if expected!=(0 as *BootType)&&expected.kind==BY_ARRAY{
@@ -177,8 +184,9 @@ fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTyp
   }
   return node.ty;
  }
- if kind==BN_SIZEOF {
+ if kind==BN_SIZEOF||kind==BN_ALIGNOF {
   if !boot_type_valid(ctx,node.aux,node.token,false) { return 0 as *BootType; }
+  if !boot_layout(ctx,node.aux,0,node.token){return 0 as *BootType;}
   node.ty=boot_type(ctx,BY_I64);return node.ty;
  }
  if kind==BN_CAST {
@@ -341,6 +349,10 @@ fn boot_check_statement(ctx:*BootContext,node:*BootNode)->bool {
   let value:*BootType=boot_check_expr(ctx,node.right,target);
   if ctx.failed { return false; }
   boot_expect(ctx,node,value,target);return false;
+ }
+ if kind==BN_YIELD{
+  let value:*BootType=boot_check_expr(ctx,node.left,ctx.value_type);if ctx.failed{return false;}
+  if ctx.value_type==(0 as *BootType){ctx.value_type=value;}else{boot_expect(ctx,node,value,ctx.value_type);}return true;
  }
  if kind==BN_EXPR { boot_check_expr(ctx,node.left,0 as *BootType);return false; }
  if kind==BN_RETURN {

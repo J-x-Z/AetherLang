@@ -2,7 +2,7 @@ use model::*;
 use runtime::*;
 use emitter::boot_choose_namespace;
 use llvm_common::*;
-use llvm_stmt::*;
+use llvm_expr::ll_statement;
 fn ll_foreign_valid(ctx:*BootContext,node:*BootNode)->bool{
  if node.ty.kind==BY_STRUCT{boot_error(ctx,node.token,"Core LLVM foreign aggregate return ABI is not implemented");return false;}
  let mut param:*BootNode=node.params;while param!=(0 as *BootNode){

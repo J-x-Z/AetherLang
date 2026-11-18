@@ -141,7 +141,16 @@ positive('alias-forward-pointer', {
 positive('container-values', {'main.aeth':(root/'tests/regressions/bootstrap/container_values.aeth').read_text()},
          expected='containers=ok\n',levels=('0','2'))
 
+positive('block-values', {'main.aeth':(root/'tests/regressions/bootstrap/block_values.aeth').read_text()},
+         expected='block-values=ok\n',levels=('0','2'))
+
 bad = {
+ 'value-missing-else': ({'main.aeth':'fn main(){let flag:bool=false;let x:i32=if flag{1};}'}, 'without yielding'),
+ 'value-discards-tail': ({'main.aeth':'fn main(){let x:i32={1;};}'}, 'without yielding'),
+ 'value-branch-type': ({'main.aeth':'fn main(){let x:i32=if true{1}else{false};}'}, 'type mismatch'),
+ 'value-scope': ({'main.aeth':'fn main(){let x:i32={let local:i32=1;local};let y:i32=local;}'}, 'unknown value'),
+ 'value-break-outside-loop': ({'main.aeth':'fn main(){let x:i32={break;};}'}, 'outside a loop'),
+ 'alignment-unknown': ({'main.aeth':'fn main(){align_of(Missing);}'}, 'unknown struct type'),
  'array-wrong-length': ({'main.aeth':'fn main(){let a:[i32;2]=[1];}'}, 'array initializer length'),
  'array-wrong-element': ({'main.aeth':'fn main(){let a:[i32;1]=[true];}'}, 'type mismatch'),
  'array-repeat-length': ({'main.aeth':'fn main(){let a:[i32;2]=[1;3];}'}, 'array initializer length'),

@@ -99,6 +99,7 @@ pub fn ll_allocas(ctx:*BootContext,node:*BootNode){
  let mut item:*BootNode=node;
  while item!=(0 as *BootNode){
   if item.kind==BN_LET||item.kind==BN_PARAM{fprintf(ctx.output,"  %%v%d = alloca ",item.id);ll_type(ctx,item.ty);ll_text(ctx,"\n");}
+  if item.kind==BN_VALUE&&item.ty.kind!=BY_VOID{fprintf(ctx.output,"  %%yield%d = alloca ",item.id);ll_type(ctx,item.ty);ll_text(ctx,"\n");}
   if item.kind==BN_ARRAY||item.kind==BN_REPEAT||(item.kind==BN_INDEX&&item.left.ty.kind==BY_ARRAY&&!boot_place_form(item.left)){
    let mut ty:*BootType=item.ty;if item.kind==BN_INDEX{ty=item.left.ty;}fprintf(ctx.output,"  %%arr%d = alloca ",item.id);ll_type(ctx,ty);ll_text(ctx,"\n");
   }

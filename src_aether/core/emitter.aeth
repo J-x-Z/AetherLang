@@ -140,6 +140,12 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
   while field!=0 as *BootNode{boot_c_temp(ctx,node);boot_c_text(ctx,".");boot_c_field(ctx,field.decl);boot_c_text(ctx," = ");boot_c_temp(ctx,field.left);boot_c_text(ctx,";\n");field=field.next;}
   return;
  }
+ if node.kind==BN_ALIGNOF {boot_c_decl(ctx,node);boot_c_text(ctx,"(int64_t)_Alignof(");boot_c_type(ctx,node.aux);boot_c_text(ctx,");\n");return;}
+ if node.kind==BN_VALUE{
+  if node.ty.kind!=BY_VOID{boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_temp(ctx,node);boot_c_text(ctx,";\n");}
+  let saved:*BootNode=ctx.value_target;ctx.value_target=node;boot_emit_stmt(ctx,node.body);ctx.value_target=saved;
+  fprintf(ctx.output,"a%d_yield%d:;\n",ctx.c_namespace,node.id);return;
+ }
  if node.kind==BN_SIZEOF {boot_c_decl(ctx,node);boot_c_text(ctx,"(int64_t)sizeof(");boot_c_type(ctx,node.aux);boot_c_text(ctx,");\n");return;}
  if node.kind==BN_MEMBER&&node.left.ty.kind==BY_STRUCT {
   boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);boot_c_temp(ctx,node.left);boot_c_text(ctx,".");boot_c_field(ctx,node.decl);boot_c_text(ctx,";\n");return;
@@ -227,6 +233,10 @@ fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
    boot_c_text(ctx,"*");boot_c_place(ctx,node.left);boot_c_text(ctx," = ");boot_c_temp(ctx,node);boot_c_text(ctx,";\n");return;
   }
   boot_emit_expr(ctx,node.right);boot_c_text(ctx,"*");boot_c_place(ctx,node.left);boot_c_text(ctx," = ");boot_c_temp(ctx,node.right);boot_c_text(ctx,";\n");return;
+ }
+ if node.kind==BN_YIELD{
+  boot_emit_expr(ctx,node.left);if node.left.ty.kind!=BY_VOID{boot_c_temp(ctx,ctx.value_target);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";");}
+  fprintf(ctx.output,"goto a%d_yield%d;\n",ctx.c_namespace,ctx.value_target.id);return;
  }
  if node.kind==BN_EXPR {boot_emit_expr(ctx,node.left);return;}
  if node.kind==BN_RETURN {
