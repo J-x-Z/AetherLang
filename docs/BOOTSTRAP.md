@@ -140,8 +140,10 @@ Trait bounds, const parameters and generic aliases are not supported yet.
 Generic payload enums use a real tag and union payload in both emitters.
 `match` checks variant identity, payload arity, guarded arms, binding scope and
 exhaustiveness; a guard does not establish coverage. Payload extraction happens
-only after the tag matches. `Result` propagation with `?` evaluates its operand
-once and returns the actual error payload, requiring an identical error type.
+only after the tag matches. `Ok`/`Err` enum propagation with `?` evaluates its
+operand once and returns the actual error payload, requiring an identical error
+type. The enum name is unrestricted; both
+source and return enums must have exactly one payload in each `Ok`/`Err` variant.
 `Option`, `Result`, `Vec<T>` and zero-sized `Vec<()>` consumers run natively.
 Enum values, including enums nested in a struct, currently have no foreign
 by-value ABI; use explicit pointer interfaces at that boundary.

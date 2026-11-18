@@ -798,13 +798,13 @@ fn boot_check_match(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootTy
  node.kind=BN_VALUE;node.flags=node.flags|4096;node.ty=result;node.body=block;node.left=0 as *BootNode;node.params=0 as *BootNode;return result;
 }
 fn boot_result_shape(ty:*BootType)->bool{
- if ty==0 as *BootType||ty.kind!=BY_ENUM||strcmp(ty.name,"Result")!=0{return false;}
+ if ty==0 as *BootType||ty.kind!=BY_ENUM{return false;}
  let ok:*BootNode=boot_enum_variant(ty,"Ok");let err:*BootNode=boot_enum_variant(ty,"Err");
  return ok!=0 as *BootNode&&err!=0 as *BootNode&&ok.params!=0 as *BootNode&&err.params!=0 as *BootNode&&ok.params.next==0 as *BootNode&&err.params.next==0 as *BootNode&&ty.fields.next.next==0 as *BootNode;
 }
 fn boot_check_try(ctx:*BootContext,node:*BootNode)->*BootType{
  let source:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);if ctx.failed{return 0 as *BootType;}
- if ctx.function==0 as *BootNode||!boot_result_shape(source)||!boot_result_shape(ctx.function.ty){boot_error(ctx,node.token,"? requires Result values and a Result-returning function");return 0 as *BootType;}
+ if ctx.function==0 as *BootNode||!boot_result_shape(source)||!boot_result_shape(ctx.function.ty){boot_error(ctx,node.token,"? requires Ok/Err enum values and an Ok/Err-returning function");return 0 as *BootType;}
  let target:*BootType=ctx.function.ty;let ok:*BootNode=boot_enum_variant(source,"Ok");let error:*BootNode=boot_enum_variant(source,"Err");let target_error:*BootNode=boot_enum_variant(target,"Err");
  if error.params.ty!=target_error.params.ty{boot_error(ctx,node.token,"? requires the same error payload type");return 0 as *BootType;}
  let temporary:*BootNode=boot_node(ctx,BN_LET,node.token);if ctx.failed{return 0 as *BootType;}temporary.ty=source;temporary.left=node.left;
