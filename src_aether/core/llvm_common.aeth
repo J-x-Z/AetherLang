@@ -11,6 +11,13 @@ pub fn ll_text(ctx:*BootContext,text:*u8){fputs(text,ctx.output);}
 pub fn ll_definition_attrs(ctx:*BootContext){
  if ctx.bare_x86_64{ll_text(ctx," noredzone");}
 }
+pub fn ll_return_void(ctx:*BootContext){
+ if (ctx.function.flags&BF_INTERRUPT)!=0 {
+  // The CPU observes the original frame at interrupt return. Keep its final stores live.
+  fprintf(ctx.output,"  call void asm sideeffect \"\", \"r,~{memory}\"(ptr %%arg%d)\n",ctx.function.params.id);
+ }
+ ll_text(ctx,"  ret void\n");
+}
 pub fn ll_id(ctx:*BootContext)->i32{ctx.llvm_serial=ctx.llvm_serial+1;return ctx.llvm_serial;}
 pub fn ll_type(ctx:*BootContext,ty:*BootType){
  if ty.kind==BY_OWN{ll_type(ctx,ty.inner);return;}

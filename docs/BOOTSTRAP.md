@@ -200,9 +200,15 @@ to check a module or add `--emit-llvm` or `--emit-obj` to produce IR or an
 ELF64 relocatable. `--cc` selects a target-capable Clang. Target selection
 precedes semantic checks and SysV ABI classification. The emitted definitions
 disable the x86 red zone. The caller supplies startup code, a linker script
-and an ELF linker. Machine-entry attributes such as `@interrupt` still require
-the seed. See the [bare-metal ABI test](../tests/bootstrap_kernel_target.py)
-and [bootable page pool](../tests/kernel_boot.py).
+and an ELF linker. A concrete `@interrupt` function returns void and receives
+a pointer to a five-u64 CPU frame, with an optional u64 hardware error code.
+Handlers use integer and pointer operations and typed memory intrinsics.
+Their LLVM interrupt calling convention preserves the interrupted context.
+QEMU runs the same Aether periodic timer and ordinary worker compiled by the
+seed and the self-host at O0 and O2. Handwritten naked entries still use
+startup assembly or the Rust seed. See the [timer](../tests/kernel_timer.py),
+[bare-metal ABI test](../tests/bootstrap_kernel_target.py) and
+[bootable page pool](../tests/kernel_boot.py).
 
 The self-hosted compiler implements a subset of the primary compiler. Its data
 model covers the supported 64-bit hosts and this specific freestanding target.

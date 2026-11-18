@@ -186,7 +186,7 @@ pub fn boot_foreign_same(a:*BootNode,b:*BootNode)->bool {
  if a.kind!=b.kind || !boot_c_symbol(a) || !boot_c_symbol(b){return false;}
  if a.kind==BN_STATIC{return strcmp(a.name,b.name)==0 && a.ty==b.ty && (a.flags&1)==(b.flags&1);}
  if a.kind!=BN_FN{return false;}
- if strcmp(a.name,b.name)!=0 || a.ty!=b.ty || (a.flags&4)!=(b.flags&4) {return false;}
+ if strcmp(a.name,b.name)!=0 || a.ty!=b.ty || (a.flags&(4|BF_INTERRUPT))!=(b.flags&(4|BF_INTERRUPT)) {return false;}
  let mut left:*BootNode=a.params;let mut right:*BootNode=b.params;
  while left!=(0 as *BootNode) && right!=(0 as *BootNode) {if left.ty!=right.ty {return false;}left=left.next;right=right.next;}
  return left==(0 as *BootNode) && right==(0 as *BootNode);

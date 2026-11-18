@@ -235,7 +235,7 @@ pub fn ll_statement(ctx:*BootContext,node:*BootNode){
  }
  if node.kind==BN_EXPR{ll_expr(ctx,node.left);return;}
  if node.kind==BN_RETURN{
-  if node.left==(0 as *BootNode){ll_text(ctx,"  ret void\n");}else{let value:i32=ll_expr(ctx,node.left);if node.left.ty.kind==BY_VOID{ll_text(ctx,"  ret void\n");}else{ll_text(ctx,"  ret ");ll_value(ctx,node.left.ty,value);ll_text(ctx,"\n");}}
+  if node.left==(0 as *BootNode){ll_return_void(ctx);}else{let value:i32=ll_expr(ctx,node.left);if node.left.ty.kind==BY_VOID{ll_return_void(ctx);}else{ll_text(ctx,"  ret ");ll_value(ctx,node.left.ty,value);ll_text(ctx,"\n");}}
   ctx.llvm_terminated=true;return;
  }
  if node.kind==BN_IF{

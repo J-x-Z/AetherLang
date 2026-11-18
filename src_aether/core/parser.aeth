@@ -570,9 +570,13 @@ pub fn boot_parse(ctx:*BootContext)->bool {
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed && boot_p_kind(ctx)!=BT_EOF {
   let mut node:*BootNode=0 as *BootNode;
-  let mut packed:bool=false;let mut repr:bool=false;let mut destructor:bool=false;let mut exported:bool=false;let mut volatility:bool=false;
+  let mut interrupt:bool=false;let mut packed:bool=false;let mut repr:bool=false;let mut destructor:bool=false;let mut exported:bool=false;let mut volatility:bool=false;
   while boot_p_kind(ctx)==64||boot_p_kind(ctx)==35{
   if boot_p_take(ctx,64){
+   if boot_p_word(ctx,"interrupt"){
+    if interrupt{boot_error(ctx,ctx.cursor,"duplicate interrupt attribute");return false;}
+    boot_p_advance(ctx);interrupt=true;continue;
+   }
    if boot_p_word(ctx,"volatile"){if volatility{boot_error(ctx,ctx.cursor,"duplicate volatile attribute");return false;}boot_p_advance(ctx);volatility=true;}else if boot_p_word(ctx,"no_mangle"){boot_p_advance(ctx);exported=true;}else if boot_p_word(ctx,"drop"){boot_p_advance(ctx);destructor=true;}else{
    if !boot_p_word(ctx,"repr"){boot_error(ctx,ctx.cursor,"expected @drop, @repr(C) or @repr(packed)");return false;}
    boot_p_advance(ctx);if !boot_p_expect(ctx,40,"expected '(' after repr"){return false;}
@@ -584,7 +588,7 @@ pub fn boot_parse(ctx:*BootContext)->bool {
    let inner:bool=boot_p_take(ctx,33);
    if !boot_p_expect(ctx,91,"expected '[' after '#'"){return false;}
    if inner {
-    if volatility || exported || destructor || repr || ctx.module!=ctx.root_module || tail!=0 as *BootNode{
+    if interrupt || volatility || exported || destructor || repr || ctx.module!=ctx.root_module || tail!=0 as *BootNode{
      boot_error(ctx,ctx.cursor,"root inner attributes must precede declarations");return false;
     }
     if boot_p_word(ctx,"no_std"){
@@ -599,9 +603,10 @@ pub fn boot_parse(ctx:*BootContext)->bool {
    exported=true;
   }
   }
-  if boot_p_kind(ctx)==BT_EOF{if volatility||exported||repr||destructor{boot_error(ctx,ctx.cursor,"attribute requires a declaration");return false;}break;}
+  if boot_p_kind(ctx)==BT_EOF{if interrupt||volatility||exported||repr||destructor{boot_error(ctx,ctx.cursor,"attribute requires a declaration");return false;}break;}
   let mut public:bool=false;
   if boot_p_word(ctx,"pub") {public=true;boot_p_advance(ctx);}
+  if interrupt && !boot_p_word(ctx,"fn"){boot_error(ctx,ctx.cursor,"interrupt requires a function definition");return false;}
   if repr && !boot_p_word(ctx,"struct") && !boot_p_word(ctx,"union"){boot_error(ctx,ctx.cursor,"repr requires a struct or union");return false;}
   if boot_p_word(ctx,"impl"){
    if volatility||exported||public||destructor{boot_error(ctx,ctx.cursor,"visibility belongs to each inherent method");return false;}
@@ -643,6 +648,7 @@ pub fn boot_parse(ctx:*BootContext)->bool {
    else if boot_p_word(ctx,"type") {node=boot_p_alias(ctx);}
    else {boot_error(ctx,ctx.cursor,"expected fn, struct, const or extern \"C\"; construct outside Core v1");return false;}
    if node==0 as *BootNode {return false;}
+   if interrupt{node.flags=node.flags|BF_INTERRUPT;}
    if exported {
     if node.kind!=BN_FN && node.kind!=BN_STATIC{boot_error(ctx,node.token,"no_mangle requires a function or static definition");return false;}
     node.flags=node.flags|BF_EXPORT;

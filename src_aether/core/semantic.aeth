@@ -169,7 +169,15 @@ fn boot_place_addressable(ctx:*BootContext,node:*BootNode)->bool {
  boot_error(ctx,node.token,"address requires a place");return false;
 }
 pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType {
+ let irq:bool=boot_in_interrupt(ctx);
+ if irq && node!=0 as *BootNode && (node.kind==BN_METHOD_CALL || node.kind==BN_CLOSURE || node.kind==BN_AWAIT || node.kind==BN_BLOCK_ON) {
+  boot_error(ctx,node.token,"interrupt body cannot call methods, construct closures or suspend");return 0 as *BootType;
+ }
  let actual:*BootType=boot_check_expr_inner(ctx,node,expected);
+ if irq && !ctx.failed && actual!=0 as *BootType && !boot_integer(actual) && !boot_indirect(actual)
+    && actual.kind!=BY_VOID && actual.kind!=BY_BOOL && actual.kind!=BY_NEVER {
+  boot_error(ctx,node.token,"interrupt body requires integer or pointer values");return 0 as *BootType;
+ }
  if !ctx.failed&&actual!=0 as *BootType&&actual.kind==BY_NEVER&&expected!=0 as *BootType{return expected;}
  // Shared reborrowing preserves the origin while restricting permissions; it
  // never changes the declaration's own canonical type or creates a raw pointer.
@@ -406,6 +414,8 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
   if function==(0 as *BootNode) { boot_error(ctx,node.token,"unknown function");return 0 as *BootType; }
   if function.kind!=BN_FN { boot_error(ctx,node.token,"called name is not a function");return 0 as *BootType; }
   if node.lookup==(0 as *BootModule) && boot_find_binding(ctx,node.name,node.token)!=(0 as *BootNode) { boot_error(ctx,node.token,"value binding shadows function name");return 0 as *BootType; }
+  if (function.flags&BF_INTERRUPT)!=0 {boot_error(ctx,node.token,"interrupt entry cannot be called as an ordinary function");return 0 as *BootType;}
+  if boot_in_interrupt(ctx) && !memory {boot_error(ctx,node.token,"interrupt body may call only memory intrinsics");return 0 as *BootType;}
   if function.generics!=(0 as *BootNode){function=boot_check_generic_call(ctx,node,function,expected);if ctx.failed{return 0 as *BootType;}}
   node.decl=function;
   let mut param:*BootNode=function.params;let mut arg:*BootNode=node.params;
@@ -625,6 +635,31 @@ fn boot_constant_checked(ctx:*BootContext,node:*BootNode)->bool {
  }
  return true;
 }
+fn boot_in_interrupt(ctx:*BootContext)->bool {
+ return ctx.function!=0 as *BootNode && (ctx.function.flags&BF_INTERRUPT)!=0;
+}
+
+fn boot_interrupt_signature(ctx:*BootContext,item:*BootNode)->bool {
+ if !ctx.bare_x86_64 || !ctx.no_std {
+  boot_error(ctx,item.token,"interrupt entry requires the x86_64-unknown-none no_std target");return false;
+ }
+ if item.generics!=0 as *BootNode || item.ty.kind!=BY_VOID || (item.flags&(4|BF_DROP|BF_ASYNC))!=0 {
+  boot_error(ctx,item.token,"interrupt requires a concrete non-variadic void function");return false;
+ }
+ let first:*BootNode=item.params;
+ if first!=0 as *BootNode && first.ty.kind==BY_PTR {
+  let frame:*BootType=first.ty.inner;
+  let code:*BootNode=first.next;
+  if frame.kind==BY_STRUCT && !frame.packed && !frame.union_layout && !frame.is_tuple
+     && (code==0 as *BootNode || (code.ty.kind==BY_U64 && code.next==0 as *BootNode)) {
+   let mut field:*BootNode=frame.fields;let mut count:i32=0;
+   while field!=0 as *BootNode && field.ty.kind==BY_U64 {count+=1;field=field.next;}
+   if count==5 && field==0 as *BootNode{return true;}
+  }
+ }
+ boot_error(ctx,item.token,"interrupt requires a pointer to five unpacked u64 frame fields and an optional u64 error code");return false;
+}
+
 fn boot_check_entry(ctx:*BootContext,item:*BootNode)->bool {
  if ctx.no_main || strcmp(item.name,"main")!=0 { return true; }
  if (item.flags&2)!=0||item.generics!=(0 as *BootNode) {boot_error(ctx,item.token,"main requires a non-foreign i32 or void signature");return false;}
@@ -652,6 +687,7 @@ pub fn boot_check(ctx:*BootContext)->bool {
  while item!=(0 as *BootNode) && !ctx.failed {
   ctx.module=item.owner;
   if bm_id(item.name)!=0{boot_error(ctx,item.token,"reserved memory intrinsic name");return false;}
+  if (item.flags&BF_INTERRUPT)!=0 && !boot_interrupt_signature(ctx,item){return false;}
   if !hb_validate(ctx,item){return false;}
   let imported:*BootNode=boot_imported(ctx,item.name,item.token);
   if ctx.failed {return false;}
