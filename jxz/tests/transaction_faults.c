@@ -1,4 +1,5 @@
 /* File publication fault injection; the transaction/recovery algorithm is Aether. */
+#include "fault_scope.h"
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>

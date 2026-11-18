@@ -1,5 +1,6 @@
 /* Inject a failed temporary-file acquisition without changing its template.
  * Cleanup must never unlink a pathname for which mkstemp returned no fd. */
+#include "fault_scope.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <stdlib.h>
