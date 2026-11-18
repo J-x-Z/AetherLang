@@ -2,6 +2,8 @@
 
 外置源码位于 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`。升级起点为 `aceff15`，三个宿主包的源码以经核验的 `v0.1.0` 标签和各包的 `source_commit` 为准。当前分支提交用 `git rev-parse HEAD` 查询。[主线任务](MAINLINE_TASKS.md) · [升级报告与实测指标](docs/UPGRADE.md)
 
+本机日常终端可直接运行 `aethc`、`aethc-native`、`jxz` 和 `jxz-native`。工具链安装在外置卷 `/Volumes/WINDOWS/work/aetherlang-toolchain`。
+
 ## 本机重建
 
 ```sh
@@ -33,9 +35,9 @@ python3 scripts/package.py --work-dir "$WORK/rebuild-evidence" --output "$WORK/r
 
 | 平台或能力 | 已执行的工作 | 本地凭据 |
 | --- | --- | --- |
-| macOS arm64 | 稳定版完整入口、可选版本自举、安装和 SDK 模板的分步状态 | `closure-20261118/accept/a24134e3f9/acceptance.json` |
-| Linux x86-64 | 双种子、安装树、JXZ、独立 Shell、QEMU、CPU/Vulkan 实机 | `closure-20261118/platforms/a24134e/linux/acceptance.json` 及中性路径重建后的 `linux-clean/{hashes.json,clean-native-extras.tgz}` |
-| Windows x86-64 | 维护者同一台 RTX 3060 笔记本的 Windows 11；自举、JXZ、LSP、CSV 及模板 | `closure-20261118/platforms/a24134e/windows/final-verification.json` |
+| macOS arm64 | 稳定版完整入口、可选版本自举、安装和 SDK 模板的分步状态 | `closure-20261118/accept/6dc584cc1e/acceptance.json` |
+| Linux x86-64 | 双种子、安装树、JXZ、独立 Shell、QEMU、CPU/Vulkan 实机及 236 项自举异步检查 | `closure-20261118/identity/verified/6dc584c-linux-evidence/{final-release,async-verified}.json` |
+| Windows x86-64 | 发行 ZIP 在原生 Windows 上完成自举、JXZ、LSP、CSV 与 64 KiB 数组；维护者 RTX 3060 实机另有早一轮 GPU 验收 | `closure-20261118/identity/verified/6dc584c-windows/hosted-summary.json`、`closure-20261118/platforms/a24134e/windows/final-verification.json` |
 | Arch Linux ARM | Xiaomi Warsaw 实机，板上自举固定点、JXZ、张量微分与 Adreno 830 Vulkan | `closure-20261118/arm64-linux/receipt.json` |
 | x86-64 裸机 | 种子和自举生成的周期中断程序，LLVM 21/23 的 O0/O2 共八次 QEMU 启动 | `closure-20261118/quake/kernel-independent-review.json` |
 | 参数化量子程序 | CUDA-Q SDK 通过同一 Quake 模块执行五组角度 | `closure-20261118/quake/parameterized-final.json` |
@@ -44,6 +46,6 @@ python3 scripts/package.py --work-dir "$WORK/rebuild-evidence" --output "$WORK/r
 
 ## 发行与下一项
 
-发行文件与 `SHA256SUMS` 保存在 `closure-20261118/public`。[0.1.0 发布页](https://github.com/J-x-Z/AetherLang/releases/tag/v0.1.0) · [报告](docs/UPGRADE.md)
+同版发行源码为 `6dc584cc1ef88ed37a1d60d3c5722f65be8d2b0f`。三份归档、`SHA256SUMS` 和 FileVeil 签名 TOML 位于 `closure-20261118/identity/verified/6dc584c-public`。各平台清单与五份文件的匿名下载校验位于 `closure-20261118/identity/verified/6dc584cc1ef88ed37a1d60d3c5722f65be8d2b0f/release-verification`。[0.1.0 发布页](https://github.com/J-x-Z/AetherLang/releases/tag/v0.1.0) · [报告](docs/UPGRADE.md)
 
 下一项具体工作是在另一个配有常规 Clang 的 ARM64 GNU/Linux 发行版上构建和搬移安装包，核验 glibc 与 libLLVM 的最低分发要求。当前 ARM64 真机已经完成原生自举和 Adreno 计算验收。
