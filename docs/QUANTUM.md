@@ -21,11 +21,22 @@ selection are outside this interface. [CUDA-Q dynamic kernel builder](https://nv
 | --- | --- | --- |
 | macOS arm64, Apple M4 CPU | CUDA-Q qpp, fp64 | Mixed circuits and a 16-qubit, 65,536-amplitude comparison, `on_gpu=0` |
 | Linux x86_64, RTX 3060 Laptop GPU | CUDA-Q cuStateVec, fp64 | Eight mixed circuits and 40 optimizer steps, `on_gpu=1` |
-| macOS arm64, Apple M4 GPU | Aether compute queue, Metal, complex64 | 16 qubits, all amplitudes checked, 42 submissions |
+| macOS arm64, Apple M4 GPU | Aether compute queue, Metal, complex64 | C and LLVM builds, 16 qubits, all 65,536 amplitudes, 42 submissions |
+| CachyOS x86-64, AMD Radeon Vega (Cezanne) | Aether compute queue, Vulkan RADV RENOIR, complex64 | C and LLVM builds, same 16-qubit checks and 42 submissions |
 | Linux x86_64, RTX 3060 Laptop GPU | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
 | Windows 11 x86-64, RTX 3060 Laptop GPU | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
 | Arch Linux ARM, Adreno 830 | Aether compute queue, Mesa Turnip 26.2.3, complex64 | C/LLVM binaries and an on-device self-hosted build agreed on all amplitudes, expectations and gradient |
-| Android, Adreno 750 | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
+| Android 17, Galaxy Z Fold6, Adreno 750 | Aether compute queue, Vulkan, complex64 | C and LLVM builds, same 16-qubit checks and 42 submissions, Qualcomm vendor ID `0x5143` |
+
+On M4, Radeon Vega and the Fold6, the C and LLVM executables each produced a
+maximum per-amplitude L1 error of `7.81873961e-8` against the fp64 reference.
+They also checked two orders of marginal probabilities, three Pauli
+expectations and a parameter-shift gradient. The peak charged to the queue
+was 2,129,920 bytes on Metal and 2,097,216 on both Vulkan devices. After
+release the charge returned to zero. The GPU performed the batched gate
+matrix multiplications. The Aether host code packed and scattered
+amplitude pairs, computed the readouts and ran the classical optimizer.
+The Vulkan provider selects a physical integrated or discrete GPU.
 
 CUDA-Q documents GPU simulation targets on Linux and CPU simulation on Apple
 Silicon. On Windows its documented installation route is Linux under WSL 2.

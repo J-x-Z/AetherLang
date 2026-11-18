@@ -1,5 +1,23 @@
 # AetherLang 集中升级交付
 
+## 0.2.0 工具链与设备交付
+
+四个平台归档绑定提交 `faec8d37de854e2de32fe0fb87e5e210813ea360`。终端与编辑器可以通过同一 MCP 服务查询真实 JXZ 项目的诊断、定义、引用和分页符号。编译器和自举前端都支持在分支、循环和嵌套语句块内恢复异步任务，也支持 Windows x64 C 布局记录的按值互调。[0.2.0 下载](https://github.com/J-x-Z/AetherLang/releases/tag/v0.2.0) · [异步适用范围](BOOTSTRAP.md#cooperative-async-in-both-source-forms)
+
+- 异步任务现在按实际的控制流保存恢复点与存活变量，循环尾部允许不会返回的合法路径。外层循环的 `break` 和 `continue` 可以穿过匹配分支，对应作用域的析构只执行一次。macOS 和两个 Linux 原生包各通过 284 项异步检查。[种子与自举的对比入口](../tests/bootstrap_async.py)
+- Windows x64 的小聚合按 ABI 规定转为整数载体，其他尺寸的值使用独立对齐副本和隐藏返回指针。独立的 MinGW 与 MSVC C 调用方分别链接 Rust 种子生成的 O0/O2 对象并在 Windows 执行。Windows 包内的自举编译器也走通 C 和 LLVM 路径，运行 JXZ、LSP、MCP 和 CSV 程序。[Windows 原生验收](https://github.com/J-x-Z/AetherLang/actions/runs/44377855758)
+- 原生 Ubuntu ARM64 构建暴露了 LLVM FFI 错把 `char` 当成固定有符号类型的问题。修正后，Ubuntu 24.04.5 的 x86-64 和 ARM64 都完成了双种子自举、搬移、MCP 和 JXZ。两个架构的完整 Rust 种子观察到的 glibc 符号上限为 2.39，随包 LLVM 还要求宿主提供 `libedit.so.2`、`libxml2.so.2` 等库。实测的 CachyOS 和 Arch Linux ARM 可选 `aethc-native` 与 `jxz-native` 使用原生工具和 MCP。[Linux 原生构建](https://github.com/J-x-Z/AetherLang/actions/runs/44375184972)
+- 在相同的 16 比特电路上强制选择 M4 Metal、Ryzen 7 5800H 的 Radeon Vega 核显和 Android Adreno 750。每台的 C/LLVM 两版均完成 42 次 GPU 提交，逐项比对所有 65,536 个振幅，最大误差为 `7.81873961e-8`。量子门的矩阵乘在 GPU 运行，打包、写回和读出在 CPU 运行。Adreno 830 的记录来自此前的原生 ARM64 Linux 测试。[程序与设备](QUANTUM.md)
+
+| 归档字节数 | 0.1.0 | 0.2.0 |
+| --- | ---: | ---: |
+| macOS ARM64 | 4,444,999 | 4,493,058 |
+| GNU/Linux x86-64 | 59,429,981 | 48,160,247 |
+| GNU/Linux ARM64 | — | 46,369,255 |
+| Windows x86-64 | 807,897 | 838,221 |
+
+Linux x86-64 的打包宿主从 CachyOS 变为 Ubuntu；该行比较的是下载大小。编译时间、峰值 RSS、对象大小和 CPU 工作负载的同机测量记录在下文各次实验中。GPU 本轮的验收指标是数值、设备提交和队列内存，未测吞吐加速比。
+
 ## 0.1.0 同版交付与 ARM64 Linux 实机
 
 三个安装清单都记录了确切的 Git 提交。发布页附有普通 SHA-256 校验单和独立签名 TOML，五个附件均已通过匿名下载校验。[发布与下载](https://github.com/J-x-Z/AetherLang/releases/tag/v0.1.0)

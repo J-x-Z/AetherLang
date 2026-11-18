@@ -1,10 +1,24 @@
 # AetherLang 工程交接
 
-外置源码位于 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`。升级起点为 `aceff15`，三个宿主包的源码以经核验的 `v0.1.0` 标签和各包的 `source_commit` 为准。当前分支提交用 `git rev-parse HEAD` 查询。[主线任务](MAINLINE_TASKS.md) · [升级报告与实测指标](docs/UPGRADE.md)
+外置源码位于 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`。升级起点为 `aceff15`，本版四个宿主包的源码为 `faec8d37de854e2de32fe0fb87e5e210813ea360`。当前分支提交用 `git rev-parse HEAD` 查询。[主线任务](MAINLINE_TASKS.md) · [升级报告与实测指标](docs/UPGRADE.md)
 
 本机日常终端可直接运行 `aethc`、`aethc-native`、`jxz` 和 `jxz-native`。工具链安装在外置卷 `/Volumes/WINDOWS/work/aetherlang-toolchain`。
 
-## 当前本地开发版
+## 0.2.0 交接
+
+标签 `v0.2.0`、四个归档和下列凭据使用同一源码提交。外置卷的验收根目录为 `WORK/v0.2.0/builds/faec8d37de854e2de32fe0fb87e5e210813ea360`。日常终端的两个编译器均报告 0.2.0，安装清单 SHA-256 为 `f7dde881aa6e270984a7707def12eb565dc4254bf5291b7cf55c303eef497acd`。JXZ 仍使用自己的版本号。[四平台下载](https://github.com/J-x-Z/AetherLang/releases/tag/v0.2.0)
+
+| 复验对象 | 命令或原始凭据（相对于验收根目录） |
+| --- | --- |
+| 原生 Linux 双架构、完整自举、MCP、JXZ、284 项异步检查 | `scripts/release_linux.sh`；依赖及结果在 `linux-actions/linux-{x86_64,aarch64}-package/evidence/` |
+| Ubuntu 包移至 Arch Linux ARM | `linux-actions/arch-arm-compatibility.json`；自举编译器和 C-only 种子均完成 MCP 查询 |
+| 笔记本 CachyOS、Mac 与 Fold6 的 16 量子比特 GPU 运行 | `amd-radv/accepted/summary.json`、`metal-gpu/results.json`、`qualcomm/device.json` |
+| Windows 原生自举、按值结构体、JXZ、MCP | [使用同一 Windows 归档及 Linux 种子的原生检查](https://github.com/J-x-Z/AetherLang/actions/runs/44377855758) |
+| 归档哈希、签名与分发回读 | `archives.json`、`FileVeil.log`、`public-readback.json` |
+
+下次维护可从 Linux 种子的分发兼容性入手：在一台缺 `libedit.so.2`、`libxml2.so.2` 的滚动发行版上验证一种可搬移的 LLVM 依赖方案。当前可以直接选包内 `aethc-native` 与 `jxz-native` 运行 MCP。16 比特 GPU 结果及已覆盖平台见[设备表](docs/QUANTUM.md)。
+
+## 0.1.0 之后的开发快照
 
 MCP 与编译修复的源码提交为 `84c270b`，在公开 `v0.1.0` 之后。MCP 的本地入口为 `aether-mcp --root /Volumes/WINDOWS/work/AetherLang/jxz`。包内和项目均可直接启动 `tools/mcp/aether_mcp.py`。它支持检查、定义、引用和分页符号搜索。[配置示例](docs/MCP.md) · [审计及测量](docs/UPGRADE.md#010-之后的本地-mcp-与编译审计)
 
@@ -65,8 +79,8 @@ python3 scripts/package.py --work-dir "$WORK/rebuild-evidence" --output "$WORK/r
 
 16 比特状态向量结果及 SDK 和原生计算路径见[量子运行时](docs/QUANTUM.md)。维护者已暂缓物理 8 GiB 整机余量测试。
 
-## 发行与下一项
+## 0.1.0 发行存档
 
 同版发行源码为 `6dc584cc1ef88ed37a1d60d3c5722f65be8d2b0f`。三份归档、`SHA256SUMS` 和 FileVeil 签名 TOML 位于 `closure-20261118/identity/verified/6dc584c-public`。各平台清单与五份文件的匿名下载校验位于 `closure-20261118/identity/verified/6dc584cc1ef88ed37a1d60d3c5722f65be8d2b0f/release-verification`。[0.1.0 发布页](https://github.com/J-x-Z/AetherLang/releases/tag/v0.1.0) · [报告](docs/UPGRADE.md)
 
-原发行线的下一项工作是在另一个配有常规 Clang 的 ARM64 GNU/Linux 发行版上构建和搬移安装包，核验 glibc 与 libLLVM 的最低分发要求。当前 ARM64 真机已经完成原生自举和 Adreno 计算验收。
+0.1.0 留下的 ARM64 Linux 分发工作已在上方 0.2.0 交接中记录。

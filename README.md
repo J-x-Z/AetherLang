@@ -61,7 +61,16 @@ textual IR emitted by that seed. The stable packages use LLVM 21.
 
 The toolchain includes an `aether-mcp --root PROJECT` stdio server for project checks,
 definitions, references and paged symbol search. It accepts both Script and
-Core and uses JXZ to resolve project dependencies. [Configure the server](docs/MCP.md)
+Core and uses JXZ to resolve project dependencies. If a rolling Linux
+distribution lacks the shared libraries required by the packaged Rust seed,
+select the self-hosted tools. This configuration passed on Arch Linux ARM:
+
+```sh
+bin="$HOME/.aetherlang/bin"
+"$bin/aether-mcp" --root "$PWD" --compiler "$bin/aethc-native" --jxz "$bin/jxz-native"
+```
+
+[MCP client configuration and queries](docs/MCP.md)
 
 ## Work with data in the terminal
 
@@ -96,12 +105,13 @@ remain gaps for users of those ecosystems. [Numerical API](docs/MATH.md) ·
   native programs. The self-hosted LLVM backend can emit x86-64 freestanding
   objects. An Aether page pool and a periodic interrupt handler that samples
   ordinary Aether work boot under QEMU at O0 and O2.
-  Foreign aggregate ABI coverage includes Apple arm64 and
-  x86-64 System V. The [persistent accumulator](examples/upgrade/accumulator.aeth)
-  reads commands, writes a journal and closes its resources.
+  Structs can pass by value between Aether and independently compiled C in
+  either direction on Apple arm64, x86-64 System V and Windows x64.
+  The persistent accumulator reads commands, writes a journal and closes its
+  resources. [Example source](examples/upgrade/accumulator.aeth)
 - **Accelerators.** Aether code owns tensor shapes, budgets, operator scheduling
   and resource lifetimes. Compute providers have run on CPU, Apple Metal and
-  Vulkan on NVIDIA and Adreno devices. On Arch Linux ARM, the self-hosted
+  Vulkan on NVIDIA, AMD Radeon and Qualcomm Adreno devices. On Arch Linux ARM, the self-hosted
   compiler rebuilt itself and compiled programs that ran on an Adreno 830. Callers select a device and receive
   errors for unsupported operations or allocation failures.
 - **Quantum simulation.** An fp64 state-vector reference and an fp32 simulator
@@ -110,7 +120,9 @@ remain gaps for users of those ecosystems. [Numerical API](docs/MATH.md) ·
   Reusable Aether circuit templates can bind shared rotation parameters or export
   them as scalar `f64` parameters in Quake. CUDA-Q can load one exported module
   and execute it with successive sets of angles. Metal and Adreno use Aether's own
-  simulator. A 16-qubit workload checks all 65,536 amplitudes, expectations
+  simulator. On Apple M4, AMD Radeon Vega and Adreno 750, C and LLVM builds
+  both ran a 16-qubit circuit with GPU gate multiplication and host-side
+  readout. Each checked all 65,536 amplitudes, ordered marginal probabilities
   and a parameter-shift gradient. [Quantum API and device results](docs/QUANTUM.md)
 - **Project tools.** JXZ checks, builds, runs and tests projects with local or
   locked registry dependencies and preserves child failures. The compiler has
