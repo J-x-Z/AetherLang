@@ -124,6 +124,7 @@ pub fn boot_method_call(ctx:*BootContext,node:*BootNode,actual:*BootType)->bool 
  receiver.next=node.params;node.params=receiver;node.left=0 as *BootNode;node.kind=BN_CALL;node.name=function.name;node.decl=function;node.aux=target;return true;
 }
 pub fn boot_method_associated(ctx:*BootContext,node:*BootNode)->bool {
+ if !node.ty.complete && node.ty.kind==BY_STRUCT{boot_error(ctx,node.token,"unknown imported module or type in qualified call");return false;}
  let target:*BootType=boot_normal_type(ctx,node.ty,0,node.token);if ctx.failed{return false;}
  let function:*BootNode=boot_method_find(ctx,target,node.name,node.token);if ctx.failed{return false;}
  node.kind=BN_CALL;node.name=function.name;node.decl=function;node.aux=target;node.ty=0 as *BootType;return true;

@@ -471,7 +471,7 @@ fn boot_static_initializer(ctx:*BootContext,node:*BootNode)->bool {
  if boot_constant_form(node){return boot_constant_checked(ctx,node);}
  if node.kind==BN_STRING || node.kind==BN_UNIT{return true;}
  if node.kind==BN_CAST && node.ty.kind==BY_PTR {
-  if node.left.ty.kind==BY_PTR{return boot_static_initializer(ctx,node.left);}
+  if boot_indirect(node.left.ty){return boot_static_initializer(ctx,node.left);}
   if node.left.kind==BN_INT && node.left.value==0{return true;}
  }
  if node.kind==BN_UNARY && node.op==38{return boot_address_base(ctx,node.left);}

@@ -40,13 +40,13 @@ fn main()->i32 {
  if copied.inner.value!=37 || source.inner.value!=38 { return 5; }
  let mut trace:i32=0;
  let mut destination:i32=0;
- *locate(&trace,&destination)=value(&trace);
+ *locate(&mut trace as *i32,&mut destination as *i32)=value(&mut trace as *i32);
  if trace!=12 || destination!=73 { return 6; }
  trace=0;
- observe(&trace,source).inner.value=46;
+ observe(&mut trace as *i32,source).inner.value=46;
  if trace!=1 || source.inner.value!=46 { return 7; }
  trace=0;
- if observe(&trace,source).inner.value!=46 || trace!=1 { return 8; }
+ if observe(&mut trace as *i32,source).inner.value!=46 || trace!=1 { return 8; }
  let mut index:i32=0;
  let mut sum:i32=0;
  while index<4 {

@@ -17,6 +17,7 @@ work.mkdir(parents=True, exist_ok=True)
 env = {**os.environ, 'TMPDIR': str(work)}
 records = []
 positive = {
+    'enum_declaration': 'enum E{A}',
     'optional_semicolons': 'const N:i32=1 fn f(){let x:i32=0 return} fn main()->i32{N-1}',
     'main_with_arguments': 'fn main(count:i32,args:**u8)->i32{return count-1;}',
     'main_void': 'fn main(){return;}',
@@ -136,7 +137,7 @@ negative.update({'parser_no_initializer': ('fn f(){let x:i32;}', 'Core let requi
                                    'variadic function needs a fixed parameter'),
  'parser_variadic_not_last': ('extern "C"{fn f(x:i32,...,y:i32);}', 'variadic marker must be last'),
  'parser_unclosed': ('fn f(){return;', 'unterminated block'),
- 'parser_unsupported': ('enum E{A}',
+ 'parser_unsupported': ('unrecognized_item E{A}',
                         'expected fn, struct, const or extern "C"; construct outside Core v1'),
  'parser_assign_expr': ('fn f()->i32{return 1=2;}', 'expected expression'),
  'parser_indirect_call': ('fn f()->i32{return (*pointer)(1);}',

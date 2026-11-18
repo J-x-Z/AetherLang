@@ -137,7 +137,7 @@ positive('late-import-and-type-alias', {
  'main.aeth':'extern "C"{fn puts(s:*u8)->i32;}fn main()->i32{let values:Pair=[20,22];return sum(values)-42;}use lib::{Pair,sum};',
  'lib.aeth':'pub type Pair=[i32;2];pub fn sum(values:Pair)->i32{values[0]+values[1]}'},levels=('0','2'))
 positive('alias-forward-pointer', {
- 'main.aeth':'type First=Later;fn take(p:*First)->i32{*p}type Later=i32;fn main()->i32{let x:i32=42;return take(&x)-42;}'})
+ 'main.aeth':'type First=Later;fn take(p:*First)->i32{*p}type Later=i32;fn main()->i32{let x:i32=42;return take(&x as *i32)-42;}'})
 positive('container-values', {'main.aeth':(root/'tests/regressions/bootstrap/container_values.aeth').read_text()},
          expected='containers=ok\n',levels=('0','2'))
 
