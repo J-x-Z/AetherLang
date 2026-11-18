@@ -112,7 +112,9 @@ fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8)->boo
      else{return boot_arguments_error(ctx,"expected llvm or c backend");}
     } else if strcmp(arg,"--link-object")==0 {
      let path:*u8=realpath(value,0 as *u8);
-     if path==0 as *u8 {return boot_arguments_error(ctx,"cannot resolve link object");}
+     if path==0 as *u8 {
+      ctx.path=value;return boot_arguments_error(ctx,"cannot resolve link object");
+     }
      cmd.objects[cmd.object_count]=boot_copy(ctx,path,strlen(path));free(path as *void);
      if ctx.failed {return false;}cmd.object_count=cmd.object_count+1;
     } else {return boot_arguments_error(ctx,"unknown command option");}

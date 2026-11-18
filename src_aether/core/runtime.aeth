@@ -78,6 +78,14 @@ pub fn boot_module_item(module:*BootModule,name:*u8)->*BootNode {
  return 0 as *BootNode;
 }
 pub fn boot_exported(item:*BootNode)->bool { return item!=(0 as *BootNode) && ((item.flags&10)!=0 || item.kind==BN_CONST || item.kind==BN_ENUM); }
+pub fn boot_child_module(module:*BootModule,name:*u8,public_only:bool)->*BootModule{
+ let mut entry:*BootImport=module.imports;
+ while entry!=0 as *BootImport{
+  if entry.symbol==0 as *u8 && (!public_only||entry.exported) && strcmp(entry.alias,name)==0{return entry.target;}
+  entry=entry.next;
+ }
+ return 0 as *BootModule;
+}
 pub fn boot_import_module(ctx:*BootContext,name:*u8,token:*BootToken)->*BootModule {
  if ctx.module!=(0 as *BootModule) {
   let mut import:*BootImport=ctx.module.imports;

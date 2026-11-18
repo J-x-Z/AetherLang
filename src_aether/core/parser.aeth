@@ -29,7 +29,7 @@ pub fn boot_p_reserved(text:*u8)->bool {
  if strcmp(text,"while")==0 || strcmp(text,"return")==0 || strcmp(text,"break")==0 || strcmp(text,"continue")==0 {return true;}
  if strcmp(text,"struct")==0 || strcmp(text,"extern")==0 || strcmp(text,"const")==0 || strcmp(text,"unsafe")==0 {return true;}
  if strcmp(text,"as")==0 || strcmp(text,"true")==0 || strcmp(text,"false")==0 || strcmp(text,"size_of")==0 || strcmp(text,"align_of")==0 {return true;}
- if strcmp(text,"static")==0 || strcmp(text,"__errno_get")==0 {return true;}
+ if strcmp(text,"mod")==0 || strcmp(text,"static")==0 || strcmp(text,"__errno_get")==0 {return true;}
  if strcmp(text,"pub")==0 || strcmp(text,"use")==0 || strcmp(text,"enum")==0 || strcmp(text,"impl")==0 {return true;}
  if strcmp(text,"for")==0 || strcmp(text,"loop")==0 || strcmp(text,"match")==0 || strcmp(text,"type")==0 {return true;}
  return false;
@@ -76,7 +76,12 @@ fn boot_p_type_inner(ctx:*BootContext)->*BootType {
  if boot_p_take(ctx,58) {
   if !boot_p_expect(ctx,58,"expected :: in imported type") {return 0 as *BootType;}
   lookup=boot_import_module(ctx,name,token); if lookup==(0 as *BootModule) {return 0 as *BootType;}
-  let member:*BootToken=boot_p_name(ctx);if member==(0 as *BootToken) {return 0 as *BootType;}name=member.text;
+  let mut member:*BootToken=boot_p_name(ctx);if member==(0 as *BootToken) {return 0 as *BootType;}name=member.text;
+  while boot_p_take(ctx,58){
+   if !boot_p_expect(ctx,58,"expected :: in nested type"){return 0 as *BootType;}
+   lookup=boot_child_module(lookup,name,true);if lookup==0 as *BootModule{boot_error(ctx,member,"unknown or private nested module");return 0 as *BootType;}
+   member=boot_p_name(ctx);if ctx.failed{return 0 as *BootType;}name=member.text;
+  }
   return boot_p_type_apply(ctx,boot_resolve_type(ctx,name,lookup,token));
  }
  if strcmp(name,"void")==0 {return boot_type(ctx,BY_VOID);}
@@ -197,17 +202,20 @@ fn boot_p_primary(ctx:*BootContext)->*BootNode {
    node.name=name.text;
    if boot_p_take(ctx,58) {
     if !boot_p_expect(ctx,58,"expected :: in imported name") {return 0 as *BootNode;}
-    let mut imports:*BootImport=ctx.module.imports;
-    while imports!=0 as *BootImport{if imports.symbol==0 as *u8&&strcmp(imports.alias,node.name)==0{node.lookup=imports.target;}imports=imports.next;}
-    let member:*BootToken=boot_p_name(ctx);if member==(0 as *BootToken) {return 0 as *BootNode;}
+    node.lookup=boot_child_module(ctx.module,node.name,false);
+    let member:*BootToken=boot_p_name(ctx);if ctx.failed{return 0 as *BootNode;}
     if node.lookup==0 as *BootModule{
      node.ty=boot_resolve_type(ctx,node.name,0 as *BootModule,token);node.kind=BN_ENUM_VALUE;node.name=member.text;
     }else{
      node.name=member.text;
-     if boot_p_take(ctx,58){
-      if !boot_p_expect(ctx,58,"expected :: before enum variant"){return 0 as *BootNode;}
-      node.ty=boot_resolve_type(ctx,node.name,node.lookup,token);node.kind=BN_ENUM_VALUE;
-      let variant:*BootToken=boot_p_name(ctx);if variant==0 as *BootToken{return 0 as *BootNode;}node.name=variant.text;
+     while boot_p_take(ctx,58){
+      if !boot_p_expect(ctx,58,"expected :: in qualified name"){return 0 as *BootNode;}
+      let child:*BootModule=boot_child_module(node.lookup,node.name,true);
+      let part:*BootToken=boot_p_name(ctx);if ctx.failed{return 0 as *BootNode;}
+      if child==0 as *BootModule{
+       node.ty=boot_resolve_type(ctx,node.name,node.lookup,token);node.kind=BN_ENUM_VALUE;node.name=part.text;break;
+      }
+      node.lookup=child;node.name=part.text;
      }
     }
    }

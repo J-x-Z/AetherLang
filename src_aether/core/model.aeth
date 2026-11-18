@@ -85,8 +85,8 @@ pub struct BootContext {
  type_parameters:*BootNode,instances:*BootInstance,instance_count:i32,methods:*BootNode,impl_target:*BootType
 }
 
-pub struct BootImport { alias:*u8,symbol:*u8,target:*BootModule,wildcard:bool,token:*BootToken,next:*BootImport }
-pub struct BootModule { id:i32,path:*u8,directory:*u8,source:*u8,length:u64,tokens:*BootToken,items:*BootNode,imports:*BootImport,state:i32,next:*BootModule }
+pub struct BootImport { alias:*u8,symbol:*u8,target:*BootModule,wildcard:bool,exported:bool,token:*BootToken,next:*BootImport }
+pub struct BootModule { id:i32,inline_module:bool,path:*u8,directory:*u8,source:*u8,length:u64,tokens:*BootToken,items:*BootNode,imports:*BootImport,state:i32,next:*BootModule }
 pub struct BootRoot { path:*u8,next:*BootRoot }
 
 pub struct BootMappedModule { name:*u8, path:*u8, next:*BootMappedModule }

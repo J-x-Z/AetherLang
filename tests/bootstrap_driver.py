@@ -103,6 +103,22 @@ foreign_aggregate.write_text('struct P{x:i64} extern "C"{fn consume(p:P)->i32;} 
 for target_backend in ('c','llvm'):
     run(target_backend+'/foreign aggregate check',[compiler,'check',foreign_aggregate,'--backend',target_backend])
     run(target_backend+'/foreign aggregate build',[compiler,'build',foreign_aggregate,'--backend',target_backend,'-o',case/('foreign-'+target_backend)])
+modules = case/'module declarations'
+modules.mkdir()
+(modules/'part.aeth').write_text('pub fn number()->i32{17}')
+nested = modules/'nested.aeth'
+nested.write_text('use top::inner::number as declared;mod top{pub mod inner{pub fn number()->i32{3}}}'
+                  'mod part;fn main()->i32{part::number()+declared()+top::inner::number()}')
+for backend in ('llvm','c'):
+    binary = case/('nested-'+backend)
+    run(backend+'/nested external and inline modules',[compiler,'build',nested,'--backend',backend,'-o',binary])
+    run(backend+'/module declaration execution',[binary],23)
+hidden=modules/'hidden.aeth'
+hidden.write_text('mod top{mod inner{pub fn number()->i32{3}}}fn main()->i32{top::inner::number()}')
+run('private nested namespace',[compiler,'check',hidden],1)
+missing=case/'missing native object Ω.o'
+failure=run('missing link input includes path',[compiler,'build',nested,'--link-object',missing,'-o',case/'missing'],1)
+assert str(missing) in failure.stdout+failure.stderr
 run('duplicate binding', [compiler,'check',*mapping,*mapping,'--',src.name],1)
 run('invalid binding', [compiler,'check','--module','fn='+str(module),'--',src.name],1)
 run('exact binding does not expose sibling roots', [compiler,'check','--module','unrelated='+str(module),'--',src.name],1)
