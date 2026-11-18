@@ -1,0 +1,79 @@
+// regress FILE X_COLUMN Y_COLUMN prints a JSON linear fit. Empty numeric fields
+// skip one observation; malformed numbers, duplicate selected names and ragged rows fail.
+use result::Result;
+use vec::{Vec,vec_new,vec_free};
+use csv::{CsvReader,csv_reader,csv_field,CSV_END_RECORD,CSV_EOF};
+use stats::{PairedMoments,LinearFit,paired_new,paired_push,paired_fit};
+extern "C"{
+    fn fopen(path:*u8,mode:*u8)->*void;fn fclose(file:*void)->i32;
+    fn strcmp(a:*u8,b:*u8)->i32;fn strtod(text:*u8,end:**u8)->f64;
+    fn printf(format:*u8,...)->i32;fn fflush(stream:*void)->i32;
+    fn dup(fd:i32)->i32;fn close(fd:i32)->i32;fn fdopen(fd:i32,mode:*u8)->*void;
+    fn write(fd:i32,data:*u8,count:usize)->isize;fn strlen(text:*u8)->usize;
+}
+struct Analysis{moments:PairedMoments,skipped:u64}
+fn number(text:*u8)->Result<f64,i32>{
+    let mut tail:*u8=0 as *u8;let n:f64=strtod(text,&mut tail as **u8);
+    if tail==text || *tail!=(0 as u8) || n-n!=0.0{return Result::Err(5);}
+    return Result::Ok(n);
+}
+fn analyze(reader:*CsvReader,field:*Vec<u8>,xname:*u8,yname:*u8)->Result<Analysis,i32>{
+    let mut width:i64=0;let mut xc:i64=-1;let mut yc:i64=-1;
+    loop{
+        let status:i32=csv_field(reader,field);if status<=CSV_EOF{return Result::Err(3);}
+        if strcmp(xname,field.data)==0{if xc>=0{return Result::Err(4);}xc=width;}
+        if strcmp(yname,field.data)==0{if yc>=0{return Result::Err(4);}yc=width;}
+        width+=1;if status==CSV_END_RECORD{break;}
+    }
+    if xc<0 || yc<0{return Result::Err(4);}
+    let mut result:Analysis=Analysis{moments:paired_new(),skipped:0};
+    let mut col:i64=0;let mut x:f64=0.0;let mut y:f64=0.0;let mut missing:bool=false;
+    loop{
+        let status:i32=csv_field(reader,field);
+        if status==CSV_EOF{break;}if status<0 || col>=width{return Result::Err(3);}
+        if col==xc || col==yc{
+            if field.len==0{missing=true;}
+            else{let v:f64=number(field.data)?;if col==xc{x=v;}if col==yc{y=v;}}
+        }
+        col+=1;
+        if status==CSV_END_RECORD{
+            if col!=width{return Result::Err(3);}
+            if missing{result.skipped+=1;}else{
+                match paired_push(&mut result.moments as *PairedMoments,x,y){Result::Ok(_)=>{},Result::Err(_)=>{return Result::Err(6);}};
+            }
+            col=0;missing=false;
+        }
+    }
+    return Result::Ok(result);
+}
+fn report(data:Analysis)->i32{
+    let fit:LinearFit=match paired_fit(data.moments){Result::Ok(v)=>v,Result::Err(_)=>{return 6;}};
+    if printf("{\"n\":%llu,\"skipped\":%llu,\"mean_x\":%.17g,\"mean_y\":%.17g,\"variance_x\":%.17g,\"variance_y\":%.17g,\"covariance\":%.17g,\"slope\":%.17g,\"intercept\":%.17g,\"r_squared\":",
+        data.moments.n,data.skipped,data.moments.mean_x,data.moments.mean_y,fit.sample_variance_x,fit.sample_variance_y,
+        fit.sample_covariance,fit.slope,fit.intercept)<0{return 7;}
+    let n:i32=if fit.r_squared_defined{printf("%.17g}\n",fit.r_squared)}else{printf("null}\n")};
+    if n<0 || fflush(0 as *void)!=0{return 7;}return 0;
+}
+fn message(code:i32)->i32{
+    let mut text:*u8="regress: input could not be read as a consistent CSV table\n";
+    if code==2{text="usage: regress FILE|- X_COLUMN Y_COLUMN\n";}
+    if code==4{text="regress: expected one header matching each selected column\n";}
+    if code==5{text="regress: selected value is not a complete finite number\n";}
+    if code==6{text="regress: fit needs two finite pairs and a predictor with nonzero variance\n";}
+    if code==7{text="regress: could not write the result\n";}
+    write(2,text,strlen(text));return code;
+}
+fn main(argc:i32,argv:**u8)->i32{
+    if argc!=4{return message(2);}
+    let mut fp:*void=0 as *void;
+    if strcmp(argv[1],"-")==0{
+        let fd:i32=dup(0);if fd<0{return message(3);}fp=fdopen(fd,"rb");
+        if fp==0 as *void{close(fd);return message(3);}
+    }else{fp=fopen(argv[1],"rb");}
+    if fp==0 as *void{return message(3);}
+    let mut reader:CsvReader=csv_reader(fp,8388608);let mut field:Vec<u8> =vec_new();
+    let result:Result<Analysis,i32> =analyze(&mut reader as *CsvReader,&mut field as *Vec<u8>,argv[2],argv[3]);
+    vec_free(&mut field as *Vec<u8>);if fclose(fp)!=0{return message(3);}
+    let status:i32=match result{Result::Ok(v)=>report(v),Result::Err(e)=>e};
+    if status!=0{return message(status);}return 0;
+}

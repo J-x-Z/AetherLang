@@ -1,0 +1,48 @@
+// Online sample moments for complete, finite pairs. No observations are retained.
+use result::Result;
+extern "C"{@pure fn sqrt(v:f64)->f64;}
+pub const STATS_NONFINITE:i32=1;
+pub const STATS_COUNT:i32=2;
+pub const STATS_CONSTANT_X:i32=3;
+pub struct PairedMoments {
+    pub n:u64, pub mean_x:f64, pub mean_y:f64, m2_x:f64, m2_y:f64, cross:f64
+}
+pub struct LinearFit {
+    pub slope:f64, pub intercept:f64, pub sample_variance_x:f64, pub sample_variance_y:f64,
+    pub sample_covariance:f64, pub r_squared:f64, pub r_squared_defined:bool
+}
+pub fn paired_new()->PairedMoments {
+    PairedMoments{n:0,mean_x:0.0,mean_y:0.0,m2_x:0.0,m2_y:0.0,cross:0.0}
+}
+fn finite(v:f64)->bool {v-v==0.0}
+pub fn paired_push(state:*PairedMoments,x:f64,y:f64)->Result<(),i32>{
+    if !finite(x) || !finite(y){return Result::Err(STATS_NONFINITE);}
+    if state.n>=9007199254740992{return Result::Err(STATS_COUNT);}
+    let count:u64=state.n+1;
+    let dx:f64=x-state.mean_x;let dy:f64=y-state.mean_y;
+    let mx:f64=state.mean_x+dx/(count as f64);let my:f64=state.mean_y+dy/(count as f64);
+    let xx:f64=state.m2_x+dx*(x-mx);let yy:f64=state.m2_y+dy*(y-my);
+    let xy:f64=state.cross+dx*(y-my);
+    if !finite(xx) || !finite(yy) || !finite(xy){return Result::Err(STATS_NONFINITE);}
+    *state=PairedMoments{n:count,mean_x:mx,mean_y:my,m2_x:xx,m2_y:yy,cross:xy};
+    Result::Ok(())
+}
+pub fn paired_fit(state:PairedMoments)->Result<LinearFit,i32>{
+    if state.n<2{return Result::Err(STATS_COUNT);}
+    if state.m2_x<=0.0{return Result::Err(STATS_CONSTANT_X);}
+    let divisor:f64=(state.n-1) as f64;
+    let slope:f64=state.cross/state.m2_x;
+    let intercept:f64=state.mean_y-slope*state.mean_x;
+    let mut r2:f64=0.0;
+    if state.m2_y>0.0{
+        // Normalize by the larger standard deviation first, avoiding overflow in cross^2.
+        let larger:f64=if state.m2_x>state.m2_y{state.m2_x}else{state.m2_y};
+        let smaller:f64=if state.m2_x>state.m2_y{state.m2_y}else{state.m2_x};
+        let r:f64=(state.cross/sqrt(larger))/sqrt(smaller);r2=r*r;
+        if r2>1.0{r2=1.0;}
+    }
+    if !finite(slope) || !finite(intercept) || !finite(r2){return Result::Err(STATS_NONFINITE);}
+    Result::Ok(LinearFit{slope:slope,intercept:intercept,sample_variance_x:state.m2_x/divisor,
+        sample_variance_y:state.m2_y/divisor,sample_covariance:state.cross/divisor,
+        r_squared:r2,r_squared_defined:state.m2_y>0.0})
+}
