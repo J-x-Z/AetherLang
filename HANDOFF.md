@@ -30,13 +30,10 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 AETHER_CUDAQ_BRIDGE="$WORK/cudaq/libaethe
 
 ## 当前接续点
 
-最近的语言提交是 `18baf08`。用 `git log -1 --oneline` 查包括打包、文档和后续移植在内的当前提交。保持本地分支、私有仓库，按用户指定在 Windows 上机前停下。
+本地分支包含 `cd1a8ef`（两种表示的 async、取消析构及实参求值顺序）、`ad846b3`（浮点常量逐操作舍入）、`477d1cc`（类型化 volatile 地址）、`3eb8e0a`（Rust 种子可变形参）和 `9e17d54`（C 中的常量控制流）。`7b2a4ae` 的量子子集读出从两种 Bell 态验证单比特不可区分与双比特可区分，`7cb41c8` 修复这一程序实际触发的泛型返回布局错误。Windows 打包入口为 `88935aa`。用 `git log -1 --oneline` 查看最后提交。
 
-- `67d05e0` 的 packed/union/指针重定位由 Mac 与 Linux 各自的 120 项命令验证。原生编译器已用两后端构建独立 Shell，各通过 48 项。证据在 `$WORK/{t26-native-layout,t26-shell-self}`。
-- `10d1b4c` 的所有者与作用域析构通过 151 项命令。`042ba7a` 的原生 LSP 有 25 个协议场景。生成的编译器再编译 JXZ，生成的 JXZ 以两个后端各通过原有集成 40 项和注册表 14 项。见 `$WORK/{t26-owned,t26-jxz-closed}`。
-- `5f95130` 新增自举常量泛型，`43279aa` 支持捕获闭包。`eedc7e1` 提供常规二进制入口、转导出与效果检查。该版本自举编译真实 f64 张量和反向微分、CPU/Metal 应用与规划程序。见 `$WORK/t26-math-native/{math,apps,planning}`。
-- `18baf08` 支持元组值与投影。自举固定点 105 项、元组 138 项、所有权 151 项通过。见 `$WORK/t26-tuples/{final,final-tests-fixed,final-owned}`。
-- `5f01665` 的流式 CSV 和配对统计已由 Rust 和自举编译器各跑 96 个命令，用 Python 精确分数独立核对样本方差、协方差和最小二乘系数。见 `$WORK/terminal-analysis`。
-- 常规入口的连续两代生成了相同的 C 和 LLVM。构建命令为 `python3 scripts/build_selfhost.py --seed "$CARGO_TARGET_DIR/release/aethc" --work-dir "$WORK/regular-work" --output "$WORK/aethc-native"`。独立复现用的编译器、原始计时和内存数据在 `$WORK/t26-default-release`。
+- 上次完整 macOS/Linux 包来自 `15aedda`，原生编译器能自建并构建 JXZ。独立 Shell 的自举双后端验收在 `$WORK/t26-shell-self`，流式统计独立有理数核验在 `$WORK/terminal-analysis`。
+- 中间验证在 `$WORK/t26-{async,volatile,scalar-const,c-return,seed-mut-params,readout}`。移动参数、挂起恢复和早退析构均有原生回归；`t26-readout/native-fixed.json` 涵盖 CPU 与 M4 Metal。
+- 常规自举入口为 `python3 scripts/build_selfhost.py --seed "$CARGO_TARGET_DIR/release/aethc" --work-dir "$WORK/regular-work" --output "$WORK/aethc-native"`。安装包使用 `scripts/package.py`，Windows x86-64 交叉包使用 `scripts/package_windows.py`。
 
-下一项是合并并验证原生编译器的剩余共享语义、生成两宿主正式包，完成 Windows 交叉构建及原生验收脚本。正式 T26/T29 证据见主线任务文档，上机验收由用户安排在以后。
+待合入显式优化 IR 和 volatile 引用转换校验后冻结源码。冻结版本验收按 `$WORK/final-mac-20261118.py`、`$WORK/linux-mainline-20261118/final-native-delivery.py` 和 Windows 交叉包三个入口执行，核验后在此记录版本和结果。用户指定本阶段结束于 Windows 上机前，保留私有仓库和本地提交。
