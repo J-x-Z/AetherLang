@@ -1,6 +1,26 @@
-//! Array repetition uses one value evaluation and a bounded-size IR fill loop.
+//! Fixed array indexing and repetition.
 use super::*;
 impl IRGenerator {
+    pub(super) fn checked_array_index(&mut self, index: Value, size: usize) -> Result<Value> {
+        if matches!(index, Value::Constant(Constant::Int(n)) if (n as u64) < size as u64) {
+            return Ok(index);
+        }
+        // Widen before comparing, including on 32-bit targets. A negative
+        // signed index becomes a large u64, while u8(200) remains 200.
+        let index = self.coerce_value(index, &IRType::U64);
+        let limit = Value::Constant(Constant::Int(size as i64));
+        let cond = self.binary_values(ast::BinOp::Lt, index.clone(), limit)?;
+        let valid = self.add_block("index_valid");
+        let invalid = self.add_block("index_invalid");
+        self.set_terminator_current(Terminator::Branch {
+            cond, then_target: valid, else_target: invalid,
+        });
+        self.current_block = invalid;
+        self.set_terminator_current(Terminator::Trap);
+        self.current_block = valid;
+        Ok(index)
+    }
+
     pub(super) fn generate_array_repeat(
         &mut self,
         expression: &Expr,

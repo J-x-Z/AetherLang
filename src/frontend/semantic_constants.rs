@@ -282,7 +282,13 @@ impl SemanticAnalyzer {
                 if p.is_signed() && truncated & (1i128 << (bits - 1)) != 0 { truncated -= 1i128 << bits; }
                 Self::integer_result(truncated, target, span)
             }
-            (ScalarConstant::Int(_), ResolvedType::Primitive(p)) if p.is_float() => self.normalize_constant(TypedConstant { ty: target.clone(), value: ScalarConstant::Float(Self::integer_value(&value).unwrap() as f64) }, span),
+            (ScalarConstant::Int(_), ResolvedType::Primitive(p)) if p.is_float() => {
+                let integer = Self::integer_value(&value).unwrap();
+                // Constants use f64 storage. Round to the destination directly
+                // so an intermediate f64 cannot turn a near tie into a tie.
+                let number = if *p == PrimitiveType::F32 { f64::from(integer as f32) } else { integer as f64 };
+                Ok(TypedConstant { ty: target.clone(), value: ScalarConstant::Float(number) })
+            }
             (ScalarConstant::Float(number), ResolvedType::Primitive(p)) if p.is_float() => self.normalize_constant(TypedConstant { ty: target.clone(), value: ScalarConstant::Float(*number) }, span),
             (ScalarConstant::Float(number), ResolvedType::Primitive(p)) if p.is_integer() => {
                 let bits = p.size_of() * 8;

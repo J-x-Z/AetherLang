@@ -15,3 +15,9 @@ fn verify_const_layout()->i32{
     if total(repeated)!=15{return 2;}
     total(block.data)-12
 }
+
+#[no_mangle]
+fn indexed_byte(index:u64)->u8 {
+    let data:[u8;2]=[7,8];
+    data[index]
+}

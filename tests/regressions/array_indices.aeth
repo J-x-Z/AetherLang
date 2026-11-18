@@ -1,0 +1,30 @@
+// Each failing case only forms an address. The bounds check is observable
+// even when an optimizer can discard the entire address computation.
+fn next(calls: *i32) -> u8 {
+    *calls += 1;
+    return 200;
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    let mut values: [u8; 256] = [0; 256];
+    let bytes: *u8 = &mut values[0] as *u8;
+    let array: &[u8; 256] = &values;
+    let high: u8 = 200;
+    if argc == 2 {
+        let test: u8 = argv[1][0];
+        if test == 48 { let p: *u8 = &values[256] as *u8; }
+        if test == 49 { let p: *u8 = &array[-1] as *u8; }
+        if test == 50 { let p: *u8 = &values[4294967296] as *u8; }
+        if test == 51 { let empty: [u8; 0] = [0; 0]; let p: *u8 = &empty[0] as *u8; }
+        if test == 52 { let n: u64 = 18446744073709551615; let p: *u8 = &array[n] as *u8; }
+        return 9;
+    }
+    let mut calls: i32 = 0;
+    let here: *u8 = &array[next(&mut calls as *i32)] as *u8;
+    if calls != 1 || here != bytes + 200 { return 1; }
+    if &bytes[high] as *u8 != here { return 2; }
+    let back: i8 = -1;
+    if &here[back] as *u8 != bytes + 199 { return 3; }
+    if false && array[256] == 0 { return 4; }
+    return 0;
+}

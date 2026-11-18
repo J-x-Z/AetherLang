@@ -96,8 +96,18 @@ if shutil.which('node') and shutil.which('wasm-ld') and shutil.which('clang'):
         const_wasm = const_obj.with_suffix('.wasm')
         run([compiler, const_source, '--target', 'wasm32-unknown-unknown', '--backend', backend,
              '--cc', 'clang', '--emit-obj', '-O2', '-o', const_obj])
-        run(['wasm-ld', '--no-entry', '--export=verify_const_layout', const_obj, '-o', const_wasm])
-        run(['node', '-e', "const fs=require('fs'); process.exit(new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[1]))).exports.verify_const_layout());", const_wasm])
+        run(['wasm-ld', '--no-entry', '--export=verify_const_layout', '--export=indexed_byte', const_obj, '-o', const_wasm])
+        # Bounds must be tested at full source width before computing a wasm32 address.
+        run(['node', '-e', """
+            const fs = require('fs');
+            const mod = new WebAssembly.Module(fs.readFileSync(process.argv[1]));
+            const {verify_const_layout, indexed_byte} = new WebAssembly.Instance(mod).exports;
+            if (verify_const_layout() !== 0 || indexed_byte(1n) !== 8) process.exit(1);
+            for (const index of [2n, 2n ** 32n, 2n ** 32n + 1n, -1n]) {
+                try { indexed_byte(index); process.exit(2); }
+                catch (error) { if (!(error instanceof WebAssembly.RuntimeError)) throw error; }
+            }
+        """, const_wasm])
         obj = work / f'layout-{backend}.o'
         wasm = obj.with_suffix('.wasm')
         run([compiler, source, '--target', 'wasm32-unknown-unknown', '--backend', backend,

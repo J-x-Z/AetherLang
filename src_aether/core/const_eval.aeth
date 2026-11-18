@@ -91,8 +91,14 @@ pub fn ce_eval(ctx:*BootContext,node:*BootNode,bindings:*BootTypeBinding,expecte
    return ce_error(ctx,node,"numeric constant cast required");
   }
   if ce_float(node.ty){
-   let mut number:f64=value.extent as f64;if ce_signed(value.inner){number=ce_i64(value.extent,value.inner) as f64;}
-   return ce_float_value(ctx,node,node.ty,number);
+   // Convert at the requested precision before widening to constant storage.
+   if ce_signed(value.inner){
+    let integer:i64=ce_i64(value.extent,value.inner);
+    if node.ty.kind==BY_F32{return ce_float_value(ctx,node,node.ty,(integer as f32) as f64);}
+    return ce_float_value(ctx,node,node.ty,integer as f64);
+   }
+   if node.ty.kind==BY_F32{return ce_float_value(ctx,node,node.ty,(value.extent as f32) as f64);}
+   return ce_float_value(ctx,node,node.ty,value.extent as f64);
   }
   if !ce_integer(value.inner)&&value.inner.kind!=BY_BOOL{return ce_error(ctx,node,"integer or bool constant cast required");}
   if node.ty.kind==BY_BOOL{return ce_value(ctx,node.ty,(value.extent!=0) as u64);}

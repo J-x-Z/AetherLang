@@ -1154,15 +1154,21 @@ impl IRGenerator {
                     base = self.load_address(base, base_ty.clone());
                 }
                 let index = self.generate_expr(index)?;
+                if self.get_current_terminator().is_some() { return Ok((Value::Unit, IRType::Unit)); }
                 let dest = self.alloc_register();
                 let base_volatile = matches!(base_ty, IRType::Volatile(_));
                 let (instruction, ty) = match base_ty.unqualified().clone() {
                     IRType::Array(element, size) => {
                         let ty = *element;
+                        let index = self.checked_array_index(index, size)?;
                         (Instruction::ArrayElementPtr { dest, ptr: base, index, array_ty: IRType::Array(Box::new(ty.clone()), size) }, if base_volatile { IRType::Volatile(Box::new(ty)) } else { ty })
                     }
                     IRType::Ptr(element) => {
                         let ty = *element;
+                        // LLVM sign-extends narrow GEP operands. Apply source
+                        // signedness before passing the target-width offset.
+                        let address_integer = Self::pointer_integer(self.pointer_width(), true);
+                        let index = self.coerce_value(index, &address_integer);
                         (Instruction::GetElementPtr { dest, ptr: base, index, elem_ty: ty.clone() }, ty)
                     }
                     _ => return Err(crate::utils::Error::CodeGen("index requires an array or pointer".into())),

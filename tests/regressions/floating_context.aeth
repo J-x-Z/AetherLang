@@ -1,10 +1,21 @@
 // At 2^24, binary32 rounds the next integer back to 2^24. Binary64 retains it.
 const SINGLE: f32 = (16777216.0 + 1.0) - 16777216.0;
 const DOUBLE: f64 = (16777216.0 + 1.0) - 16777216.0;
+// Halfway from 2^63 to the next binary32 number (one ULP = 2^40).
+const MID: u64 = 9223372586610589696;
+const ABOVE: f32 = (MID + 1) as f32;
+const TIE: f32 = MID as f32;
+const BELOW: f32 = (MID - 1) as f32;
+const VIA_DOUBLE: f32 = ((MID + 1) as f64) as f32;
+// At -2^62 the spacing towards -infinity is 2^39.
+const SIGNED: i64 = -4611686293305294849;
+const NEGATIVE: f32 = SIGNED as f32;
 
 fn single(x: f32) -> f32 { (x + 1.0) - x }
 fn double(x: f64) -> f64 { (x + 1.0) - x }
 fn identity(x: f32) -> f32 { x }
+fn from_unsigned(n: u64) -> f32 { n as f32 }
+fn from_signed(n: i64) -> f32 { n as f32 }
 
 fn main() -> i32 {
     let a: f32 = (16777216.0 + 1.0) - 16777216.0;
@@ -17,5 +28,8 @@ fn main() -> i32 {
     if 16777217.0 == d || d == 16777217.0 { return 5; }
     let rounded: f32 = 16777217.0;
     if (16777217.0 as i64) != 16777217 || (rounded as i64) != 16777216 { return 6; }
+    if (ABOVE as u64) != 9223373136366403584 || ABOVE != from_unsigned(MID + 1) { return 7; }
+    if (TIE as u64) != 9223372036854775808 || TIE != BELOW || TIE != VIA_DOUBLE { return 8; }
+    if (NEGATIVE as i64) != -4611686568183201792 || NEGATIVE != from_signed(SIGNED) { return 9; }
     return 0;
 }
