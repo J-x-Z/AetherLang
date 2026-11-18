@@ -7,34 +7,56 @@ index. Large finite rotation angles use a separate same-axis shift rotation so
 adding pi/2 cannot vanish through floating-point rounding. The reference state
 allocator has a caller budget and a 24-qubit hard ceiling (256 MiB for amplitudes).
 
-`stdlib/quantum_cudaq.aeth` is the optional native backend. Aether passes its gate
-records and owned state buffer through a versioned C ABI. The small C++ adapter
-uses CUDA-Q's dynamic kernel builder and copies the result; it does not implement
-the optimizer or substitute a prewritten example circuit. SDK exceptions become
-Result errors; SDK objects and C++ types do not cross the ABI. Calls are serialized
-around the SDK. Only fp64 state-vector backends are accepted by this adapter.
+`stdlib/quantum_cudaq.aeth` is an optional adapter to NVIDIA's CUDA-Q SDK.
+Aether builds the circuit and runs the classical optimizer. Its version 1 C ABI
+sends gate records to a C++ adapter, which creates an SDK kernel, applies the
+requested gates and invokes `cudaq::get_state`. The adapter requires fp64,
+copies amplitudes into an Aether-owned host buffer and returns the SDK state's
+original CPU/GPU placement. Calls are serialized and SDK exceptions become
+`Result` errors. The interface covers pure-state simulation for the ten gates
+above. Arbitrary CUDA-Q kernels, physical QPU submission and multi-GPU
+selection are outside this interface. [CUDA-Q dynamic kernel builder](https://nvidia.github.io/cuda-quantum/latest/specification/cudaq/dynamic_kernels.html)
 
-CUDA-Q on macOS ARM64 uses CPU simulation. This is an officially supported mode;
-**there is no Metal/Apple-GPU backend in this integration**. NVIDIA GPU execution
-is validated separately on Linux. See the [official platform requirements](https://nvidia.github.io/cuda-quantum/latest/using/quick_start.html)
-and [dynamic kernel builder API](https://nvidia.github.io/cuda-quantum/latest/specification/cudaq/dynamic_kernels.html).
+| Host and device | Execution path | Verified workload |
+| --- | --- | --- |
+| macOS arm64, Apple M4 CPU | CUDA-Q qpp, fp64 | Mixed circuits and a 16-qubit, 65,536-amplitude comparison, `on_gpu=0` |
+| Linux x86_64, RTX 3060 Laptop GPU | CUDA-Q cuStateVec, fp64 | Eight mixed circuits and 40 optimizer steps, `on_gpu=1` |
+| macOS arm64, Apple M4 GPU | Aether compute queue, Metal, complex64 | 16 qubits, all amplitudes checked, 42 submissions |
+| Linux x86_64, RTX 3060 Laptop GPU | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
+| Android, Adreno 750 | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
+
+CUDA-Q documents GPU simulation targets on Linux and CPU simulation on Apple
+Silicon. On Windows its documented installation route is Linux under WSL 2.
+The table records the tested host/device combinations. Native Windows and WSL 2
+CUDA-Q execution are unverified in this project. The Metal and Adreno rows run
+Aether's own simulator and require no CUDA-Q SDK. [CUDA-Q installation](https://nvidia.github.io/cuda-quantum/latest/using/install/local_installation.html) · [CUDA-Q simulator targets](https://nvidia.github.io/cuda-quantum/latest/using/quick_start.html)
 
 Build against an existing C++ SDK (no implicit download or global installation):
 
 ```sh
 python3 scripts/build_cudaq.py --sdk /path/to/cudaq \
   --backend qpp --output /external/work/libaether_cudaq.dylib
+/path/to/aethc build examples/quantum/cudaq_device.aeth --sysroot . \
+  --link-object /external/work/libaether_cudaq.dylib -o /external/work/cudaq-device
+/external/work/cudaq-device
 python3 tests/cudaq_runtime.py --compiler /path/to/aethc \
   --bridge /external/work/libaether_cudaq.dylib --work-dir /external/work/cudaq-test
 python3 tests/cudaq_boundaries.py --compiler /path/to/aethc \
   --library /external/work/libaether_cudaq.dylib --work-dir /external/work/cudaq-boundaries
 ```
 
-Linux uses `.so`; select `--backend custatevec-fp64` and make matching CUDA and
-cuStateVec libraries available to both the linker and loader. `--runtime-path`
-sets rpaths in the adapter; an SDK's transitive dependencies may additionally
-need `LD_LIBRARY_PATH` / a linker rpath-link. Pass `--gpu` to the validation runner;
-it asserts actual state placement (`is_on_gpu`), not merely a requested label.
+The probe prepares X|0⟩, checks both complex amplitudes, and prints
+`state_location=cpu` or `state_location=gpu` from CUDA-Q's `is_on_gpu()`.
+Use `cudaq-device --require gpu` when a CPU result must fail. This probes the
+linked simulator and reports placement for that execution. It does not enumerate
+adapters or return a GPU model or ordinal.
+
+The build helper selects the SDK simulator library at link time. Linux uses
+`.so`. Select `--backend custatevec-fp64` and make matching CUDA and cuStateVec
+libraries available to both the linker and loader. `--runtime-path` sets
+rpaths in the adapter. Transitive dependencies may also need `LD_LIBRARY_PATH`
+or a linker rpath-link. Pass `--gpu` to the validation runner to require GPU
+placement. The compiler's own `--backend c|llvm` selects host code generation.
 
 For an existing wheel runtime, matching source headers can be supplied with
 `--source /path/to/cuda-quantum-source --include /path/to/dependencies`. This run
@@ -51,11 +73,9 @@ wire order; the adapter deliberately avoids CUDA-Q's big-endian display index
 operator when copying amplitudes.
 
 `stdlib/cuda.aeth` separately exposes the CUDA runtime and cuBLAS C ABI with
-fallible owned buffer/stream/handle helpers. It is not CUDA-Q and does not claim
-Aether device-kernel code generation. Raw GPU pointers and asynchronous lifetimes
-remain under caller control. The mathematical layer currently provides CPU
-f64 tensors/autodiff; it is not a JAX API implementation, a tensor JIT compiler,
-or an automatic differentiator through arbitrary CUDA-Q kernels.
+fallible owned buffer/stream/handle helpers. Raw GPU pointers and asynchronous
+lifetimes remain under caller control. Differentiation in the circuit layer
+uses parameter-shift evaluations of the supported rotations.
 
 On a CUDA host, reproduce the native cuBLAS checks with:
 
@@ -108,19 +128,18 @@ it. It is not a process RSS limit or GPU memory guarantee. `quantum_state_bytes`
 provides checked complex128 planning independently of the existing 24-qubit
 allocation ceiling; requests whose byte count overflows u64 are rejected.
 
-| Pure state qubits | complex64 theoretical | complex128 (current implementation) |
+| Pure state qubits | complex64 (Aether compute) | complex128 (Aether reference and CUDA-Q adapter) |
 | --- | --- | --- |
 | 16 | 512 KiB | 1 MiB |
 | 20 | 8 MiB | 16 MiB |
 | 24 | 128 MiB | 256 MiB |
 | 28 | 2 GiB | 4 GiB |
 
-These are `2^n` pure state vectors. A full 16-qubit complex128 density matrix is
-`4^16 * 16` bytes, or 64 GiB. Neither a density-matrix backend nor complex64
-execution is currently implemented here. Precision conversion must become an
-explicit backend capability and error contract when Metal/Adreno are added.
-For Vulkan, 64-bit shader floating point is a queried optional feature, not an
-assumption that can be made for every GPU. See [VkPhysicalDeviceFeatures](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceFeatures.html).
+These are byte counts for a single `2^n` pure state vector. A full 16-qubit
+complex128 density matrix would require `4^16 * 16` bytes, or 64 GiB. The
+current simulators represent pure states. Aether's Metal and Vulkan paths use
+two f32 lanes per amplitude and compare results against a complex128 host
+reference. Vulkan shader fp64 support varies by device. [VkPhysicalDeviceFeatures](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceFeatures.html)
 
 New validation builds a 16-qubit GHZ state, checks all 65,536 amplitudes, exact
 budget boundaries, concurrent live-state admission, close-before-release, and
