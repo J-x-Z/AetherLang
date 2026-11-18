@@ -106,5 +106,19 @@ if os.name == 'posix':
     failed = run([compiler, small, '--target', target, '--emit-obj', '--cc', wrong,
                   '-o', old], expected=1)
     assert 'invalid native output' in failed.stderr and old.read_bytes() == b'previous'
-    assert not list(work.glob('preserved.tmp.*'))
+    # Clang also succeeds while writing assembly IR for the overridden target.
+    failed = run([compiler, small, '--target', target, '-O2', '--emit-llvm', '--cc', wrong,
+                  '-o', old], expected=1)
+    assert 'wrong or missing bare-metal target triple or data layout' in failed.stderr
+    assert old.read_bytes() == b'previous'
+    # Keep the requested triple but model a tool returning a different pointer layout.
+    altered = work/'wrong-layout-cc'
+    module = 'target datalayout = "e-p:32:32"\ntarget triple = "x86_64-unknown-none"\n'
+    altered.write_text('#!/usr/bin/env python3\nimport pathlib, sys\n'
+                       + f'pathlib.Path(sys.argv[sys.argv.index("-o")+1]).write_text({module!r})\n')
+    altered.chmod(0o755)
+    failed = run([compiler, small, '--target', target, '-O2', '--emit-llvm', '--cc', altered,
+                  '-o', old], expected=1)
+    assert 'wrong or missing bare-metal target triple or data layout' in failed.stderr
+    assert old.read_bytes() == b'previous' and not list(work.glob('preserved.tmp.*'))
 print(f'{len(records)} checks passed; {work}/results.json')

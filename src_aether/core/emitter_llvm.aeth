@@ -126,8 +126,8 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
  if !boot_choose_namespace(ctx){return false;}
  let mut item:*BootNode=ctx.program.body;
  if ctx.bare_x86_64{
-  ll_text(ctx,"target triple = \"x86_64-unknown-none\"\n");
-  ll_text(ctx,"target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n");
+  ll_text(ctx,BARE_TRIPLE_LINE);ll_text(ctx,"\n");
+  ll_text(ctx,BARE_LAYOUT_LINE);ll_text(ctx,"\n");
  }else{ll_text(ctx,"; Aether Core direct LLVM IR (64-bit host ABI)\n");}
  ll_intrinsics(ctx);
  if ctx.uses_errno && !ctx.errno_declared {fprintf(ctx.output,"declare ptr @%s()\n",ctx.errno_name);}

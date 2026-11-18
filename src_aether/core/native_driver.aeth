@@ -4,6 +4,8 @@ use host_platform::*;
 use model::*;
 use runtime::*;
 use host_posix::boot_host_info;
+use llvm_common::{BARE_TRIPLE_LINE,BARE_LAYOUT_LINE};
+extern "C" {fn fgetc(file:*void)->i32;}
 
 pub struct BootCommand {
  input:*u8, output:*u8, lsp:bool, symbols:bool, json_errors:bool, llvm:bool, native:bool, object:bool, check:bool,
@@ -75,6 +77,30 @@ pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bo
  return ok;
 }
 
+// The optimizer may report success while overriding the requested target.
+// LLVM prints both target declarations before the first function definition.
+fn boot_bare_ir_header(file:*void)->bool {
+ let mut line:[u8;160]=[0;160];let mut n:u64=0;
+ let mut triple:bool=false;let mut layout:bool=false;
+ while true {
+  let ch:i32=fgetc(file);
+  if ch<0{return false;}
+  if ch==10 {
+   if n<160 {
+    if n>0 && line[n-1]==13{n-=1;}
+    line[n]=0;
+    let text:*u8=&mut line[0] as *u8;
+    if strcmp(text,BARE_TRIPLE_LINE)==0{triple=true;}
+    else if strcmp(text,BARE_LAYOUT_LINE)==0{layout=true;}
+    else if strncmp(text,"target ",7)==0||strncmp(text,"define ",7)==0||strncmp(text,"declare ",8)==0{return false;}
+    if triple && layout{return true;}
+   }
+   n=0;
+  }else if n<160{line[n]=ch as u8;n+=1;}
+ }
+ return false;
+}
+
 // Explicit optimized LLVM emission uses the same host compiler as native
 // output. The default/O0 direct IR path remains independent of host tools and
 // deterministic for the self-compilation fixed point. Publish only on success.
@@ -95,11 +121,16 @@ pub fn boot_optimize_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->
  if ok{
   let output:*void=fopen(stage,"rb");
   if output==0 as *void{ok=false;}else{
-   let mut byte:u8=0;let count:u64=fread(&mut byte as *u8 as *void,1,1,output);
+   if ctx.bare_x86_64{ok=boot_bare_ir_header(output);}else{
+    let mut byte:u8=0;let count:u64=fread(&mut byte as *u8 as *void,1,1,output);ok=count==1&&byte!=0;
+   }
    let read_error:i32=ferror(output);let close_error:i32=fclose(output);
-   ok=count==1&&byte!=0&&read_error==0&&close_error==0;
+   ok=ok&&read_error==0&&close_error==0;
   }
-  if !ok{boot_error(ctx,ctx.cursor,"host compiler produced empty or unreadable optimized IR");}
+  if !ok{
+   if ctx.bare_x86_64{boot_error(ctx,ctx.cursor,"optimized IR has wrong or missing bare-metal target triple or data layout");}
+   else{boot_error(ctx,ctx.cursor,"host compiler produced empty or unreadable optimized IR");}
+  }
  }else if !ctx.failed{boot_error(ctx,ctx.cursor,"host compiler failed to optimize LLVM IR");}
  if ok&&rename(stage,options.output)!=0{ok=false;boot_error(ctx,ctx.cursor,"cannot replace optimized IR output");}
  if !ok{remove(stage);}return ok;
