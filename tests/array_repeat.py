@@ -11,7 +11,7 @@ def run(command,expected=0,stdout=None,timeout=30):
  command=list(map(str,command));r=subprocess.run(command,text=True,capture_output=True,timeout=timeout)
  records.append(dict(command=command,status=r.returncode,expected=expected,stdout=r.stdout,stderr=r.stderr))
  (work/'results.json').write_text(json.dumps(dict(compiler_sha256=hashlib.sha256(compiler.read_bytes()).hexdigest(),checks=records),indent=2))
- assert r.returncode==expected,(command,r.stdout,r.stderr)
+ assert r.returncode==expected,(command,r.returncode,r.stdout,r.stderr)
  if stdout is not None:assert r.stdout==stdout and not r.stderr,(command,r.stdout,r.stderr)
  return r
 for source,output in [('array_repeat.aeth',''),('script/array_repeat.ath','once\nonce\n')]:
@@ -20,6 +20,10 @@ for source,output in [('array_repeat.aeth',''),('script/array_repeat.ath','once\
    binary=work/f'{Path(source).suffix[1:]}-{backend}-{level}'
    run([compiler,root/'tests/regressions'/source,'--backend',backend,'-O',level,'-o',binary])
    run([binary],stdout=output,timeout=10)
+# Exercise x86 instruction selection even when the host runs another architecture.
+if 'llvm' in a.backends:
+ run([compiler,root/'tests/regressions/array_repeat.aeth','--backend','llvm','--target',
+      'x86_64-unknown-linux-gnu','--emit-obj','-O0','-o',work/'repeat-x86.o'])
 negative={
  'exclusive':'fn main(){let mut x:i64=1;let copies:[&mut i64;2]=[&mut x;2];}',
  'nested_exclusive':'struct R{value:&mut i64}fn main(){let mut x:i64=1;let copies:[R;2]=[R{value:&mut x};2];}',

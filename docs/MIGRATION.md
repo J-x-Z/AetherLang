@@ -2,6 +2,15 @@
 
 > **Purpose**: Guide for migrating existing C/Rust codebases to AetherLang
 
+## Large values in the LLVM backend
+
+Rebuild separately compiled Aether objects together when moving to this
+version of the Rust LLVM backend. Its internal calling convention uses
+caller-owned storage for a struct or array larger than two target pointers.
+Passing and returning these values still makes independent copies, including
+when a later argument mutates the original. Foreign functions and callbacks
+continue to use the platform C ABI.
+
 ## C ABI callbacks defined in Aether (2026-11-15)
 
 Matching `extern "C"` declarations can now resolve to one non-generic

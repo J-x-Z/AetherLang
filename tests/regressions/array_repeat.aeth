@@ -6,6 +6,11 @@ fn next()->i64{calls=calls+1;calls}
 fn filled<T,const N:usize>(value:T)->[T;N]{[value;N]}
 fn early()->i32{let values:[i64;3]=[{return 7;};3];99}
 fn empty_early()->i32{let values:[i64;0]=[{return 8;};0];99}
+fn large_fill(value:u8)->[u8;65536] { [value;65536] }
+fn change_tail(p:*u8)->u8 { *p=31; 31 }
+fn observe_before_change(data:[u8;65536], after:u8)->bool {
+    data[65535]==7 && after==31
+}
 fn main()->i32{
     let values:[i64;3]=[next();3];
     if calls!=1 || values[0]!=1 || values[2]!=1{return 1;}
@@ -33,7 +38,14 @@ fn main()->i32{
     if size_of([();13])!=0{return 12;}
     let floats:[f32;3]=[1.25;3];
     if floats[2]!=1.25{return 13;}
-    let large:[u8;65536]=[7;65536];
+    let mut large:[u8;65536]=large_fill(7);
     if large[65535]!=7{return 11;}
+    let copy:[u8;65536]=large;
+    large=large;
+    let tail:*u8=&mut large[65535] as *u8;
+    if !observe_before_change(large,change_tail(tail)){return 14;}
+    large[0]=22;
+    if copy[0]!=7 || copy[65535]!=7{return 15;}
+    if large[0]!=22 || large[65535]!=31{return 16;}
     0
 }

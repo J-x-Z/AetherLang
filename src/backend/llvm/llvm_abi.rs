@@ -100,10 +100,24 @@ impl LLVMCodeGen {
         Ok(if parts.is_empty() { AbiValue::Ignore } else { AbiValue::Expand(parts) })
     }
 
+    unsafe fn indirect_aggregate(&self, native: LLVMTypeRef) -> bool {
+        matches!(LLVMGetTypeKind(native), llvm_sys::LLVMTypeKind::LLVMArrayTypeKind | llvm_sys::LLVMTypeKind::LLVMStructTypeKind)
+            && LLVMTypeIsSized(native) != 0
+            && LLVMABISizeOfType(self.target_data, native) > 2 * u64::from(LLVMPointerSize(self.target_data))
+    }
+
     unsafe fn classify_abi(&self, ty: &IRType, result: bool, c_abi: bool) -> Result<AbiValue> {
         let native = self.ir_type_to_llvm(ty);
         if *ty == IRType::Unit { return Ok(AbiValue::Ignore); }
-        if !c_abi { return Ok(AbiValue::Direct(native)); }
+        if !c_abi {
+            // Large Aether values travel in caller-owned storage. Expanding
+            // complete aggregate parameters or returns into registers can
+            // overwhelm instruction selection even when local copies are lowered.
+            if self.indirect_aggregate(native) {
+                return Ok(AbiValue::Indirect);
+            }
+            return Ok(AbiValue::Direct(native));
+        }
         let target = ForeignAbiTarget::for_triple(&self.target_triple);
         if self.contains_vector(ty) {
             if matches!(ty, IRType::Vector(..)) && LLVMABISizeOfType(self.target_data,native)==16 && target.supports_vector128() {

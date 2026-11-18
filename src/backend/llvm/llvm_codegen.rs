@@ -546,11 +546,19 @@ impl LLVMCodeGen {
 
                 Instruction::Load { dest, ptr, ty } => {
                     let ptr_val = self.get_value(ptr)?;
-                    let name = CString::new("").unwrap();
-                    // Use the actual element type from IR
                     let elem_ty = self.ir_type_to_llvm(ty);
-                    let result = if LLVMABISizeOfType(self.target_data, elem_ty) == 0 { LLVMConstNull(elem_ty) }
-                        else { let load = LLVMBuildLoad2(self.builder, elem_ty, ptr_val, name.as_ptr()); LLVMSetAlignment(load, 1); load };
+                    let size = LLVMABISizeOfType(self.target_data, elem_ty);
+                    let result = if size == 0 {
+                        LLVMConstNull(elem_ty)
+                    } else if self.indirect_aggregate(elem_ty) {
+                        // Take the snapshot here: evaluating a later argument may mutate the source.
+                        let snapshot = self.entry_alloca(elem_ty);
+                        let len = LLVMConstInt(LLVMInt64TypeInContext(self.context), size, 0);
+                        LLVMBuildMemCpy(self.builder, snapshot, 1, ptr_val, 1, len);
+                        self.unaligned_load(elem_ty, snapshot)
+                    } else {
+                        self.unaligned_load(elem_ty, ptr_val)
+                    };
                     self.value_map.insert(*dest, result);
                 }
 
@@ -1023,22 +1031,23 @@ impl LLVMCodeGen {
 
     fn optimize_module(&self) -> Result<()> {
         unsafe {
-            let target_machine = self.target_machine;
-            if self.opt_level > 0 {
-                use llvm_sys::transforms::pass_builder::*;
-                let pipeline = CString::new(format!("default<O{}>", self.opt_level)).unwrap();
-                let options = LLVMCreatePassBuilderOptions();
-                let error = LLVMRunPasses(self.module, pipeline.as_ptr(), target_machine, options);
-                LLVMDisposePassBuilderOptions(options);
-                if !error.is_null() {
-                    let message = llvm_sys::error::LLVMGetErrorMessage(error);
-                    let detail = CStr::from_ptr(message).to_string_lossy().into_owned();
-                    llvm_sys::error::LLVMDisposeErrorMessage(message);
-                    return Err(Error::CodeGen(format!("LLVM optimization failed: {}", detail)));
-                }
-                if let Err(error) = self.verify_module() {
-                    return Err(error);
-                }
+            use llvm_sys::transforms::pass_builder::*;
+            // A whole array loaded and stored as one SSA value can overwhelm x86
+            // instruction selection. Lower memory copies even at -O0.
+            let passes = if self.opt_level == 0 {
+                "memcpyopt".into()
+            } else {
+                format!("function(memcpyopt),default<O{}>", self.opt_level)
+            };
+            let pipeline = CString::new(passes).unwrap();
+            let options = LLVMCreatePassBuilderOptions();
+            let error = LLVMRunPasses(self.module, pipeline.as_ptr(), self.target_machine, options);
+            LLVMDisposePassBuilderOptions(options);
+            if !error.is_null() {
+                let message = llvm_sys::error::LLVMGetErrorMessage(error);
+                let detail = CStr::from_ptr(message).to_string_lossy().into_owned();
+                llvm_sys::error::LLVMDisposeErrorMessage(message);
+                return Err(Error::CodeGen(format!("LLVM optimization failed: {}", detail)));
             }
 
         }
@@ -1193,7 +1202,7 @@ impl LLVMCodeGen {
         // Verify
         self.verify_module()?;
         
-        Ok(())
+        self.verify_module()
     }
     
 
