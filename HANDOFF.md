@@ -1,6 +1,6 @@
 # AetherLang 工程交接
 
-功能源码冻结于 `13941f6730247ab7961011bdbd9de9033d1ec0a8`。工作树在 `/Volumes/WINDOWS/work/AetherLang`，分支为 `work/aetherlang-upgrade`。原始起点是 `aceff15`，本次续做起点是 `4cb768c`。用 `git log -1 --oneline` 查看包含交付文档的当前提交。仓库保持私有，提交保存在本地。[主线任务](MAINLINE_TASKS.md) · [升级报告及测量](docs/UPGRADE.md)
+macOS/Linux 已验收宿主包冻结于 `13941f6`。Windows 11 x64 原生验收包冻结于 `98402df`。最新功能提交为 `d22a1d9`，裸机 ABI 定向回归为 `5f895ca`。工作树在 `/Volumes/WINDOWS/work/AetherLang`，分支为 `work/aetherlang-upgrade`。原始起点是 `aceff15`，本次续做起点是 `4cb768c`。用 `git log -1 --oneline` 查看包含交付文档的当前提交。仓库保持私有，提交保存在本地。[主线任务](MAINLINE_TASKS.md) · [升级报告及测量](docs/UPGRADE.md)
 
 ## 重建
 
@@ -22,16 +22,26 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 OPENBLAS_LIBRARY=/opt/homebrew/opt/openbl
 | --- | --- | --- |
 | macOS arm64 | `$WORK/releases/aetherlang-macos-472e6fd.tar.gz` | `$WORK/accept-472e6fd/{full.log,run.json,archive.json}` |
 | Linux x86-64 | `$WORK/linux-mainline-20261118/delivered/472e6fd/linux-release-472e6fd.tgz` | 同目录 `final-verification.json` 和证据归档 |
-| Windows x86-64 | `$WORK/windows-delivery/aether-windows-x64-472e6fd-20261118.zip` | 同目录 `final-receipt-472e6fd.json` 记录交叉编译、链接、PE 和 ZIP 校验 |
+| Windows x86-64 | `$WORK/windows-native-20261118/aether-windows-x64-117efa2.zip` | 同目录 `native-acceptance.json` 与 `evidence-117efa2.zip` 含真机自举、JXZ、CSV 与 LSP 记录 |
 
 常规编译器自举覆盖两种源表示及 C/LLVM；生成的编译器已实际编译 JXZ、独立 Shell、持久服务与科学计算程序。CSV 回归使用精确有理数核验。16 比特程序在 CPU、M4 Metal、RTX 3060 和 Adreno 750 上有实际执行记录，设备取证分别在 Mac 的 compute 日志、Linux 证据包与 `$WORK/adreno-ordered-marginal-94d6348`。最后一项编译器回归及析构验证在 `$WORK/t26-method-receiver/manifest.json`。
 
-## 下一项
+## Windows 复验
 
-按用户指定，在 Windows 上机前停下。下一次在 Windows x64 解压 ZIP、核对随包 SHA-256，使用 Python 3.10+ 和匹配 UCRT x64 的 llvm-mingw Clang 运行包内入口，保留 `native-results` 中的回执。
+在 NTFS 工作目录解压包，使用 x64 Python 3.10+ 和 llvm-mingw UCRT Clang。Windows 11 build 26200、Python 3.10.11 与 Clang 21.1.8 已跑通该入口。
 
 ```powershell
-.\Test-Native.ps1 -Clang 'C:\llvm-mingw\bin\clang.exe' -Python python -WorkDir '.\native-results'
+.\Test-Native.ps1 -Clang 'C:\Tools\llvm-mingw\bin\clang.exe' -Python python -WorkDir '.\native-results'
 ```
 
-Windows 原生验收后，再由维护者决定公开和推送时间。后续科学工具最直接的缺口是数据框互操作、绘图和交互式分析；语言本身仍有独立于这些工作流的系统编程入口。
+独立 GPU 包在 `$WORK/windows-gpu-20261118/AetherLang-Windows-x64-Vulkan.zip`。解压后 `python windows_vulkan.py run --dir . --vendor 10de` 重跑 RTX 4060 的 CPU/Vulkan 对照。CUDA-Q 的 SDK 设备探针在 `examples/quantum/cudaq_device.aeth`，设备结果见 [量子运行时](docs/QUANTUM.md)。
+
+## 裸机入口与下一项
+
+`d22a1d9` 的 macOS Rust 种子已放在 `$WORK/kernel-readback-20261118/aethc-527387d`。从仓库根目录加载前述环境，然后运行：
+
+```sh
+python3 tests/freestanding.py --compiler "$WORK/kernel-readback-20261118/aethc-527387d" --backends c llvm --qemu --work-dir "$WORK/kernel-recheck"
+```
+
+本机复验结果在 `$WORK/kernel-readback-20261118/final/results.json`。若继续做内核，下一项是让常规自举编译器接受显式裸机目标与机器入口，使用同一套 x86-64 QEMU 用例核验。此后再接入内核自己的分配器和 panic 入口。公开发布和远端推送仍待维护者决定。

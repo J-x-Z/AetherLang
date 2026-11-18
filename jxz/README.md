@@ -191,8 +191,8 @@ it never recursively deletes the target directory or removes source `.c` files.
 
 The default host implementation requires a 64-bit POSIX host with `find` and
 the linker required by `aethc`. macOS is exercised by the integration suite.
-A separate Windows adapter has cross-build preflight below; native acceptance
-is still pending. Online registry commands additionally require `curl`. The dependency-edit/install commands `add`, `remove` and `install`
+The separate Windows x64 adapter passed native project and registry-cache tests
+on Windows 11. Online registry commands additionally require `curl`. The dependency-edit/install commands `add`, `remove` and `install`
 remain unsupported and return an explicit error; remote publication is not implemented.
 
 Migration: `build` now defaults to debug (`-O0`); pass `--release` for `-O2`.
@@ -204,7 +204,7 @@ Cleanup also reads the previous `.jxz-output-name` format, rejects corrupt or
 incomplete records, and preserves unrelated files. Path and process operations
 are provided by `stdlib/path.aeth` and `stdlib/process.aeth`.
 
-### Windows x64 preflight
+### Windows x64 build and acceptance
 
 The native Windows adapter is Aether code using Win32/UCRT. Project parsing,
 package verification and build publication share the POSIX implementation.
@@ -223,7 +223,7 @@ self-hosted compiler. No Wine or Windows host is contacted.
 On an actual Windows host with native Clang/SDK configured:
 
 ```powershell
-python jxz/tests/windows_native.py --jxz C:\bundle\jxz.exe --compiler C:\bundle\aethc.exe --cc C:\LLVM\bin\clang.exe --stdlib C:\bundle\stdlib --work-dir C:\aether-tests
+python jxz/tests/windows_native.py --jxz C:\bundle\jxz.exe --compiler C:\bundle\aethc.exe --cc C:\LLVM\bin\clang.exe --stdlib C:\bundle\stdlib --host-source C:\bundle\source\jxz --work-dir C:\aether-tests
 ```
 
 That entry validates local/transitive dependencies, changes and deterministic
@@ -233,11 +233,17 @@ an explicit skip. Cross-linking is not native runtime acceptance.
 
 Windows uses UTF-8 project paths with wide native APIs and `.exe` output names.
 Test discovery and cache verification do not require `find`, `tar`, a shell,
-or symlink privileges. Online fetch still requires **curl 8.4+**; its Windows
-native transport and Unicode argument behavior await native acceptance.
+or symlink privileges. Online fetch requires **curl 8.4+**. Windows curl
+8.22.0 fetched a three-package graph from a loopback registry with UTF-8 paths.
+After the server stopped, both backends rebuilt from the verified cache.
 Ownership markers are regular files published atomically through a hard link.
 Killing a writer before marker publication can leave a random `.jxz-marker-*`
 sibling in the parent directory; it is preserved as an uncommitted artifact,
 never treated as ownership or recursively deleted. A filesystem without hard
-links fails that operation without replacing existing files. Windows-specific
-file locking, child signal handling and crash recovery remain native-test gates.
+links fails that operation without replacing existing files.
+
+JXZ acquires the Windows lock by exclusively creating
+`.jxz-directory-lock`. Windows removes it when the last owning or inherited
+handle closes. A pre-existing file with that name makes the operation fail
+and retains its contents. The native suite kills the parent, observes the
+child still holding the lock, and builds again after the child exits.

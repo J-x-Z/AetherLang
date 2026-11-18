@@ -1,5 +1,23 @@
 # AetherLang 集中升级交付
 
+## Windows 11 原生交付与设备验证
+
+Windows 包冻结于 `98402df`，SHA-256 为 `3b946dd8aa457dbdef7944d5a0588a67c0702e45eef32ecaa336b3a9f91b507b`。在 Windows x64 build 26200 解压后核验了 168 个载荷文件，并用 llvm-mingw UCRT Clang 21.1.8 和 Python 3.10.11 从包内 PowerShell 入口执行。编译器套件用 C/LLVM 在 O0/O2 编译运行并发射 COFF，还在 Windows 上从 Aether 源码生成了两份下一代编译器，三份编译器对同一入口发射完全相同的 LLVM IR。25 项编译器检查包含 LSP 的入口，内层运行 24 个协议和 CLI 场景。JXZ 35 项及终端 CSV 10 项通过。该机单次耗时为编译器套件 25.22 秒、JXZ 13.03 秒、CSV 2.86 秒。各平台发行基线及编译速度、RSS、产物和运行性能比较见下节。
+
+真机验收修复了两处影响实际工作的错误。旧 JXZ 可初始化项目，却在写入依赖和发布输出时被自己的 Win32 目录锁拦截。现在 NTFS 独占创建临时锁文件，最后一个继承句柄关闭时系统清除它。C、LLVM 编译的项目都完成发布；杀掉父进程、保留用户同名文件、拒绝损坏记录和空目录清理都有回归。输出记录和事务日志以二进制模式写入约定的 LF。原生 Windows 的 CSV 程序曾把标准输入中的 `0x1A` 误判为流结束。现在只在读取用的副本上启用二进制模式。五个有效样本经文件和重定向得到相同斜率 2.2、截距 4 和样本方差 2.5、13。macOS 的 JXZ 集成 40 项、注册表 14 项及统计 96 项复验通过。
+
+线上协议另在这台 Windows 上用系统 curl 8.22.0 对回环 HTTP 注册表做了 11 项检查。从空缓存获取三包菱形图，14 个请求包含百分号编码的中文和空格。关闭服务器、确认端口已关闭并清空构建产物后，两后端均可用缓存重建，程序输出 `registry=17`，锁文件哈希保持一致。回执和复现脚本在 `WORK/windows-native-20261118/evidence-registry-117efa2.zip`。
+
+另一个 Windows 包交付可复用的 Vulkan DLL 和加载器对象。C/LLVM 生成的 16 比特程序在 RTX 4060 Laptop GPU 上完成 42 次提交，全部 65,536 个振幅最大 L1 误差为 `7.81873961e-8`，队列峰值记账 2,097,216 字节，释放后为零。CUDA-Q SDK 独立探针在 Apple M4 实测报告 CPU，Linux RTX 3060 的 cuStateVec GPU 有先前 SDK 实机证据。Windows 4060 的 GPU 验收使用 Aether 自有 Vulkan 路径。证据在 `WORK/windows-native-20261118/{native-acceptance.json,evidence-117efa2.zip}`、`WORK/windows-gpu-20261118/windows-vulkan-results.json` 和 `WORK/cudaq/device-query-20261118/runtime/results.json`。
+
+## Aether 写内核的实际边界
+
+Rust 种子可用 C 或 LLVM 为 `x86_64-unknown-none` 生成裸机对象。已有启动汇编负责建栈、页表、GDT 和 IDT；Aether 中断入口在 QEMU 中执行并返回过两种 CPU 栈帧。ARM64 有裸机对象与裸入口反汇编证据。自举编译器的宿主固定点已验证，目前它的命令行和前端尚缺跨目标和中断入口支持。[裸机验收](../tests/freestanding.py) · [启动夹具](../tests/regressions/freestanding/interrupt_boot.S)
+
+旧 Rust 种子会在普通 x86-64 裸机函数里使用栈指针以下的 red zone，同栈中断可能覆盖局部变量。`d22a1d9` 为该目标的每个 LLVM 函数设置 `noredzone`，并让 C 编译入口传 `-mno-red-zone`。普通独立翻译单元的两条回归在旧版分别失败，修复后通过。另在 QEMU TCG 启动 C/LLVM、O0/O2 四个原有镜像，均按预期退出。对手工编译发射的 C 源码，外部构建也须传相同参数。
+
+若要开发可长期维护的内核，第一项是让自举工具链支持同一裸机目标、链接脚本与中断约定，并持续测试镜像启动。第二项是给基础库明确的分配、内存操作、panic 和资源释放接口。第三项是用真实定时器、上下文切换、页分配和 MMIO 驱动持续验收 IRQ 与并发规则。调度器、虚拟内存策略和具体设备驱动可由独立内核项目实现。当前验证覆盖 x86-64 模拟机，中断嵌套、多核和 ARM64 真机启动仍需各自的运行证据。
+
 ## 2026-11-18 宿主编译器与 JXZ 交付
 
 在起点 `aceff15` 之后的 `e37a4f2` 里，常规入口 `src_aether/core/aethc.aeth` 已能从 Rust 种子生成、编译下一代并运行实际项目。最终 `13941f6` 在 macOS arm64 和 Linux x86-64 上均由 C-only、LLVM 两种种子各通过 144 项四代验收。常规入口相邻两代生成的 C 在两台宿主上也是同一份，共 3,670,518 字节。直接 LLVM IR 逐代在各自宿主上完全相同，macOS 为 5,021,655 字节，Linux 为 5,021,682 字节。机器码生成与链接继续交给宿主 Clang。Rust 种子保留内联汇编、跨目标代码生成和向量等能力。两种源表示都能使用捕获闭包、常量泛型、借用的动态接口和协作式任务。
@@ -31,7 +49,7 @@ Linux 原套件在最后的包中复现了一个 macOS 默认环境看不出的�
 | --- | --- | --- |
 | macOS arm64 | 完整测试入口退出 0；双种子发布、搬移、3 个编译器别名、包内四组 JXZ 共 216 项；归档内 78 文件逐一校验 | `640f945633c6d435b7070f57ac893063867dbd82837f4f8f30b2d5a79e23f148` |
 | Linux x86-64 | 双种子发布；57 项依赖/搬移/别名检查、81 项方法、108 项自举 JXZ、96 项统计、192 项独立 Shell、4 次 CPU/RTX 量子工作负载；79 文件逐一校验 | `a51295c27c954093d0038ea984a2164fb8bda208db8c218e0bc1533007a7cceb` |
-| Windows x86-64 | 编译器和 JXZ 各经 C/LLVM、O0/O2 生成并链接 PE，携带 LLVM O2 两个程序、标准库、源码和 PowerShell 原生验收入口。ZIP 165 项的 CRC、清单与 PE 导入表已校验，上机待办 | `e300eb9bd35af09b7df0bd69a61cab8a5e7931eddcb59ad3eec0914628935673` |
+| Windows x86-64 | 编译器和 JXZ 各经 C/LLVM、O0/O2 生成并链接 PE，携带 LLVM O2 两个程序、标准库、源码和 PowerShell 原生验收入口。旧 ZIP 165 项的 CRC、清单与 PE 导入表已校验。原生测试随后发现 JXZ 缺陷，替代包与修复见上节 | `e300eb9bd35af09b7df0bd69a61cab8a5e7931eddcb59ad3eec0914628935673` |
 
 终端统计用精确有理数生成样本方差、协方差和回归系数的期望值；状态向量和选定比特分布使用解析概率校验。三块 GPU 已实际运行有序读出。Adreno 在 `e37a4f2` 使用了同一份量子库和 fixture，最终提交的 Linux 与 Mac 测试以最终源码运行。LLVM 与 C 的目标覆盖、Rust 专属内联汇编、协作任务限制、借用与 FFI 边界分别列在 [能力表](FEATURES.md) 和 [自举说明](BOOTSTRAP.md)。
 

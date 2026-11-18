@@ -6,7 +6,7 @@ T01–T20保留本轮20项语言基础任务：让开发者能够安装工具链
 
 ## 当前版本与验收
 
-本轮从本地 `4cb768c` 续做，最初起点为 `aceff15`。交付功能源码为 `13941f6`。JXZ 启动错误修正于 `61f94cb`，Rust 种子安装别名修正于 `e8ef17b`，按值泛型方法的分派已进入最后的自举固定点。环境见 [HANDOFF.md](HANDOFF.md)，数据及平台范围见[升级报告](docs/UPGRADE.md)。外置证据根目录为 `WORK=/Volumes/WINDOWS/work/aetherlang-upgrade-work`。
+本轮从本地 `4cb768c` 续做，最初起点为 `aceff15`。macOS/Linux 宿主包源码为 `13941f6`，Windows 原生验收包为 `98402df`。JXZ 启动错误修正于 `61f94cb`，Rust 种子安装别名修正于 `e8ef17b`，按值泛型方法的分派已进入最后的自举固定点。环境见 [HANDOFF.md](HANDOFF.md)，数据及平台范围见[升级报告](docs/UPGRADE.md)。外置证据根目录为 `WORK=/Volumes/WINDOWS/work/aetherlang-upgrade-work`。
 
 原审计针对 `a6cc268`，29 组复现及原始结果保存在 `WORK/audit-normal-language/index.json`。T01–T29 根据各自整项验收条件标记。下表追踪每组原问题。
 
@@ -132,7 +132,9 @@ Mac主机同时最多一个全量编译，Cargo并发沿用3；Linux宿主交付
 
 - [x] 在相同数据上验证终端数据读入、统计分析、数值误差及结果导出，分别说明能承接的 MATLAB、R 和 Python 工作及仍依赖的生态能力。
 - [x] 在多轮独立检查中将新发现的编译、资源或工具问题变为回归用例。检查应覆盖自举生成的编译器和普通用户命令。
-- [x] Windows 上机前完成源码移植、可复现的 PE 构建与原生测试入口。用户已指定本阶段停在 Windows 上机前，Windows 原生执行在后续窗口验收。
-- [x] 按实际验收范围改写 README；贡献说明收录在 CONTRIBUTORS.md。当前仓库保持私有且不推送，Windows 上机和公开发布按后续安排。
+- [x] Windows 上机前完成源码移植、可复现的 PE 构建与原生测试入口。Windows 开机后的增量验收见下一项。
+- [x] 按实际验收范围改写 README；贡献说明收录在 CONTRIBUTORS.md。当前仓库保持私有且不推送，Windows 原生记录见下项，公开时间由维护者决定。
 
 后段依赖可能交叉：例如算子编译确实需要某项const generic能力时，应先完成T25对应子项，而不是在引擎内复制一套类型规则。保持小步可构建提交；没有新证据时不重复审计已闭合问题。上述范围大于最初半天预算，不据此承诺所有扩展在同一轮完成，但清单和完成状态必须持续保留。
+
+- [x] Windows 11 x64 原生编译器与 JXZ 验收。`98402df` 包逐文件核对，双后端自举、固定点、24 个 LSP 场景、35 项 JXZ 和 10 项 CSV 检查通过。RTX 4060 Laptop 在独立 Vulkan 包上完成 16 比特读出。记录见 [升级报告](docs/UPGRADE.md)。

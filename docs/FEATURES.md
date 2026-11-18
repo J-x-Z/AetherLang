@@ -28,3 +28,5 @@
 公开基础库按实际消费者分组。字节、文本、持有键的 Map 使用 `tests/text_map.py`，Vec、Option 和 Result 使用 `tests/{vec_alignment,vec32,generic_runtime}.py`；作用域包装见 `tests/owned_allocations.py`。文件、io、path、fd、process 与二进制接口由 `tests/{runtime_foundation,process_runtime}.py` 和 JXZ 验证；分配器、TOML 子集、标量图见 `tests/legacy_runtime.py`。LLVM/JNI/OpenBLAS 与硬件 SDK 各有宿主或设备依赖，见 `tests/ffi_modules.py` 及升级报告。仓库里的早期生成 `.c`、smoke/test 文件不作为公开标准库接口。
 
 各平台测量和版本变更见[升级报告](UPGRADE.md)。
+
+对于 `x86_64-unknown-none`，Rust 种子从 `d22a1d9` 起为独立编译的普通函数也禁用 red zone。直接编译发射的 C 须传 `-mno-red-zone`。QEMU 启动与自举编译器仍缺的内核能力见[内核验收边界](UPGRADE.md#aether-写内核的实际边界)。

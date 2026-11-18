@@ -91,8 +91,17 @@ contains `aethc` (Rust seed), `aethc-native` (Aether), their JXZ executables and
 the standard library. On Linux, `--bundle-linux-llvm` includes the seed's LLVM
 library. The installer verifies file checksums and switches versions atomically.
 macOS arm64 and Linux x86-64 packages have run on their respective hosts.
-Windows x86-64 has a separate PE cross-build and native test entry. Windows
-runtime acceptance is pending. [Upgrade results](docs/UPGRADE.md) ·
+The Windows x86-64 bundle runs on Windows 11 with llvm-mingw UCRT Clang.
+Its PowerShell entry verifies the files, compiles another generation of the
+compiler with both backends, and exercises JXZ, the language server and CSV
+statistics. From the extracted bundle run:
+
+```powershell
+.\Test-Native.ps1 -Clang 'C:\Tools\llvm-mingw\bin\clang.exe' -Python python -WorkDir '.\native-results'
+```
+
+The separate Windows Vulkan package ran the 16-qubit workload on an RTX 4060
+Laptop GPU. [Upgrade results](docs/UPGRADE.md) ·
 [Engineering handoff](HANDOFF.md)
 
 AetherLang is distributed under the [Apache License 2.0](LICENSE).

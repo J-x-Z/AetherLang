@@ -23,6 +23,7 @@ selection are outside this interface. [CUDA-Q dynamic kernel builder](https://nv
 | Linux x86_64, RTX 3060 Laptop GPU | CUDA-Q cuStateVec, fp64 | Eight mixed circuits and 40 optimizer steps, `on_gpu=1` |
 | macOS arm64, Apple M4 GPU | Aether compute queue, Metal, complex64 | 16 qubits, all amplitudes checked, 42 submissions |
 | Linux x86_64, RTX 3060 Laptop GPU | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
+| Windows 11 x64, RTX 4060 Laptop GPU | Aether compute queue, Vulkan, complex64 | C and LLVM, 65,536 amplitudes, 42 submissions, max L1 error per amplitude 7.81873961e-8 |
 | Android, Adreno 750 | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
 
 CUDA-Q documents GPU simulation targets on Linux and CPU simulation on Apple
@@ -30,6 +31,13 @@ Silicon. On Windows its documented installation route is Linux under WSL 2.
 The table records the tested host/device combinations. Native Windows and WSL 2
 CUDA-Q execution are unverified in this project. The Metal and Adreno rows run
 Aether's own simulator and require no CUDA-Q SDK. [CUDA-Q installation](https://nvidia.github.io/cuda-quantum/latest/using/install/local_installation.html) · [CUDA-Q simulator targets](https://nvidia.github.io/cuda-quantum/latest/using/quick_start.html)
+
+On Windows the optional compute package contains `aether_vulkan.dll`,
+`loader.obj` and C/LLVM workloads. Run
+`python windows_vulkan.py run --dir . --vendor 10de` from its extracted directory to check NVIDIA device selection,
+the CPU reference, the provider ABI, and the quantum result. An explicit
+provider path such as `.\aether_vulkan.dll` selects the library. Source build
+options are available through `python tests/windows_vulkan.py build --help`.
 
 Build against an existing C++ SDK (no implicit download or global installation):
 
