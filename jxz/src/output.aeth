@@ -223,10 +223,15 @@ pub fn publication_prepare(directory: *u8, name: *u8) -> Publication {
     return transaction;
 }
 pub fn publication_publish(transaction: *Publication) -> bool {
-    if rename(transaction.staged, transaction.output) != 0 || rename(transaction.records, transaction.record) != 0 || host_marker_create("JXZ-BUILD-SETTLED\0" as *u8, transaction.settled) != 0 {
-        perror("jxz: cannot publish build; restoring previous output\0" as *u8);
-        output_recover(transaction.directory);
-        return false;
+    if rename(transaction.staged, transaction.output) != 0 {
+        perror("jxz: cannot publish executable");
+    } else if rename(transaction.records, transaction.record) != 0 {
+        perror("jxz: cannot publish output inventory");
+    } else if host_marker_create("JXZ-BUILD-SETTLED\0" as *u8, transaction.settled) != 0 {
+        perror("jxz: cannot mark build as settled");
+    } else {
+        return cleanup(transaction);
     }
-    return cleanup(transaction);
+    output_recover(transaction.directory);
+    return false;
 }

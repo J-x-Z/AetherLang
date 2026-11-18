@@ -3,6 +3,7 @@
 import argparse,hashlib,json,os,subprocess,sys,tempfile,time
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--jxz',required=True,type=Path);p.add_argument('--compiler',required=True,type=Path);p.add_argument('--cc',required=True,type=Path);p.add_argument('--work-dir',required=True,type=Path);p.add_argument('--stdlib',type=Path);p.add_argument('--host-source',type=Path,help='Frozen selected Windows JXZ source; defaults to jxz.exe sibling source/')
+p.add_argument('--publication-only',action='store_true',help='Run only the Windows output sharing regression')
 a=p.parse_args();base=a.work_dir.resolve();base.mkdir(parents=True,exist_ok=True);w=Path(tempfile.mkdtemp(prefix='JXZ Windows Ω ',dir=base));records=[];report={'native_windows_executed':False,'status':'not-run','checks':records}
 def save():(w/'results.json').write_text(json.dumps(report,indent=2))
 if os.name!='nt':report['status']='skipped: requires actual Windows; no native acceptance claimed';save();print(w/'results.json');sys.exit(77)
@@ -11,6 +12,111 @@ env={**os.environ,'AETHC':str(compiler),'CC':str(cc),'JXZ_OFFLINE':'1'}
 if a.stdlib:env['AETHER_PATH']=str(a.stdlib.resolve())
 def run(label,args,cwd,expected=0,extra=None):
  r=subprocess.run(list(map(str,args)),cwd=cwd,env={**env,**(extra or {})},capture_output=True,timeout=120);records.append({'label':label,'command':list(map(str,args)),'cwd':str(cwd),'exit':r.returncode,'stdout':r.stdout.decode(errors='replace'),'stderr':r.stderr.decode(errors='replace')});save();assert r.returncode==expected,(label,r.returncode,r.stdout,r.stderr);return r
+def test_publication_sharing():
+    import ctypes
+    from ctypes import wintypes
+
+    project = w / 'publication sharing'
+    project.mkdir()
+    run('initialize sharing fixture', [jxz, 'init', 'publication'], project)
+    source = project / 'src/main.aeth'
+    source.write_bytes(b'fn main()->i32{return 0;}')
+    run('publish original executable', [jxz, 'build'], project)
+    target = project / 'target'
+    output, record = target / 'publication.exe', target / '.jxz-outputs'
+    old_image, old_record = output.read_bytes(), record.read_bytes()
+    source.write_bytes(b'fn main()->i32{return 23;}')
+    new_image = project / 'replacement.exe'
+    run('build replacement executable', [compiler, 'build', source, '--cc', cc, '-o', new_image], project)
+    assert new_image.read_bytes() != old_image
+
+    # JXZ invokes AETHC with "build" as argv[1]. Using Python as the compiler
+    # makes this file a gate between readying a real transaction and publishing it.
+    (project / 'build').write_text(
+        'import os, shutil, sys, time\n'
+        'from pathlib import Path\n'
+        'shutil.copyfile("replacement.exe", sys.argv[sys.argv.index("-o") + 1])\n'
+        'Path("pid.tmp").write_text(str(os.getpid()))\n'
+        'os.replace("pid.tmp", "compiler.pid")\n'
+        'deadline = time.monotonic() + 20\n'
+        'while not Path("release").exists():\n'
+        '    if time.monotonic() >= deadline: sys.exit(31)\n'
+        '    time.sleep(0.01)\n', encoding='ascii')
+
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    open_process = kernel.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    wait = kernel.WaitForSingleObject
+    wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    wait.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+
+    ready, release = project / 'compiler.pid', project / 'release'
+    for persistent in (True, False):
+        ready.unlink(missing_ok=True)
+        release.unlink(missing_ok=True)
+        child = subprocess.Popen([jxz, 'build'], cwd=project,
+                                 env={**env, 'AETHC':sys.executable},
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        held = worker = None
+        try:
+            deadline = time.monotonic() + 20
+            while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert ready.is_file(), 'JXZ did not reach its compiler with a prepared transaction'
+            assert (target / '.jxz-build/ready').is_file()
+            worker = open_process(0x00100000, False, int(ready.read_text()))  # SYNCHRONIZE
+            if not worker:
+                raise ctypes.WinError(ctypes.get_last_error())
+            # Allow readers and writers, explicitly omit FILE_SHARE_DELETE.
+            held = create(str(output), 0x80000000, 3, None, 3, 0, None)
+            if held == ctypes.c_void_p(-1).value:
+                held = None
+                raise ctypes.WinError(ctypes.get_last_error())
+            release.touch()
+            assert wait(worker, 10000) == 0, 'compiler worker did not exit'
+            if persistent:
+                stdout, stderr = child.communicate(timeout=15)
+                assert child.returncode == 1, (stdout, stderr)
+                assert output.read_bytes() == old_image and record.read_bytes() == old_record
+            else:
+                # Start the hold interval after compiler exit, not during compilation.
+                try:
+                    stdout, stderr = child.communicate(timeout=.20)
+                except subprocess.TimeoutExpired:
+                    pass
+                else:
+                    raise AssertionError(('build exited while output was briefly held', child.returncode, stdout, stderr))
+                assert kernel.CloseHandle(held)
+                held = None
+                stdout, stderr = child.communicate(timeout=15)
+                assert child.returncode == 0, (stdout, stderr)
+                assert output.read_bytes() == new_image.read_bytes() and record.read_bytes() == old_record
+                assert not (target / '.jxz-build').exists()
+                run('execute replacement after sharing clears', [output], project, 23)
+            records.append(dict(label='persistent sharing preserves published output' if persistent else
+                                'transient sharing publishes replacement', exit=child.returncode))
+            save()
+        finally:
+            release.touch(exist_ok=True)
+            if held is not None:
+                kernel.CloseHandle(held)
+            if worker:
+                kernel.CloseHandle(worker)
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=10)
+
+
+test_publication_sharing()
+if a.publication_only:
+    report['status']='native Windows publication sharing passed'; save(); print(w/'results.json'); sys.exit(0)
 root=w/'project Ω';root.mkdir();run('version',[jxz,'--version'],root);run('init',[jxz,'init','program'],root);before=(root/'Jxz.toml').read_bytes();run('init preservation',[jxz,'init'],root,1);assert (root/'Jxz.toml').read_bytes()==before
 for name,expected in [('missing compiler.exe',127),('invalid compiler.exe',126)]:
  path=w/name

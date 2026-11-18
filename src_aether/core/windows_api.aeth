@@ -12,6 +12,7 @@ extern "C"{
  fn GetLastError()->u32;
  fn GetFullPathNameW(path:*u16,size:u32,out:*u16,last:**u16)->u32;
  fn MoveFileExW(source:*u16,destination:*u16,flags:u32)->i32;
+ fn Sleep(milliseconds:u32);
  fn DeleteFileW(path:*u16)->i32;
  fn BCryptGenRandom(provider:*void,out:*u8,count:u32,flags:u32)->i32;
  fn _errno()->*i32;
@@ -89,7 +90,19 @@ pub fn write(descriptor:i32,data:*u8,count:u64)->i64{let mut size:u64=count;if s
 pub fn remove(path:*u8)->i32{let wide:*u16=win_wide(path);if wide==0 as *u16{return -1;}let result:i32=DeleteFileW(wide);let error:u32=GetLastError();free(wide as *void);if result==0{win_error_code(error);return -1;}return 0;}
 pub fn rename(old:*u8,new_path:*u8)->i32{
  let a:*u16=win_wide(old);let b:*u16=win_wide(new_path);if a==0 as *u16||b==0 as *u16{free(a as *void);free(b as *void);return -1;}
- let result:i32=MoveFileExW(a,b,9);let error:u32=GetLastError();free(a as *void);free(b as *void);if result==0{win_error_code(error);return -1;}return 0;
+ // A reader without FILE_SHARE_DELETE can temporarily prevent replacement.
+ // Replacing a hard-linked executable can report ACCESS_DENIED for that case.
+ let mut result:i32=MoveFileExW(a,b,9);
+ let mut error:u32=GetLastError();
+ let mut delay:u32=10;
+ while result==0 && (error==5 || error==32 || error==33) && delay<=640 {
+  Sleep(delay);
+  result=MoveFileExW(a,b,9);
+  error=GetLastError();
+  delay=delay*2;
+ }
+ free(a as *void);free(b as *void);
+ if result==0{win_error_code(error);return -1;}return 0;
 }
 pub fn access(path:*u8,mode:i32)->i32{
  let wide:*u16=win_wide(path);if wide==0 as *u16{return -1;}let attributes:u32=GetFileAttributesW(wide);let error:u32=GetLastError();free(wide as *void);
