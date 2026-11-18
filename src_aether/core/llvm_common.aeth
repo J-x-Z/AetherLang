@@ -71,8 +71,9 @@ pub fn ll_literal(ctx:*BootContext,node:*BootNode,ty:*BootType){
 // The direct backend targets 64-bit machines. Keep large values in storage;
 // the register representing such a value is its address.
 pub fn ll_bulk(ty:*BootType)->bool{
- if ty==0 as *BootType{return false;}if ty.kind==BY_OWN{return ll_bulk(ty.inner);}
- return (ty.kind==BY_ARRAY||ty.kind==BY_STRUCT||ty.kind==BY_ENUM) && ty.layout_size>16;
+ if ty==0 as *BootType{return false;}
+ let storage:*BootType=boot_storage_type(ty);
+ return (storage.kind==BY_ARRAY||storage.kind==BY_STRUCT||storage.kind==BY_ENUM) && storage.layout_size>16;
 }
 pub fn ll_named(ctx:*BootContext,name:*u8,index:i32)->i32{
  let id:i32=ll_id(ctx);ll_begin(ctx,id);fprintf(ctx.output,"getelementptr i8, ptr %%%s%d, i64 0\n",name,index);return id;
@@ -85,7 +86,7 @@ pub fn ll_needs_snapshot(ctx:*BootContext,node:*BootNode,delayed:bool)->bool{
  return node.kind==BN_IDENT||node.kind==BN_MEMBER||node.kind==BN_INDEX||node.kind==BN_ENUM_FIELD||node.kind==BN_CAST||(node.kind==BN_UNARY&&node.op==42);
 }
 pub fn ll_copy(ctx:*BootContext,ty:*BootType,dst:i32,src:i32,qualified:bool){
- fprintf(ctx.output,"  call void @llvm.memmove.p0.p0.i64(ptr %%r%d, ptr %%r%d, i64 %llu, i1 ",dst,src,ty.layout_size);
+ fprintf(ctx.output,"  call void @llvm.memmove.p0.p0.i64(ptr %%r%d, ptr %%r%d, i64 %llu, i1 ",dst,src,boot_storage_type(ty).layout_size);
  if qualified{ll_text(ctx,"true)\n");}else{ll_text(ctx,"false)\n");}
 }
 pub fn ll_sret(ctx:*BootContext,ty:*BootType){ll_text(ctx,"ptr sret(");ll_type(ctx,ty);ll_text(ctx,") ");}

@@ -1,4 +1,9 @@
 struct Ticket{value:i64}
+struct Parcel{first:i64,middle:i64,last:i64}
+static mut PARCEL_TOTAL:i64=0;
+@drop fn unpack(value:own Parcel){PARCEL_TOTAL+=value.first+value.middle+value.last;}
+fn parcel(n:i64)->own Parcel{unsafe{return Parcel{first:n,middle:n+1,last:n+2} as own Parcel;}}
+fn forward(value:own Parcel)->own Parcel{return value;}
 static mut LIVE:i64=0;
 static mut CLOSED:i64=0;
 static mut ORDER:i64=0;
@@ -23,5 +28,7 @@ fn main()->i32{
  if ordinary_call()!=10||LIVE!=0||CLOSED!=11{return 7;}
  {let first:own Ticket=make(9);let moved:own Ticket=transfer(first);if moved.value!=9{return 8;}}
  if LIVE!=0||CLOSED!=12{return 9;}
+ {let item:own Parcel=parcel(5);let moved:own Parcel=forward(item);if moved.last!=7{return 10;}}
+ if PARCEL_TOTAL!=18{return 11;}
  return 0;
 }
