@@ -243,10 +243,14 @@ while True: signal.pause()
         for command, expected in [('missing-compiler',127), ('not-executable',126)]:
             path = self.root/command
             if expected==126: path.write_text('not executable')
-            result = self.run_jxz('lsp',expected=expected,env={'AETHC':str(path)})
-            self.assertEqual(result.stdout,'')
-            self.assertIn('cannot execute language server',result.stderr)
-            self.assertFalse((self.root/'target').exists())
+            for fault in (None,'perror-errno'):
+                with self.subTest(command=command,fault=fault):
+                    injection=transaction_fault(fault) if fault else {}
+                    result = self.run_jxz('lsp',expected=expected,env={'AETHC':str(path),**injection})
+                    self.assertEqual(result.stdout,'')
+                    self.assertIn('cannot execute language server',result.stderr)
+                    if fault:self.assertIn('injected diagnostic errno change',result.stderr)
+                    self.assertFalse((self.root/'target').exists())
         result = self.run_jxz('lsp','unexpected',expected=2)
         self.assertEqual(result.stdout,'')
         self.assertIn('takes no arguments',result.stderr)

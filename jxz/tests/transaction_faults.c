@@ -83,9 +83,18 @@ int REPLACE(symlink)(const char *target, const char *path) {
     }
     return result;
 }
+void REPLACE(perror)(const char *text) {
+    REAL(perror, void (*)(const char *))(text);
+    if (mode("perror-errno")) {
+        static const char marker[] = "injected diagnostic errno change\n";
+        (void)write(2, marker, sizeof marker - 1);
+        errno = EIO;
+    }
+}
 INTERPOSE(fopen)
 INTERPOSE(fputc)
 INTERPOSE(fputs)
 INTERPOSE(fclose)
 INTERPOSE(rename)
 INTERPOSE(symlink)
+INTERPOSE(perror)

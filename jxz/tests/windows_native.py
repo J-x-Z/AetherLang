@@ -12,6 +12,11 @@ if a.stdlib:env['AETHER_PATH']=str(a.stdlib.resolve())
 def run(label,args,cwd,expected=0,extra=None):
  r=subprocess.run(list(map(str,args)),cwd=cwd,env={**env,**(extra or {})},capture_output=True,timeout=120);records.append({'label':label,'command':list(map(str,args)),'cwd':str(cwd),'exit':r.returncode,'stdout':r.stdout.decode(errors='replace'),'stderr':r.stderr.decode(errors='replace')});save();assert r.returncode==expected,(label,r.returncode,r.stdout,r.stderr);return r
 root=w/'project Ω';root.mkdir();run('version',[jxz,'--version'],root);run('init',[jxz,'init','program'],root);before=(root/'Jxz.toml').read_bytes();run('init preservation',[jxz,'init'],root,1);assert (root/'Jxz.toml').read_bytes()==before
+for name,expected in [('missing compiler.exe',127),('invalid compiler.exe',126)]:
+ path=w/name
+ if expected==126:path.write_bytes(b'not a PE executable')
+ r=run('language-server startup status '+name,[jxz,'lsp'],root,expected,{'AETHC':str(path)})
+ assert not r.stdout and b'cannot execute language server' in r.stderr
 # Real local transitive graph and Unicode paths, without any shell command.
 dep=w/'dependency 中文';leaf=w/'leaf';(dep/'src').mkdir(parents=True);(leaf/'src').mkdir(parents=True)
 (leaf/'Jxz.toml').write_text("[package]\nname='leaf'\n[build]\nsrc='src'\n",encoding='utf8');(leaf/'src/lib.aeth').write_text('pub fn value()->i32{return 41;}')
@@ -66,5 +71,9 @@ probe=w/'stdio_fault.aeth';probe.write_text('use host::read_path_bytes;use resul
 (w/'stdio-input').write_bytes(b'partial')
 for backend in ['c','llvm']:
  exe=w/('stdio-'+backend+'.exe');run('zero errno read failure build '+backend,[compiler,probe,'--cc',cc,'--backend',backend,'-O2','--module','host='+str(host_source/'host.aeth'),'--link-object',obj,'-l','bcrypt','-l','shell32','-o',exe],w);run('zero errno read failure '+backend,[exe],w)
+# Closing a redirected stdout HANDLE must not replace the child's spawn error.
+spawn_probe=w/'spawn_status.aeth';spawn_probe.write_text('use host::process_run;fn main()->i32{let args:[*u8;2]=["./missing-child.exe",0 as *u8];if process_run(&args[0] as **u8,"spawn-output")!=127{return 1;}return 0;}')
+for backend in ['c','llvm']:
+ exe=w/('spawn-status-'+backend+'.exe');run('redirected spawn status build '+backend,[compiler,spawn_probe,'--cc',cc,'--backend',backend,'-O2','--module','host='+str(host_source/'host.aeth'),'-l','bcrypt','-l','shell32','-o',exe],w);run('redirected spawn status '+backend,[exe],w)
 run('clean owned outputs',[jxz,'clean'],root);assert (root/'Jxz.toml').is_file() and (root/'src/main.aeth').is_file();assert not (root/'target/program.exe').exists()
 report['status']='native Windows JXZ acceptance passed';save();print(w/'results.json')

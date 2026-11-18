@@ -89,20 +89,23 @@ pub fn read_path_bytes(path:*u8,limit:u64)->Result<Vec<u8>,i32>{
 fn spawn(args:**u8,output:*void)->*WinProcess{
  let command:*u16=win_command(args);if command==0 as *u16{return 0 as *WinProcess;}
  let startup:*WinStartup=malloc(size_of(WinStartup)) as *WinStartup;let process:*WinProcess=malloc(size_of(WinProcess)) as *WinProcess;
- if startup==0 as *WinStartup||process==0 as *WinProcess{free(command as *void);free(startup as *void);free(process as *void);return 0 as *WinProcess;}
- memset(startup as *void,0,size_of(WinStartup));memset(process as *void,0,size_of(WinProcess));startup.cb=size_of(WinStartup) as u32;startup.flags=256;startup.input=win_standard(4294967286);startup.error=win_standard(4294967284);
- if output==0 as *void{startup.output=win_standard(4294967285);}else{let current:*void=GetCurrentProcess();if DuplicateHandle(current,output,current,&mut startup.output as **void,0,1,2)==0{startup.output=0 as *void;}}
- let valid:bool=startup.input!=0 as *void&&startup.output!=0 as *void&&startup.error!=0 as *void;
- let mut application:*u16=0 as *u16;let mut explicit:bool=false;let mut k:u64=0;while args[0][k]!=0{if args[0][k]==47||args[0][k]==92||args[0][k]==58{explicit=true;application=win_wide(args[0]);break;}k=k+1;}
- let mut ok:i32=0;if valid&&(!explicit||application!=0 as *u16){ok=CreateProcessW(application,command,0 as *void,0 as *void,1,0,0 as *void,0 as *u16,startup,process);}let error:u32=GetLastError();free(application as *void);win_standard_close(startup);free(startup as *void);free(command as *void);
- if ok==0{free(process as *void);win_error_code(error);return 0 as *WinProcess;}CloseHandle(process.thread);return process;
+ if startup==0 as *WinStartup||process==0 as *WinProcess{free(command as *void);free(startup as *void);free(process as *void);win_errno(12);return 0 as *WinProcess;}
+ memset(startup as *void,0,size_of(WinStartup));memset(process as *void,0,size_of(WinProcess));startup.cb=size_of(WinStartup) as u32;startup.flags=256;
+ // Capture each failing operation before another Win32/UCRT call or cleanup.
+ let mut error:i32=0;startup.input=win_standard(4294967286);if startup.input==0 as *void{error=host_errno();}
+ if error==0{startup.error=win_standard(4294967284);if startup.error==0 as *void{error=host_errno();}}
+ if error==0{if output==0 as *void{startup.output=win_standard(4294967285);if startup.output==0 as *void{error=host_errno();}}else{let current:*void=GetCurrentProcess();if DuplicateHandle(current,output,current,&mut startup.output as **void,0,1,2)==0{let code:u32=GetLastError();win_error_code(code);error=host_errno();startup.output=0 as *void;}}}
+ let mut application:*u16=0 as *u16;let mut k:u64=0;if error==0{while args[0][k]!=0{if args[0][k]==47||args[0][k]==92||args[0][k]==58{application=win_wide(args[0]);if application==0 as *u16{error=host_errno();}break;}k=k+1;}}
+ let mut ok:i32=0;if error==0{ok=CreateProcessW(application,command,0 as *void,0 as *void,1,0,0 as *void,0 as *u16,startup,process);if ok==0{let code:u32=GetLastError();win_error_code(code);error=host_errno();}}
+ free(application as *void);win_standard_close(startup);free(startup as *void);free(command as *void);
+ if ok==0{free(process as *void);win_errno(if error==0{5}else{error});return 0 as *WinProcess;}CloseHandle(process.thread);return process;
 }
 fn wait_process(child:*WinProcess)->i32{let status:u32=WaitForSingleObject(child.process,4294967295);let mut code:u32=1;let ok:i32=GetExitCodeProcess(child.process,&mut code as *u32);CloseHandle(child.process);free(child as *void);if status!=0||ok==0{return 1;}return code as i32;}
 pub fn process_run(args:**u8,stdout_path:*u8)->i32{
  let mut output:*void=0 as *void;if stdout_path!=0 as *u8{let p:*u16=win_wide(stdout_path);if p==0 as *u16{return 1;}output=CreateFileW(p,1073741824,1,0 as *void,2,128,0 as *void);free(p as *void);if output==(-1 as i64) as *void{return 1;}}
- let child:*WinProcess=spawn(args,output);if output!=0 as *void{CloseHandle(output);}if child==0 as *WinProcess{return if host_errno()==2{127}else{126};}return wait_process(child);
+ let child:*WinProcess=spawn(args,output);let error:i32=host_errno();if output!=0 as *void{CloseHandle(output);}if child==0 as *WinProcess{return if error==2{127}else{126};}return wait_process(child);
 }
-pub fn host_execute(args:**u8)->i32{let child:*WinProcess=spawn(args,0 as *void);if child==0 as *WinProcess{host_error("jxz: cannot execute language server");return if host_errno()==2{127}else{126};}return wait_process(child);}
+pub fn host_execute(args:**u8)->i32{let child:*WinProcess=spawn(args,0 as *void);if child==0 as *WinProcess{let error:i32=host_errno();host_error("jxz: cannot execute language server");return if error==2{127}else{126};}return wait_process(child);}
 pub fn host_capture(args:**u8,limit:u64,lock:*void)->Result<Vec<u8>,i32>{
  let mut reader:*void=0 as *void;let mut writer:*void=0 as *void;if CreatePipe(&mut reader as **void,&mut writer as **void,0 as *void,0)==0{return Result::Err(1);}
  if lock!=0 as *void&&!host_inherit(lock,true){CloseHandle(reader);CloseHandle(writer);return Result::Err(1);}
