@@ -1,0 +1,88 @@
+#![no_std]
+#![no_main]
+
+pub const PAGE_BYTES:usize = 4096;
+
+// The caller supplies separate metadata and contiguous, writable page frames.
+// Initialize fresh or quiescent metadata for 1..64 frames. One owner serializes
+// use of the pool. Allocated pages retain their contents.
+#[repr(C)]
+pub struct PagePool {
+    base:*u8,
+    count:u32,
+    allocated:u64
+}
+
+#[no_mangle]
+pub fn page_pool_init(pool:*PagePool, base:*u8, count:u32)->bool {
+    if pool==0 as *PagePool || base==0 as *u8 || count==0 || count>64 {return false;}
+    let address:usize=base as usize;
+    let span:usize=(count as usize)*PAGE_BYTES;
+    let max:usize=(0 as usize)-(1 as usize);
+    if address%PAGE_BYTES!=0 || address>max-(span-1) {return false;}
+    pool.base=base;
+    pool.count=count;
+    pool.allocated=0;
+    return true;
+}
+
+// Allocate the lowest-addressed free frame. Null indicates exhaustion.
+#[no_mangle]
+pub fn page_alloc(pool:*PagePool)->*u8 {
+    if pool==0 as *PagePool {return 0 as *u8;}
+    let mut i:u32=0;
+    while i<pool.count {
+        let bit:u64=(1 as u64)<<(i as u64);
+        if (pool.allocated & bit)==0 {
+            pool.allocated=pool.allocated | bit;
+            return pool.base+(i as usize)*PAGE_BYTES;
+        }
+        i+=1;
+    }
+    return 0 as *u8;
+}
+
+// Accept only the starting address of a currently allocated frame in this pool.
+#[no_mangle]
+pub fn page_release(pool:*PagePool, frame:*u8)->bool {
+    if pool==0 as *PagePool || (frame as usize)<(pool.base as usize) {return false;}
+    let offset:usize=(frame as usize)-(pool.base as usize);
+    let i:usize=offset/PAGE_BYTES;
+    if offset%PAGE_BYTES!=0 || i>=(pool.count as usize) {return false;}
+    let bit:u64=(1 as u64)<<(i as u64);
+    if (pool.allocated & bit)==0 {return false;}
+    pool.allocated=pool.allocated ^ bit;
+    return true;
+}
+
+// The boot entry supplies four aligned RAM pages. A nonzero result identifies
+// the failed check without needing a console, allocator, or host runtime.
+#[no_mangle]
+pub fn kernel_main(base:*u8, pages:u32)->i32 {
+    let mut metadata:PagePool=PagePool{base:0 as *u8,count:0,allocated:0};
+    let pool:*PagePool=&mut metadata as *PagePool;
+    if pages!=4 || !page_pool_init(pool,base,pages) {return 1;}
+    let mut frames:[*u8;4]=[0 as *u8;4];
+    let mut i:u32=0;
+    while i<pages {
+        let p:*u8=page_alloc(pool);
+        if p!=base+(i as usize)*PAGE_BYTES {return 2;}
+        frames[i]=p;
+        p[0]=(i+1) as u8;
+        p[4095]=(16+i) as u8;
+        i+=1;
+    }
+    if page_alloc(pool)!=0 as *u8 {return 3;}
+    if page_release(pool,frames[1]+1) || page_release(pool,base+4*PAGE_BYTES) ||
+       page_release(pool,0 as *u8) || page_alloc(pool)!=0 as *u8 {return 4;}
+    if !page_release(pool,frames[1]) || page_release(pool,frames[1]) {return 5;}
+    if page_alloc(pool)!=frames[1] || page_alloc(pool)!=0 as *u8 {return 6;}
+    i=0;
+    while i<pages {
+        let p:*u8=frames[i];
+        if p[0]!=((i+1) as u8) || p[4095]!=((16+i) as u8) {return 7;}
+        if !page_release(pool,p) {return 8;}
+        i+=1;
+    }
+    return 0;
+}
