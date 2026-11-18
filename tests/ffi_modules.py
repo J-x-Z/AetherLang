@@ -53,10 +53,10 @@ def execute(name, library, objects=(), output=None):
 for name in ['llvm_targets', 'jni_consumer', 'openblas', 'metal_compute']:
     run([compiler, 'check', fixture(name)])
 
-prefix = os.environ.get('LLVM_SYS_211_PREFIX')
+prefix = os.getenv('AETHER_LLVM_PREFIX') or os.getenv('LLVM_SYS_211_PREFIX')
 config = args.llvm_config or (Path(prefix) / 'bin/llvm-config' if prefix else shutil.which('llvm-config-21'))
 if config:
-    assert run([config,'--version']).startswith('21.')
+    assert run([config,'--version']).startswith(('21.1.', '23.1.'))
     includes = run([config, '--includedir'])
     libdir = Path(run([config, '--libdir']))
     libraries = run([config, '--libnames', '--link-shared']).split()
@@ -65,7 +65,7 @@ if config:
     run([os.environ.get('CC', 'clang'), '-std=c11', '-I', includes, '-c', root / 'runtime/llvm/target_init.c', '-o', bridge])
     execute('llvm_targets', libdir / libraries[0], [bridge])
 else:
-    print('LLVM SDK execution skipped: set LLVM_SYS_211_PREFIX or --llvm-config')
+    print('LLVM SDK execution skipped: set AETHER_LLVM_PREFIX or --llvm-config')
 
 java = args.java_home or os.environ.get('JAVA_HOME')
 if not java and sys.platform == 'darwin':

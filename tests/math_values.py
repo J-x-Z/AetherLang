@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from ir_toolchain import emitted_source_compiler
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--compiler', type=Path, required=True)
@@ -67,7 +68,7 @@ for backend in args.backends:
         text = '#include <stdint.h>\nvoid *test_malloc(uint64_t); void *test_realloc(void *, uint64_t); void test_free(void *);\n' + text
     emitted.write_text(text)
     executable = work / f'allocation-{backend}'
-    run(f'allocation/{backend}/build', [cc, '-O1', '-g', '-fsanitize=address,undefined', emitted, root / 'allocation_shim.c', '-lm', '-o', executable])
+    run(f'allocation/{backend}/build', [*emitted_source_compiler(backend, cc), '-O1', '-g', '-fsanitize=address,undefined', emitted, root / 'allocation_shim.c', '-lm', '-o', executable])
     run(f'allocation/{backend}/run', [executable], {**env, 'UBSAN_OPTIONS': 'halt_on_error=1'})
 print(f'{len(records)} math checks passed')
 print(outputs[0], end='')

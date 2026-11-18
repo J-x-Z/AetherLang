@@ -6,7 +6,8 @@ Aether's own simulator with the SDK, and runs an Aether-owned optimizer loop.
 import argparse,json,os,subprocess
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--compiler',type=Path,required=True);p.add_argument('--bridge',type=Path,required=True);p.add_argument('--work-dir',type=Path,required=True);p.add_argument('--backends',nargs='+',default=['c','llvm']);p.add_argument('--gpu',action='store_true')
-p.add_argument('--quake-python', type=Path, help='Python with the CUDA-Q MLIR verifier installed')
+p.add_argument('--quake-python', type=Path, default=os.getenv('AETHER_CUDAQ_QUAKE_PYTHON'),
+               help='Python with the CUDA-Q MLIR verifier installed (or set AETHER_CUDAQ_QUAKE_PYTHON)')
 a=p.parse_args()
 w=a.work_dir.resolve();w.mkdir(parents=True,exist_ok=True);c=a.compiler.resolve();bridge=a.bridge.resolve();source=Path(__file__).resolve().parent/'regressions/quantum/cudaq.aeth';records=[]
 def run(name,cmd,expected_exit=0):

@@ -16,20 +16,36 @@ phase=${2:-all}
 case "$phase" in
     all|seed) cargo_action=test ;;
     selfhost) cargo_action=build ;;
-    *) echo 'Usage: scripts/test.sh [llvm|c] [all|seed|selfhost]' >&2; exit 2 ;;
+    *) echo 'Usage: scripts/test.sh [llvm|llvm23|c] [all|seed|selfhost]' >&2; exit 2 ;;
 esac
-case "${1:-llvm}" in
-    llvm)
-        if [ -z "${LLVM_SYS_211_PREFIX:-}" ] && [ -x /opt/homebrew/opt/llvm@21/bin/llvm-config ]; then
-            export LLVM_SYS_211_PREFIX=/opt/homebrew/opt/llvm@21
+seed_backend=${1:-llvm}
+case "$seed_backend" in
+    llvm|llvm23)
+        aether_select_llvm "$seed_backend"
+        if [ "$seed_backend" = llvm23 ]; then
+            # The seed prints new float literals in .ll; the host linker takes objects.
+            export AETHER_IR_CC="$AETHER_LLVM_PREFIX/bin/clang"
         fi
-        cargo "$cargo_action" --locked --features llvm
+        cargo "$cargo_action" --locked --no-default-features --features "$seed_backend"
         backends='llvm c'; bootstrap_backend=llvm ;;
     c)
         cargo "$cargo_action" --locked --no-default-features
         backends='c'; bootstrap_backend=c ;;
-    *) printf '%s\n' 'Usage: scripts/test.sh [llvm|c] [all|seed|selfhost]' >&2; exit 2 ;;
+    *) printf '%s\n' 'Usage: scripts/test.sh [llvm|llvm23|c] [all|seed|selfhost]' >&2; exit 2 ;;
 esac
+test_quantum_templates() {
+    template_compiler=$1
+    template_work=$2
+    shift 2
+    if [ -n "${AETHER_CUDAQ_BRIDGE:-}" ]; then
+        set -- "$@" --bridge "$AETHER_CUDAQ_BRIDGE"
+    fi
+    if [ "${AETHER_TEST_METAL:-0}" = 1 ]; then
+        set -- "$@" --metal
+    fi
+    python3 tests/quantum_templates.py --compiler "$template_compiler" --work-dir "$template_work" "$@"
+}
+
 compiler="$CARGO_TARGET_DIR/debug/aethc"
 if [ "$phase" != selfhost ]; then
     python3 "$root/scripts/test_build_paths.py"
@@ -50,6 +66,8 @@ if [ "$phase" != selfhost ]; then
         AETHER_BACKEND="$backend" python3 jxz/tests/integration.py --jxz "$jxz" --aethc "$compiler" --work-dir "$CARGO_TARGET_DIR/jxz-tests-$backend"
         python3 jxz/tests/registry.py --jxz "$jxz" --aethc "$compiler" --backend "$backend" --work-dir "$CARGO_TARGET_DIR/jxz-registry-$backend"
     done
+
+    test_quantum_templates "$compiler" "$CARGO_TARGET_DIR/quantum-templates" --backends $backends
 
     if [ -n "${AETHER_CUDAQ_BRIDGE:-}" ]; then
         case "${AETHER_CUDAQ_GPU:-0}" in
@@ -74,7 +92,18 @@ if clang --version >/dev/null 2>&1; then
     if [ "${AETHER_TEST_QEMU:-0}" = 1 ]; then
         python3 tests/kernel_boot.py --selfhost "$native_compiler" --seed "$compiler" \
             --backends $backends --work-dir "$CARGO_TARGET_DIR/kernel-boot" --qemu
+        kernel_cc=${CC:-clang}
+        kernel_prefix=${AETHER_LLVM_PREFIX:-${LLVM_SYS_211_PREFIX:-}}
+        if [ -n "$kernel_prefix" ] && [ -x "$kernel_prefix/bin/clang" ]; then
+            kernel_cc="$kernel_prefix/bin/clang"
+        fi
+        python3 tests/bootstrap_kernel_target.py --compiler "$native_compiler" --cc "$kernel_cc" \
+            --work-dir "$CARGO_TARGET_DIR/native-kernel-target" --qemu
+        if [ "$bootstrap_backend" = llvm ]; then
+            python3 tests/kernel_timer.py --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/kernel-timer"
+        fi
     fi
+    test_quantum_templates "$native_compiler" "$CARGO_TARGET_DIR/native-quantum-templates" --backends c llvm
     python3 tests/terminal_stats.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-terminal-stats"
     python3 tests/bootstrap_tuples.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-tuples" --sanitize
     python3 tests/bootstrap_constants.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-constants" --sanitize

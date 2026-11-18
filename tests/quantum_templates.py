@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from ir_toolchain import emitted_source_compiler
 import sys
 
 cli = argparse.ArgumentParser(description=__doc__)
@@ -74,7 +75,7 @@ for backend in args.backends:
                 ' void test_free(void *);\n' + code)
     gen.write_text(code)
     binary = work/('allocation-'+backend)
-    run('link sanitizer '+backend, [os.environ.get('CC','clang'), '-g', '-O1', '-fsanitize=address,undefined',
+    run('link sanitizer '+backend, [*emitted_source_compiler(backend, os.environ.get('CC','clang')), '-g', '-O1', '-fsanitize=address,undefined',
                                     gen, repo/'tests/regressions/math/allocation_shim.c', '-lm', '-o', binary])
     run('allocation failure and retry '+backend, [binary])
 print(f'{len(records)} template checks passed')

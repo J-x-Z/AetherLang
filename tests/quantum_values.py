@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from ir_toolchain import emitted_source_compiler
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--compiler', type=Path, required=True)
@@ -98,7 +99,7 @@ for backend in args.backends:
         source = '#include <stdint.h>\nvoid *test_malloc(uint64_t); void *test_realloc(void *, uint64_t); void test_free(void *);\n' + source
     emitted.write_text(source)
     binary = work / f'pool-allocation-{backend}'
-    run(f'pool allocation/{backend}/sanitizer build', [cc, '-O1', '-g', '-fsanitize=address,undefined', emitted,
+    run(f'pool allocation/{backend}/sanitizer build', [*emitted_source_compiler(backend, cc), '-O1', '-g', '-fsanitize=address,undefined', emitted,
         root / 'regressions/math/allocation_shim.c', '-lm', '-o', binary])
     run(f'pool allocation/{backend}/sanitizer run', [binary], {**env, 'UBSAN_OPTIONS': 'halt_on_error=1'})
 print(f'{len(records)} quantum checks passed; {work / "results.json"}')

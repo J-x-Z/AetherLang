@@ -12,24 +12,13 @@ mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR"
 CARGO_TARGET_DIR=$(CDPATH= cd -- "$CARGO_TARGET_DIR" && pwd)
 TMPDIR=$(CDPATH= cd -- "$TMPDIR" && pwd)
 export CARGO_BUILD_JOBS CARGO_TARGET_DIR TMPDIR
-case "${1:-llvm}" in
+backend=${1:-llvm}
+case "$backend" in
     c) set -- --no-default-features ;;
-    llvm)
-        if [ -z "${LLVM_SYS_211_PREFIX:-}" ]; then
-            if command -v llvm-config-21 >/dev/null 2>&1; then
-                LLVM_SYS_211_PREFIX=$(llvm-config-21 --prefix)
-            elif [ -x /opt/homebrew/opt/llvm@21/bin/llvm-config ]; then
-                LLVM_SYS_211_PREFIX=/opt/homebrew/opt/llvm@21
-            elif command -v llvm-config >/dev/null 2>&1 && [ "$(llvm-config --version | cut -d. -f1)" = 21 ]; then
-                LLVM_SYS_211_PREFIX=$(llvm-config --prefix)
-            else
-                printf '%s\n' 'LLVM 21 is required. Set LLVM_SYS_211_PREFIX, or use scripts/build.sh c.' >&2
-                exit 1
-            fi
-            export LLVM_SYS_211_PREFIX
-        fi
-        set -- --features llvm ;;
-    *) printf '%s\n' 'Usage: scripts/build.sh [llvm|c]' >&2; exit 2 ;;
+    llvm|llvm23)
+        aether_select_llvm "$backend"
+        set -- --no-default-features --features "$backend" ;;
+    *) printf '%s\n' 'Usage: scripts/build.sh [llvm|llvm23|c]' >&2; exit 2 ;;
 esac
 cargo build --locked --release "$@"
 printf '%s\n' "Compiler: $CARGO_TARGET_DIR/release/aethc"

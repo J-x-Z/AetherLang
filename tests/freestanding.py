@@ -47,7 +47,7 @@ def interrupt_stack_delta(disassembly, name):
     raise AssertionError('missing interrupt return')
 
 def tool(name):
-    prefix=os.environ.get('LLVM_SYS_211_PREFIX')
+    prefix=os.getenv('AETHER_LLVM_PREFIX') or os.getenv('LLVM_SYS_211_PREFIX')
     candidates=([Path(prefix)/'bin'/name] if prefix else [])+[Path('/opt/homebrew/opt/llvm@21/bin')/name]
     for candidate in candidates:
         if candidate.is_file():return str(candidate)

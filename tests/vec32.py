@@ -50,8 +50,9 @@ rejected = run('wrong-size-t/wasm32/reject', [compiler, 'check', wrong, '--targe
 if 'E2202' not in rejected.stderr or 'target C ABI' not in rejected.stderr:
     raise SystemExit('Expected the target C ABI mismatch diagnostic')
 cc = env.get('WASM_CC') or shutil.which('clang')
-if env.get('WASM_CC') is None and Path('/opt/homebrew/opt/llvm@21/bin/clang').is_file():
-    cc = '/opt/homebrew/opt/llvm@21/bin/clang'
+sdk_clang = Path(env.get('AETHER_LLVM_PREFIX') or env.get('LLVM_SYS_211_PREFIX') or '/opt/homebrew/opt/llvm@21')/'bin/clang'
+if not env.get('WASM_CC') and sdk_clang.is_file():
+    cc = str(sdk_clang)
 linker = shutil.which('wasm-ld'); node = shutil.which('node')
 if not all([cc, linker, node]):
     meta['wasm_execution'] = 'not run: requires clang, wasm-ld and node'
