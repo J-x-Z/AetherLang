@@ -2,8 +2,8 @@ use result::Result;
 use quantum::{Circuit,QuantumState,Q_X,Q_CX,Q_RY,Q_RZ,Q_INVALID,
               quantum_new,quantum_gate,quantum_set_angle,quantum_free,quantum_state_free};
 use quantum_template::*;
-use template_eval::evaluate;
-extern "C" { fn cos(x:f64)->f64;fn sin(x:f64)->f64; }
+use template_eval::{evaluate,component_tolerance};
+extern "C" { fn cos(x:f64)->f64;fn sin(x:f64)->f64;fn fabs(x:f64)->f64;fn printf(format:*u8,...)->i32; }
 
 fn make_source()->Result<*Circuit,i32> {
     let c:*Circuit=quantum_new(3)?;
@@ -13,21 +13,22 @@ fn make_source()->Result<*Circuit,i32> {
     return Result::Ok(c);
 }
 
-fn near(a:f64,b:f64)->bool {let d:f64=a-b;return d<0.0000000001 && d> -0.0000000001;}
-
 // Consecutive Ry(theta) on q2 add, X sets q1, CX from q2 sets q0 when q2 is one.
 // Rz(phi) on q0 gives opposite phases on basis indices 2 and 7.
 fn correct(c:*Circuit,theta:f64,phi:f64)->bool {
-    let s:*QuantumState=match evaluate(c){Result::Ok(v)=>v,Result::Err(_)=>{return false;}};
-    let mut ok:bool=s.length==8;
+    let s:*QuantumState=match evaluate(c){Result::Ok(v)=>v,Result::Err(e)=>{printf("template provider error=%d\n",e);return false;}};
+    let mut ok:bool=s.length==8;let mut worst:f64=0.0;
     let mut i:u64=0;
     while i<s.length {
         let mut re:f64=0.0;let mut im:f64=0.0;
         if i==2 {re=cos(theta)*cos(phi/2.0);im= -cos(theta)*sin(phi/2.0);}
         if i==7 {re=sin(theta)*cos(phi/2.0);im=sin(theta)*sin(phi/2.0);}
-        if !near(s.amplitudes[i].re,re) || !near(s.amplitudes[i].im,im) {ok=false;}
+        let dr:f64=fabs(s.amplitudes[i].re-re);let di:f64=fabs(s.amplitudes[i].im-im);
+        if !(dr<component_tolerance() && di<component_tolerance()) {ok=false;}
+        if dr>worst {worst=dr;}if di>worst {worst=di;}
         i+=1;
     }
+    printf("theta=%.6g phi=%.6g amplitudes=%llu max_component_error=%.9g\n",theta,phi,s.length,worst);
     quantum_state_free(s);
     return ok;
 }

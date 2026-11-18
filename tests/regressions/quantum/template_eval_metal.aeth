@@ -1,0 +1,47 @@
+use result::Result;
+use quantum::{Circuit,QuantumState,quantum_state_new,quantum_state_free};
+use compute::*;
+use quantum_compute::*;
+extern "C" {
+    fn getenv(name:*u8)->*u8;
+    fn printf(format:*u8,...)->i32;
+}
+
+pub fn component_tolerance()->f64 {return 0.000001;}
+
+fn read_amplitudes(device:*ComputeQuantumState)->Result<*QuantumState,i32> {
+    let host:*QuantumState=quantum_state_new(device.qubits,3)?;
+    let mut i:u64=0;
+    while i<host.length {
+        host.amplitudes[i]=match quantum_compute_amplitude(device,i) {
+            Result::Ok(a)=>a,Result::Err(e)=>{quantum_state_free(host);return Result::Err(e.code);}
+        };
+        i+=1;
+    }
+    return Result::Ok(host);
+}
+
+pub fn evaluate(c:*Circuit)->Result<*QuantumState,i32> {
+    let path:*u8=getenv("AETHER_TEMPLATE_METAL_PROVIDER");
+    let mut q:*ComputeQueue=match compute_queue_with_provider(COMPUTE_METAL,1048576,path) {
+        Result::Ok(queue)=>queue,Result::Err(e)=>{return Result::Err(e.code);}
+    };
+    let mut state:*ComputeQuantumState=match quantum_compute(q,c) {
+        Result::Ok(s)=>s,
+        Result::Err(e)=>{compute_queue_close(&mut q as **ComputeQueue);return Result::Err(e.code);}
+    };
+    let output:Result<*QuantumState,i32>=read_amplitudes(state);
+    quantum_compute_free(&mut state as **ComputeQuantumState);
+    let stats:ComputeQueueStats=compute_queue_stats(q);
+    let caps:ComputeDeviceCaps=compute_device_caps(q);
+    compute_queue_close(&mut q as **ComputeQueue);
+    let host:*QuantumState=output?;
+    if stats.backend!=COMPUTE_METAL || caps.name[0]==0 || stats.failed!=0 ||
+        stats.submitted!=c.gates.len || stats.observed_completed!=stats.submitted || stats.used_bytes!=0 {
+        quantum_state_free(host);
+        return Result::Err(50);
+    }
+    printf("metal device=%s id=%llu submitted=%llu completed=%llu remaining=%llu\n",
+           &caps.name[0] as *u8,caps.device_id,stats.submitted,stats.observed_completed,stats.used_bytes);
+    return Result::Ok(host);
+}

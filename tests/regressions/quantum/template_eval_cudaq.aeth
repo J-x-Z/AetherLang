@@ -5,3 +5,4 @@ pub fn evaluate(c:*Circuit)->Result<*QuantumState,i32> {
     let mut error:[u8;256]=[0;256];
     return quantum_cudaq(c,3,&mut error[0] as *u8,256,0 as *i32);
 }
+pub fn component_tolerance()->f64 {return 0.0000000001;}

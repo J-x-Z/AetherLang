@@ -106,8 +106,17 @@ The regression circuit shares an angle θ between two Ry gates on qubit 2,
 sets qubit 1, controls an X on qubit 0 from qubit 2, and applies Rz(φ) to
 qubit 0. Its only populated amplitudes are `cos(θ) exp(-iφ/2)` at index 2
 and `sin(θ) exp(iφ/2)` at index 7. The runner checks every complex amplitude
-for several bindings and injects allocation failures. Add `--bridge /path/to/libaether_cudaq.dylib`
-to check the same states through CUDA-Q.
+for several bindings and injects allocation failures. Its default CPU checks
+support both C and LLVM. Use `--backends c` for a C-only compiler.
+Add `--bridge /path/to/libaether_cudaq.dylib` to check the states through
+CUDA-Q, or `--metal` on macOS to require Aether's Metal provider.
+
+On Apple M4, C and LLVM each evaluated the original circuit and its bindings
+five times in total through Metal. All five gates per evaluation completed on
+the queue, with zero managed bytes remaining after release. The largest real
+or imaginary amplitude error against the analytic result was
+`7.48710555e-8`. Metal's f32 test uses a per-component tolerance of `1e-6`,
+and the reference and CUDA-Q fp64 tests use `1e-10`.
 
 ```sh
 python3 tests/quantum_templates.py --compiler /path/to/aethc \
