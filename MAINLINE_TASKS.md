@@ -157,4 +157,4 @@ Mac主机同时最多一个全量编译，Cargo并发沿用3；Linux宿主交付
 | macOS 可选 LLVM 23.1.2 | 完整 `llvm23 seed`；已生成的自举编译器配合 Clang 23 通过裸机检查 | 从 LLVM 23 种子运行 `sh scripts/test.sh llvm23 selfhost`，核对生成的常规编译器及自举回归。 |
 | Linux、Windows 同版交付 | Linux `13941f6`、Windows `98402df` 有真机安装包验收 | 用同一个新源码提交重建、安装并运行两台宿主的入口。若提升 LLVM 默认大版本，另用拟发布的精确补丁版本完成验证。 |
 
-8 GiB 统一内存是端侧设计目标。16 比特已有多设备执行记录，运行时预算只覆盖声明的缓冲区；整机 8 GiB 配置下的峰值与可用余量尚待真机记录。[量子内存边界](docs/QUANTUM.md#explicit-host-state-budgets)
+8 GiB 统一内存仍为端侧设计目标。按维护者决定，物理 8 GiB 设备上的整机峰值和余量实测暂缓，本次发布沿用已有 16 比特多设备执行及其已声明的缓冲区预算证据。[量子内存边界](docs/QUANTUM.md#explicit-host-state-budgets)
