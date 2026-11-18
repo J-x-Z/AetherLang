@@ -14,6 +14,10 @@ on:
         description: Expected full source commit in the bundle manifest
         required: true
         type: string
+      linux_sha256:
+        description: SHA-256 of the matching Linux x64 Rust seed archive for Win64 C ABI tests
+        required: false
+        type: string
 
 permissions: {}
 
@@ -40,8 +44,58 @@ jobs:
           name: windows-bundle
           path: windows.zip
           retention-days: 1
-  windows:
+      - name: Fetch the matching Linux Rust seed
+        if: inputs.linux_sha256 != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          LINUX_SHA256: ${{ inputs.linux_sha256 }}
+        run: |
+          [[ "$LINUX_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "aetherlang-$TAG-linux-x86_64.tgz" --output linux.tgz
+          echo "$LINUX_SHA256  linux.tgz" | sha256sum --check
+      - uses: actions/upload-artifact@v4
+        if: inputs.linux_sha256 != ''
+        with:
+          name: linux-seed
+          path: linux.tgz
+          compression-level: 0
+          retention-days: 1
+  emit-win64:
     needs: archive
+    if: inputs.linux_sha256 != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-seed
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-bundle
+      - name: Emit Win64 LLVM IR from the released Rust seed
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          tar -xzf linux.tgz
+          seed="aetherlang-$TAG-linux-x86_64"
+          test "$(jq -r .source_commit "$seed/manifest.json")" = "$SOURCE_COMMIT"
+          mkdir -p oracle
+          unzip -j windows.zip '*/tests/regressions/aggregates/win64.*' -d oracle
+          for abi in gnu msvc; do
+            for opt in 0 2; do
+              "$seed/aethc" oracle/win64.aeth --backend llvm --target "x86_64-pc-windows-$abi" \
+                --emit-llvm "-O$opt" -o "oracle/$abi-$opt.ll"
+            done
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win64-seed-ir
+          path: oracle
+          retention-days: 1
+  windows:
+    needs: [archive, emit-win64]
+    if: ${{ !cancelled() && needs.archive.result == 'success' && (needs.emit-win64.result == 'success' || needs.emit-win64.result == 'skipped') }}
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -75,6 +129,40 @@ jobs:
         run: |
           & (Join-Path $env:BUNDLE_ROOT Test-Native.ps1) -Clang $env:AETHER_CLANG -WorkDir "$env:RUNNER_TEMP\aether-results"
           exit $LASTEXITCODE
+      - uses: actions/download-artifact@v4
+        if: inputs.linux_sha256 != ''
+        with:
+          name: win64-seed-ir
+          path: oracle
+      - name: Link and run Rust-emitted Win64 code with independent MinGW and MSVC C callers
+        if: inputs.linux_sha256 != ''
+        working-directory: oracle
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          foreach ($abi in 'gnu','msvc') {
+            if ($abi -eq 'gnu') {
+              & $env:AETHER_CLANG -std=c11 -O2 -c win64.c -o oracle.obj
+            } else {
+              cl.exe /nologo /std:c11 /O2 /c win64.c /Fooracle.obj
+            }
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            foreach ($opt in 0,2) {
+              & $env:AETHER_CLANG -target "x86_64-pc-windows-$abi" "-O$opt" -c "$abi-$opt.ll" -o aether.obj
+              if ($LASTEXITCODE) { exit $LASTEXITCODE }
+              if ($abi -eq 'gnu') {
+                & $env:AETHER_CLANG aether.obj oracle.obj -o probe.exe
+              } else {
+                cl.exe /nologo aether.obj oracle.obj /Feprobe.exe
+              }
+              if ($LASTEXITCODE) { exit $LASTEXITCODE }
+              .\probe.exe
+              if ($LASTEXITCODE) { exit $LASTEXITCODE }
+              Write-Output "$abi O$opt bidirectional Win64 C ABI passed"
+            }
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

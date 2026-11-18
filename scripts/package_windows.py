@@ -63,7 +63,15 @@ if frozen_mcp:
     suite_files.extend(subprocess.check_output(
         ['git', 'ls-tree', '--name-only', commit, '--', 'tests/mcp_queries.py', 'tests/mcp_protocol.py'],
         cwd=repo, text=True).splitlines())
+launcher = 'tools/mcp/aether-mcp.cmd'
+has_launcher = bool(subprocess.check_output(['git', 'ls-tree', '--name-only', commit, '--', launcher], cwd=repo))
+abi_fixture = 'tests/regressions/aggregates/win64'
+suite_files.extend(subprocess.check_output(
+    ['git', 'ls-tree', '--name-only', commit, '--', abi_fixture+'.aeth', abi_fixture+'.c'],
+    cwd=repo, text=True).splitlines())
 paths = ['src_aether/core', 'jxz/src', 'stdlib', *suite_files, *frozen_mcp]
+if has_launcher:
+    paths.append(launcher)
 archive = subprocess.check_output(['git', 'archive', '--format=tar', commit, *paths], cwd=repo)
 with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
     for item in tar:
@@ -132,6 +140,8 @@ try:
     shutil.copytree(cross['jxz'][0]/'source',stage/'source/jxz')
     for path in [*suite_files, *frozen_mcp]:
         dest=stage/path;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source/path,dest)
+    if has_launcher:
+        (stage/'aether-mcp.cmd').write_bytes((source/launcher).read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
     # These packaging/acceptance wrappers are hashed independently of the frozen
     # language source, so a later packaging fix never mislabels its source commit.
     for name in ['package_windows.py','validate_windows.py']:
@@ -207,6 +217,17 @@ To rebuild on a development host with the repository and existing Aether seed:
 The output must be new, and the source snapshot comes only from that committed
 revision. No Cargo, downloads, Windows execution or Wine are used by packaging.
 ''',encoding='utf-8')
+    if has_launcher:
+        with (stage/'README-WINDOWS.md').open('a', encoding='utf-8') as readme:
+            readme.write(r'''
+## MCP server
+
+Start `.\aether-mcp.cmd --root "D:\My Project"` from the bundle directory.
+Place Python 3.10+ on PATH or set `AETHER_MCP_PYTHON` to your python.exe.
+For clients that launch executables directly, choose that python.exe as the
+command and pass `-B`, the absolute path to `tools\mcp\aether_mcp.py`,
+`--root`, and the project path as separate arguments. The server uses stdio.
+''')
     files=[dict(name=f.relative_to(stage).as_posix(), bytes=f.stat().st_size, sha256=sha(f))
            for f in sorted(stage.rglob('*')) if f.is_file()]
     manifest=dict(format='aether-windows-native-bundle-1', source_commit=commit,

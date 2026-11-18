@@ -85,8 +85,12 @@ try:
     if 'tests/mcp_protocol.py' in names:
         run('mcp-protocol', [sys.executable, '-B', package/'tests/mcp_protocol.py'])
     if 'tests/mcp_queries.py' in names:
+        launcher = []
+        if 'aether-mcp.cmd' in names:
+            env['AETHER_MCP_PYTHON'] = sys.executable
+            launcher = ['--server', package/'aether-mcp.cmd']
         run('mcp-native', [sys.executable, '-B', package/'tests/mcp_queries.py',
-            '--compiler', package/'aethc.exe', '--jxz', package/'jxz.exe', '--work-dir', w/'mcp'])
+            '--compiler', package/'aethc.exe', '--jxz', package/'jxz.exe', '--work-dir', w/'mcp', *launcher])
     if 'tests/windows_csv.py' in names:
         run('csv-native', [sys.executable, package/'tests/windows_csv.py',
             '--compiler', package/'aethc.exe', '--cc', cc, '--sysroot', package,
