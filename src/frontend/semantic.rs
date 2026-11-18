@@ -1095,6 +1095,11 @@ impl SemanticAnalyzer {
             }
 
             Expr::Call { func, args, span } => {
+                if let Expr::Ident(ident) = func.as_ref() {
+                    if let Some(operation) = crate::intrinsics::platform(&ident.name) {
+                        self.check_platform_call(operation, *span)?;
+                    }
+                }
                 let func_ty = self.check_expr(func)?;
 
 

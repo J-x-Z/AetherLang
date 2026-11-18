@@ -232,6 +232,11 @@ impl PlatformOp {
     pub fn params(self) -> Vec<crate::types::ResolvedType> { vec![] }
     pub fn result(self) -> crate::types::ResolvedType { crate::types::ResolvedType::I32 }
     pub fn libc_symbol(self, target: &str) -> Result<&'static str, String> {
+        let native;
+        let target = if target == "native" {
+            native = target_lexicon::HOST.to_string();
+            &native
+        } else { target };
         match self {
             Self::ErrnoGet if target.contains("apple") => Ok("__error"),
             Self::ErrnoGet if target.contains("android") => Ok("__errno"),

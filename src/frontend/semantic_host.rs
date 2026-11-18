@@ -12,6 +12,20 @@ impl SemanticAnalyzer {
         }
     }
 
+    pub(super) fn check_platform_call(&self, op: crate::intrinsics::PlatformOp, span: Span) -> Result<()> {
+        let symbol = op.libc_symbol(&self.system_target)
+            .map_err(|message| Error::Semantic { code: "E2407", message, span })?;
+        if let Some(declaration) = self.foreign_signatures.get(symbol) {
+            let result = ResolvedType::Pointer(Box::new(ResolvedType::I32));
+            let expected = Self::c_function_signature(&[], &result, false);
+            if declaration != &expected || self.c_abi_definitions.contains(symbol) {
+                return Err(Error::Semantic { code: "E2202", span,
+                    message: format!("native errno requires libc function '{symbol}' with signature fn() -> *i32") });
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn check_hosted_abi(&self, program: &Program) -> Result<()> {
         if program
             .inner_attrs

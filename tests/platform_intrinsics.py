@@ -26,6 +26,21 @@ for name,source_text in {
  'wrong_type':'fn main(){let error:bool=__errno_get();}',
 }.items():
  path=w/(name+'.aeth'); path.write_text(source_text);run('reject '+name,[c,'check',path],True)
+for triple, accessor in [('aarch64-apple-darwin','__error'),('x86_64-unknown-linux-gnu','__errno_location'),
+                         ('aarch64-linux-android','__errno'),('x86_64-pc-windows-msvc','_errno')]:
+ path=w/'accessor.aeth'
+ for declaration in [f'extern "C"{{fn {accessor}(x:i64)->i32;}}',f'extern "C"{{static {accessor}:i32;}}',
+                     f'#[no_mangle] fn {accessor}()->*i32{{return 0 as *i32;}}']:
+  path.write_text(declaration+'fn main()->i32{__errno_get()}')
+  for backend in a.backends:
+   failure=run('incompatible accessor '+triple,[c,'check',path,'--backend',backend,'--target',triple],True)
+   assert 'E2202' in failure.stderr and accessor in failure.stderr
+ path.write_text(f'extern "C"{{fn {accessor}()->*i32;}}fn main()->i32{{__errno_get()}}')
+ run('compatible accessor '+triple,[c,'check',path,'--target',triple,'--backend',a.backends[0]])
+path=w/'errno-wasm.aeth';path.write_text('fn main()->i32{__errno_get()}')
+for backend in a.backends:
+ failure=run('no native errno ABI for wasm',[c,'check',path,'--target','wasm32-unknown-unknown','--backend',backend],True)
+ assert 'E2407' in failure.stderr
 if 'llvm' in a.backends:
  for target in ['x86_64-unknown-linux-gnu','aarch64-linux-android','x86_64-pc-windows-msvc']:
   run('cross object '+target,[c,source,'--backend','llvm','--emit-obj','--target',target,'-o',w/(target+'.o')])
