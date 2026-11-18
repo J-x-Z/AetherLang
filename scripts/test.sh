@@ -50,8 +50,8 @@ if clang --version >/dev/null 2>&1; then
     CC=clang python3 scripts/build_selfhost.py --seed "$CARGO_TARGET_DIR/bootstrap-core/stage4" \
         --work-dir "$CARGO_TARGET_DIR/regular-bootstrap" --output "$native_compiler"
     python3 tests/terminal_stats.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-terminal-stats"
-    python3 tests/bootstrap_tuples.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-tuples" --sanitize
-    python3 tests/bootstrap_patterns.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-patterns" --sanitize
+    python3 tests/bootstrap_tuples.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-tuples" --sanitize
+    python3 tests/bootstrap_patterns.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-patterns" --sanitize
     if [ "$bootstrap_backend" = llvm ]; then
         python3 tests/bootstrap_effects.py --compiler "$native_compiler" --reference-compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-effects"
     else
