@@ -1,4 +1,5 @@
 // Vulkan device adapter for the Aether compute provider ABI. No window system.
+#define AETHER_GPU_BUILD_PROVIDER
 #include "../compute/provider.h"
 #include <vulkan/vulkan.h>
 #include <limits.h>

@@ -12,7 +12,7 @@ extern "C" {
     fn aether_gpu_event_wait(context:*void,event:*void,native:*i64)->i32;
     fn aether_gpu_event_free(context:*void,event:*void);
     fn printf(fmt:*u8,...)->i32;
-    fn strtoul(s:*u8,end:**u8,base:i32)->u64;
+    fn strtoull(s:*u8,end:**u8,base:i32)->u64;
 }
 @repr(C) struct Caps {
     id:u64,heap:u64,max_buffer:u64,available:u64,vendor:u32,fp64:u32,unified:u32,family:u32,name:[u8;256]
@@ -26,7 +26,7 @@ fn main(argc:i32,argv:**u8)->i32 {
     if device==0 as *void {printf("open error %d native %lld\n",code,native);return 3;}
     let mut caps:Caps=Caps{id:0,heap:0,max_buffer:0,available:0,vendor:0,fp64:0,unified:0,family:0,name:[0;256]};
     aether_gpu_caps(device,&mut caps as *Caps);
-    let expect:u64=strtoul(argv[2],0 as **u8,16);
+    let expect:u64=strtoull(argv[2],0 as **u8,16);
     printf("gpu=%s vendor=0x%x id=%llu heap=%llu max_buffer=%llu available=%llu fp64=%u unified=%u queue=%u\n",
         &caps.name[0] as *u8,caps.vendor,caps.id,caps.heap,caps.max_buffer,caps.available,caps.fp64,caps.unified,caps.family);
     if caps.id==0 || caps.heap==0 || caps.max_buffer<1024 || (expect!=0 && expect!=caps.vendor as u64) {return 4;}

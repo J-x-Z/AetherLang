@@ -1,44 +1,92 @@
-// POSIX provider loading. Scheduling, tensor layouts and ownership live in Aether.
+// Native provider loading. Scheduling, tensor layouts and ownership live in Aether.
 #include "provider.h"
-#include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+typedef HMODULE Library;
+typedef FARPROC Symbol;
+
+static Library library_open(const char *path, int64_t *native) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (!n) { *native = GetLastError(); return NULL; }
+    wchar_t *wide = calloc(n, sizeof(*wide));
+    if (!wide) { *native = ERROR_OUTOFMEMORY; return NULL; }
+    Library library = NULL;
+    DWORD needed = 0;
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, n))
+        needed = GetFullPathNameW(wide, 0, NULL, NULL);
+    if (!needed) {
+        *native = GetLastError();
+    } else {
+        wchar_t *full = calloc(needed, sizeof(*full));
+        if (full) {
+            DWORD len = GetFullPathNameW(wide, needed, full, NULL);
+            if (len && len < needed)
+                library = LoadLibraryExW(full, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+            if (!library) *native = len >= needed ? ERROR_INSUFFICIENT_BUFFER : GetLastError();
+            free(full);
+        } else {
+            *native = ERROR_OUTOFMEMORY;
+        }
+    }
+    free(wide);
+    return library;
+}
+
+static int explicit_path(const char *path) { return strpbrk(path, "/\\") != NULL; }
+static Symbol library_entry(Library lib) { return GetProcAddress(lib, "aether_gpu_provider_v1"); }
+static void library_close(Library lib) { FreeLibrary(lib); }
+#else
+#include <dlfcn.h>
+typedef void *Library;
+typedef void *Symbol;
+static Library library_open(const char *path, int64_t *native) {
+    (void)native;
+    return dlopen(path, RTLD_LOCAL | RTLD_NOW);
+}
+static int explicit_path(const char *path) { return strchr(path, '/') != NULL; }
+static Symbol library_entry(Library lib) { return dlsym(lib, "aether_gpu_provider_v1"); }
+static void library_close(Library lib) { dlclose(lib); }
+#endif
+
 typedef struct {
-    void *library, *device;
+    Library library;
+    void *device;
     const AetherGpuProviderV1 *api;
 } Provider;
 
 void *aether_gpu_open(int32_t backend, const char *path, int32_t *code, int64_t *native) {
     *code = AETHER_GPU_ARGUMENT;
     *native = 0;
-    if (!path || !strchr(path, '/')) return NULL;
+    if (!path || !explicit_path(path)) return NULL;
     *code = AETHER_GPU_DEVICE;
-    void *library = dlopen(path, RTLD_LOCAL | RTLD_NOW);
+    Library library = library_open(path, native);
     if (!library) return NULL;
-    void *symbol = dlsym(library, "aether_gpu_provider_v1");
+    Symbol symbol = library_entry(library);
     const AetherGpuProviderV1 *(*entry)(void) = NULL;
-    _Static_assert(sizeof(entry) == sizeof(symbol), "POSIX function pointer ABI");
+    _Static_assert(sizeof(entry) == sizeof(symbol), "provider function pointer ABI");
     memcpy(&entry, &symbol, sizeof(entry));
     const AetherGpuProviderV1 *api = entry ? entry() : NULL;
     if (!api || api->version != AETHER_GPU_ABI_V1 || api->struct_bytes < sizeof(*api)
         || api->backend != backend || !api->open || !api->close || !api->caps
         || !api->buffer_new || !api->buffer_contents || !api->buffer_free
         || !api->submit_gemm || !api->event_status || !api->event_wait || !api->event_free) {
-        dlclose(library);
+        library_close(library);
         return NULL;
     }
     Provider *provider = malloc(sizeof(*provider));
     if (!provider) {
         *code = AETHER_GPU_ALLOCATION;
-        dlclose(library);
+        library_close(library);
         return NULL;
     }
     void *device = api->open(code, native);
     if (!device) {
         if (!*code) *code = AETHER_GPU_DEVICE;
         free(provider);
-        dlclose(library);
+        library_close(library);
         return NULL;
     }
     *provider = (Provider){library, device, api};
@@ -50,7 +98,7 @@ void aether_gpu_close(void *ctx) {
     Provider *p = ctx;
     if (!p) return;
     p->api->close(p->device);
-    dlclose(p->library);
+    library_close(p->library);
     free(p);
 }
 

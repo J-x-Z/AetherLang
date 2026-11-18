@@ -46,6 +46,9 @@ typedef struct {
 } AetherGpuProviderV1;
 
 // The only symbol that a provider shared library needs to export.
+#if defined(_WIN32) && defined(AETHER_GPU_BUILD_PROVIDER)
+__declspec(dllexport)
+#endif
 const AetherGpuProviderV1 *aether_gpu_provider_v1(void);
 
 // Plain C ABI used by stdlib/compute. Explicit path selects the installed
