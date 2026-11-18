@@ -384,23 +384,19 @@ fn macos_target(requested: &str) -> Result<Option<(String, Option<String>)>, Str
     Ok(Some((format!("{prefix}-apple-macosx"), if version.is_empty() { None } else { Some(deployment_version(version)?) })))
 }
 
-/// Resolve standard SDK paths without spawning xcrun for every compilation.
-/// Explicit SDKROOT/DEVELOPER_DIR and xcode-select's on-disk selection win.
+/// Resolve an explicitly supplied SDK without running the host toolchain.
 fn macos_sdk() -> Result<Option<PathBuf>, String> {
     if let Some(root) = std::env::var_os("SDKROOT").filter(|value| !value.is_empty()) {
         let root = PathBuf::from(root);
         if !root.is_dir() { return Err(format!("SDKROOT {} is not an SDK directory", root.display())); }
         return Ok(Some(root));
     }
-    let developer = std::env::var_os("DEVELOPER_DIR").filter(|value| !value.is_empty()).map(PathBuf::from)
-        .or_else(|| fs::read_link("/var/db/xcode_select_link").ok());
+    let developer = std::env::var_os("DEVELOPER_DIR").filter(|value| !value.is_empty()).map(PathBuf::from);
     let developer = developer.map(|path| {
         if path.extension().is_some_and(|extension| extension == "app") { path.join("Contents/Developer") } else { path }
     });
     let candidates = if let Some(developer) = developer {
         vec![developer.join("Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"), developer.join("SDKs/MacOSX.sdk")]
-    } else if cfg!(target_os = "macos") {
-        vec![PathBuf::from("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")]
     } else { vec![] };
     Ok(candidates.into_iter().find(|path| path.is_dir()))
 }
@@ -427,6 +423,35 @@ fn sdk_deployment(sdk: &Path) -> Result<Option<String>, String> {
     version.map(deployment_version).transpose()
 }
 
+// Apple's driver can target an older macOS than the version of its selected SDK.
+// A compilation-database record exposes both effective settings in one invocation.
+// This query never executes the caller's CC and produces no object or temporary file.
+#[cfg(target_os = "macos")]
+fn native_macos_defaults(prefix: &str, sdk: Option<&Path>) -> Result<(PathBuf, String), String> {
+    let arch = prefix.strip_suffix("-apple-macosx").unwrap_or(prefix);
+    let arch = if arch == "aarch64" { "arm64" } else { arch };
+    let mut driver = Command::new("/usr/bin/clang");
+    driver.env_remove("MACOSX_DEPLOYMENT_TARGET").args(["-arch", arch]);
+    if let Some(sdk) = sdk { driver.arg("-isysroot").arg(sdk); }
+    let output = driver.args(["-MJ", "-", "-fsyntax-only", "-x", "c", "/dev/null"]).output()
+        .map_err(|e| format!("cannot query Apple Clang's macOS settings: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("cannot query Apple Clang's macOS settings: {}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    #[derive(serde::Deserialize)]
+    struct AppleCommand { arguments: Vec<String> }
+    let text = std::str::from_utf8(&output.stdout).map_err(|e| e.to_string())?;
+    let command: AppleCommand = serde_json::from_str(text.trim().trim_end_matches(','))
+        .map_err(|e| format!("invalid Apple Clang compilation record: {e}"))?;
+    let selected = command.arguments.windows(2).find(|a| a[0] == "-isysroot")
+        .ok_or("Apple Clang did not select a macOS SDK")?;
+    let triple = command.arguments.iter().find_map(|a| a.strip_prefix("--target="))
+        .ok_or("Apple Clang did not report a target triple")?;
+    let version = macos_target(triple)?.and_then(|(_, version)| version)
+        .ok_or("Apple Clang did not report a macOS deployment version")?;
+    Ok((PathBuf::from(&selected[1]), version))
+}
+
 fn effective_target(requested: &str) -> Result<EffectiveTarget, String> {
     let Some((prefix, explicit)) = macos_target(requested)? else {
         return Ok(EffectiveTarget { triple: requested.into(), pass_target: requested != "native", macos_deployment: None, sdk: None });
@@ -434,12 +459,16 @@ fn effective_target(requested: &str) -> Result<EffectiveTarget, String> {
     let sdk = macos_sdk()?;
     // Validate platform compatibility even when deployment was selected explicitly.
     let sdk_default = sdk.as_deref().map(sdk_deployment).transpose()?.flatten();
-    let version = if let Some(version) = explicit { version }
+    let deployment = if let Some(version) = explicit { Some(version) }
         else if let Some(version) = std::env::var_os("MACOSX_DEPLOYMENT_TARGET").filter(|value| !value.is_empty()) {
-            deployment_version(version.to_str().ok_or("MACOSX_DEPLOYMENT_TARGET must be a numeric UTF-8 version")?)?
-        } else {
-            sdk_default.ok_or("cannot determine macOS deployment target; set MACOSX_DEPLOYMENT_TARGET, use a versioned --target, or select a macOS SDK with SDKROOT")?
-        };
+            Some(deployment_version(version.to_str().ok_or("MACOSX_DEPLOYMENT_TARGET must be a numeric UTF-8 version")?)?)
+        } else { None };
+    #[cfg(target_os = "macos")]
+    let (sdk, sdk_default) = if sdk.is_none() || deployment.is_none() {
+        let (selected, version) = native_macos_defaults(&prefix, sdk.as_deref())?;
+        (Some(selected), Some(version))
+    } else { (sdk, sdk_default) };
+    let version = deployment.or(sdk_default).ok_or("cannot determine macOS deployment target; set MACOSX_DEPLOYMENT_TARGET, use a versioned --target, or select a macOS SDK with SDKROOT")?;
     if (prefix.starts_with("aarch64-") || prefix.starts_with("arm64-")) && version.split('.').next().unwrap().parse::<u16>().unwrap() < 11 {
         return Err("macOS arm64 requires deployment target 11.0 or later".into());
     }

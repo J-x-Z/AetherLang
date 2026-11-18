@@ -100,8 +100,7 @@ try:
         assert 'built for newer' in output.stderr and '14.0' in output.stderr and '13.0' in output.stderr, output.stderr
         run([executable])
 
-        # A selected C driver is invoked once; the compiler never probes it or
-        # starts xcrun. Preserve a normal native CC invocation (no --target).
+        # A selected C driver is invoked once; SDK discovery never probes it. Preserve a normal native CC invocation (no --target).
         cc_log = work / f'{backend}-cc-args.txt'
         cc_log.write_text('')
         wrapper = work / f'{backend}-custom-cc.sh'
@@ -112,7 +111,9 @@ try:
             {**environment, 'MACOSX_DEPLOYMENT_TARGET': '13.0'})
         argv = cc_log.read_text().splitlines()
         assert argv.count('-mmacosx-version-min=13.0') == 1, argv
-        assert '-isysroot' in argv and not any(arg.startswith('--target=') for arg in argv), argv
+        assert argv.count('-isysroot') == 1 and not any(arg.startswith('--target=') for arg in argv), argv
+        actual_sdk = Path(argv[argv.index('-isysroot') + 1])
+        assert actual_sdk.resolve() == selected_sdk.resolve(), (actual_sdk, selected_sdk)
         run([executable])
 
     # Rejection paths are compiler diagnostics, not linker failures or crashes.
