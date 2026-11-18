@@ -4,6 +4,22 @@
 
 本机日常终端可直接运行 `aethc`、`aethc-native`、`jxz` 和 `jxz-native`。工具链安装在外置卷 `/Volumes/WINDOWS/work/aetherlang-toolchain`。
 
+## 当前本地开发版
+
+MCP 与编译修复的源码提交为 `84c270b`，在公开 `v0.1.0` 之后。MCP 的本地入口为 `aether-mcp --root /Volumes/WINDOWS/work/AetherLang/jxz`。包内和项目均可直接启动 `tools/mcp/aether_mcp.py`。它支持检查、定义、引用和分页符号搜索。[配置示例](docs/MCP.md) · [审计及测量](docs/UPGRADE.md#010-之后的本地-mcp-与编译审计)
+
+工具链已按清单 SHA-256 `4afd1f42c3e98ececa0c971b8b7019c18ad944fd49f774abd8566efd3180d0d7` 原子安装。命令中的版本号仍为 0.1.0，安装清单的 `release_id` 为 `aetherlang-mcp-dev-84c270b`。验收记录位于 `/Volumes/WINDOWS/work/aetherlang-upgrade-work/mcp-cycle`。载入下方“本机重建”的环境后，可运行这组检查。
+
+```sh
+cycle="$WORK/mcp-cycle"
+prefix=/Volumes/WINDOWS/work/aetherlang-toolchain/bin
+python3 -B tests/mcp_protocol.py
+python3 -B tests/mcp_queries.py --compiler "$prefix/aethc" --jxz "$prefix/jxz" --work-dir "$cycle/recheck-seed"
+python3 -B tests/mcp_queries.py --compiler "$prefix/aethc-native" --jxz "$prefix/jxz" --work-dir "$cycle/recheck-native"
+```
+
+Windows x64 的新 JXZ 已用 C、LLVM 两个后端在 O0/O2 交叉编译并链接。下一项具体任务是用这批源码构建的 Windows 包运行 `Test-Native.ps1`，其中包括完整的 MCP 协议与项目查询测试。下文多平台验收表所列的是已发布 0.1.0 的记录。
+
 ## 本机重建
 
 ```sh
@@ -48,4 +64,4 @@ python3 scripts/package.py --work-dir "$WORK/rebuild-evidence" --output "$WORK/r
 
 同版发行源码为 `6dc584cc1ef88ed37a1d60d3c5722f65be8d2b0f`。三份归档、`SHA256SUMS` 和 FileVeil 签名 TOML 位于 `closure-20261118/identity/verified/6dc584c-public`。各平台清单与五份文件的匿名下载校验位于 `closure-20261118/identity/verified/6dc584cc1ef88ed37a1d60d3c5722f65be8d2b0f/release-verification`。[0.1.0 发布页](https://github.com/J-x-Z/AetherLang/releases/tag/v0.1.0) · [报告](docs/UPGRADE.md)
 
-下一项具体工作是在另一个配有常规 Clang 的 ARM64 GNU/Linux 发行版上构建和搬移安装包，核验 glibc 与 libLLVM 的最低分发要求。当前 ARM64 真机已经完成原生自举和 Adreno 计算验收。
+原发行线的下一项工作是在另一个配有常规 Clang 的 ARM64 GNU/Linux 发行版上构建和搬移安装包，核验 glibc 与 libLLVM 的最低分发要求。当前 ARM64 真机已经完成原生自举和 Adreno 计算验收。
