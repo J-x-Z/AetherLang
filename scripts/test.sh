@@ -55,7 +55,12 @@ if clang --version >/dev/null 2>&1; then
     CC=clang python3 tests/core_references.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/core-references"
     case "$(uname -s)/$(uname -m)" in
         Darwin/arm64|Darwin/x86_64|Linux/x86_64)
-            CC=clang python3 tests/bootstrap_native_abi.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-native-abi" ;;
+            CC=clang python3 tests/bootstrap_native_abi.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-native-abi"
+            if [ "$bootstrap_backend" = llvm ]; then
+                CC=clang python3 tests/bootstrap_layout.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --reference-compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-layout"
+            else
+                CC=clang python3 tests/bootstrap_layout.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-layout"
+            fi ;;
     esac
     CC=clang python3 tests/bootstrap_storage.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-storage"
     CC=clang python3 tests/bootstrap_errno.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-errno"

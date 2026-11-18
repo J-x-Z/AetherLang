@@ -3,13 +3,13 @@
 use model::*;
 use runtime::*;
 use type_model::boot_layout;
-extern "C"{fn uname(info:*void)->i32;}
+use host_posix::boot_host_info;
 pub const ABI_SCALAR:i32=0;pub const ABI_PARTS:i32=1;pub const ABI_BYVAL:i32=2;
 pub const ABI_INDIRECT:i32=3;pub const ABI_EMPTY:i32=4;
 pub const ABI_FLOAT:i32=-1;pub const ABI_DOUBLE:i32=-2;pub const ABI_FLOAT2:i32=-3;pub const ABI_I64X2:i32=-4;
 pub struct BootNativeSlot {mode:i32,ty:*BootType,a:i32,b:i32,first:i32,second:i32,address:i32,param:*BootNode,next:*BootNativeSlot}
 pub struct BootNativeSignature {result:*BootNativeSlot,params:*BootNativeSlot,gp:i32,sse:i32}
-struct BootChunk{kind:i32,bytes:i32,float_count:i32,double_value:bool}
+struct BootChunk{kind:i32,bytes:i32,double_value:bool}
 pub fn boot_abi_needed(fn_node:*BootNode)->bool{
  if !boot_c_symbol(fn_node){return false;}
  if fn_node.ty.kind==BY_STRUCT{return true;}
@@ -18,8 +18,7 @@ pub fn boot_abi_needed(fn_node:*BootNode)->bool{
 }
 pub fn boot_abi_target(ctx:*BootContext,node:*BootNode)->bool{
  if ctx.native_abi!=0{return true;}
- let info:*u8=boot_alloc(ctx,2048) as *u8;if ctx.failed{return false;}
- if uname(info as *void)!=0 {boot_error(ctx,node.token,"cannot identify the native aggregate ABI");return false;}
+ let info:*u8=boot_host_info(ctx);if ctx.failed{return false;}
  if strcmp(info,"Darwin")==0{
   if strcmp(info+1024,"arm64")==0{ctx.native_abi=1;}
   if strcmp(info+1024,"x86_64")==0{ctx.native_abi=2;}
@@ -38,7 +37,7 @@ fn boot_hfa(ty:*BootType)->i32{
  let mut field:*BootNode=ty.fields;let mut kind:i32=0;let mut count:i32=0;
  while field!=0 as *BootNode {
   let h:i32=boot_hfa(field.ty);if h==0{return 0;}
-  if kind!=0 && kind!=h-h%100{return 0;}kind=h-h%100;count=count+h%100;if count>4{return 0;}field=field.next;
+  if kind!=0 && kind!=h-h%100{return 0;}kind=h-h%100;if ty.union_layout{if h%100>count{count=h%100;}}else{count=count+h%100;}if count>4{return 0;}field=field.next;
  }
  let mut width:u64=4;if kind==200{width=8;}
  if count==0 || ty.layout_size!=(count as u64)*width{return 0;}return kind+count;
@@ -50,10 +49,9 @@ fn boot_sysv_chunks(ty:*BootType,offset:u64,chunks:*BootChunk)->bool{
   let mut i:u64=0;while i<ty.extent{if !boot_sysv_chunks(ty.inner,offset+i*ty.inner.layout_size,chunks){return false;}i=i+1;}return true;
  }
  if ty.kind==BY_STRUCT{
-  let mut pos:u64=0;let mut f:*BootNode=ty.fields;
+  let mut f:*BootNode=ty.fields;
   while f!=0 as *BootNode{
-   let align:u64=f.ty.layout_align;pos=pos+(align-pos%align)%align;
-   if !boot_sysv_chunks(f.ty,offset+pos,chunks){return false;}pos=pos+f.ty.layout_size;f=f.next;
+   if !boot_sysv_chunks(f.ty,offset+(f.value as u64),chunks){return false;}f=f.next;
   }
   return true;
  }
@@ -62,7 +60,7 @@ fn boot_sysv_chunks(ty:*BootType,offset:u64,chunks:*BootChunk)->bool{
   let at:u64=offset+i;let c:*BootChunk=chunks+at/8;let end:i32=(at%8) as i32+1;
   if end>c.bytes{c.bytes=end;}
   if ty.kind==BY_F32 || ty.kind==BY_F64{
-   if c.kind==0{c.kind=2;}if i==0{c.float_count=c.float_count+1;}if ty.kind==BY_F64{c.double_value=true;}
+   if c.kind==0{c.kind=2;}if ty.kind==BY_F64{c.double_value=true;}
   }else{c.kind=1;}
   i=i+1;
  }
@@ -70,7 +68,7 @@ fn boot_sysv_chunks(ty:*BootType,offset:u64,chunks:*BootChunk)->bool{
 }
 fn boot_piece(c:*BootChunk)->i32{
  if c.kind==0{return 0;}if c.kind==1{return c.bytes*8;}if c.double_value{return ABI_DOUBLE;}
- if c.float_count==1{return ABI_FLOAT;}return ABI_FLOAT2;
+ if c.bytes<=4{return ABI_FLOAT;}return ABI_FLOAT2;
 }
 fn boot_classify(ctx:*BootContext,sig:*BootNativeSignature,ty:*BootType,result:bool,token:*BootToken)->*BootNativeSlot{
  let slot:*BootNativeSlot=boot_alloc(ctx,size_of(BootNativeSlot) as u64) as *BootNativeSlot;

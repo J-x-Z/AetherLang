@@ -27,9 +27,9 @@ fn ll_intrinsics(ctx:*BootContext){
 }
 fn ll_global_place(ctx:*BootContext,node:*BootNode){
  if node.kind==BN_IDENT{ll_text(ctx,"@");boot_storage_name(ctx,node.decl);return;}
- ll_text(ctx,"getelementptr (");ll_type(ctx,node.left.ty);ll_text(ctx,", ptr ");ll_global_place(ctx,node.left);
- if node.kind==BN_MEMBER{fprintf(ctx.output,", i32 0, i32 %d)",ll_field_index(node.left.ty,node.decl));}
- else{fprintf(ctx.output,", i32 0, i64 %llu)",node.right.value as u64);}
+ ll_text(ctx,"getelementptr (i8, ptr ");ll_global_place(ctx,node.left);
+ let mut offset:u64=0;if node.kind==BN_MEMBER{offset=node.decl.value as u64;}else{offset=(node.right.value as u64)*node.ty.layout_size;}
+ fprintf(ctx.output,", i64 %llu)",offset);
 }
 fn ll_initializer(ctx:*BootContext,node:*BootNode){
  if boot_zero_initializer(node){ll_text(ctx,"zeroinitializer");return;}
@@ -37,13 +37,13 @@ fn ll_initializer(ctx:*BootContext,node:*BootNode){
  if node.kind==BN_STRING{fprintf(ctx.output,"@a%d_str%d",ctx.c_namespace,node.id);return;}
  if node.kind==BN_UNARY && node.op==38{ll_global_place(ctx,node.left);return;}
  if node.kind==BN_STRUCT_VALUE{
-  ll_text(ctx,"{");let mut field:*BootNode=node.ty.fields;
+  if node.ty.packed{ll_text(ctx,"<{");}else{ll_text(ctx,"{");}let mut field:*BootNode=node.ty.fields;
   while field!=0 as *BootNode{
    let mut init:*BootNode=node.params;while init.decl!=field{init=init.next;}
    ll_type(ctx,field.ty);ll_text(ctx," ");ll_initializer(ctx,init.left);
    field=field.next;if field!=0 as *BootNode{ll_text(ctx,",");}
   }
-  ll_text(ctx,"}");return;
+  if node.ty.packed{ll_text(ctx,"}>");}else{ll_text(ctx,"}");}return;
  }
  if node.kind==BN_ARRAY || node.kind==BN_REPEAT{
   ll_text(ctx,"[");let mut i:u64=0;let mut value:*BootNode=node.params;
@@ -53,6 +53,49 @@ fn ll_initializer(ctx:*BootContext,node:*BootNode){
   ll_text(ctx,"]");return;
  }
  if ll_float(node.ty){ll_literal(ctx,node,node.ty);}else{ll_integer(ctx,node.value,node.ty);}
+}
+// An initialized union can contain a pointer relocation or an aggregate. Emit
+// a byte-compatible packed constant with the active member's actual LLVM type.
+// Opaque pointers let subsequent loads use the declared language record type.
+fn ll_has_union(ty:*BootType)->bool{
+ if ty.kind==BY_ARRAY{return ll_has_union(ty.inner);}
+ if ty.kind!=BY_STRUCT{return false;}if ty.union_layout{return true;}
+ let mut f:*BootNode=ty.fields;while f!=0 as *BootNode{if ll_has_union(f.ty){return true;}f=f.next;}return false;
+}
+fn ll_padding(ctx:*BootContext,count:u64,values:bool){
+ fprintf(ctx.output,"[%llu x i8]",count);if values{ll_text(ctx," zeroinitializer");}
+}
+fn ll_physical_member(ctx:*BootContext,node:*BootNode,values:bool){
+ ll_physical_init(ctx,node,false);
+ if values{ll_text(ctx," ");ll_physical_init(ctx,node,true);}
+}
+fn ll_physical_init(ctx:*BootContext,node:*BootNode,values:bool){
+ let ty:*BootType=node.ty;
+ if !ll_has_union(ty) || boot_zero_initializer(node){
+  if values{ll_initializer(ctx,node);}else{ll_type(ctx,ty);}return;
+ }
+ ll_text(ctx,"<{");let mut at:u64=0;let mut any:bool=false;
+ if ty.kind==BY_ARRAY{
+  let mut n:u64=0;let mut el:*BootNode=node.params;
+  while n<ty.extent{
+   if any{ll_text(ctx,", ");}any=true;
+   if node.kind==BN_REPEAT{ll_physical_member(ctx,node.left,values);}else{ll_physical_member(ctx,el,values);el=el.next;}
+   n=n+1;
+  }
+  at=ty.layout_size;
+ }else{
+  let mut f:*BootNode=ty.fields;if ty.union_layout{f=node.params.decl;}
+  while f!=0 as *BootNode{
+   if any{ll_text(ctx,", ");}any=true;
+   let offset:u64=f.value as u64;
+   if offset>at{ll_padding(ctx,offset-at,values);ll_text(ctx,", ");}
+   let mut entry:*BootNode=node.params;while entry.decl!=f{entry=entry.next;}
+   ll_physical_member(ctx,entry.left,values);at=offset+f.ty.layout_size;
+   if ty.union_layout{break;}f=f.next;
+  }
+ }
+ if at<ty.layout_size{if any{ll_text(ctx,", ");}ll_padding(ctx,ty.layout_size-at,values);}
+ ll_text(ctx,"}>");
 }
 fn ll_storage(ctx:*BootContext,item:*BootNode){
  let foreign:bool=(item.flags&2)!=0;
@@ -64,6 +107,10 @@ fn ll_storage(ctx:*BootContext,item:*BootNode){
  ll_text(ctx,"@");boot_storage_name(ctx,item);ll_text(ctx," = ");
  if foreign{ll_text(ctx,"external ");}else if !boot_c_symbol(item) && (item.flags&8)==0{ll_text(ctx,"internal ");}
  if (item.flags&1)==0{ll_text(ctx,"constant ");}else{ll_text(ctx,"global ");}
+ if !foreign && item.left!=0 as *BootNode && ll_has_union(item.ty){
+  ll_physical_init(ctx,item.left,false);ll_text(ctx," ");ll_physical_init(ctx,item.left,true);
+  fprintf(ctx.output,", align %llu\n",item.ty.layout_align);return;
+ }
  ll_type(ctx,item.ty);if !foreign{ll_text(ctx," ");ll_initializer(ctx,item.left);}ll_text(ctx,"\n");
 }
 pub fn boot_llvm_supported(ctx:*BootContext)->bool {
@@ -86,9 +133,11 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
    ll_type(ctx,ty);fprintf(ctx.output," = type { i32, [%llu x ",ty.extent);ll_type(ctx,ty.inner);ll_text(ctx,"] }\n");
   }
   if ty.kind==BY_STRUCT{
-   ll_type(ctx,ty);ll_text(ctx," = type { ");let mut field:*BootNode=ty.fields;
+   ll_type(ctx,ty);
+   if ty.union_layout{fprintf(ctx.output," = type { [%llu x i%llu] }\n",ty.layout_size/ty.layout_align,ty.layout_align*8);ty=ty.next;continue;}
+   if ty.packed{ll_text(ctx," = type <{ ");}else{ll_text(ctx," = type { ");}let mut field:*BootNode=ty.fields;
    while field!=(0 as *BootNode){ll_type(ctx,field.ty);field=field.next;if field!=(0 as *BootNode){ll_text(ctx,", ");}}
-   ll_text(ctx," }\n");
+   if ty.packed{ll_text(ctx," }>\n");}else{ll_text(ctx," }\n");}
   }ty=ty.next;
  }
  ll_globals(ctx,ctx.program.body);item=ctx.program.body;

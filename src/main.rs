@@ -156,7 +156,7 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
         if cli.emit_c { write(&output, c.as_bytes())?; }
         else {
             let temp = Temporary::new("c", c.as_bytes())?;
-            native_compile(cli, &target, &temp.path, &output, cli.emit_obj, ir.no_std, ir.functions.iter().any(|function|function.interrupt))?;
+            native_compile(cli, &target, &temp.path, &output, cli.emit_obj, &ir)?;
         }
     } else {
         #[cfg(feature = "llvm")]
@@ -171,7 +171,7 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
                 if cli.emit_obj { write(&output, &bytes)?; }
                 else {
                     let temp = Temporary::new("o", &bytes)?;
-                    native_compile(cli, &target, &temp.path, &output, false, ir.no_std, ir.functions.iter().any(|function|function.interrupt))?;
+                    native_compile(cli, &target, &temp.path, &output, false, &ir)?;
                 }
             }
         }
@@ -272,15 +272,15 @@ impl Temporary {
 }
 impl Drop for Temporary { fn drop(&mut self) { let _ = fs::remove_file(&self.path); } }
 
-fn native_compile(cli: &Cli, target: &EffectiveTarget, input: &Path, output: &Path, object: bool, freestanding: bool, interrupt: bool) -> Result<(), String> {
+fn native_compile(cli: &Cli, target: &EffectiveTarget, input: &Path, output: &Path, object: bool, ir: &middle::ir::IRModule) -> Result<(), String> {
     let staged = OutputFile::new(output)?;
     let compilers = if let Some(cc) = cli.cc.clone().or_else(|| std::env::var_os("CC").map(PathBuf::from)) { vec![cc] }
         else { ["clang", "gcc", "cc"].iter().map(PathBuf::from).collect() };
     for compiler in &compilers {
         let mut command = Command::new(compiler);
         command.arg(format!("-O{}", cli.opt_level));
-        if freestanding { command.arg("-ffreestanding"); }
-        if interrupt { command.arg("-mno-red-zone"); }
+        if ir.no_std { command.arg("-ffreestanding"); }
+        if ir.functions.iter().any(|function| function.interrupt) { command.arg("-mno-red-zone"); }
         if target.pass_target { command.arg(format!("--target={}", target.triple)); }
         if let Some(version) = &target.macos_deployment {
             command.arg(format!("-mmacosx-version-min={version}"));
@@ -291,6 +291,9 @@ fn native_compile(cli: &Cli, target: &EffectiveTarget, input: &Path, output: &Pa
         if object { command.arg("-c"); }
         command.arg(input).arg("-o").arg(&staged.path);
         if !object {
+            if target.macos_deployment.is_some() && ir.has_packed_relocations() {
+                command.arg("-Wl,-no_fixup_chains");
+            }
             command.args(&cli.link_object);
             for library in &cli.link_library { command.arg(format!("-l{}", library)); }
         }

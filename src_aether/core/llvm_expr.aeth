@@ -12,8 +12,7 @@ pub fn ll_place(ctx:*BootContext,node:*BootNode)->i32{
  if node.kind==BN_MEMBER{
   let mut base:i32=0;let mut ty:*BootType=node.left.ty;
   if boot_indirect(ty){base=ll_expr(ctx,node.left);ty=ty.inner;}else{base=ll_place(ctx,node.left);}
-  ll_begin(ctx,id);ll_text(ctx,"getelementptr ");ll_type(ctx,ty);
-  fprintf(ctx.output,", ptr %%r%d, i32 0, i32 %d\n",base,ll_field_index(ty,node.decl));return id;
+  ll_begin(ctx,id);fprintf(ctx.output,"getelementptr i8, ptr %%r%d, i64 %lld\n",base,node.decl.value);return id;
  }
  if node.kind==BN_INDEX{
   let mut pointer:i32=0;
@@ -59,6 +58,11 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
   let index:i32=ll_expr(ctx,node.right);let wide:i32=ll_cast(ctx,index,node.right.ty,boot_type(ctx,BY_I64));ll_array_bound(ctx,wide,node.left.ty.extent);
   ll_begin(ctx,id);ll_text(ctx,"getelementptr ");ll_type(ctx,node.left.ty);fprintf(ctx.output,", ptr %%arr%d, i64 0, i64 %%r%d\n",node.id,wide);return ll_load(ctx,node.ty,id);
  }
+ if node.kind==BN_STRUCT_VALUE && node.ty.union_layout{
+  let field:*BootNode=node.params;let value:i32=ll_expr(ctx,field.left);ll_text(ctx,"  store ");ll_type(ctx,node.ty);fprintf(ctx.output," zeroinitializer, ptr %%union%d\n",node.id);
+  ll_text(ctx,"  store ");ll_value(ctx,field.ty,value);fprintf(ctx.output,", ptr %%union%d, align 1\n",node.id);
+  ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%union%d\n",node.id);return id;
+ }
  if node.kind==BN_STRUCT_VALUE{
   let mut field:*BootNode=node.params;let mut value:i32=0;
   if field==(0 as *BootNode){ll_begin(ctx,id);ll_text(ctx,"select i1 true, ");ll_type(ctx,node.ty);ll_text(ctx," zeroinitializer, ");ll_type(ctx,node.ty);ll_text(ctx," zeroinitializer\n");return id;}
@@ -71,6 +75,7 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
   let location:i32=ll_id(ctx);ll_begin(ctx,location);fprintf(ctx.output,"call ptr @%s()\n",ctx.errno_name);
   ll_begin(ctx,id);fprintf(ctx.output,"load i32, ptr %%r%d\n",location);return id;
  }
+ if node.kind==BN_OFFSET{ll_begin(ctx,id);fprintf(ctx.output,"add i64 0, %llu\n",node.value as u64);return id;}
  if node.kind==BN_ALIGNOF{ll_begin(ctx,id);fprintf(ctx.output,"add i64 0, %llu\n",node.aux.layout_align);return id;}
  if node.kind==BN_VALUE{
   let saved:*BootNode=ctx.value_target;let saved_yield:i32=ctx.llvm_yield;
@@ -82,6 +87,10 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
  if node.kind==BN_SIZEOF{
   let address:i32=ll_id(ctx);ll_begin(ctx,address);ll_text(ctx,"getelementptr ");ll_type(ctx,node.aux);ll_text(ctx,", ptr null, i64 1\n");
   ll_begin(ctx,id);fprintf(ctx.output,"ptrtoint ptr %%r%d to i64\n",address);return id;
+ }
+ if node.kind==BN_MEMBER && node.left.ty.kind==BY_STRUCT && node.left.ty.union_layout{
+  let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  store ");ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", ptr %%union%d\n",node.id);
+  ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%union%d, align 1\n",node.id);return id;
  }
  if node.kind==BN_MEMBER&&node.left.ty.kind==BY_STRUCT{
   let value:i32=ll_expr(ctx,node.left);ll_begin(ctx,id);ll_text(ctx,"extractvalue ");ll_value(ctx,node.left.ty,value);fprintf(ctx.output,", %d\n",ll_field_index(node.left.ty,node.decl));return id;

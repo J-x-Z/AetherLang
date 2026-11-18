@@ -101,6 +101,28 @@ pub struct IRExtern {
 }
 
 impl IRModule {
+    /// Classic dyld rebases can represent unaligned slots in packed static data.
+    /// Restrict the Mach-O linker option to actual relocations in such storage.
+    pub fn has_packed_relocations(&self) -> bool {
+        fn contains(module: &IRModule, ty: &IRType, init: &IRInitializer, packed: bool) -> bool {
+            match (ty.unqualified(), init) {
+                (_, IRInitializer::Address { .. } | IRInitializer::Scalar(Constant::String(_))) => packed,
+                (IRType::Struct(name), IRInitializer::Aggregate(fields)) => {
+                    module.structs.iter().find(|s| &s.name == name).is_some_and(|record| {
+                        fields.iter().any(|(index, value)| contains(module, &record.fields[*index].1,
+                            value, packed || record.repr == StructRepr::Packed))
+                    })
+                }
+                (IRType::Array(element, _), IRInitializer::Aggregate(values)) =>
+                    values.iter().any(|(_, value)| contains(module, element, value, packed)),
+                (IRType::Array(element, _), IRInitializer::Repeat(value, count)) =>
+                    *count != 0 && contains(module, element, value, packed),
+                _ => false,
+            }
+        }
+        self.globals.iter().any(|g| g.initializer.as_ref().is_some_and(|v| contains(self, &g.ty, v, false)))
+    }
+
     pub fn new(name: &str) -> Self {
         Self {
             pointer_width: Default::default(),

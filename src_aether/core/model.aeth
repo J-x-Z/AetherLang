@@ -58,14 +58,14 @@ pub const BN_MATCH:i32=44; pub const BN_ARM:i32=45; pub const BN_TRY:i32=46;
 pub const BN_RANGE_FOR:i32=50;
 pub const BN_ENUM_TAG:i32=47; pub const BN_ENUM_FIELD:i32=48;
 pub const BN_METHOD_CALL:i32=49;pub const BF_METHOD:i32=512;
-pub const BN_STATIC:i32=40;
+pub const BN_STATIC:i32=40; pub const BN_OFFSET:i32=73; pub const BF_UNSAFE:i32=1024;
 // A definition carrying #[no_mangle] shares its symbol and native ABI with extern declarations.
 pub const BF_EXPORT:i32=64;
 pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=34; pub const BN_UNIT:i32=35; pub const BN_TYPE_PARAMETER:i32=36;
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
 pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
-pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool }
+pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool }
 pub struct BootNode {
  kind:i32,id:i32,op:i32,flags:i32,tree_depth:i32,value:i64,name:*u8,token:*BootToken,
  ty:*BootType,aux:*BootType,decl:*BootNode,left:*BootNode,right:*BootNode,
@@ -78,7 +78,7 @@ pub struct BootContext {
  failed:bool,next_id:i32,depth:i32,bindings:*BootBinding,
  function:*BootNode,loop_depth:i32,output:*void,c_namespace:i32,
  module:*BootModule,root_module:*BootModule,modules:*BootModule,modules_tail:*BootModule,
- native_abi:i32,no_main:bool,export_namespace:*u8,uses_errno:bool,errno_name:*u8,errno_declared:bool,
+ unsafe_depth:i32,packed_relocation:bool,host_info:*u8,native_abi:i32,no_main:bool,export_namespace:*u8,uses_errno:bool,errno_name:*u8,errno_declared:bool,
  module_count:i32,source_total:u64,roots:*BootRoot,mapped:*BootMappedModule,
  llvm_serial:i32,llvm_block:i32,llvm_break:i32,llvm_continue:i32,llvm_terminated:bool,parse_condition:bool,
  value_type:*BootType,value_target:*BootNode,llvm_yield:i32,

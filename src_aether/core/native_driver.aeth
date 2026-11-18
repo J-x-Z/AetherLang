@@ -2,6 +2,7 @@
 // compiler participates in argument processing, code generation or publication.
 use model::*;
 use runtime::*;
+use host_posix::boot_host_info;
 extern "C" {
  fn getenv(name:*u8)->*u8;
  fn fork()->i32;
@@ -88,7 +89,13 @@ pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bo
  if options.object {args[n]="-c";n=n+1;}
  let mut i:i32=0;
  while i<options.object_count {args[n]=options.objects[i];i=i+1;n=n+1;}
- if !options.object {args[n]="-lm";n=n+1;}
+ if !options.object {
+  args[n]="-lm";n=n+1;
+  if ctx.packed_relocation {
+   let info:*u8=boot_host_info(ctx);if ctx.failed{remove(stage);return false;}
+   if strcmp(info,"Darwin")==0 {args[n]="-Wl,-no_fixup_chains";n=n+1;}
+  }
+ }
  args[n]="-o";n=n+1;args[n]=boot_tool_path(ctx,stage);n=n+1;args[n]=0 as *u8;
  let mut ok:bool=!ctx.failed && boot_run_tool(args);
  if ok && !boot_valid_image(stage,options.object) {ok=false;boot_error(ctx,ctx.cursor,"host compiler produced an invalid native output");}

@@ -1,0 +1,29 @@
+@repr(C) union Scalar { a:f32, b:f32 }
+@repr(C) union Image { low:u8, bytes:[u8;16] }
+@repr(C) struct Coordinates { index:i32, value:f64 }
+@repr(packed) struct Wire { tag:u8, point:Coordinates, tail:u8 }
+@repr(C) union Address { address:*i32, bits:u64 }
+@repr(packed) struct Slot { tag:u8, payload:Address }
+static mut DATA:[i32;3]=[4,17,29];
+#[no_mangle] static POINTERS:[Slot;2]=[Slot{tag:6,payload:Address{address:&mut DATA[1] as *i32}},Slot{tag:7,payload:Address{address:&mut DATA[2] as *i32}}];
+extern "C"{fn apply(v:Wire)->Wire;fn flip(v:Scalar)->Scalar;fn inspect()->i32;}
+#[no_mangle] fn roundtrip(v:Wire)->Wire {
+    let mut result:Wire=v;
+    result.point.index+=2;
+    result.point.value+=0.5;
+    return result;
+}
+fn make(byte:u8)->Image {return Image{low:byte};}
+fn main()->i32 {
+    let value:Wire=apply(Wire{tag:3,point:Coordinates{index:40,value:3.5},tail:7});
+    if value.tag!=(3 as u8) || value.point.index!=42 || value.point.value!=4.0 || value.tail!=(9 as u8){return 1;}
+    if size_of(Wire)!=(18 as usize) || offset_of(Wire,point)!=(1 as usize){return 2;}
+    let image:Image=make(211);
+    unsafe {
+        if flip(Scalar{a:1.5}).b!=(2.5 as f32){return 3;}
+        if *POINTERS[1].payload.address!=29{return 4;}
+        if image.bytes[0]!=(211 as u8){return 5;}
+        for i in 1..16 {if image.bytes[i]!=(0 as u8){return 6;}}
+    }
+    return inspect();
+}
