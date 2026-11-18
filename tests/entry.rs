@@ -12,7 +12,7 @@ fn default_entry_returns_zero_and_keeps_module_main_as_an_ordinary_function() {
         "fn main() { 73 }",
         "use helper::main as helper_main; fn main() { helper_main(); }",
     ];
-    let backends = if cfg!(feature = "llvm") { vec!["c", "llvm"] } else { vec!["c"] };
+    let backends = if cfg!(any(feature = "llvm", feature = "llvm23")) { vec!["c", "llvm"] } else { vec!["c"] };
     for source in sources {
         fs::write(directory.join("main.aeth"), source).unwrap();
         for backend in &backends {

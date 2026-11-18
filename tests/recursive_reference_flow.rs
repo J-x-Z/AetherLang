@@ -47,7 +47,7 @@ fn recursive_reference_regions_terminate_and_preserve_escapes() {
         "{}",
         String::from_utf8_lossy(&checked.stderr)
     );
-    for backend in if cfg!(feature = "llvm") {
+    for backend in if cfg!(any(feature = "llvm", feature = "llvm23")) {
         vec!["c", "llvm"]
     } else {
         vec!["c"]
@@ -90,7 +90,7 @@ fn nested_enum_coverage_and_array_references_execute() {
     let compiler = env!("CARGO_BIN_EXE_aethc");
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/regressions/semantics/patterns_arrays.aeth");
-    for backend in if cfg!(feature = "llvm") {
+    for backend in if cfg!(any(feature = "llvm", feature = "llvm23")) {
         vec!["c", "llvm"]
     } else {
         vec!["c"]

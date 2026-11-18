@@ -8,8 +8,8 @@ pub mod linker;
 // C Backend (always available)
 pub mod c;
 
-// LLVM Backend (optional, requires --features llvm)
-#[cfg(feature = "llvm")]
+// Both supported LLVM versions use this backend.
+#[cfg(any(feature = "llvm", feature = "llvm23"))]
 pub mod llvm;
 
 pub use codegen::CodeGen;

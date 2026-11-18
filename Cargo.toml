@@ -9,7 +9,8 @@ repository = "https://github.com/J-x-Z/AetherLang"
 
 [features]
 default = ["llvm"]  # LLVM is the primary backend (like Rust)
-llvm = ["llvm-sys"]
+llvm = ["dep:llvm-sys"]
+llvm23 = ["dep:llvm-sys-23"]
 c-only = []  # C backend fallback for environments without LLVM
 
 [dependencies]
@@ -17,9 +18,9 @@ c-only = []  # C backend fallback for environments without LLVM
 anyhow = "1.0"
 thiserror = "1.0"
 
-# LLVM bindings - requires LLVM 21
-# Enabled by default for LLVM backend
-llvm-sys = { version = "211", optional = true, features = ["prefer-dynamic"] }
+# Select one LLVM C API. LLVM 21 is the default for existing builds.
+llvm-sys = { version = "211", optional = true, features = ["prefer-dynamic", "strict-versioning"] }
+llvm-sys-23 = { package = "llvm-sys", version = "231", optional = true, features = ["prefer-dynamic", "strict-versioning"] }
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }

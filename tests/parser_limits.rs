@@ -198,7 +198,7 @@ fn ordinary_expression_depth_and_wide_programs_remain_supported() {
         String::from_utf8_lossy(&result.stderr)
     );
     let mut backends = vec!["c"];
-    if cfg!(feature = "llvm") {
+    if cfg!(any(feature = "llvm", feature = "llvm23")) {
         backends.push("llvm");
     }
     for backend in backends {
@@ -385,7 +385,7 @@ fn script_limits_report_original_locations_and_keep_ordinary_programs() {
         String::from_utf8_lossy(&output.stderr)
     );
     let mut backends = vec!["c"];
-    if cfg!(feature = "llvm") {
+    if cfg!(any(feature = "llvm", feature = "llvm23")) {
         backends.push("llvm");
     }
     for backend in backends {

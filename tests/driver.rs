@@ -27,7 +27,7 @@ fn imports_compile_bodies_aliases_and_private_helpers_from_any_cwd() {
     } }
     assert!(!p.0.join("src/main.c").exists());
 }
-fn backends() -> Vec<&'static str> { if cfg!(feature = "llvm") { vec!["c", "llvm"] } else { vec!["c"] } }
+fn backends() -> Vec<&'static str> { if cfg!(any(feature = "llvm", feature = "llvm23")) { vec!["c", "llvm"] } else { vec!["c"] } }
 
 #[test]
 fn imports_do_not_expose_private_or_missing_symbols() {
@@ -450,7 +450,7 @@ fn unsized_types_and_untyped_uninitialized_locals_fail_before_codegen() {
     }
 }
 
-#[cfg(feature = "llvm")]
+#[cfg(any(feature = "llvm", feature = "llvm23"))]
 #[test]
 fn unsupported_foreign_abi_is_diagnosed_while_checking_the_selected_backend() {
     let p = Project::new();

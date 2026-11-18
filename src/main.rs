@@ -1,4 +1,10 @@
 //! AetherLang compiler driver: one frontend for checking and building.
+#[cfg(all(feature = "llvm", feature = "llvm23"))]
+compile_error!("select one LLVM version: use the default LLVM 21 build, or use --no-default-features --features llvm23 for LLVM 23");
+
+#[cfg(all(feature = "llvm23", not(feature = "llvm")))]
+extern crate llvm_sys_23 as llvm_sys;
+
 mod intrinsics;
 mod frontend;
 mod middle;
@@ -18,7 +24,7 @@ use frontend::{resolve::{ModuleSearch, Resolver}, session::{Session, Diagnostic}
 use middle::{ir_gen::IRGenerator, optimize::Optimizer, ir_printer::print_ir};
 use backend::CCodeGen;
 use driver_output::{write, OutputFile};
-#[cfg(feature = "llvm")]
+#[cfg(any(feature = "llvm", feature = "llvm23"))]
 use backend::codegen::CodeGen;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -93,7 +99,7 @@ enum Commands {
     Version,
 }
 
-fn default_backend() -> &'static str { if cfg!(feature = "llvm") { "llvm" } else { "c" } }
+fn default_backend() -> &'static str { if cfg!(any(feature = "llvm", feature = "llvm23")) { "llvm" } else { "c" } }
 
 fn main() {
     env_logger::init();
@@ -159,7 +165,7 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
             native_compile(cli, &target, &temp.path, &output, cli.emit_obj, &ir)?;
         }
     } else {
-        #[cfg(feature = "llvm")]
+        #[cfg(any(feature = "llvm", feature = "llvm23"))]
         {
             let triple = target_triple(&target.triple);
             let mut codegen = backend::llvm::LLVMCodeGen::new(&triple).with_opt_level(cli.opt_level);
@@ -175,8 +181,8 @@ fn run(cli: &Cli) -> Result<(), Diagnostic> {
                 }
             }
         }
-        #[cfg(not(feature = "llvm"))]
-        return Err("LLVM backend is not built; rebuild with --features llvm or use --backend c".into());
+        #[cfg(not(any(feature = "llvm", feature = "llvm23")))]
+        return Err("LLVM backend is not built; use --backend c, rebuild with --features llvm (LLVM 21), or rebuild with --no-default-features --features llvm23 (LLVM 23)".into());
     }
     if !cli.quiet { println!("Output: {}", output.display()); }
     Ok(())
@@ -319,7 +325,7 @@ fn native_compile(cli: &Cli, target: &EffectiveTarget, input: &Path, output: &Pa
     Err(format!("no C compiler found (tried {}); set --cc or CC", compilers.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")))
 }
 
-#[cfg(feature = "llvm")]
+#[cfg(any(feature = "llvm", feature = "llvm23"))]
 fn target_triple(target: &str) -> String {
     if target != "native" { return target.into(); }
     unsafe {

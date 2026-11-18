@@ -13,7 +13,7 @@ fn core_and_script_const_layouts_execute_on_native_backends() {
     fs::create_dir_all(&work).unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut backends = vec!["c"];
-    if cfg!(feature = "llvm") {
+    if cfg!(any(feature = "llvm", feature = "llvm23")) {
         backends.push("llvm");
     }
     for source in [
