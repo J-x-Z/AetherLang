@@ -16,11 +16,8 @@ configuration, substituting its own absolute paths.
 {
   "mcpServers": {
     "aetherlang": {
-      "command": "python3",
-      "args": [
-        "/absolute/path/to/toolchain/tools/mcp/aether_mcp.py",
-        "--root", "/absolute/path/to/project"
-      ]
+      "command": "/absolute/path/to/toolchain/bin/aether-mcp",
+      "args": ["--root", "/absolute/path/to/project"]
     }
   }
 }
@@ -28,7 +25,9 @@ configuration, substituting its own absolute paths.
 
 The packaged adapter uses the adjacent compiler and JXZ. From a source
 checkout, select built executables explicitly when PATH points to an older
-installation. On Windows use the Python executable and native `.exe` paths.
+installation. Windows bundles include `aether-mcp.cmd` for the terminal. Clients
+that require an executable can launch `python.exe` with the bundled
+`tools/mcp/aether_mcp.py` and the same `--root` argument.
 
 ```sh
 python3 tools/mcp/aether_mcp.py --root "$PWD/jxz" \
