@@ -21,7 +21,7 @@ jobs:
       - run: sh scripts/test.sh c
       - run: cargo build --locked --release --no-default-features
   llvm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       LLVM_SYS_211_PREFIX: /usr/lib/llvm-21
     steps:
