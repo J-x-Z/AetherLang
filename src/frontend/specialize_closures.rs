@@ -284,6 +284,7 @@ impl Specializer {
         };
         let parameter_types: Vec<Type> = params.iter().map(|p| p.ty.clone().unwrap()).collect();
         let mut parameters = vec![Param {
+            mutable: false,
             name: Ident {
                 name: env_parameter,
                 span,
@@ -298,6 +299,7 @@ impl Specializer {
             span,
         }];
         parameters.extend(params.iter().map(|p| Param {
+            mutable: false,
             name: p.name.clone(),
             ownership: Ownership::Own,
             ty: p.ty.clone().unwrap(),

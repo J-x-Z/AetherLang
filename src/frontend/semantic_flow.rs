@@ -340,7 +340,7 @@ impl<'a> Flow<'a> {
             let mut value = Value::empty(ty.clone());
             self.parameter_references(&ty, &mut vec![], index, &mut value.references);
             let id = self.declare(&param.name, ty, Some(value));
-            self.bindings[id].mutable = param.ownership == Ownership::Mut;
+            self.bindings[id].mutable = param.mutable || param.ownership == Ownership::Mut;
         }
         let outcome = self.block(&function.body, &HashSet::new())?;
         if let Some(value) = outcome {

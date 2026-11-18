@@ -839,7 +839,7 @@ impl SemanticAnalyzer {
                 kind: SymbolKind::Param { ownership: param.ownership },
                 ty: ty.clone(),
                 span: param.span,
-                mutable: param.ownership == Ownership::Mut,
+                mutable: param.mutable || param.ownership == Ownership::Mut,
             })?;
         }
         

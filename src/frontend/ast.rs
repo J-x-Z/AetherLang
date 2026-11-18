@@ -100,6 +100,9 @@ pub struct Function {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub name: Ident,
+    /// Whether the local parameter binding may be reassigned (`mut name: T`).
+    /// This does not change the parameter's type, ABI or ownership mode.
+    pub mutable: bool,
     pub ownership: Ownership,
     pub ty: Type,
     pub span: Span,

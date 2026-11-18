@@ -473,3 +473,65 @@ fn unsupported_foreign_abi_is_diagnosed_while_checking_the_selected_backend() {
         success(&p.compiler(&["check","ffi.aeth","--target","wasm32-unknown-unknown","--backend","c"]));
     }
 }
+
+#[test]
+fn mutable_parameter_bindings_preserve_value_abi_and_suspend_state() {
+    let p = Project::new();
+    p.source("mutable.aeth", r#"
+struct Pair { x:i32, y:i32 }
+fn increment(mut value:i32)->i32 { value+=1; value }
+fn second(mut pointer:*i32)->i32 { pointer=pointer+1; *pointer }
+fn adjusted(mut pair:Pair)->i32 { pair.x+=10; pair.x+pair.y }
+fn replace<T>(mut value:T, other:T)->T { value=other; value }
+fn borrowed(value:&mut i32) { *value+=3; }
+extern "C" { fn local_abi(value:i32)->i32; }
+#[no_mangle] fn local_abi(mut value:i32)->i32 { value+=4; value }
+async fn suspended(mut value:i32)->i32 {
+    value+=2;
+    await yield_now();
+    value+=3;
+    return value;
+}
+fn main()->i32 {
+    let original:i32=7;
+    if increment(original)!=8 || original!=7 {return 1;}
+    let values:[i32;2]=[11,22];
+    let pointer:*i32=&values[0] as *i32;
+    if second(pointer)!=22 || *pointer!=11 {return 2;}
+    let pair:Pair=Pair{x:3,y:4};
+    if adjusted(pair)!=17 || pair.x!=3 {return 3;}
+    if replace(original,19)!=19 || original!=7 {return 4;}
+    let mut referent:i32=10; borrowed(&mut referent);
+    if referent!=13 || local_abi(original)!=11 || original!=7 {return 5;}
+    let mut job:_=suspended(original);
+    match job.poll(){Pending()=>{},_=>{return 6;}}
+    match job.poll(){Ready(value)=>{if value!=12{return 7;}},_=>{return 8;}}
+    if original!=7 {return 9;}
+    return 0;
+}
+"#);
+    success(&p.compiler(&["check", "mutable.aeth"]));
+    for backend in backends() { for opt in ["0", "2"] {
+        success(&p.compiler(&["build", "mutable.aeth", "--backend", backend, "-O", opt, "-o", "mutable"]));
+        run(&p.0.join("mutable"), 0);
+    } }
+}
+
+#[test]
+fn parameter_binding_mutability_does_not_grant_pointee_mutability() {
+    let p = Project::new();
+    for source in [
+        "fn bad(value:i32)->i32 {value=9; value} fn main()->i32{bad(1)}",
+        "fn bad(mut value:&i32) {*value=9;} fn main()->i32{let x:i32=1; bad(&x);0}",
+        "fn bad(a:&mut i32,b:&mut i32) {a=b;} fn main()->i32{0}",
+        "async fn bad(value:i32)->i32 {await yield_now();value=9;return value;} fn main()->i32{let mut job:_=bad(1);job.poll();job.poll();0}",
+    ] {
+        p.source("bad-parameter.aeth", source);
+        for mode in ["check", "build"] {
+            let output=p.compiler(&[mode, "bad-parameter.aeth", "-o", "bad-parameter"]);
+            assert!(!output.status.success(), "accepted immutable parameter or shared referent: {source}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("mutab"), "{output:?}");
+            assert!(!p.0.join("bad-parameter").exists());
+        }
+    }
+}

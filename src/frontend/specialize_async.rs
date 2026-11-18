@@ -422,7 +422,7 @@ impl<'a> Builder<'a> {
                     param.span,
                 ));
             }
-            active.push(self.slot(param.name.name, param.ty, false)?);
+            active.push(self.slot(param.name.name, param.ty, param.mutable)?);
         }
         let mut incoming = active.clone();
         let mut statements = Vec::new();

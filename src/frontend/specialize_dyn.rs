@@ -240,6 +240,7 @@ impl Specializer {
                 })
                 .collect::<Vec<_>>();
             let mut dispatch_params = vec![Param {
+                mutable: false,
                 name: receiver.clone(),
                 ownership: Ownership::Own,
                 ty: Type::Ref {
@@ -251,6 +252,7 @@ impl Specializer {
                 span: method.span,
             }];
             dispatch_params.extend(arg_names.iter().zip(&args).map(|(n, t)| Param {
+                mutable: false,
                 name: n.clone(),
                 ownership: Ownership::Own,
                 ty: t.clone(),
@@ -272,6 +274,7 @@ impl Specializer {
                     span: value_span,
                 };
                 let params = std::iter::once(Param {
+                    mutable: false,
                     name: value.clone(),
                     ownership: Ownership::Own,
                     ty: Type::Ref {
@@ -283,6 +286,7 @@ impl Specializer {
                     span: method.span,
                 })
                 .chain(arg_names.iter().zip(&args).map(|(n, t)| Param {
+                    mutable: false,
                     name: n.clone(),
                     ownership: Ownership::Own,
                     ty: t.clone(),

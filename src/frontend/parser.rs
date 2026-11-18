@@ -565,6 +565,7 @@ impl Parser {
 
     fn parse_param(&mut self) -> Result<Param> {
         let start = self.current().span;
+        let mutable = self.consume(&TokenKind::Mut);
         let name = self.parse_ident()?;
         self.expect(TokenKind::Colon)?;
 
@@ -584,6 +585,7 @@ impl Parser {
 
         Ok(Param {
             name,
+            mutable,
             ownership,
             ty,
             span: start.merge(&self.tokens[self.pos.saturating_sub(1)].span),
@@ -2573,6 +2575,20 @@ mod tests {
         let Item::Function(f)=&program.items[0] else {panic!("function")};
         assert!(matches!(&f.body.stmts[0],Stmt::Semi(Expr::Layout {query:LayoutQuery::Size,ty:Type::Array {size:16,..},..})));
         assert!(matches!(&f.body.stmts[2],Stmt::Semi(Expr::Layout {query:LayoutQuery::Offset,field:Some(field),..}) if field.name=="tail"));
+    }
+
+    #[test]
+    fn parameter_binding_mutability_is_separate_from_ownership() {
+        let program=parse("fn f(mut value:i32, borrowed:&mut i32, mut owned:own Item, legacy:mut i32) {}").unwrap();
+        let Item::Function(f)=&program.items[0] else {panic!("function")};
+        assert!(f.params[0].mutable);
+        assert_eq!(f.params[0].ownership,Ownership::Own);
+        assert!(!f.params[1].mutable);
+        assert!(matches!(f.params[1].ty,Type::Ref{mutable:true,..}));
+        assert!(f.params[2].mutable);
+        assert!(matches!(f.params[2].ty,Type::Owned{ownership:Ownership::Own,..}));
+        assert!(!f.params[3].mutable);
+        assert_eq!(f.params[3].ownership,Ownership::Mut);
     }
 
 }
