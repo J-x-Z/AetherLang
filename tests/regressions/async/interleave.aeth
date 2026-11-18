@@ -1,0 +1,21 @@
+static mut trace:i64=0;
+async fn task(id:i32)->i32 {
+    trace=trace*10+id as i64;
+    let mut n:i32=id;
+    await yield_now();
+    n=n+10;
+    trace=trace*10+id as i64;
+    await yield_now();
+    return n+10;
+}
+fn main()->i32 {
+    let mut a:_=task(1);let mut b:_=task(2);
+    match a.poll(){Pending()=>{},_=>{return 1;}}
+    match b.poll(){Pending()=>{},_=>{return 2;}}
+    match b.poll(){Pending()=>{},_=>{return 3;}}
+    match a.poll(){Pending()=>{},_=>{return 4;}}
+    if trace!=1221{return 5;}
+    match a.poll(){Ready(21)=>{},_=>{return 6;}}
+    match b.poll(){Ready(22)=>{},_=>{return 7;}}
+    return 0;
+}

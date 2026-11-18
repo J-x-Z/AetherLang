@@ -112,7 +112,7 @@ impl Parser {
     fn parse_stmt_inner(&mut self) -> Result<Stmt, String> {
         match self.peek().kind {
             TokenKind::From => self.parse_core_import(),
-            TokenKind::Def | TokenKind::Comptime => self.parse_function_def(),
+            TokenKind::Def | TokenKind::Comptime | TokenKind::Async => self.parse_function_def(),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
             TokenKind::For => self.parse_for(),
@@ -156,6 +156,7 @@ impl Parser {
     }
 
     fn parse_function_def(&mut self) -> Result<Stmt, String> {
+        let is_async=self.match_kind(TokenKind::Async);
         let is_comptime = if self.peek().kind == TokenKind::Comptime {
             self.advance();
             true
@@ -212,6 +213,7 @@ impl Parser {
             return_type,
             body,
             is_comptime,
+            is_async,
             span: start_span,
         }))
     }
@@ -467,6 +469,10 @@ impl Parser {
 
     fn parse_unary_inner(&mut self) -> Result<Expr, String> {
         let token = self.peek().clone();
+        if token.kind==TokenKind::Await {
+            self.advance();let value=self.parse_call()?;let mut span=token.span;span.end=value.span().end;
+            return Ok(Expr::Call{func:Box::new(Expr::Identifier{name:"@async_await".into(),span:token.span}),args:vec![value],span});
+        }
         let op = match token.kind { TokenKind::Minus => Some(UnaryOp::Neg), TokenKind::Not => Some(UnaryOp::Not), _ => None };
         if let Some(op) = op {
             self.advance();

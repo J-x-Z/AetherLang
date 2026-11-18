@@ -14,6 +14,8 @@ mod drop_templates;
 #[path = "specialize_closures.rs"]
 mod closures;
 use closures::ClosureInfo;
+#[path = "specialize_async.rs"]
+mod async_tasks;
 #[path="specialize_dyn.rs"]
 mod dynamic;
 use dynamic::DynamicObject;
@@ -25,6 +27,7 @@ pub fn specialize(program: Program) -> Result<Program> {
 }
 
 pub fn specialize_for_width(program: Program, width: PointerWidth) -> Result<Program> {
+    let program = async_tasks::lower(program)?;
     Specializer::new(&program, width)?.run(program)
 }
 
@@ -644,7 +647,7 @@ impl Specializer {
                         None
                     };
                     if closure_inference {
-                        if let Some(t) = inferred.as_ref().filter(|t| self.contains_closure(t)) {
+                        if let Some(t) = inferred.as_ref().filter(|t| self.contains_closure(t) || async_tasks::contains_task(self,t)) {
                             *ty = Some(t.clone());
                         }
                     }
@@ -678,6 +681,9 @@ impl Specializer {
 
     fn expr(&mut self, expr: &mut Expr, expected: Option<&Type>) -> Result<Option<Type>> {
         let span = expr.span();
+        if matches!(expr,Expr::Call{func,..} if matches!(&**func,Expr::Ident(name) if name.name==async_tasks::AWAIT)) {
+            return Err(Error::semantic_expected("E2406", "await only at an implemented async suspension boundary", span));
+        }
         if matches!(expr, Expr::Closure {..}) {
             return self.lower_closure(expr, expected);
         }

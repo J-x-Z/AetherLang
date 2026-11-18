@@ -1,0 +1,12 @@
+async def child(n: int) -> int:
+    await yield_now()
+    return n + 1
+async def pause():
+    await yield_now()
+def main():
+    block_on(pause())
+    invoke = lambda (x: int): block_on(child(x))
+    first = invoke(3)
+    child = lambda (x: int): x * 3
+    second = child(4)
+    return first + second - 16

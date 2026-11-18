@@ -1,0 +1,54 @@
+use result::Result;
+struct Ticket { id:i32 }
+static mut live:i32=0;
+static mut order:i64=0;
+static mut made:i32=0;
+@drop fn release(ticket:own Ticket){live=live-1;order=order*10+ticket.id as i64;}
+fn ticket(id:i32)->own Ticket{live=live+1;made=made+1;unsafe{Ticket{id:id} as own Ticket}}
+async fn leaf(value:own Ticket)->i32 {
+    await yield_now();
+    return value.id;
+}
+async fn work(first:own Ticket,fail:bool)->Result<i32,i32> {
+    let second:own Ticket=ticket(2);
+    let n:i32=await leaf(ticket(3));
+    if fail {return Result::Err(n+40);}
+    await yield_now();
+    return Result::Ok(first.id+second.id+n);
+}
+async fn argument_exit(first:own Ticket)->i32 {
+    let n:i32=await leaf({let second:own Ticket=ticket(2);return 7;});
+    return n;
+}
+fn main()->i32 {
+    {let mut task:_=work(ticket(1),false);if live!=1||made!=1{return 1;}}
+    if live!=0||order!=1{return 2;}
+    order=0;
+    {let mut task:_=work(ticket(1),false);match task.poll(){Pending()=>{},_=>{return 3;}}
+     if live!=3||made!=4{return 4;}}
+    if live!=0||order!=321{return 5;}
+    order=0;
+    let mut failed:_=work(ticket(1),true);
+    match failed.poll(){Pending()=>{},_=>{return 6;}}
+    match failed.poll(){Ready(result)=>{match result{Result::Err(43)=>{},_=>{return 7;}}},_=>{return 8;}}
+    if live!=0||order!=321||!failed.is_finished(){return 9;}
+    match failed.poll(){Finished()=>{},_=>{return 10;}}
+    order=0;
+    {let mut complete:_=work(ticket(1),false);
+     match complete.poll(){Pending()=>{},_=>{return 11;}}
+     match complete.poll(){Pending()=>{},_=>{return 12;}}
+     if live!=2||order!=3{return 13;}
+     match complete.poll(){Ready(result)=>{match result{Result::Ok(6)=>{},_=>{return 14;}}},_=>{return 15;}}
+     if live!=0||order!=321{return 16;}}
+    order=0;
+    let mut cancelled:_=work(ticket(1),false);
+    match cancelled.poll(){Pending()=>{},_=>{return 17;}}
+    cancelled.cancel();
+    if live!=0||order!=321{return 18;}
+    order=0;
+    let mut immediate:_=argument_exit(ticket(1));
+    match immediate.poll(){Ready(7)=>{},_=>{return 19;}}
+    if live!=0||order!=21{return 20;}
+    match immediate.poll(){Finished()=>{},_=>{return 21;}}
+    return 0;
+}

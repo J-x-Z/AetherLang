@@ -97,6 +97,7 @@ impl Transpiler {
     ) -> Result<(ScriptType, String)> {
         let mut context = Transpiler::new();
         context.imported = self.imported.clone();
+        context.async_helpers = self.async_helpers.clone();
         context.locals = self.locals.clone();
         context.assigned = self.assigned.clone();
         context.functions = self.functions.clone();

@@ -1,0 +1,38 @@
+static mut trace:i32=0;
+async fn child(n:i32)->i32 {
+    trace=trace*10+1;
+    let mut value:i32=n+2;
+    await yield_now();
+    value=value+3;
+    trace=trace*10+2;
+    return value;
+}
+async fn parent(n:i32)->i32 {
+    trace=trace*10+3;
+    let value:i32=await child(n);
+    trace=trace*10+4;
+    await yield_now();
+    return value+1;
+}
+async fn array_values()->i32 {
+    let mut values:[i32;3]=[1,2,3];
+    for i in 0..3 {values[i]=values[i]+10;}
+    await yield_now();
+    values[1]=values[1]+20;
+    return values[0]+values[1]+values[2];
+}
+fn main()->i32 {
+    let mut job:_=parent(10);
+    if trace!=0 || job.is_finished(){return 1;}
+    match job.poll(){Pending()=>{},_=>{return 2;}}
+    if trace!=31{return 3;}
+    match job.poll(){Pending()=>{},_=>{return 4;}}
+    if trace!=3124{return 5;}
+    match job.poll(){Ready(n)=>{if n!=16{return 6;}},_=>{return 7;}}
+    if !job.is_finished(){return 8;}
+    match job.poll(){Finished()=>{},_=>{return 9;}}
+    let mut arrays:_=array_values();
+    match arrays.poll(){Pending()=>{},_=>{return 10;}}
+    match arrays.poll(){Ready(56)=>{},_=>{return 11;}}
+    return 0;
+}

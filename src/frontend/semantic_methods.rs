@@ -126,6 +126,9 @@ impl SemanticAnalyzer {
             ResolvedType::Reference { inner, .. } | ResolvedType::Pointer(inner) => inner.as_ref(),
             other => other,
         };
+        // Ownership changes transfer rules, not the nominal method namespace.
+        // Keep receiver_ty intact for the exact owned/borrowed signature check.
+        let base = if let ResolvedType::Owned(inner)=base {inner.as_ref()} else {base};
         let symbol = match base {
             ResolvedType::Struct { name, .. } | ResolvedType::Enum { name } => format!("{}::{}", name, method.name),
             _ => return Err(Error::UndefinedVariable { name: method.name.clone(), span }),

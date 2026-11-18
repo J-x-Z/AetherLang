@@ -8,6 +8,8 @@ pub enum TokenKind {
 
     // Keywords
     Def,
+    Async,
+    Await,
     Lambda,
     Return,
     If,

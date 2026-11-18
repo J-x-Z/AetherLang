@@ -6,6 +6,7 @@ use crate::frontend::ast as core;
 #[derive(Clone, Default)]
 pub(super) struct ImportedApi {
     pub functions: HashMap<String, (Vec<ScriptType>, ScriptType)>,
+    pub async_functions: HashSet<String>,
     pub values: HashMap<String, ScriptType>,
     pub fields: HashMap<(String, String), ScriptType>,
     pub methods: HashMap<(String, String), (Vec<ScriptType>, ScriptType)>,
@@ -112,8 +113,12 @@ impl ImportedApi {
                                 .map(|t| reader.ty(t, 0))
                                 .transpose()?
                                 .unwrap_or_else(|| "void".into());
-                            if f.annotations.iter().any(|a|a.name.name=="async") {return Err("async Core function imports are not yet exposed in Script".into());}
                             result.functions.insert(name.clone(), (params, ret));
+                            if requested.contains(name)
+                                && f.annotations.iter().any(|a| a.name.name == "async")
+                            {
+                                result.async_functions.insert(name.clone());
+                            }
                         }
                         core::Item::Struct(s) if s.name.name == *target => {
                             found = true;

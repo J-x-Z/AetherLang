@@ -15,6 +15,8 @@ mod closures;
 #[path="transpiler_imports.rs"]
 mod imports;
 use imports::ImportedApi;
+#[path="transpiler_async.rs"]
+mod async_tasks;
 use types::{ScriptType, Dimension};
 
 pub struct Transpiler {
@@ -29,6 +31,8 @@ pub struct Transpiler {
     assigned: HashSet<String>,
     return_type: ScriptType,
     is_main: bool,
+    current_async: bool,
+    async_helpers: HashMap<String,String>,
     loop_depth: usize,
     temporary: usize,
     reserved_names: HashSet<String>,
@@ -40,7 +44,7 @@ impl Transpiler {
     pub fn new() -> Self {
         Self { imported:ImportedApi::default(), output: String::new(), source_lines: Vec::new(), source_line: 1, indent: 0, source_file: None,
             functions: HashMap::new(), locals: BTreeMap::new(), assigned: HashSet::new(),
-            return_type: "void".into(), is_main: false, loop_depth: 0, temporary: 0, reserved_names: HashSet::new(), definitions: HashMap::new(), const_parameters: HashMap::new() }
+            return_type: "void".into(), is_main: false, current_async:false, async_helpers:HashMap::new(), loop_depth: 0, temporary: 0, reserved_names: HashSet::new(), definitions: HashMap::new(), const_parameters: HashMap::new() }
     }
 
     pub fn with_source_file(mut self, path: &str) -> Self {
@@ -56,6 +60,7 @@ impl Transpiler {
         self.functions.clear();
         self.functions.extend(self.imported.functions.iter().map(|(n,(_,r))|(n.clone(),r.clone())));
         self.definitions.clear();
+        self.async_helpers.clear();
         self.temporary = 0;
         self.reserved_names.clear();
         self.reserve_source_names(module);
@@ -65,6 +70,10 @@ impl Transpiler {
                 return Err("Script top-level statements must be function definitions".into());
             };
             Self::validate_signature(function)?;
+            if function.is_async {
+                if function.name=="main" || !function.const_params.is_empty(){return Err("Script async def requires a non-generic, non-main function".into());}
+                let helper=self.fresh_name("block_on");self.async_helpers.insert(function.name.clone(),helper);
+            }
             self.definitions.insert(function.name.clone(),function.clone());
             let ret = if let Some(hint) = &function.return_type { Self::map_type(hint)? }
                 else if function.name == "main" { "i32".into() } else { "void".into() };
@@ -72,6 +81,7 @@ impl Transpiler {
                 return Err(format!("duplicate Script function '{}'", function.name));
             }
         }
+        self.register_async_imports();
         self.line("// Generated Aether Core; source semantics checked before lowering.");
         if let Some(source) = self.source_file.clone() {
             self.line(&format!("// Source: {}", source.replace(['\n', '\r'], " ")));
@@ -87,6 +97,7 @@ impl Transpiler {
         for statement in &module.stmts {
             if let Stmt::FunctionDef(function) = statement { self.function(function)?; }
         }
+        self.emit_async_helpers()?;
         Ok(std::mem::take(&mut self.output))
     }
 
@@ -145,6 +156,7 @@ impl Transpiler {
     fn function(&mut self, function: &FunctionDef) -> Result<()> {
         if function.is_comptime { return Err("Script @comptime execution is not implemented".into()); }
         self.source_line = function.span.line;
+        self.current_async=function.is_async;
         self.locals.clear();
         self.assigned.clear();
         self.const_parameters.clear();
@@ -177,7 +189,7 @@ impl Transpiler {
             self.assigned.insert(param.name.clone());
             let internal = self.fresh_name("arg");
             parameters.push(format!("{}: {}", internal, ty));
-            copies.push(format!("{} = {};", param.name, internal));
+            copies.push(if function.is_async {format!("let mut {}: {} = {};",param.name,ty,internal)} else {format!("{} = {};", param.name, internal)});
         }
         if matches!(self.return_type, ScriptType::Callable {..}) {
             let candidates=function.params.iter().filter_map(|p|self.locals.get(&p.name)).filter(|t|t.same_callable_signature(&self.return_type)).cloned().collect::<Vec<_>>();
@@ -195,10 +207,12 @@ impl Transpiler {
         self.source_line = function.span.line;
         self.indent = 0;
         let generics = if generic_parameters.is_empty() {String::new()} else {format!("<{}>",generic_parameters.join(", "))};
-        self.line(&format!("fn {}{}({}) -> {} {{", function.name, generics, parameters.join(", "), self.return_type));
+        self.line(&format!("{}fn {}{}({}) -> {} {{",if function.is_async{"async "}else{""}, function.name, generics, parameters.join(", "), self.return_type));
         self.indent = 1;
-        for (name, ty) in self.locals.clone() {
-            if !ty.anonymous_callable() {self.line(&format!("let mut {}: {};", name, ty));}
+        if !function.is_async {
+            for (name, ty) in self.locals.clone() {
+                if !ty.anonymous_callable() {self.line(&format!("let mut {}: {};", name, ty));}
+            }
         }
         self.output.push_str(&body);
         self.source_lines.extend(body_lines);
@@ -259,7 +273,10 @@ impl Transpiler {
                 let ty = self.infer_type(&assignment.value)?;
                 if ty == "void" { return Err(format!("cannot assign a void result to '{}'", name)); }
                 let first=!self.locals.contains_key(name);
-                if ty.anonymous_callable() && first {
+                if self.current_async && first {
+                    if self.indent!=1{return Err("first async Script bindings must be at function scope, outside a branch or loop".into());}
+                    self.line(&format!("let mut {}: {} = {};",name,ty,value));
+                } else if ty.anonymous_callable() && first {
                     if self.indent != 1 {return Err("a closure's first Script binding must be at function scope, outside a branch or loop".into());}
                     self.line(&format!("let mut {}: _ = {};",name,value));
                 } else {
@@ -322,6 +339,10 @@ impl Transpiler {
                 let end = self.expression(args.last().unwrap())?;
                 let ty = self.infer_type(args.last().unwrap())?;
                 let before = self.assigned.clone();
+                if self.current_async && !self.locals.contains_key(&loop_.var) {
+                    if self.indent!=1{return Err("first async Script loop bindings must be at function scope".into());}
+                    self.line(&format!("let mut {}: {} = 0;",loop_.var,ty));
+                }
                 self.locals.entry(loop_.var.clone()).or_insert(ty);
                 self.assigned.insert(loop_.var.clone());
                 let internal = self.fresh_name("iter");
@@ -344,6 +365,7 @@ impl Transpiler {
     }
 
     fn infer_type(&self, expr: &Expr) -> Result<ScriptType> {
+        if let Some((ty,_))=self.async_expression(expr)?{return Ok(ty);}
         Ok(match expr {
             Expr::Lambda {params,ret_type,body,span} => self.lambda_parts(params,ret_type.as_ref(),body,*span)?.0,
             Expr::Integer { .. } => "i64".into(), Expr::Float { .. } => "f64".into(),
@@ -382,6 +404,7 @@ impl Transpiler {
     }
 
     fn expression(&self, expr: &Expr) -> Result<String> {
+        if let Some((_,code))=self.async_expression(expr)?{return Ok(code);}
         Ok(match expr {
             Expr::Lambda {params,ret_type,body,span} => self.lambda_parts(params,ret_type.as_ref(),body,*span)?.1,
             Expr::Identifier { name, .. } => {

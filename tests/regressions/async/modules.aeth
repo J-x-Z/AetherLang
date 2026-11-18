@@ -1,0 +1,8 @@
+use async_child::delayed;
+async fn parent()->i32 {let value:i32=await delayed(10);return value+2;}
+fn main()->i32 {
+ let mut task:_=parent();
+ match task.poll(){Pending()=>{},_=>{return 1;}}
+ match task.poll(){Ready(19)=>{},_=>{return 2;}}
+ return 0;
+}

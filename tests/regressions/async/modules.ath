@@ -1,0 +1,10 @@
+from script_child import delayed
+async def parent(value: int) -> int:
+    result = await delayed(value)
+    await yield_now()
+    return result + 2
+def main():
+    result = block_on(parent(10))
+    direct = block_on(delayed(3))
+    print(result + direct)
+    return result + direct - 29

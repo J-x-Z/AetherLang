@@ -1,0 +1,13 @@
+async def child(n: int) -> int:
+    value = n + 2
+    await yield_now()
+    value = value + 3
+    return value
+async def parent(n: int) -> int:
+    value = await child(n)
+    await yield_now()
+    return value + 1
+def main():
+    result = block_on(parent(10))
+    print(result)
+    return result - 16

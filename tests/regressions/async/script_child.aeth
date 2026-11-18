@@ -1,0 +1,2 @@
+pub async fn delayed(value:i64)->i64 {await yield_now();return value+7;}
+pub fn ordinary(value:i64)->i64 {return value+1;}

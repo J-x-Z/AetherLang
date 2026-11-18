@@ -36,6 +36,7 @@ pub struct FunctionDef {
     pub return_type: Option<TypeHint>,
     pub body: Vec<Stmt>,
     pub is_comptime: bool,
+    pub is_async: bool,
     pub span: Span,
 }
 

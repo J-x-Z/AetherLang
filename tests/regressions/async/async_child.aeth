@@ -1,0 +1,1 @@
+pub async fn delayed(value:i32)->i32 { await yield_now(); return value+7; }

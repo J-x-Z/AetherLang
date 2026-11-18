@@ -1,0 +1,4 @@
+from script_child import ordinary as block_on
+from script_child import ordinary as yield_now
+def main():
+    return block_on(4) + yield_now(5) - 11

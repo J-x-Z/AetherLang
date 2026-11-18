@@ -275,6 +275,8 @@ impl Lexer {
 
         let kind = match text.as_str() {
             "def" => TokenKind::Def,
+            "async" => TokenKind::Async,
+            "await" => TokenKind::Await,
             "lambda" => TokenKind::Lambda,
             "return" => TokenKind::Return,
             "if" => TokenKind::If,

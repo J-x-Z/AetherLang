@@ -251,6 +251,17 @@ impl Parser {
             attributes.push(if self.check(&TokenKind::Hash) { self.parse_attribute()? } else { self.parse_annotation()? });
         }
         
+        // Async remains an ordinary function until the state-machine lowering.
+        let pub_async = self.check(&TokenKind::Pub) && self.peek().is_some_and(|t| matches!(&t.kind,TokenKind::Ident(n) if n=="async"));
+        if matches!(self.current_kind(),TokenKind::Ident(n) if n=="async") || pub_async {
+            if pub_async {self.advance();}
+            let start=self.advance().span;
+            let mut function=self.parse_function()?;
+            function.is_pub=pub_async;
+            attributes.push(Annotation{name:Ident{name:"async".into(),span:start},args:vec![],span:start});
+            function.annotations=attributes;
+            return Ok(Item::Function(function));
+        }
         // Handle pub modifier - peek ahead to see what comes next
         match self.current_kind() {
             TokenKind::Pub => {
@@ -1046,6 +1057,12 @@ impl Parser {
     // Keep recursive prefix parsing outside the large atom match. In debug
     // builds that match has a sizeable frame even when just parsing a '-'.
     fn parse_primary_inner(&mut self) -> Result<Expr> {
+        if matches!(self.current_kind(),TokenKind::Ident(n) if n=="await") {
+            let start=self.advance().span;
+            let value=self.parse_expr_bp(19)?;
+            let span=start.merge(&value.span());
+            return Ok(Expr::Call{func:Box::new(Expr::Ident(Ident{name:"@async_await".into(),span:start})),args:vec![value],span});
+        }
         if !matches!(self.current_kind(), TokenKind::Minus | TokenKind::Tilde | TokenKind::Not | TokenKind::Star | TokenKind::And) {
             return self.parse_atom(true);
         }
@@ -1596,6 +1613,17 @@ impl Parser {
                 self.advance();
                 let first_ident = Ident { name: name.clone(), span: token.span };
                 
+                // Expected enum type resolves an unqualified payload pattern.
+                // Parentheses distinguish Ready(x)/Pending() from a new binding.
+                if self.consume(&TokenKind::LParen) {
+                    let mut fields=Vec::new();
+                    while !self.check(&TokenKind::RParen) {
+                        fields.push(self.parse_pattern()?);
+                        if !self.consume(&TokenKind::Comma) {break;}
+                    }
+                    let end=self.expect(TokenKind::RParen)?.span;
+                    return Ok(Pattern::Variant{enum_name:None,variant:first_ident,fields,span:token.span.merge(&end)});
+                }
                 // Check for path pattern (e.g., Color::Red)
                 if self.consume(&TokenKind::ColonColon) {
                     let variant = self.parse_ident()?;
