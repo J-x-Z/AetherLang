@@ -47,9 +47,12 @@ if 'llvm' in a.backends:
  # Inspect the actual text relocations, rather than merely asserting which
  # target-machine option was selected. The same source must retain static
  # address materialization on the freestanding ELF target.
- readobj=os.environ.get('LLVM_READOBJ') or shutil.which('llvm-readobj-21') or shutil.which('llvm-readobj')
+ sdk=os.getenv('AETHER_LLVM_PREFIX') or os.getenv('LLVM_SYS_211_PREFIX')
+ sdk_tool=Path(sdk)/'bin/llvm-readobj' if sdk else None
+ readobj=os.environ.get('LLVM_READOBJ') or (str(sdk_tool) if sdk_tool and sdk_tool.is_file() else None)
+ if not readobj:readobj=shutil.which('llvm-readobj-21') or shutil.which('llvm-readobj')
  if not readobj:
-  prefixes=[os.environ.get('LLVM_SYS_211_PREFIX',''),'/opt/homebrew/opt/llvm@21','/opt/homebrew/opt/llvm']
+  prefixes=['/opt/homebrew/opt/llvm@21','/opt/homebrew/opt/llvm']
   for prefix in prefixes:
    tool=Path(prefix)/'bin/llvm-readobj'
    if prefix and tool.is_file():readobj=str(tool);break
