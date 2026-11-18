@@ -52,7 +52,7 @@ def install():
     # Older packages may contain only the two required tools. Every compiler or
     # driver actually present in a new package must remain runnable as installed.
     executable_names = names & {"aethc", "aethc-c", "aethc-core", "aethc-native",
-                                "jxz", "jxz-c", "jxz-native", "jxz-native-c"}
+                                "jxz", "jxz-c", "jxz-native", "jxz-native-c", "aether-mcp"}
 
     prefix = args.prefix.resolve()
     prefix.mkdir(parents=True, exist_ok=True)

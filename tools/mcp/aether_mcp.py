@@ -168,7 +168,7 @@ class Session:
                 return error(request_id, -32602, "Expected protocolVersion, capabilities and clientInfo.")
             result = {"protocolVersion": version if version in VERSIONS else VERSIONS[0],
                       "capabilities": {"tools": {}},
-                      "serverInfo": {"name": "aether-mcp", "version": "0.1.0"}}
+                      "serverInfo": {"name": "aether-mcp", "version": "0.2.0"}}
             self.phase = "negotiated"
         elif self.phase != "ready":
             return error(request_id, -32002, "Initialize the session and send notifications/initialized first.")

@@ -75,6 +75,7 @@ with tempfile.TemporaryDirectory(prefix='.aether-package-', dir=out.parent) as s
     for path in sorted((root/'stdlib').glob('*.aeth')):
         shutil.copy2(path, stage/'stdlib'/path.name)
     shutil.copy2(root/'install.sh', stage/'install.sh')
+    shutil.copy2(root/'tools/mcp/aether-mcp', stage/'aether-mcp')
     for path in ('runtime/llvm/target_init.c', 'runtime/metal/bridge.m', 'runtime/metal/bridge.h',
                  'runtime/metal/provider.m', 'runtime/compute/provider.h', 'runtime/compute/loader.c',
                  'runtime/vulkan/provider.c', 'runtime/vulkan/gemm.comp', 'scripts/build_vulkan.py',
