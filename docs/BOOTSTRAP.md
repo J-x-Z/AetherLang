@@ -1,17 +1,24 @@
-# Self-hosting Core compiler
+# Self-hosted compiler
 
-`src_aether/core/` is a complete compiler written in Aether Core: lexer,
-recursive-descent/Pratt parser, name and type checker, typed C11 emission, and
-direct LLVM IR emission.
-It compiles all of its own source. The Rust compiler remains the full language
-compiler, with LLVM as the primary backend and C as the portable alternative.
-Core does not implement the full Rust compiler's language yet.
+The regular entry `src_aether/core/aethc.aeth` reads Core and Script sources,
+checks them, and emits LLVM IR or C11. The lexer, parser, type checking,
+lowering, code generation and build driver are written in Aether. The regular
+compiler builds its own complete source and compiles JXZ with either backend.
+Rust supplies the initial seed and the broader cross-target compiler. Host
+Clang supplies instruction selection, optimization and linking.
 
-Run the entire chain with an existing freshly built compiler:
+Build the regular executable and verify that two successive generations
+produce byte-identical C and LLVM IR:
 
 ```sh
-python3 tests/bootstrap_core.py --compiler /path/to/aethc \
-  --work-dir /external/work/bootstrap --backend llvm
+python3 scripts/build_selfhost.py --seed /path/to/aethc --work-dir /external/work/regular --output /external/work/aethc-native
+```
+
+The four-generation test uses the same implementation and a compatibility
+entry whose bare invocation emits C:
+
+```sh
+python3 tests/bootstrap_core.py --compiler /path/to/aethc --work-dir /external/work/bootstrap --backend llvm
 ```
 
 Use `--backend c` for a C-only seed. The runner copies the Core source files
@@ -58,7 +65,7 @@ and `use library::*;`. Flat groups such as
 `use library::{first, second as alias};` are supported. Named imports permit `library::function()`,
 `library::CONSTANT`, and `*library::Type`; selected and wildcard imports bring
 public declarations into the file's scope. A wildcard also binds its module
-name. Nested import trees and re-exports are not yet supported.
+name. Public re-exports preserve type identity through aliases and diamond imports. Nested import trees remain unsupported.
 
 Each module has private functions, constants and nominal struct types; `pub`
 exports a declaration, while `extern "C"` declarations expose their ABI name.
@@ -147,8 +154,7 @@ Computed dimensions are checked after direct parameters are inferred; the
 compiler does not solve arbitrary expressions backwards. Transparent generic
 aliases such as `type Pair<T>=Block<T,2>` are supported.
 
-Trait bounds, const parameters on aliases or inherent impl declarations, and
-compile-time floating-point arithmetic are not supported yet. Layout intrinsics
+Scalar constants support finite f32/f64 arithmetic, comparisons, casts and per-operation rounding. Short-circuit operands are both type-checked. Trait bounds and const parameters on aliases or inherent impl declarations remain unsupported. Layout intrinsics
 remain ordinary checked expressions, not constant-expression operators. The
 runtime regression entry uses the shared primary-compiler const fixture
 and an actual fixed-size matrix stored in `Vec`, plus multi-module constants:
@@ -202,7 +208,7 @@ loading is limited to 256 unique files and an import depth of 64; syntactic and
 actual AST depth are also bounded. Output is written to a temporary sibling and atomically renamed; failed
 compilation leaves an existing output intact. Output may not replace the
 entry source or any imported source, including canonical path aliases. Handles and raw pointers in compiled programs have explicit
-lifetimes; this subset does not add an automatic destructor system.
+lifetimes. Values explicitly declared with `own T` can use a typed `@drop` destructor for scope exits, errors and cancellation.
 
 Validation includes recursive heap structures, NUL-containing files, call and
 assignment order, numeric boundaries, malformed inputs, and ASan/UBSan builds
@@ -253,10 +259,7 @@ branches. Integer operations wrap without `nsw`/`nuw`; division/remainder guards
 trap zero and signed MIN/-1. Float casts use LLVM saturating conversion intrinsics, following the
 [LLVM language reference](https://llvm.org/docs/LangRef.html#saturating-floating-point-to-integer-conversions).
 Scalar and pointer C ABI calls include narrow-integer extensions and C varargs
-promotions. Internal aggregate arguments/results are supported. External C
-aggregate-by-value parameters/results are rejected with a source diagnostic
-until target-specific C aggregate ABI lowering is implemented; ordinary pointer
-to struct FFI remains supported. The LLVM path is currently a 64-bit host path,
+promotions. Internal aggregate arguments/results are supported. External C aggregate parameters and results follow the Apple arm64 and System V x86-64 host conventions. Unsupported layouts or conventions fail during checking. Ordinary pointer-to-struct FFI remains available. The LLVM path is currently a 64-bit host path,
 with no cross-target ABI claim.
 
 Existing application/standard-library validation is separate from compiler

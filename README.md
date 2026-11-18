@@ -27,7 +27,8 @@ The self-hosted compiler is written in Aether. This build checks that two
 consecutive generations emit byte-identical C and byte-identical LLVM IR for
 the full compiler entry. Clang compiles or assembles the output and the host
 linker produces the executable. The Rust compiler also supplies cross-target,
-inline assembly, atomic and vector facilities. Build a C-only seed with
+inline assembly and vector facilities. The self-hosted compiler supports typed
+atomics, memory fences and volatile access. Build a C-only seed with
 `sh scripts/build.sh c`. [Capabilities](docs/FEATURES.md) · [Bootstrap](docs/BOOTSTRAP.md)
 
 ## Work with data in the terminal

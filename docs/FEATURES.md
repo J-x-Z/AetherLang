@@ -13,7 +13,7 @@
 | 数据与宿主库 | 带长度字节、严格 UTF-8、i64 字节键 Map、Option/Result 以及带 errno 的 POSIX 文件/目录/进程接口 | 文件中的 NUL、无效 UTF-8、短读、错误码、子进程和分配失败均有原生用例 | `tests/{text_map,runtime_foundation,process_runtime}.py` |
 | 数学与量子 | CPU f64 张量/反向 AD、标量 DAG、电路与状态向量，OpenBLAS、Metal、CUDA-Q 的接口各自独立 | 真实 CPU native JIT/vmap、低秩、稀疏、PDE、MaxCut；M4 Metal、RTX 3060 和 Adreno 750 Vulkan 运行上层程序与 16q，CUDA-Q QPP 有独立 SDK 验收 | `tests/{math_values,compute_jit,compute_planning,compute_applications,compute_runtime,cudaq_runtime}.py` |
 | 项目、编辑器与安装 | JXZ 本地依赖、精确版本注册表、锁定/离线缓存、项目级 LSP、可校验的整包安装 | 目录移动、子进程退出、并发和中断恢复均有回归 | `jxz/tests/integration.py`、`tests/package_install.py` |
-| 自举 | Core 读取真实模块图，在 Aether 中执行解析、检查、C 和直接 LLVM IR 输出 | C-only 与 LLVM 种子分别构建四代，分别核对 C 和 LLVM 固定点，原生构建、对象输出及 JXZ 精确依赖映射；运行未改的 accumulator 服务和标准库消费者。主编译器由 Rust 构建 | `tests/{bootstrap_core,bootstrap_llvm}.py` |
+| 自举 | Core 读取真实模块图，在 Aether 中执行解析、检查、C 和直接 LLVM IR 输出 | C-only 与 LLVM 种子分别构建四代，分别核对 C 和 LLVM 固定点，原生构建、对象输出及 JXZ 精确依赖映射；运行未改的 accumulator 服务和标准库消费者。常规宿主编译器 aethc-native 自身由 Aether 构建，并以两个后端构建 JXZ。Rust 提供初始种子与更广的交叉目标支持 | `tests/{bootstrap_core,bootstrap_llvm}.py` |
 
 ### 稳定基础语义
 
