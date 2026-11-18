@@ -1,11 +1,12 @@
+// Native compiler entry shared by the Rust seed and all Aether-built generations.
 use model::*;
 use runtime::*;
 use project::*;
 use semantic::boot_check;
 use emitter::boot_emit;
-use emitter_llvm::boot_emit_llvm;
-// File/CLI boundary for the self-hosted Core compiler. The compiler never shells
-// out: its only output is checked C source. The build driver links that source.
+use emitter_llvm::{boot_emit_llvm,boot_llvm_supported};
+use native_driver::*;
+
 extern "C" {
  fn realpath(path:*u8,resolved:*u8)->*u8;
  fn mkstemp(path:*u8)->i32;
@@ -13,86 +14,167 @@ extern "C" {
  fn close(descriptor:i32)->i32;
  fn rename(source:*u8,destination:*u8)->i32;
 }
-fn boot_driver_message(message:*u8)->i32 {
- printf("aether-core: %s\n\0" as *u8,message);
- return 1;
+
+fn boot_arguments_error(ctx:*BootContext,message:*u8)->bool {
+ boot_error(ctx,0 as *BootToken,message);
+ return false;
 }
-pub fn boot_driver(argc:i32,argv:**u8)->i32 {
- if argc<2 { return boot_driver_message("usage: aether-core input.aeth [-I directory]... [--emit-llvm] [-o output | --check]\0" as *u8); }
- let mut input:*u8=0 as *u8;let mut output:*u8=0 as *u8;
- let mut check:bool=false;let mut llvm:bool=false;let mut index:i32=1;
- while index<argc {
-  let argument:*u8=argv[index];
-  if strcmp(argument,"--emit-llvm")==0 {
-   if llvm {return boot_driver_message("duplicate --emit-llvm");}llvm=true;
-  }else{if strcmp(argument,"-I")==0 {
-   index=index+1;if index>=argc {return boot_driver_message("-I requires a directory");}
-  } else { if strcmp(argument,"--check\0" as *u8)==0 {
-   if check { return boot_driver_message("duplicate --check\0" as *u8); }
-   check=true;
-  } else { if strcmp(argument,"-o\0" as *u8)==0 {
-   index=index+1;
-   if index>=argc || output!=(0 as *u8) { return boot_driver_message("-o requires one output path\0" as *u8); }
-   output=argv[index];
-  } else {
-   if argument[0]==45 { return boot_driver_message("unknown command option\0" as *u8); }
-   if input!=(0 as *u8) { return boot_driver_message("expected one input file\0" as *u8); }
-   input=argument;
-  } }
+fn boot_optimization(level:*u8)->*u8 {
+ if strcmp(level,"0")==0 {return "-O0";}
+ if strcmp(level,"1")==0 {return "-O1";}
+ if strcmp(level,"2")==0 {return "-O2";}
+ if strcmp(level,"3")==0 {return "-O3";}
+ return 0 as *u8;
+}
+fn boot_add_library(ctx:*BootContext,prefix:*u8,required:bool)->bool {
+ let local:*u8=boot_project_join(ctx,prefix,"stdlib","");
+ let nested:*u8=boot_project_join(ctx,prefix,"lib/aetherlang/stdlib","");
+ if ctx.failed {return false;}
+ if access(local,1)==0 {return boot_project_root(ctx,local);}
+ if access(nested,1)==0 {return boot_project_root(ctx,nested);}
+ if required {return boot_arguments_error(ctx,"sysroot has no stdlib directory");}
+ return true;
+}
+fn boot_default_library(ctx:*BootContext,invoked:*u8)->bool {
+ let mut has_slash:bool=false;let mut k:u64=0;
+ while invoked[k]!=0 {if invoked[k]==47 {has_slash=true;}k=k+1;}
+ let mut resolved:*u8=0 as *u8;
+ if has_slash {resolved=realpath(invoked,0 as *u8);}
+ else {
+  let paths:*u8=getenv("PATH");let mut start:u64=0;let mut end:u64=0;
+  while paths!=0 as *u8 && resolved==0 as *u8 {
+   while paths[end]!=58 && paths[end]!=0 {end=end+1;}
+   let mut dir:*u8=".";
+   if end>start {dir=boot_copy(ctx,paths+start,end-start);}
+   if ctx.failed{return false;}
+   let candidate:*u8=boot_project_join(ctx,dir,invoked,"");
+   if ctx.failed{return false;}
+   if access(candidate,1)==0 {resolved=realpath(candidate,0 as *u8);}
+   if paths[end]==0 {break;}end=end+1;start=end;
   }
-  }
-  index=index+1;
  }
- if input==(0 as *u8) { return boot_driver_message("missing input file\0" as *u8); }
- if check && output!=(0 as *u8) { return boot_driver_message("--check does not accept -o\0" as *u8); }
- if !check && output==(0 as *u8) { return boot_driver_message("generation requires -o output.c\0" as *u8); }
- if output!=(0 as *u8) {
-  let input_real:*u8=realpath(input,0 as *u8);
-  let output_real:*u8=realpath(output,0 as *u8);
-  let mut same:bool=strcmp(input,output)==0;
-  if input_real!=(0 as *u8) && output_real!=(0 as *u8) { same=strcmp(input_real,output_real)==0; }
-  free(input_real as *void);free(output_real as *void);
-  if same { return boot_driver_message("input and output paths must differ\0" as *u8); }
+ if resolved==0 as *u8 {return true;}
+ let mut n:u64=strlen(resolved);
+ while n>0 && resolved[n-1]!=47 {n=n-1;}
+ if n>1 {n=n-1;}resolved[n]=0;
+ let mut ok:bool=boot_add_library(ctx,resolved,false);
+ if n>=4 && strcmp(resolved+(n-4),"/bin")==0 {
+  resolved[n-3]=0;if ok {ok=boot_add_library(ctx,resolved,false);}
  }
- let context:*BootContext=boot_context_new(0 as *u8,0,input);
- if context==(0 as *BootContext) {return boot_driver_message("cannot allocate compiler context");}
- let mut success:bool=true;index=1;
- while index<argc && success {
-  if strcmp(argv[index],"-I")==0 {index=index+1;success=boot_project_root(context,argv[index]);}
-  else {if strcmp(argv[index],"-o")==0 {index=index+1;}}
-  index=index+1;
- }
- if success {success=boot_project(context,input);}
- if success {success=boot_check(context);}
- if success && !check {success=boot_project_output(context,output);}
- if success && !check {
-  let path_length:u64=strlen(output);
-  let temporary:*u8=malloc(path_length+12) as *u8;
-  if temporary==(0 as *u8) { success=false;boot_driver_message("cannot allocate output path\0" as *u8); }
-  else {
-   memcpy(temporary as *void,output as *void,path_length);
-   memcpy((temporary+path_length) as *void,".tmp.XXXXXX\0" as *u8 as *void,12);
-   let descriptor:i32=mkstemp(temporary);
-   if descriptor<0 { success=false;boot_driver_message("cannot create output temporary\0" as *u8); }
-   else {
-    context.output=fdopen(descriptor,"wb\0" as *u8);
-    if context.output==(0 as *void) { close(descriptor);success=false;boot_driver_message("cannot open output stream\0" as *u8); }
-    else {
-     if llvm{success=boot_emit_llvm(context);}else{success=boot_emit(context);}
-     let write_error:i32=ferror(context.output);
-     let finish_error:i32=fclose(context.output);
-     context.output=0 as *void;
-     if write_error!=0 || finish_error!=0 { success=false;boot_driver_message("cannot completely write output\0" as *u8); }
-     if success {
-      if rename(temporary,output)!=0 { success=false;boot_driver_message("cannot replace output\0" as *u8); }
-     }
-    }
-    if !success { remove(temporary); }
+ free(resolved as *void);return ok;
+}
+fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8)->bool {
+ let mut i:i32=1;let mut native:bool=false;let mut format:i32=0;let mut backend:i32=0;
+ let mut check_command:bool=false;let mut positional:bool=false;let mut sysroot:*u8=0 as *u8;
+ cmd.optimize="-O0";cmd.objects=boot_alloc(ctx,(argc as u64)*(size_of(*u8) as u64)) as **u8;
+ if ctx.failed {return false;}
+ if i<argc && strcmp(argv[i],"build")==0 {native=true;i=i+1;}
+ else if i<argc && strcmp(argv[i],"check")==0 {cmd.check=true;check_command=true;i=i+1;}
+ while i<argc {
+  let arg:*u8=argv[i];i=i+1;
+  if !positional && strcmp(arg,"--")==0 {positional=true;continue;}
+  if !positional && arg[0]==45 {
+   if strcmp(arg,"--check")==0 {
+    if cmd.check || native {return boot_arguments_error(ctx,"conflicting check or build command");}
+    cmd.check=true;
+   } else if strcmp(arg,"--emit-c")==0 || strcmp(arg,"--emit-llvm")==0 || strcmp(arg,"--emit-obj")==0 {
+    if format!=0 {return boot_arguments_error(ctx,"choose one output format");}
+    format=1;
+    if strcmp(arg,"--emit-llvm")==0 {format=2;}
+    if strcmp(arg,"--emit-obj")==0 {format=3;}
+   } else if arg[1]==79 {
+    let mut level:*u8=arg+2;
+    if level[0]==0 {if i>=argc{return boot_arguments_error(ctx,"-O requires a level");}level=argv[i];i=i+1;}
+    cmd.optimize=boot_optimization(level);
+    if cmd.optimize==0 as *u8 {return boot_arguments_error(ctx,"expected optimization level 0..3");}
+   } else {
+    if i>=argc {return boot_arguments_error(ctx,"missing option argument");}
+    let value:*u8=argv[i];i=i+1;
+    if strcmp(arg,"-I")==0 {if !boot_project_root(ctx,value){return false;}}
+    else if strcmp(arg,"--module")==0 {if !boot_project_map(ctx,value){return false;}}
+    else if strcmp(arg,"--sysroot")==0 {
+     if sysroot!=0 as *u8 {return boot_arguments_error(ctx,"duplicate --sysroot");}sysroot=value;
+    } else if strcmp(arg,"-o")==0 {
+     if cmd.output!=0 as *u8 || value[0]==0 {return boot_arguments_error(ctx,"-o requires one output path");}
+     cmd.output=value;
+    } else if strcmp(arg,"--backend")==0 {
+     if backend!=0 {return boot_arguments_error(ctx,"duplicate --backend");}
+     if strcmp(value,"llvm")==0 {backend=2;}else if strcmp(value,"c")==0 {backend=1;}
+     else{return boot_arguments_error(ctx,"expected llvm or c backend");}
+    } else if strcmp(arg,"--link-object")==0 {
+     let path:*u8=realpath(value,0 as *u8);
+     if path==0 as *u8 {return boot_arguments_error(ctx,"cannot resolve link object");}
+     cmd.objects[cmd.object_count]=boot_copy(ctx,path,strlen(path));free(path as *void);
+     if ctx.failed {return false;}cmd.object_count=cmd.object_count+1;
+    } else {return boot_arguments_error(ctx,"unknown command option");}
    }
-   free(temporary as *void);
+  } else {
+   if cmd.input!=0 as *u8 {return boot_arguments_error(ctx,"expected one input file");}
+   cmd.input=arg;
   }
  }
- boot_context_free(context);
- if !success { return 1; }
- return 0;
+ if cmd.input==0 as *u8 {return boot_arguments_error(ctx,"expected input.aeth");}
+ ctx.path=cmd.input;
+ cmd.object=format==3;cmd.native=cmd.object || (native && format==0);
+ if cmd.check && (cmd.output!=0 as *u8 || format!=0 || cmd.object_count!=0) {return boot_arguments_error(ctx,"check does not produce an output");}
+ if (!cmd.native || cmd.object) && cmd.object_count!=0 {return boot_arguments_error(ctx,"link objects require an executable build");}
+ if !cmd.check && cmd.output==0 as *u8 {
+  if native && format==0 {cmd.output="a.out";}else{return boot_arguments_error(ctx,"generation requires -o output");}
+ }
+ if format==1 && backend==2 || format==2 && backend==1 {return boot_arguments_error(ctx,"output format conflicts with selected backend");}
+ cmd.llvm=format==2 || (cmd.native && backend!=1) || (cmd.check && (backend==2 || (check_command && backend==0)));
+ let paths:*u8=getenv("AETHER_PATH");
+ if paths!=0 as *u8 {
+  let mut begin:u64=0;let mut end:u64=0;
+  while paths[end]!=0 {
+   while paths[end]!=0 && paths[end]!=58 {end=end+1;}
+   if end>begin {
+    let path:*u8=boot_copy(ctx,paths+begin,end-begin);
+    if ctx.failed || !boot_project_root(ctx,path){return false;}
+   }
+   if paths[end]!=0 {end=end+1;}begin=end;
+  }
+ }
+ if sysroot!=0 as *u8 {return boot_add_library(ctx,sysroot,true);}
+ return boot_default_library(ctx,argv[0]);
+}
+
+fn boot_generate(ctx:*BootContext,cmd:*BootCommand)->bool {
+ if !boot_project_output(ctx,cmd.output){return false;}
+ let actual:*u8=realpath(cmd.output,0 as *u8);
+ if actual!=0 as *u8 {
+  let mut i:i32=0;let mut same:bool=false;
+  while i<cmd.object_count {if strcmp(cmd.objects[i],actual)==0{same=true;}i=i+1;}
+  free(actual as *void);
+  if same{return boot_arguments_error(ctx,"output must not replace a link input");}
+ }
+ let path:*u8=boot_sibling(ctx,cmd.output);
+ if ctx.failed{return false;}
+ let fd:i32=mkstemp(path);
+ if fd<0 {return boot_arguments_error(ctx,"cannot create output temporary");}
+ ctx.output=fdopen(fd,"wb");
+ if ctx.output==0 as *void {close(fd);remove(path);return boot_arguments_error(ctx,"cannot open output stream");}
+ let mut ok:bool=false;
+ if cmd.llvm {ok=boot_emit_llvm(ctx);}else{ok=boot_emit(ctx);}
+ let write_error:i32=ferror(ctx.output);let close_error:i32=fclose(ctx.output);ctx.output=0 as *void;
+ if write_error!=0 || close_error!=0 {ok=boot_arguments_error(ctx,"cannot completely write output");}
+ if cmd.native {
+  if ok {ok=boot_native_publish(ctx,cmd,path);}remove(path);
+ } else {
+  if ok && rename(path,cmd.output)!=0 {ok=boot_arguments_error(ctx,"cannot replace output");}
+  if !ok {remove(path);}
+ }
+ return ok;
+}
+
+pub fn boot_driver(argc:i32,argv:**u8)->i32 {
+ let ctx:*BootContext=boot_context_new(0 as *u8,0,"aether-core");
+ if ctx==0 as *BootContext {return 1;}
+ let cmd:*BootCommand=boot_alloc(ctx,size_of(BootCommand) as u64) as *BootCommand;
+ let mut ok:bool=cmd!=0 as *BootCommand && boot_parse_command(ctx,cmd,argc,argv);
+ if ok {ok=boot_project(ctx,cmd.input) && boot_check(ctx);}
+ if ok && cmd.llvm {ok=boot_llvm_supported(ctx);}
+ if ok && !cmd.check {ok=boot_generate(ctx,cmd);}
+ boot_context_free(ctx);
+ if ok {return 0;}return 1;
 }

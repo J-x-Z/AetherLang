@@ -32,6 +32,26 @@ aethc-core project/main.aeth -I shared/modules -o program.c
 clang -std=c11 -O2 program.c -lm -o program
 ```
 
+The current Core driver can also invoke the host compiler and publish native
+artifacts. This is the entry point JXZ uses when `AETHC` points to `aethc-core`.
+
+```sh
+aethc-core check main.aeth --backend llvm --sysroot /path/to/aetherlang
+aethc-core build -O 2 --module mathlib=deps/math/src/lib.aeth --link-object native.o -o app -- main.aeth
+aethc-core --emit-obj --backend c -O2 main.aeth -o main.o
+```
+
+Native build defaults to direct LLVM IR and Clang. Select `--backend c` to
+compile generated C11. Set `CC` to one compiler executable. The driver passes
+arguments directly, checks child termination and native output type, and
+publishes only after a successful build. Existing executables survive a failed
+link. Linux ELF64 and macOS Mach-O64 are verified; target selection in this
+driver is native only. Bare `input.aeth -o output.c` retains the source-emission
+interface used by the preceding bootstrap generation. `--emit-llvm` emits IR
+without invoking the host compiler. `-I`, exact module bindings, `AETHER_PATH`,
+and the installed standard library are supported. Directory roots never expose
+siblings of an exact `NAME=FILE.aeth` package binding.
+
 Imports may appear between top-level declarations. Supported forms are `use library;`,
 `use library as alias;`, `use library::item;`, `use library::item as alias;`,
 and `use library::*;`. Flat groups such as

@@ -65,7 +65,7 @@ pub struct BootContext {
  failed:bool,next_id:i32,depth:i32,bindings:*BootBinding,
  function:*BootNode,loop_depth:i32,output:*void,c_namespace:i32,
  module:*BootModule,root_module:*BootModule,modules:*BootModule,modules_tail:*BootModule,
- module_count:i32,source_total:u64,roots:*BootRoot,
+ module_count:i32,source_total:u64,roots:*BootRoot,mapped:*BootMappedModule,
  llvm_serial:i32,llvm_block:i32,llvm_break:i32,llvm_continue:i32,llvm_terminated:bool,parse_condition:bool,
  value_type:*BootType,value_target:*BootNode,llvm_yield:i32
 }
@@ -73,3 +73,5 @@ pub struct BootContext {
 pub struct BootImport { alias:*u8,symbol:*u8,target:*BootModule,wildcard:bool,token:*BootToken,next:*BootImport }
 pub struct BootModule { id:i32,path:*u8,directory:*u8,source:*u8,length:u64,tokens:*BootToken,items:*BootNode,imports:*BootImport,state:i32,next:*BootModule }
 pub struct BootRoot { path:*u8,next:*BootRoot }
+
+pub struct BootMappedModule { name:*u8, path:*u8, next:*BootMappedModule }

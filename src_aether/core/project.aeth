@@ -12,7 +12,7 @@ fn boot_project_name(ctx:*BootContext,token:*BootToken)->bool {
  if token==(0 as *BootToken) || token.kind!=BT_IDENT || boot_p_reserved(token.text) {boot_error(ctx,token,"expected an import identifier");return false;}
  return true;
 }
-fn boot_project_join(ctx:*BootContext,directory:*u8,name:*u8,suffix:*u8)->*u8 {
+pub fn boot_project_join(ctx:*BootContext,directory:*u8,name:*u8,suffix:*u8)->*u8 {
  let a:u64=strlen(directory);let b:u64=strlen(name);let c:u64=strlen(suffix);
  if a+b+c>8192 {boot_error(ctx,ctx.cursor,"module path exceeds 8192 bytes");return 0 as *u8;}
  let path:*u8=boot_alloc(ctx,a+b+c+2) as *u8;if path==(0 as *u8) {return path;}
@@ -31,6 +31,17 @@ fn boot_project_candidate(ctx:*BootContext,directory:*u8,name:*u8)->*u8 {
  let result:*u8=boot_copy(ctx,resolved,strlen(resolved));free(resolved as *void);return result;
 }
 fn boot_project_find(ctx:*BootContext,module:*BootModule,name:*u8,token:*BootToken)->*u8 {
+ let mut binding:*BootMappedModule=ctx.mapped;
+ while binding!=0 as *BootMappedModule {
+  if strcmp(binding.name,name)==0 {
+   let flat:*u8=boot_project_join(ctx,module.directory,name,".aeth");
+   let nested:*u8=boot_project_join(ctx,module.directory,name,"/mod.aeth");
+   if ctx.failed {return 0 as *u8;}
+   if !boot_map_compatible(ctx,flat,binding.path,token) || !boot_map_compatible(ctx,nested,binding.path,token){return 0 as *u8;}
+   return binding.path;
+  }
+  binding=binding.next;
+ }
  let local:*u8=boot_project_candidate(ctx,module.directory,name);if local!=(0 as *u8) || ctx.failed {return local;}
  let mut root:*BootRoot=ctx.roots;
  while root!=(0 as *BootRoot) {
@@ -153,4 +164,43 @@ fn boot_project_import(ctx:*BootContext,module:*BootModule,target:*BootModule,al
  let import:*BootImport=boot_alloc(ctx,size_of(BootImport) as u64) as *BootImport;if import==(0 as *BootImport){return false;}
  import.alias=alias;import.symbol=symbol;import.target=target;import.wildcard=wildcard;import.token=token;
  if tail==(0 as *BootImport){module.imports=import;}else{tail.next=import;}return true;
+}
+
+// Exact JXZ package bindings do not expose sibling files as search roots.
+fn boot_map_compatible(ctx:*BootContext,candidate:*u8,path:*u8,token:*BootToken)->bool {
+ let actual:*u8=realpath(candidate,0 as *u8);
+ if actual==0 as *u8 {return true;}
+ let same:bool=strcmp(actual,path)==0;free(actual as *void);
+ if !same {boot_error(ctx,token,"explicit module conflicts with local module");}
+ return same;
+}
+fn boot_aether_path(path:*u8)->bool {
+ let n:u64=strlen(path);return n>5 && strcmp(path+(n-5),".aeth")==0;
+}
+pub fn boot_project_map(ctx:*BootContext,spec:*u8)->bool {
+ let mut i:u64=0;
+ while spec[i]!=0 && spec[i]!=61 {
+  let ch:u8=spec[i];
+  if !((ch>=65 && ch<=90)||(ch>=97 && ch<=122)||ch==95||(i>0 && ch>=48 && ch<=57)) {
+   boot_error(ctx,ctx.cursor,"invalid explicit module name");return false;
+  }
+  i=i+1;
+ }
+ if i==0 || spec[i]!=61 {boot_error(ctx,ctx.cursor,"--module requires NAME=FILE.aeth");return false;}
+ let name:*u8=boot_copy(ctx,spec,i);if ctx.failed{return false;}
+ if boot_p_reserved(name){boot_error(ctx,ctx.cursor,"reserved explicit module name");return false;}
+ let mut previous:*BootMappedModule=ctx.mapped;
+ while previous!=0 as *BootMappedModule {
+  if strcmp(previous.name,name)==0 {boot_error(ctx,ctx.cursor,"duplicate explicit module");return false;}
+  previous=previous.next;
+ }
+ let filename:*u8=spec+i+1;
+ if !boot_aether_path(filename){boot_error(ctx,ctx.cursor,"explicit module requires a .aeth source file");return false;}
+ let real:*u8=realpath(filename,0 as *u8);
+ if real==0 as *u8 {boot_error(ctx,ctx.cursor,"cannot resolve explicit module");return false;}
+ let binding:*BootMappedModule=boot_alloc(ctx,size_of(BootMappedModule) as u64) as *BootMappedModule;
+ if binding==0 as *BootMappedModule {free(real as *void);return false;}
+ let valid:bool=boot_aether_path(real);binding.path=boot_copy(ctx,real,strlen(real));free(real as *void);
+ if !valid || ctx.failed {boot_error(ctx,ctx.cursor,"explicit module must resolve to .aeth");return false;}
+ binding.name=name;binding.next=ctx.mapped;ctx.mapped=binding;return true;
 }
