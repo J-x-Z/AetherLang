@@ -59,6 +59,10 @@ frozen_mcp = subprocess.check_output(
 ).splitlines()
 if frozen_mcp and set(frozen_mcp) != set(mcp_files):
     sys.exit('Incomplete MCP adapter in the requested revision')
+if frozen_mcp:
+    suite_files.extend(subprocess.check_output(
+        ['git', 'ls-tree', '--name-only', commit, '--', 'tests/mcp_queries.py', 'tests/mcp_protocol.py'],
+        cwd=repo, text=True).splitlines())
 paths = ['src_aether/core', 'jxz/src', 'stdlib', *suite_files, *frozen_mcp]
 archive = subprocess.check_output(['git', 'archive', '--format=tar', commit, *paths], cwd=repo)
 with tarfile.open(fileobj=io.BytesIO(archive)) as tar:

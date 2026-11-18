@@ -82,6 +82,11 @@ try:
         '--core-source',package/'source/core','--cc',cc,'--work-dir',w/'compiler','--lsp-runner',package/'tests/bootstrap_lsp.py'],timeout=1800)
     run('jxz-native',[sys.executable,package/'jxz/tests/windows_native.py','--jxz',package/'jxz.exe',
         '--compiler',package/'aethc.exe','--cc',cc,'--work-dir',w/'jxz','--stdlib',package/'stdlib','--host-source',package/'source/jxz'],timeout=1200)
+    if 'tests/mcp_protocol.py' in names:
+        run('mcp-protocol', [sys.executable, '-B', package/'tests/mcp_protocol.py'])
+    if 'tests/mcp_queries.py' in names:
+        run('mcp-native', [sys.executable, '-B', package/'tests/mcp_queries.py',
+            '--compiler', package/'aethc.exe', '--jxz', package/'jxz.exe', '--work-dir', w/'mcp'])
     if 'tests/windows_csv.py' in names:
         run('csv-native', [sys.executable, package/'tests/windows_csv.py',
             '--compiler', package/'aethc.exe', '--cc', cc, '--sysroot', package,
