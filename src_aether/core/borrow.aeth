@@ -21,7 +21,7 @@ fn br_contains_owner(ty:*BootType,depth:i32)->bool{
 fn br_type(ctx:*BootContext,ty:*BootType,token:*BootToken,foreign:bool)->bool{
  if ty==0 as *BootType{return true;}
  if ty.kind==BY_OWN{
-  if foreign||ty.inner.kind!=BY_STRUCT||br_contains_owner(ty.inner,0)||br_contains(ty.inner,0){boot_error(ctx,token,"own requires a plain nominal struct payload and an internal ABI");return false;}return true;
+  if foreign||ty.inner.kind!=BY_STRUCT||ty.inner.is_tuple||br_contains_owner(ty.inner,0)||br_contains(ty.inner,0){boot_error(ctx,token,"own requires a plain nominal struct payload and an internal ABI");return false;}return true;
  }
  if br_contains_owner(ty,0){boot_error(ctx,token,"owned values cannot enter copyable aggregate storage");return false;}
 
@@ -138,6 +138,9 @@ fn br_expr(state:*BootBorrowState,node:*BootNode,consume:bool)->*BootBorrowOrigi
   return br_expr(state,node.left,consume);
  }
  if node.kind==BN_MEMBER&&(node.flags&BF_UNSAFE)==0&&node.ty.kind==BY_PTR&&boot_reference(node.left.ty)&&node.left.ty.inner.kind==BY_OWN{boot_error(state.ctx,node.token,"raw pointer field cannot escape a borrowed owner");return 0 as *BootBorrowOrigin;}
+ if (node.kind==BN_MEMBER||node.kind==BN_INDEX)&&!boot_indirect(node.left.ty)&&node.left.ty.kind!=BY_OWN&&!boot_place_form(node.left){
+  br_expr(state,node.left,false);br_expr(state,node.right,false);return 0 as *BootBorrowOrigin;
+ }
  if node.kind==BN_MEMBER||node.kind==BN_INDEX||(node.kind==BN_UNARY&&node.op==42){
   let origins:*BootBorrowOrigin=br_place(state,node);br_access(state,origins,false,node.token);return 0 as *BootBorrowOrigin;
  }

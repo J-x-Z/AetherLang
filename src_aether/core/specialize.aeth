@@ -32,6 +32,11 @@ pub fn boot_infer_type(ctx:*BootContext,formal:*BootType,actual:*BootType,bindin
  if formal.kind==BY_CONST_EXPR&&actual.kind==BY_CONST_VALUE{
   let value:*BootType=ce_eval(ctx,formal.expression,bindings,actual.inner,0);if ctx.failed{return false;}if value==0 as *BootType||value==actual{return true;}boot_error(ctx,token,"generic const value mismatch");return false;
  }
+ if formal.kind==BY_STRUCT&&formal.is_tuple&&actual.kind==BY_STRUCT&&actual.is_tuple{
+  let mut a:*BootNode=formal.fields;let mut b:*BootNode=actual.fields;
+  while a!=0 as *BootNode&&b!=0 as *BootNode{if !boot_infer_type(ctx,a.ty,b.ty,bindings,token,depth+1){return false;}a=a.next;b=b.next;}
+  if a!=0 as *BootNode||b!=0 as *BootNode{boot_error(ctx,token,"generic tuple arity mismatch");return false;}return true;
+ }
  if formal.kind==BY_APPLICATION&&actual.base==formal.base{
   let mut left:*BootTypeArgument=formal.arguments;let mut right:*BootTypeArgument=actual.arguments;
   while left!=(0 as *BootTypeArgument)&&right!=(0 as *BootTypeArgument){if !boot_infer_type(ctx,left.ty,right.ty,bindings,token,depth+1){return false;}left=left.next;right=right.next;}
@@ -43,7 +48,7 @@ pub fn boot_infer_type(ctx:*BootContext,formal:*BootType,actual:*BootType,bindin
 pub fn boot_generic_hint(ctx:*BootContext,formal:*BootType,bindings:*BootTypeBinding,token:*BootToken)->*BootType{
  let mut ty:*BootType=boot_substitute_type(ctx,formal,bindings,0,token);if ctx.failed{return 0 as *BootType;}
  ty=boot_normal_type(ctx,ty,0,token);if boot_type_concrete(ty,0){return ty;}
- if ty!=0 as *BootType&&ty.kind==BY_ARRAY&&boot_type_concrete(ty.inner,0){return ty;}return 0 as *BootType;
+ if ty!=0 as *BootType&&((ty.kind==BY_ARRAY&&boot_type_concrete(ty.inner,0))||(ty.kind==BY_STRUCT&&ty.is_tuple)){return ty;}return 0 as *BootType;
 }
 fn boot_clone_nodes(ctx:*BootContext,source:*BootNode,bindings:*BootTypeBinding)->*BootNode{
  let mut old:*BootNode=source;let mut first:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;

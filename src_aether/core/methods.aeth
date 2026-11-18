@@ -40,7 +40,7 @@ pub fn boot_methods_check(ctx:*BootContext)->bool {
  while item!=0 as *BootNode&&!ctx.failed{
   let target:*BootType=boot_normal_type(ctx,item.aux,0,item.token);if ctx.failed{return false;}item.aux=target;
   let base:*BootType=boot_method_base(target);
-  if base==0 as *BootType||!base.complete||(base.kind!=BY_STRUCT&&base.kind!=BY_TEMPLATE)||base.is_enum{boot_error(ctx,item.token,"inherent impl target must be a struct");return false;}
+  if base==0 as *BootType||!base.complete||(base.kind!=BY_STRUCT&&base.kind!=BY_TEMPLATE)||base.is_enum||base.is_tuple{boot_error(ctx,item.token,"inherent impl target must be a struct");return false;}
   let mut prior:*BootNode=item.next;
   while prior!=0 as *BootNode{
    if item.decl!=0 as *BootNode&&prior.decl!=0 as *BootNode&&boot_method_base(prior.aux)==base&&strcmp(prior.name,item.name)==0{boot_error(ctx,item.token,"duplicate inherent method on this struct");return false;}prior=prior.next;

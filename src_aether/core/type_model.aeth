@@ -1,6 +1,7 @@
 use model::*;
 use runtime::*;
 use const_eval::*;
+use tuple_model::*;
 use enum_model::boot_enum_payload;
 pub fn boot_array_type(ctx:*BootContext,inner:*BootType,count:u64)->*BootType {
  let mut ty:*BootType=ctx.types;
@@ -12,6 +13,12 @@ pub fn boot_array_type(ctx:*BootContext,inner:*BootType,count:u64)->*BootType {
 pub fn boot_normal_type(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->*BootType {
  if ty==(0 as *BootType)||ctx.failed{return ty;}
  if depth>256{boot_error(ctx,token,"cyclic or excessively deep type alias");return 0 as *BootType;}
+ if ty.kind==BY_STRUCT&&ty.is_tuple{
+  let mut old:*BootNode=ty.fields;let mut fields:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;let mut index:u64=0;
+  while old!=0 as *BootNode&&!ctx.failed{let field:*BootNode=tp_field(ctx,boot_normal_type(ctx,old.ty,depth+1,old.token),index,old.token);if ctx.failed{return 0 as *BootType;}
+   if tail==0 as *BootNode{fields=field;}else{tail.next=field;}tail=field;old=old.next;index=index+1;
+  }return tp_type(ctx,fields);
+ }
  if ty.kind==BY_CONST_EXPR{return ty;}
  if ty.kind==BY_APPLICATION{return boot_expand_type(ctx,ty,depth+1,token);}
  if ty.kind==BY_ALIAS{return boot_normal_type(ctx,ty.inner,depth+1,token);}
@@ -38,12 +45,12 @@ fn boot_normal_nodes(ctx:*BootContext,node:*BootNode){
 pub fn boot_normalize(ctx:*BootContext)->bool{
  let mut ty:*BootType=ctx.types;
  while ty!=(0 as *BootType)&&!ctx.failed{
-  if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{boot_normal_nodes(ctx,ty.fields);}ty=ty.next;
+  if (ty.kind==BY_STRUCT&&!ty.is_tuple)||ty.kind==BY_ENUM{boot_normal_nodes(ctx,ty.fields);}ty=ty.next;
  }
  boot_normal_nodes(ctx,ctx.program.body);if ctx.failed{return false;}
  // Retire pre-normalization array entries so C never emits stale alias fields.
  ty=ctx.types;while ty!=(0 as *BootType)&&!ctx.failed{
-  if ty.kind==BY_ARRAY{let canonical:*BootType=boot_normal_type(ctx,ty,0,ctx.cursor);if canonical!=ty{ty.kind=BY_ALIAS;ty.inner=canonical;}}
+  if ty.kind==BY_ARRAY||(ty.kind==BY_STRUCT&&ty.is_tuple){let canonical:*BootType=boot_normal_type(ctx,ty,0,ctx.cursor);if canonical!=ty{ty.kind=BY_ALIAS;ty.inner=canonical;}}
   ty=ty.next;
  }
  return !ctx.failed;
@@ -150,6 +157,7 @@ pub fn boot_type_concrete(ty:*BootType,depth:i32)->bool{
  if ty==(0 as *BootType)||depth>256{return false;}
  if ty.kind==BY_PARAMETER||ty.kind==BY_CONST_PARAMETER||ty.kind==BY_CONST_EXPR||ty.kind==BY_TEMPLATE||ty.kind==BY_APPLICATION{return false;}
  if ty.kind==BY_ARRAY&&ty.expression!=0 as *BootNode{return false;}
+ if ty.kind==BY_STRUCT&&ty.is_tuple{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{if !boot_type_concrete(field.ty,depth+1){return false;}field=field.next;}return true;}
  if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_OWN{return boot_type_concrete(ty.inner,depth+1);}return true;
 }
 pub fn boot_type_bindings(ctx:*BootContext,parameters:*BootNode)->*BootTypeBinding{
@@ -163,6 +171,12 @@ pub fn boot_substitute_type(ctx:*BootContext,ty:*BootType,bindings:*BootTypeBind
  if ctx.failed||ty==(0 as *BootType){return ty;}if depth>256{boot_error(ctx,token,"generic type nesting exceeds 256");return 0 as *BootType;}
  if ty.kind==BY_PARAMETER||ty.kind==BY_CONST_PARAMETER{let mut binding:*BootTypeBinding=bindings;while binding!=(0 as *BootTypeBinding){if binding.formal==ty&&binding.actual!=(0 as *BootType){return binding.actual;}binding=binding.next;}return ty;}
  if ty.kind==BY_ALIAS{return boot_substitute_type(ctx,ty.inner,bindings,depth+1,token);}
+ if ty.kind==BY_STRUCT&&ty.is_tuple{
+  let mut old:*BootNode=ty.fields;let mut fields:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;let mut index:u64=0;
+  while old!=0 as *BootNode&&!ctx.failed{let field:*BootNode=tp_field(ctx,boot_substitute_type(ctx,old.ty,bindings,depth+1,old.token),index,old.token);if ctx.failed{return 0 as *BootType;}
+   if tail==0 as *BootNode{fields=field;}else{tail.next=field;}tail=field;old=old.next;index=index+1;
+  }return tp_type(ctx,fields);
+ }
  if ty.kind==BY_CONST_EXPR{return ce_expression(ctx,ce_substitute(ctx,ty.expression,bindings));}
  if ty.kind==BY_ARRAY&&ty.expression!=0 as *BootNode{
   let inner:*BootType=boot_substitute_type(ctx,ty.inner,bindings,depth+1,token);

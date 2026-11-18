@@ -28,7 +28,7 @@ pub const BY_I16:i32=4; pub const BY_U16:i32=5; pub const BY_I32:i32=6; pub cons
 pub const BY_I64:i32=8; pub const BY_U64:i32=9; pub const BY_F32:i32=10; pub const BY_F64:i32=11;
 pub const BY_PTR:i32=12; pub const BY_STRUCT:i32=13; pub const BY_ARRAY:i32=14; pub const BY_ALIAS:i32=15;
 pub const BY_CONST_PARAMETER:i32=23; pub const BY_CONST_VALUE:i32=24; pub const BY_CONST_EXPR:i32=25;
-pub const BN_CONST_VALUE:i32=51;
+pub const BN_CONST_VALUE:i32=51;pub const BN_TUPLE:i32=53;
 pub const BY_ENUM:i32=19;
 pub const BY_INFER:i32=26;pub const BN_CLOSURE:i32=52;pub const BF_CLOSURE_ENV:i32=16384;pub const BF_CLOSURE_BODY:i32=32768;
 pub const BY_OWN:i32=22; pub const BF_DROP:i32=2048; pub const BF_OWN_MOVE:i32=4096;
@@ -69,7 +69,7 @@ pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=3
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
 pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
-pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool,is_alias:bool,expression:*BootNode,callable:*BootNode }
+pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool,is_alias:bool,expression:*BootNode,callable:*BootNode,is_tuple:bool }
 pub struct BootCallEdge {callee:*BootNode,next:*BootCallEdge}
 pub struct BootNode {
  effect_explicit:bool,effect_limit:i32,effect_bits:i32,calls:*BootCallEdge,

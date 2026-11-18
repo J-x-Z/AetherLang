@@ -1,0 +1,33 @@
+use model::*;
+use runtime::*;
+// Tuple identity is the ordered element type sequence, independent of modules
+// and spelling. The existing aggregate IR supplies actual values and layout.
+pub fn tp_field(ctx:*BootContext,ty:*BootType,index:u64,token:*BootToken)->*BootNode{
+ let field:*BootNode=boot_node(ctx,BN_FIELD,token);let name:*u8=boot_alloc(ctx,32) as *u8;if ctx.failed{return 0 as *BootNode;}
+ snprintf(name,32,"%llu",index);field.name=name;field.ty=ty;field.flags=8;return field;
+}
+pub fn tp_type(ctx:*BootContext,fields:*BootNode)->*BootType{
+ if fields==0 as *BootNode{return boot_type(ctx,BY_VOID);}
+ let mut old:*BootType=ctx.types;
+ while old!=0 as *BootType{
+  if old.kind==BY_STRUCT&&old.is_tuple{
+   let mut a:*BootNode=old.fields;let mut b:*BootNode=fields;let mut equal:bool=true;
+   while a!=0 as *BootNode&&b!=0 as *BootNode{if a.ty!=b.ty{equal=false;break;}a=a.next;b=b.next;}
+   if equal&&a==0 as *BootNode&&b==0 as *BootNode{return old;}
+  }old=old.next;
+ }
+ let ty:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;if ty==0 as *BootType{return ty;}
+ ty.kind=BY_STRUCT;ty.is_tuple=true;ty.complete=true;ty.id=boot_id(ctx);ty.name="tuple";
+ let mut source:*BootNode=fields;let mut tail:*BootNode=0 as *BootNode;let mut index:u64=0;
+ while source!=0 as *BootNode&&!ctx.failed{let field:*BootNode=tp_field(ctx,source.ty,index,source.token);if ctx.failed{return 0 as *BootType;}
+  if tail==0 as *BootNode{ty.fields=field;}else{tail.next=field;}tail=field;source=source.next;index=index+1;
+ }ty.next=ctx.types;ctx.types=ty;return ty;
+}
+pub fn tp_foreign(ty:*BootType,depth:i32)->bool{
+ if depth>256{return true;}
+ if ty.kind==BY_ARRAY{return tp_foreign(ty.inner,depth+1);}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{
+  if ty.is_tuple{return true;}let mut field:*BootNode=ty.fields;
+  while field!=0 as *BootNode{if tp_foreign(field.ty,depth+1){return true;}field=field.next;}
+ }return false;
+}

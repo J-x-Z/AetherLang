@@ -18,6 +18,8 @@ pub fn ls_name_token(node:*BootNode)->*BootToken{
 }
 fn li_record(arena:*BootContext,index:*LspIndex,node:*BootNode,decl:*BootNode,definition:bool){
  if decl==0 as *BootNode||index.count>=262144{return;}
+ // Numeric tuple fields have no named source declaration to navigate to.
+ if decl.kind==BN_FIELD&&decl.name!=0 as *u8&&decl.name[0]>=48&&decl.name[0]<=57{return;}
  if decl.kind!=BN_FN&&decl.name!=0 as *u8&&decl.name[0]==64{return;}let token:*BootToken=ls_name_token(node);if token==0 as *BootToken||token.path==0 as *u8{return;}
  // Hidden lowered locals have source tokens, but are not source declarations.
  if definition&&node.name!=0 as *u8&&node.name[0]==64&&node.kind!=BN_FN{return;}
@@ -48,6 +50,11 @@ pub fn ls_type(out:*LspBuffer,ty:*BootType,depth:i32){
  if ty.kind==BY_PTR{ls_char(out,42);ls_type(out,ty.inner,depth+1);return;}
  if ty.kind==BY_REF||ty.kind==BY_MUTREF{ls_char(out,38);if ty.kind==BY_MUTREF{ls_text(out,"mut ");}ls_type(out,ty.inner,depth+1);return;}
  if ty.kind==BY_ARRAY{ls_char(out,91);ls_type(out,ty.inner,depth+1);ls_text(out,"; ");ls_number(out,ty.extent as i64);ls_char(out,93);return;}
+ if ty.kind==BY_STRUCT&&ty.is_tuple{
+  ls_char(out,40);let mut field:*BootNode=ty.fields;let mut count:i32=0;
+  while field!=0 as *BootNode{if count!=0{ls_text(out,", ");}ls_type(out,field.ty,depth+1);count=count+1;field=field.next;}
+  if count==1{ls_char(out,44);}ls_char(out,41);return;
+ }
  if ty.name!=0 as *u8{ls_text(out,ty.name);if ty.arguments!=0 as *BootTypeArgument{ls_char(out,60);let mut arg:*BootTypeArgument=ty.arguments;let mut first:bool=true;while arg!=0 as *BootTypeArgument{if !first{ls_text(out,", ");}first=false;ls_type(out,arg.ty,depth+1);arg=arg.next;}ls_char(out,62);}return;}
  let mut name:*u8="?";
  if ty.kind==BY_VOID{name="()";}if ty.kind==BY_BOOL{name="bool";}if ty.kind==BY_I8{name="i8";}if ty.kind==BY_U8{name="u8";}if ty.kind==BY_I16{name="i16";}if ty.kind==BY_U16{name="u16";}if ty.kind==BY_I32{name="i32";}if ty.kind==BY_U32{name="u32";}if ty.kind==BY_I64{name="i64";}if ty.kind==BY_U64{name="u64";}if ty.kind==BY_F32{name="f32";}if ty.kind==BY_F64{name="f64";}ls_text(out,name);

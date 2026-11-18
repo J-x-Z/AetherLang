@@ -3,6 +3,7 @@ use runtime::*;
 use type_model::*;
 use specialize::*;
 use const_eval::*;
+use tuple_model::*;
 use methods::*;
 use borrow::boot_borrow_check;
 use owned::boot_own_lower;
@@ -195,6 +196,7 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
  }
  let kind:i32=node.kind;
  if kind==BN_CONST_VALUE{return node.ty;}
+ if kind==BN_TUPLE{return boot_check_tuple(ctx,node,expected);}
  if kind==BN_VALUE&&(node.flags&4096)!=0{return node.ty;}
  if kind==BN_ENUM_VALUE{return boot_check_enum_value(ctx,node,expected);}
  if kind==BN_MATCH{return boot_check_match(ctx,node,expected);}
@@ -662,6 +664,7 @@ pub fn boot_check(ctx:*BootContext)->bool {
    if !boot_layout(ctx,item.ty,0,item.token){return false;}
   } else {
    if !boot_type_valid(ctx,item.ty,item.token,(item.kind==BN_FN||item.kind==BN_ALIAS)) { return false; }
+   if boot_c_symbol(item)&&tp_foreign(item.ty,0){boot_error(ctx,item.token,"tuple values have no stable C ABI");return false;}
    if item.kind==BN_FN {
     if (item.flags&BF_EXPORT)!=0 && strcmp(item.name,"main")==0 && !ctx.no_main {boot_error(ctx,item.token,"exporting the host main symbol requires #![no_main]");return false;}
     if (item.flags&4)!=0 && ((item.flags&2)==0 || item.params==(0 as *BootNode)) {
@@ -673,6 +676,7 @@ pub fn boot_check(ctx:*BootContext)->bool {
     let mut param:*BootNode=item.params;
     while param!=(0 as *BootNode) {
      if !boot_type_valid(ctx,param.ty,param.token,false) { return false; }
+     if boot_c_symbol(item)&&tp_foreign(param.ty,0){boot_error(ctx,param.token,"tuple values have no stable C ABI");return false;}
      if boot_c_symbol(item)&&param.ty.kind==BY_VOID{boot_error(ctx,param.token,"foreign unit parameter ABI is not supported");return false;}
      if boot_c_symbol(item)&&boot_foreign_enum(param.ty,0){boot_error(ctx,param.token,"foreign enum value ABI is not supported");return false;}
      if boot_c_symbol(item)&&param.ty.kind==BY_ARRAY{boot_error(ctx,param.token,"foreign array value ABI is not supported");return false;}
@@ -927,4 +931,22 @@ fn boot_check_closure(ctx:*BootContext,function:*BootNode)->bool{
  if !ctx.failed&&function.ty.kind!=BY_VOID&&(boot_flow(function.body)&1)!=0{boot_error(ctx,function.token,"closure may finish without returning a value");}
  ctx.function=saved_function;ctx.bindings=saved_bindings;ctx.depth=saved_depth;ctx.loop_depth=saved_loop;ctx.value_type=saved_value;ctx.value_target=saved_target;ctx.unsafe_depth=saved_unsafe;
  return !ctx.failed;
+}
+
+fn boot_check_tuple(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType{
+ let mut wanted:*BootNode=0 as *BootNode;if expected!=0 as *BootType&&expected.kind==BY_STRUCT&&expected.is_tuple{wanted=expected.fields;}
+ let contextual:bool=wanted!=0 as *BootNode;let mut value:*BootNode=node.params;let mut fields:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;let mut index:u64=0;
+ while value!=0 as *BootNode&&!ctx.failed{
+  if contextual&&wanted==0 as *BootNode{boot_error(ctx,node.token,"tuple initializer arity mismatch");return 0 as *BootType;}
+  let mut hint:*BootType=0 as *BootType;if wanted!=0 as *BootNode&&(boot_type_concrete(wanted.ty,0)||(wanted.ty.kind==BY_ARRAY&&boot_type_concrete(wanted.ty.inner,0))||(wanted.ty.kind==BY_STRUCT&&wanted.ty.is_tuple)){hint=wanted.ty;}
+  let actual:*BootType=boot_check_expr(ctx,value,hint);if ctx.failed{return 0 as *BootType;}
+  if hint!=0 as *BootType&&boot_type_concrete(hint,0)&&!boot_expect(ctx,value,actual,hint){return 0 as *BootType;}
+  let field:*BootNode=tp_field(ctx,actual,index,value.token);if ctx.failed{return 0 as *BootType;}field.left=value;let next:*BootNode=value.next;value.next=0 as *BootNode;
+  if tail==0 as *BootNode{fields=field;}else{tail.next=field;}tail=field;value=next;index=index+1;if wanted!=0 as *BootNode{wanted=wanted.next;}
+ }
+ if wanted!=0 as *BootNode{boot_error(ctx,node.token,"tuple initializer arity mismatch");return 0 as *BootType;}
+ let ty:*BootType=tp_type(ctx,fields);if ctx.failed||!boot_type_valid(ctx,ty,node.token,false){return 0 as *BootType;}
+ let mut argument:*BootNode=fields;let mut field:*BootNode=ty.fields;
+ while argument!=0 as *BootNode{argument.decl=field;argument=argument.next;field=field.next;}
+ node.kind=BN_STRUCT_VALUE;node.ty=ty;node.params=fields;return ty;
 }

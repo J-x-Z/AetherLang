@@ -64,17 +64,17 @@ fn boot_lex_digits(lexer:*BootLexer,hex:bool)->bool {
 }
 fn boot_lex_number(lexer:*BootLexer)->bool {
  let start:u64=lexer.position;
- let mut kind:i32=BT_INT;
+ let mut kind:i32=BT_INT;let projection:bool=lexer.tail!=0 as *BootToken&&lexer.tail.kind==46;
  if boot_lex_peek(lexer,0)==48 && (boot_lex_peek(lexer,1)==120 || boot_lex_peek(lexer,1)==88) {
   boot_lex_advance(lexer);boot_lex_advance(lexer);
   if !boot_lex_digits(lexer,true) { return false; }
  } else {
   if !boot_lex_digits(lexer,false) { return false; }
-  if boot_lex_peek(lexer,0)==46 && boot_lex_digit(boot_lex_peek(lexer,1)) {
+  if !projection&&boot_lex_peek(lexer,0)==46 && boot_lex_digit(boot_lex_peek(lexer,1)) {
    kind=BT_FLOAT;boot_lex_advance(lexer);
    if !boot_lex_digits(lexer,false) { return false; }
   }
-  if boot_lex_peek(lexer,0)==101 || boot_lex_peek(lexer,0)==69 {
+  if !projection&&(boot_lex_peek(lexer,0)==101 || boot_lex_peek(lexer,0)==69) {
    kind=BT_FLOAT;boot_lex_advance(lexer);
    if boot_lex_peek(lexer,0)==43 || boot_lex_peek(lexer,0)==45 { boot_lex_advance(lexer); }
    if !boot_lex_digits(lexer,false) { return false; }

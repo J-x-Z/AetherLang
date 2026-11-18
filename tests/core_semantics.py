@@ -107,7 +107,7 @@ negative = {
     'constant_call': ('fn f()->i32{return 1;}const X:i32=f();fn main()->i32{return 0;}', 'compile-time constant'),
     'outside_break': ('fn main()->i32{break;return 0;}', 'outside a loop'),
     'outside_continue': ('fn main()->i32{continue;return 0;}', 'outside a loop'),
-    'function_shadow': ('fn f()->i32{return 0;}fn main()->i32{let f:i32=1;return f();}', 'shadows function'),
+    'function_shadow': ('fn f()->i32{return 0;}fn main()->i32{let f:i32=1;return f();}', 'called value is not a closure'),
 }
 for name, escape, message in [
     ('unknown', r'\q', 'unknown string escape'),
@@ -140,8 +140,8 @@ negative.update({'parser_no_initializer': ('fn f(){let x:i32;}', 'Core let requi
  'parser_unsupported': ('unrecognized_item E{A}',
                         'expected fn, struct, const or extern "C"; construct outside Core v1'),
  'parser_assign_expr': ('fn f()->i32{return 1=2;}', 'expected expression'),
- 'parser_indirect_call': ('fn f()->i32{return (*pointer)(1);}',
-                          'Core calls require a function name'),
+ 'indirect_unknown_callee': ('fn f()->i32{return (*pointer)(1);}',
+                          'unknown value name'),
  'parser_deep_expr': ('fn f()->i32{return '
                       '((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))));}',
                       'expression nesting exceeds 256'),

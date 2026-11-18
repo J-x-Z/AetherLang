@@ -311,3 +311,27 @@ Core `|x: i64| -> i64 { base + x }` and Script `lambda (x: int) -> int: base + x
 The self-hosted compiler supports nested closures, returned environments, immediate calls, generic callback parameters, closure fields in concrete generic records, array/record/enum captures, private module calls and const-generic algorithms using callbacks. References passed as closure parameters and references returned into the closure's own environment use the ordinary provenance checks. Closure environments do not expose a C ABI. Capturing checked references or owned resources is explicitly rejected until aggregate projection-aware lifetime and move tracking is available. This restriction does not erase a reference into a raw pointer.
 
 `tests/bootstrap_closures.py` checks the common Core/Script subset against the primary compiler and executes both native backends with optimization and sanitizers. The environment and exact hidden callee lower to ordinary typed nodes, so arithmetic, borrowing and code generation remain shared with named functions.
+
+Core tuple types and values use structural identity: `(i32, i64)` denotes the
+same type across modules, while a named record with those fields remains a
+different type. Parentheses without a comma group an expression or type;
+`(value,)` is a one-element tuple and `()` is Unit. Numeric projections such as
+`value.1.0` retain integer field boundaries. Tuple construction evaluates each
+operand once in source order and copies its value before later operands run.
+Tuples support generic inference, array and enum storage, `Vec`, static
+initializers, packed-record fields, zero-sized elements and ordinary returns in
+both emitters. Read-only access to a temporary aggregate evaluates the value;
+taking a reference still requires valid addressable storage.
+
+Tuple values, including those nested in records, have no stable C ABI; use a
+named C-compatible record at a foreign value boundary. Raw pointers to opaque
+Aether-owned tuple storage remain available. The current Core reference/owner
+projection restrictions also apply to tuple payloads. Per-field initialization
+of a declared but uninitialized tuple is not migrated yet. The standalone
+acceptance command covers the supported value semantics and explicitly checks
+these storage boundaries:
+
+```sh
+python3 tests/bootstrap_tuples.py --compiler "$WORK/core-stage4" \
+  --reference-compiler "$AETHC" --work-dir "$WORK/core-tuples" --sanitize
+```
