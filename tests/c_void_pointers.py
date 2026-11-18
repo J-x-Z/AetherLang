@@ -13,8 +13,8 @@ parser.add_argument('--work-dir', type=Path, required=True)
 parser.add_argument('--backends', nargs='+', choices=['llvm', 'c'], default=['llvm', 'c'])
 parser.add_argument('--levels', nargs='+', choices=['0', '2'], default=['0', '2'])
 parser.add_argument('--clang', default=os.environ.get('CLANG', 'clang'))
-parser.add_argument('--cases', nargs='+', choices=['file_handles', 'unit_sentinel', 'unit_values', 'zero_sized'],
-                    default=['file_handles', 'unit_sentinel', 'unit_values', 'zero_sized'])
+parser.add_argument('--cases', nargs='+', choices=['file_handles', 'byte_file_handles', 'unit_sentinel', 'unit_values', 'zero_sized'],
+                    default=['file_handles', 'byte_file_handles', 'unit_sentinel', 'unit_values', 'zero_sized'])
 parser.add_argument('--sanitize', action='store_true', help='Enable ASan/UBSan for generated C')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -30,6 +30,7 @@ records = []
 failed = False
 cases = {
     'file_handles': (fixtures / 'file_handles.aeth', b'void-pointers=ok\n'),
+    'byte_file_handles': (root / 'tests/regressions/ffi_variadic.aeth', b''),
     'unit_sentinel': (fixtures / 'unit_sentinel.aeth', b'unit-sentinel=ok\n'),
     # Reuse the established semantic oracles for by-value Unit aggregates,
     # Result<(), E>, Vec<()>, empty structs and zero-length arrays.

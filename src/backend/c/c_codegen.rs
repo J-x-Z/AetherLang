@@ -11,6 +11,40 @@ use crate::backend::codegen::CodeGen;
 use crate::middle::ir::*;
 use crate::utils::{Error, Result};
 
+/// A hosted stdio declaration may spell an opaque FILE handle as a byte address.
+/// Convert only the FILE positions. Other fixed arguments and the variadic tail
+/// remain visible to the type and format checks of the system header.
+struct StdioStream {
+    byte_parameter: Option<usize>,
+    byte_result: bool,
+}
+
+impl StdioStream {
+    fn declaration(ext: &IRExtern) -> Option<Self> {
+        let (parameter, result): (Option<usize>, bool) = match ext.name.as_str() {
+            "fopen" | "fdopen" | "popen" | "tmpfile" => (None, true),
+            "freopen" => (Some(2), true),
+            "fclose" | "pclose" | "fflush" | "ferror" | "feof" | "clearerr" | "fileno"
+            | "fseek" | "ftell" | "fseeko" | "ftello" | "rewind" | "fgetpos" | "fsetpos"
+            | "fgetc" | "getc" | "getc_unlocked" | "getw" | "setbuf" | "setvbuf"
+            | "fprintf" | "fscanf" | "vfprintf" | "vfscanf" | "flockfile" | "ftrylockfile"
+            | "funlockfile" => (Some(0), false),
+            "fputc" | "putc" | "putc_unlocked" | "ungetc" | "putw" | "fputs" => (Some(1), false),
+            "fgets" | "getline" => (Some(2), false),
+            "fread" | "fwrite" | "getdelim" => (Some(3), false),
+            _ => return None,
+        };
+        let byte_pointer = |ty: &IRType| {
+            matches!(ty, IRType::Ptr(inner) if matches!(inner.unqualified(), IRType::U8 | IRType::I8))
+        };
+        let byte_parameter = parameter.filter(|&i| ext.params.get(i).is_some_and(|(_, ty)| byte_pointer(ty)));
+        Some(Self {
+            byte_parameter,
+            byte_result: result && byte_pointer(&ext.ret_type),
+        })
+    }
+}
+
 /// C code generator
 pub struct CCodeGen {
     target_triple: String,
@@ -43,6 +77,7 @@ pub struct CCodeGen {
     current_func_name: String,
     current_func_param_count: usize,
     extern_conversions: HashMap<String, String>,
+    stdio_streams: HashMap<String, StdioStream>,
 }
 
 impl CCodeGen {
@@ -65,6 +100,7 @@ impl CCodeGen {
             current_func_name: String::new(),
             current_func_param_count: 0,
             extern_conversions: HashMap::new(),
+            stdio_streams: HashMap::new(),
         }
 
 
@@ -664,7 +700,12 @@ impl CCodeGen {
             }
 
             Instruction::Call { dest, func, args } => {
-                let args_str: Vec<_> = args.iter().map(|a| self.value_to_c(a)).collect();
+                let mut args_str: Vec<_> = args.iter().map(|a| self.value_to_c(a)).collect();
+                let stream = self.stdio_streams.get(func);
+                if let Some(arg) = stream.and_then(|s| s.byte_parameter).and_then(|i| args_str.get_mut(i)) {
+                    *arg = format!("(FILE*)({arg})");
+                }
+                let result_cast = if stream.is_some_and(|s| s.byte_result) { "(void*)" } else { "" };
 
                 // Check if user-defined function returns void
                 let ret_ty = self.func_ret_types.get(func).cloned();
@@ -678,7 +719,7 @@ impl CCodeGen {
                 let is_void = matches!(ret_ty, Some(IRType::Void)) || matches!(ret_ty, None);
                 
                 let callee = self.extern_conversions.get(func).unwrap_or(func);
-                let call = format!("{}({})", callee, args_str.join(", "));
+                let call = format!("{result_cast}{callee}({})", args_str.join(", "));
                 
                 // For void functions, don't assign to a variable
                 if is_void || dest.is_none() {
@@ -1164,16 +1205,12 @@ impl CCodeGen {
         const HEADER_FUNCTIONS: &[&str] = &[
             "abort", "exit", "malloc", "calloc", "realloc", "free", "atoi", "atol", "atof", "strtol", "strtoul",
             "system", "getenv", "setenv", "unsetenv", "realpath", "qsort", "bsearch", "abs", "labs", "llabs", "rand", "srand",
-            "puts", "putchar", "getchar", "printf", "fprintf", "sprintf", "snprintf", "scanf", "sscanf", "fscanf",
-            "fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "rewind", "fgets", "fputs", "fflush", "feof", "ferror", "clearerr",
-            "tmpfile", "remove", "rename", "perror", "setbuf", "setvbuf", "fileno", "fgetc", "fputc", "getc", "putc", "ungetc", "freopen",
+            "puts", "putchar", "getchar", "printf", "sprintf", "snprintf", "scanf", "sscanf", "remove", "rename", "perror",
             "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strcat", "strncat", "strchr", "strrchr", "strstr",
             "memcpy", "memmove", "memset", "memcmp", "memchr", "strerror", "strdup", "assert",
             // Remaining ISO C stdio APIs and common POSIX stdio extensions.
-            "fdopen", "popen", "pclose", "fseeko", "ftello", "fgetpos", "fsetpos", "tmpnam", "tmpnam_r",
-            "vprintf", "vfprintf", "vsprintf", "vsnprintf", "vscanf", "vfscanf", "vsscanf", "dprintf", "vdprintf",
-            "getline", "getdelim", "flockfile", "ftrylockfile", "funlockfile", "getc_unlocked", "putc_unlocked",
-            "getchar_unlocked", "putchar_unlocked", "getw", "putw", "ctermid",
+            "tmpnam", "tmpnam_r", "vprintf", "vsprintf", "vsnprintf", "vscanf", "vsscanf", "dprintf", "vdprintf",
+            "getchar_unlocked", "putchar_unlocked", "ctermid",
             // Scalar conversion/allocation/environment APIs declared by stdlib.
             "strtod", "strtof", "strtold", "strtoll", "strtoull", "atoll", "div", "ldiv", "lldiv",
             "atexit", "at_quick_exit", "quick_exit", "_Exit", "aligned_alloc", "mblen", "mbtowc", "wctomb", "mbstowcs", "wcstombs",
@@ -1182,7 +1219,14 @@ impl CCodeGen {
 
         ];
         let mut declared = HashSet::new();
+        self.stdio_streams.clear();
         for ext in &module.externs {
+            if !module.no_std {
+                if let Some(stream) = StdioStream::declaration(ext) {
+                    self.stdio_streams.insert(ext.name.clone(), stream);
+                    continue;
+                }
+            }
             // Strict ISO modes may hide POSIX declarations; when imported,
             // use the exact system prototype in either feature-test mode.
             if !module.no_std && matches!(ext.name.as_str(), "mkdtemp" | "mkstemp") {
