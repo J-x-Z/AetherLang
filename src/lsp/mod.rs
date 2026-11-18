@@ -198,6 +198,15 @@ mod tests{
         assert_eq!(decoded.as_deref(), Some(canonical.as_path()));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_in_a_unix_filename_is_percent_encoded() {
+        let path = std::env::temp_dir().join(r"hello\world.aeth");
+        let uri = uri_from_path(path.to_str().unwrap());
+        assert!(uri.ends_with("/hello%5Cworld.aeth"));
+        assert_eq!(path_from_uri(&uri), Some(Resolver::source_path(&path)));
+    }
+
     #[test]
     fn windows_drive_and_unc_uri_spellings() {
         for drive in [r"C:\src\a.aeth", r"\\?\C:\src\a.aeth"] {
