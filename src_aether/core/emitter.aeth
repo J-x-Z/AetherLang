@@ -313,10 +313,18 @@ fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
   else{boot_c_text(ctx,"return;\n");}return;
  }
  if node.kind==BN_IF {
+  if node.left.kind==BN_BOOL{
+   if node.left.value!=0{boot_emit_stmt(ctx,node.body);}else{boot_emit_stmt(ctx,node.third);}
+   return;
+  }
   boot_emit_expr(ctx,node.left);boot_c_text(ctx,"if (");boot_c_temp(ctx,node.left);boot_c_text(ctx,") ");boot_emit_stmt(ctx,node.body);
   if node.third!=0 as *BootNode{boot_c_text(ctx,"else {\n");boot_emit_stmt(ctx,node.third);boot_c_text(ctx,"}\n");}return;
  }
  if node.kind==BN_WHILE {
+  if node.left.kind==BN_BOOL{
+   if node.left.value!=0{boot_c_text(ctx,"while (true) ");boot_emit_stmt(ctx,node.body);}
+   return;
+  }
   boot_c_text(ctx,"while (true) {\n");boot_emit_expr(ctx,node.left);boot_c_text(ctx,"if (!");boot_c_temp(ctx,node.left);boot_c_text(ctx,") break;\n");boot_emit_stmt(ctx,node.body);boot_c_text(ctx,"}\n");return;
  }
  if node.kind==BN_BREAK{boot_c_text(ctx,"break;\n");return;}

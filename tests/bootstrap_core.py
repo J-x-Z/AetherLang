@@ -121,7 +121,7 @@ save()
 fixtures = {'recursive_heap': 'heap=49995000 factorial=3628800 fib=6765\n',
             'file_io': 'file-bytes=5\n',
             'effects_numbers': 'effects=123 wrap=4 decimal=12\n',
-            'typed_values': 'typed-values=ok\n', 'foreign_names': '', 'llvm_abi': 'llvm-abi=ok\n'}
+            'literal_control_flow': '', 'typed_values': 'typed-values=ok\n', 'foreign_names': '', 'llvm_abi': 'llvm-abi=ok\n'}
 fixture_root = root / 'tests' / 'regressions' / 'bootstrap'
 def companion_objects(name):
     companion = fixture_root / f'{name}.c'
@@ -134,7 +134,7 @@ for name, expected in fixtures.items():
     run(f'fixture-{name}-emit', [stages[2], fixture, '-o', generated])
     for level in ['0', '2']:
         binary = work / f'{name}-O{level}'
-        run(f'fixture-{name}-cc-O{level}', [cc, '-std=c11', f'-O{level}', generated, *companion_objects(name), '-lm', '-o', binary])
+        run(f'fixture-{name}-cc-O{level}', [cc, '-std=c11', '-Werror=return-type', f'-O{level}', generated, *companion_objects(name), '-lm', '-o', binary])
         command = [binary]
         if name == 'file_io':
             command += [work / 'io-original', work / 'io-renamed']

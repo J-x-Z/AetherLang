@@ -1,0 +1,3 @@
+fn choose(n:i32)->i32 { if false {return -1;} if true {return n;} }
+fn retry(n:i32)->i32 { let mut i:i32=0; loop { if i==n {return i;} i+=1; } }
+fn main()->i32 {return choose(17)+retry(25)-42;}
