@@ -30,7 +30,7 @@ pub const BY_CONST_PARAMETER:i32=23; pub const BY_CONST_VALUE:i32=24; pub const 
 pub const BN_CONST_VALUE:i32=51;pub const BN_TUPLE:i32=53;pub const BN_PATTERN:i32=54;
 pub const BY_INTERFACE:i32=27;pub const BY_DYN_MARKER:i32=28;pub const BN_INTERFACE:i32=55;pub const BF_DYN_DISPATCH:i32=262144;
 pub const BF_SCRIPT_UNINIT:i32=524288;
-pub const BY_ENUM:i32=19;
+pub const BY_ENUM:i32=19;pub const BY_NEVER:i32=29;pub const BN_HALT:i32=56;
 pub const BY_INFER:i32=26;pub const BN_CLOSURE:i32=52;pub const BF_CLOSURE_ENV:i32=16384;pub const BF_CLOSURE_BODY:i32=32768;
 pub const BY_OWN:i32=22; pub const BF_DROP:i32=2048; pub const BF_OWN_MOVE:i32=4096;
 pub const BY_REF:i32=20; pub const BY_MUTREF:i32=21;
@@ -73,7 +73,7 @@ pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8
 pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool,is_alias:bool,expression:*BootNode,callable:*BootNode,is_tuple:bool,dynamic_contract:*BootType,dynamic_mutable:bool,dynamic_methods:*BootNode }
 pub struct BootCallEdge {callee:*BootNode,next:*BootCallEdge}
 pub struct BootNode {
- effect_explicit:bool,effect_limit:i32,effect_bits:i32,calls:*BootCallEdge,
+ host_effect:i32,effect_explicit:bool,effect_limit:i32,effect_bits:i32,calls:*BootCallEdge,
  kind:i32,id:i32,op:i32,flags:i32,tree_depth:i32,value:i64,name:*u8,token:*BootToken,
  ty:*BootType,aux:*BootType,decl:*BootNode,left:*BootNode,right:*BootNode,
  third:*BootNode,body:*BootNode,params:*BootNode,next:*BootNode,owner:*BootModule,lookup:*BootModule,llvm_value:i32,generics:*BootNode,origin:*BootNode
@@ -83,7 +83,7 @@ pub struct BootOverlay {path:*u8,text:*u8,length:u64,version:i64,next:*BootOverl
 pub struct BootDynImplementation{contract:*BootType,target:*BootType,methods:*BootNode,token:*BootToken,next:*BootDynImplementation}
 pub struct BootContext {
  dynamic_impls:*BootDynImplementation,
- overlays:*BootOverlay,quiet:bool,diagnostic_token:*BootToken,diagnostic_message:*u8,
+ no_std:bool,hosted_module:*BootModule,overlays:*BootOverlay,quiet:bool,diagnostic_token:*BootToken,diagnostic_message:*u8,
  arena:*BootArena,allocated:u64,source:*u8,length:u64,path:*u8,
  tokens:*BootToken,cursor:*BootToken,types:*BootType,program:*BootNode,
  failed:bool,next_id:i32,depth:i32,bindings:*BootBinding,

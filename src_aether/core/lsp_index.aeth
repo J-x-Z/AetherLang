@@ -18,6 +18,8 @@ pub fn ls_name_token(node:*BootNode)->*BootToken{
 }
 fn li_record(arena:*BootContext,index:*LspIndex,node:*BootNode,decl:*BootNode,definition:bool){
  if decl==0 as *BootNode||index.count>=262144{return;}
+ // Hosted lowering has no user-written declaration or navigation target.
+ if node.host_effect!=0||(decl.owner!=0 as *BootModule&&decl.owner.id<0){return;}
  // Numeric tuple fields have no named source declaration to navigate to.
  if decl.kind==BN_FIELD&&decl.name!=0 as *u8&&decl.name[0]>=48&&decl.name[0]<=57{return;}
  if decl.kind!=BN_FN&&decl.name!=0 as *u8&&decl.name[0]==64{return;}let token:*BootToken=ls_name_token(node);if token==0 as *BootToken||token.path==0 as *u8{return;}

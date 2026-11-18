@@ -579,11 +579,15 @@ pub fn boot_parse(ctx:*BootContext)->bool {
    let inner:bool=boot_p_take(ctx,33);
    if !boot_p_expect(ctx,91,"expected '[' after '#'"){return false;}
    if inner {
-    if destructor || repr || ctx.module!=ctx.root_module || tail!=0 as *BootNode || ctx.no_main || !boot_p_word(ctx,"no_main"){
-     boot_error(ctx,ctx.cursor,"expected a single root #![no_main] before declarations");return false;
+    if destructor || repr || ctx.module!=ctx.root_module || tail!=0 as *BootNode{
+     boot_error(ctx,ctx.cursor,"root inner attributes must precede declarations");return false;
     }
-    boot_p_advance(ctx);if !boot_p_expect(ctx,93,"expected ']' after no_main"){return false;}
-    ctx.no_main=true;continue;
+    if boot_p_word(ctx,"no_std"){
+     if ctx.no_std{boot_error(ctx,ctx.cursor,"duplicate no_std attribute");return false;}ctx.no_std=true;
+    }else if boot_p_word(ctx,"no_main"){
+     if ctx.no_main{boot_error(ctx,ctx.cursor,"duplicate no_main attribute");return false;}ctx.no_main=true;
+    }else{boot_error(ctx,ctx.cursor,"expected no_main or no_std inner attribute");return false;}
+    boot_p_advance(ctx);if !boot_p_expect(ctx,93,"expected ']' after inner attribute"){return false;}continue;
    }
    if !boot_p_word(ctx,"no_mangle"){boot_error(ctx,ctx.cursor,"unsupported declaration attribute");return false;}
    boot_p_advance(ctx);if !boot_p_expect(ctx,93,"expected ']' after no_mangle"){return false;}

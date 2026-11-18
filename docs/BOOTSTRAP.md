@@ -372,3 +372,28 @@ and exclusive-reference aggregate payloads remain outside this implementation.
 shared aggregate references, nested reference projections and private imported
 implementations on C/LLVM O0/O2 and with ASan/UBSan; it compares rejection cases
 with the primary compiler.
+
+Hosted execution provides the same twelve implicit names as the primary
+compiler: `print`, `println`, `print_i64`, `println_i64`, `puts`, `alloc`,
+`malloc`, `free`, `atof`, `strcmp`, `exit` and `assert`. Visible source functions
+and imports take priority. Their parameter types, Unit/value results and
+IO/allocation/read/panic effects are checked before lowering; `exit` is a
+diverging expression, including in an initializer or short-circuit operand.
+Printing treats the string as data, and `assert(false)` traps in both backends.
+
+A root `#![no_std]` disables these implicit calls across the loaded module graph;
+explicit declarations remain available. It can coexist with `#![no_main]`.
+This flag does not promise a libc-free executable or a new target ABI. The
+self-hosted implementation currently uses 64-bit host allocation sizes. Hosted
+C symbols such as `malloc`, `printf` and the `strto*` family must match their
+platform signatures; freestanding explicit declarations retain their chosen
+ABI. Raw pointer pointee spellings may differ across a C boundary, while scalar
+width, return and variadic mismatches are rejected.
+
+```sh
+python3 tests/bootstrap_hosted.py --compiler "$WORK/aethc-native" \
+  --seed "$WORK/aethc" --work-dir "$WORK/core-hosted" --sanitize
+```
+
+This runner requests `--emit-c` or `--emit-llvm` explicitly, so it works with
+both the bootstrap emitter CLI and the regular native compiler CLI.

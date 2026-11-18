@@ -101,27 +101,42 @@ pub fn boot_layout(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->bo
  }
  ty.layout_size=size;ty.layout_align=alignment;return true;
 }
+// Expression evaluation carries the same reachable exits as statements.
+// In particular a hosted exit inside an initializer or argument cannot return.
+fn boot_flow_then(left:i32,right:i32)->i32{if (left&1)==0{return left;}return (left&(-2 as i32))|right;}
+fn boot_expr_flow(node:*BootNode)->i32{
+ if node==0 as *BootNode{return 1;}
+ if node.kind==BN_VALUE{let flow:i32=boot_flow(node.body);if (flow&16)!=0{return (flow&(-17 as i32))|1;}return flow;}
+ let mut flow:i32=boot_expr_flow(node.left);
+ if node.kind==BN_BINARY&&(node.op==BT_AND||node.op==BT_OR){
+  let right:i32=boot_expr_flow(node.right);
+  if node.left.kind==BN_BOOL{if (node.op==BT_AND&&node.left.value!=0)||(node.op==BT_OR&&node.left.value==0){return boot_flow_then(flow,right);}return flow;}
+  return boot_flow_then(flow,right|1);
+ }
+ flow=boot_flow_then(flow,boot_expr_flow(node.right));flow=boot_flow_then(flow,boot_expr_flow(node.third));
+ let mut arg:*BootNode=node.params;while arg!=0 as *BootNode&&(flow&1)!=0{flow=boot_flow_then(flow,boot_expr_flow(arg));arg=arg.next;}return flow;
+}
 // Reachable exits: fallthrough=1, return=2, break=4, continue=8. Loop-local exits
 // are consumed by their own loop, and unreachable statements do not add exits.
 pub fn boot_flow(node:*BootNode)->i32{
  if node==(0 as *BootNode){return 1;}
- if node.kind==BN_EXPR&&node.left.kind==BN_VALUE{
-  let flow:i32=boot_flow(node.left.body);if (flow&16)!=0{return (flow&(-17 as i32))|1;}return flow;
- }
- if node.kind==BN_YIELD{return 16;}
- if node.kind==BN_RETURN{return 2;}if node.kind==BN_BREAK{return 4;}if node.kind==BN_CONTINUE{return 8;}
+ if node.kind==BN_HALT{return 0;}
+ if node.kind==BN_EXPR||node.kind==BN_LET{return boot_expr_flow(node.left);}
+ if node.kind==BN_ASSIGN{return boot_flow_then(boot_expr_flow(node.left),boot_expr_flow(node.right));}
+ if node.kind==BN_YIELD{return boot_flow_then(boot_expr_flow(node.left),16);}
+ if node.kind==BN_RETURN{return boot_flow_then(boot_expr_flow(node.left),2);}if node.kind==BN_BREAK{return 4;}if node.kind==BN_CONTINUE{return 8;}
  if node.kind==BN_BLOCK{
   let mut result:i32=1;let mut item:*BootNode=node.body;
   while item!=(0 as *BootNode)&&(result&1)!=0{result=(result&(-2 as i32))|boot_flow(item);item=item.next;}return result;
  }
  if node.kind==BN_IF{
   if node.left.kind==BN_BOOL{if node.left.value!=0{return boot_flow(node.body);}return boot_flow(node.third);}
-  return boot_flow(node.body)|boot_flow(node.third);
+  return boot_flow_then(boot_expr_flow(node.left),boot_flow(node.body)|boot_flow(node.third));
  }
  if node.kind==BN_WHILE{
   if node.left.kind==BN_BOOL&&node.left.value==0{return 1;}
   let body:i32=boot_flow(node.body);let mut result:i32=body&2;
-  if (body&4)!=0||node.left.kind!=BN_BOOL||node.left.value==0{result=result|1;}return result;
+  if (body&4)!=0||node.left.kind!=BN_BOOL||node.left.value==0{result=result|1;}return boot_flow_then(boot_expr_flow(node.left),result);
  }
  return 1;
 }

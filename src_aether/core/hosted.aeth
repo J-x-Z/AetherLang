@@ -1,0 +1,104 @@
+// Hosted names are a typed fallback, never a replacement for a source symbol.
+// Lower once to checked ordinary calls/blocks; only trap/unreachable is primitive.
+use model::*;
+use runtime::*;
+use host_posix::boot_host_info;
+pub fn hb_id(name:*u8)->i32{
+ if strcmp(name,"print")==0{return 1;}if strcmp(name,"println")==0{return 2;}
+ if strcmp(name,"print_i64")==0{return 3;}if strcmp(name,"println_i64")==0{return 4;}
+ if strcmp(name,"puts")==0{return 5;}if strcmp(name,"alloc")==0{return 6;}
+ if strcmp(name,"malloc")==0{return 7;}if strcmp(name,"free")==0{return 8;}
+ if strcmp(name,"atof")==0{return 9;}if strcmp(name,"strcmp")==0{return 10;}
+ if strcmp(name,"exit")==0{return 11;}if strcmp(name,"assert")==0{return 12;}return 0;
+}
+fn hb_param(ctx:*BootContext,ty:*BootType,token:*BootToken)->*BootNode{
+ let node:*BootNode=boot_node(ctx,BN_PARAM,token);if !ctx.failed{node.name="@argument";node.ty=ty;}return node;
+}
+pub fn hb_signature(ctx:*BootContext,name:*u8,token:*BootToken,c_abi:bool)->*BootNode{
+ let id:i32=hb_id(name);let bytes:*BootType=boot_ptr_type(ctx,boot_type(ctx,BY_U8));
+ let unit:*BootType=boot_type(ctx,BY_VOID);let i32ty:*BootType=boot_type(ctx,BY_I32);let size:*BootType=boot_type(ctx,BY_U64);
+ let f:*BootNode=boot_node(ctx,BN_FN,token);if ctx.failed{return 0 as *BootNode;}f.name=name;f.ty=unit;f.op=id;
+ let mut first:*BootType=bytes;let mut second:*BootType=0 as *BootType;let mut third:*BootType=0 as *BootType;
+ if id>=1&&id<=5{f.effect_bits=4;}if id>=6&&id<=8{f.effect_bits=8;}if id==9||id==10{f.effect_bits=1;}if id==11||id==12{f.effect_bits=16;}
+ if id==3||id==4{first=boot_type(ctx,BY_I64);}if id==5||id==10{f.ty=i32ty;}
+ if id==6||id==7{first=size;f.ty=bytes;}if id==9{f.ty=boot_type(ctx,BY_F64);}if id==10{second=bytes;}
+ if id==11{first=i32ty;if !c_abi{f.ty=boot_type(ctx,BY_NEVER);}}
+ if id==12{first=boot_type(ctx,BY_BOOL);}
+ if c_abi{
+  if id==1||id==2||id==3||id==4||id==6||id==12{return 0 as *BootNode;}
+  if strcmp(name,"printf")==0{f.ty=i32ty;f.flags=4;}
+  else if strcmp(name,"realloc")==0{f.ty=bytes;second=size;}
+  else if strcmp(name,"memcpy")==0{f.ty=bytes;second=bytes;third=size;}
+  else if strcmp(name,"strlen")==0{f.ty=size;}
+  else if strcmp(name,"mkdtemp")==0{f.ty=bytes;}
+  else if strcmp(name,"mkstemp")==0{f.ty=i32ty;}
+  else if strcmp(name,"strtof")==0||strcmp(name,"strtod")==0||strcmp(name,"strtol")==0||strcmp(name,"strtoul")==0||strcmp(name,"strtoll")==0||strcmp(name,"strtoull")==0{
+   second=boot_ptr_type(ctx,bytes);f.ty=boot_type(ctx,BY_F64);
+   if strcmp(name,"strtof")==0{f.ty=boot_type(ctx,BY_F32);}
+   if strcmp(name,"strtof")!=0&&strcmp(name,"strtod")!=0{
+    third=i32ty;let mut kind:i32=BY_I64;
+    if strcmp(name,"strtoul")==0||strcmp(name,"strtoull")==0{kind=BY_U64;}
+    if strcmp(boot_host_info(ctx),"Windows")==0&&(strcmp(name,"strtol")==0||strcmp(name,"strtoul")==0){kind=kind-2;}
+    f.ty=boot_type(ctx,kind);
+   }
+  }else if id==0{return 0 as *BootNode;}
+ }else if id==0{return 0 as *BootNode;}
+ f.params=hb_param(ctx,first,token);if ctx.failed{return 0 as *BootNode;}if second!=0 as *BootType{f.params.next=hb_param(ctx,second,token);if ctx.failed{return 0 as *BootNode;}if third!=0 as *BootType{f.params.next.next=hb_param(ctx,third,token);}}
+ return f;
+}
+fn hb_abi_type(left:*BootType,right:*BootType)->bool{return left==right||(left.kind==BY_PTR&&right.kind==BY_PTR);}
+pub fn hb_validate(ctx:*BootContext,item:*BootNode)->bool{
+ if ctx.no_std||!boot_c_symbol(item){return true;}let expected:*BootNode=hb_signature(ctx,item.name,item.token,true);if ctx.failed{return false;}if expected==0 as *BootNode{return true;}
+ if item.kind!=BN_FN{boot_error(ctx,item.token,"hosted symbol is a C function, not global storage");return false;}
+ let mut a:*BootNode=item.params;let mut b:*BootNode=expected.params;
+ let mut valid:bool=(item.flags&4)==(expected.flags&4)&&hb_abi_type(item.ty,expected.ty);
+ while a!=0 as *BootNode&&b!=0 as *BootNode{if !hb_abi_type(a.ty,b.ty){valid=false;}a=a.next;b=b.next;}
+ if !valid||a!=0 as *BootNode||b!=0 as *BootNode{boot_error(ctx,item.token,"hosted symbol must match its target C ABI");return false;}return true;
+}
+fn hb_raw(ctx:*BootContext,name:*u8,token:*BootToken)->*BootNode{
+ let mut item:*BootNode=ctx.program.body;let mut tail:*BootNode=0 as *BootNode;
+ while item!=0 as *BootNode{if boot_c_symbol(item)&&item.kind==BN_FN&&strcmp(item.name,name)==0{return item;}tail=item;item=item.next;}
+ let f:*BootNode=hb_signature(ctx,name,token,true);if f==0 as *BootNode{return f;}
+ if ctx.hosted_module==0 as *BootModule{ctx.hosted_module=boot_alloc(ctx,size_of(BootModule) as u64) as *BootModule;if ctx.failed{return 0 as *BootNode;}ctx.hosted_module.id= -1;}
+ f.flags=f.flags|2;f.owner=ctx.hosted_module;tail.next=f;return f;
+}
+fn hb_cast(ctx:*BootContext,node:*BootNode,ty:*BootType)->*BootNode{
+ if node.ty==ty{return node;}let cast:*BootNode=boot_node(ctx,BN_CAST,node.token);if !ctx.failed{cast.left=node;cast.ty=ty;}return cast;
+}
+fn hb_string(ctx:*BootContext,text:*u8,location:*BootToken)->*BootNode{
+ let token:*BootToken=boot_alloc(ctx,size_of(BootToken) as u64) as *BootToken;if ctx.failed{return 0 as *BootNode;}
+ memcpy(token as *void,location as *void,size_of(BootToken) as u64);token.text=text;token.length=strlen(text);token.kind=BT_STRING;
+ let node:*BootNode=boot_node(ctx,BN_STRING,token);if !ctx.failed{node.ty=boot_ptr_type(ctx,boot_type(ctx,BY_U8));}return node;
+}
+fn hb_call(ctx:*BootContext,name:*u8,args:*BootNode,effects:i32,token:*BootToken)->*BootNode{
+ let f:*BootNode=hb_raw(ctx,name,token);if ctx.failed{return 0 as *BootNode;}
+ let call:*BootNode=boot_node(ctx,BN_CALL,token);if ctx.failed{return call;}call.decl=f;call.name=name;call.ty=f.ty;call.host_effect=effects;
+ let mut arg:*BootNode=args;let mut param:*BootNode=f.params;let mut last:*BootNode=0 as *BootNode;
+ while arg!=0 as *BootNode&&!ctx.failed{let next:*BootNode=arg.next;arg.next=0 as *BootNode;let mut converted:*BootNode=arg;if param!=0 as *BootNode{converted=hb_cast(ctx,arg,param.ty);param=param.next;}if last==0 as *BootNode{call.params=converted;}else{last.next=converted;}last=converted;arg=next;}
+ return call;
+}
+fn hb_statement(ctx:*BootContext,value:*BootNode)->*BootNode{let statement:*BootNode=boot_node(ctx,BN_EXPR,value.token);if !ctx.failed{statement.left=value;}return statement;}
+pub fn hb_lower(ctx:*BootContext,node:*BootNode,signature:*BootNode,expected:*BootType)->*BootType{
+ let id:i32=signature.op;let result:*BootType=signature.ty;let args:*BootNode=node.params;node.params=0 as *BootNode;
+ let mut value:*BootNode=0 as *BootNode;
+ if id<=4{
+  let mut format:*u8="%s";if id==2{format="%s\n";}if id==3{format="%lld";}if id==4{format="%lld\n";}
+  let string:*BootNode=hb_string(ctx,format,node.token);if ctx.failed{return 0 as *BootType;}string.next=args;value=hb_call(ctx,"printf",string,signature.effect_bits,node.token);
+ }else if id!=12{
+  let mut name:*u8=signature.name;if id==6{name="malloc";}value=hb_call(ctx,name,args,signature.effect_bits,node.token);
+ }
+ if ctx.failed{return 0 as *BootType;}
+ if result.kind!=BY_VOID&&result.kind!=BY_NEVER{
+  let converted:*BootNode=hb_cast(ctx,value,result);if ctx.failed{return 0 as *BootType;}let next:*BootNode=node.next;let identity:i32=node.id;memcpy(node as *void,converted as *void,size_of(BootNode) as u64);node.id=identity;node.next=next;return result;
+ }
+ let block:*BootNode=boot_node(ctx,BN_BLOCK,node.token);if ctx.failed{return 0 as *BootType;}
+ if id==12{
+  let branch:*BootNode=boot_node(ctx,BN_IF,node.token);let negated:*BootNode=boot_node(ctx,BN_UNARY,node.token);let halt:*BootNode=boot_node(ctx,BN_HALT,node.token);if ctx.failed{return 0 as *BootType;}
+  negated.op=33;negated.left=args;negated.ty=boot_type(ctx,BY_BOOL);branch.left=negated;branch.body=halt;halt.op=1;block.body=branch;
+ }else{block.body=hb_statement(ctx,value);}
+ let finish:*BootNode=boot_node(ctx,BN_HALT,node.token);if ctx.failed{return 0 as *BootType;}
+ if id!=11{finish.kind=BN_YIELD;finish.left=boot_node(ctx,BN_UNIT,node.token);if ctx.failed{return 0 as *BootType;}finish.left.ty=result;}block.body.next=finish;
+ node.kind=BN_VALUE;node.flags=node.flags|4096;node.body=block;node.decl=0 as *BootNode;node.ty=result;
+ if id==11{node.ty=boot_type(ctx,BY_VOID);if expected!=0 as *BootType{node.ty=expected;}}
+ return result;
+}

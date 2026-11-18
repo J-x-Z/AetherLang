@@ -5,6 +5,7 @@ use specialize::*;
 use const_eval::*;
 use tuple_model::*;
 use pattern_model::*;
+use hosted::*;
 use methods::*;
 use borrow::boot_borrow_check;
 use owned::boot_own_lower;
@@ -127,7 +128,7 @@ fn boot_literal_number(node:*BootNode)->bool {
  return node.kind==BN_UNARY && node.op==45 && (node.left.kind==BN_INT || node.left.kind==BN_FLOAT);
 }
 fn boot_expect(ctx:*BootContext,node:*BootNode,actual:*BootType,expected:*BootType)->bool {
- if actual!=expected { boot_error(ctx,node.token,"type mismatch");return false; }
+ if actual!=expected && actual.kind!=BY_NEVER { boot_error(ctx,node.token,"type mismatch");return false; }
  return true;
 }
 // A writable pointer target is independent of whether the pointer binding can
@@ -166,6 +167,7 @@ fn boot_place_addressable(ctx:*BootContext,node:*BootNode)->bool {
 }
 pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType {
  let actual:*BootType=boot_check_expr_inner(ctx,node,expected);
+ if !ctx.failed&&actual!=0 as *BootType&&actual.kind==BY_NEVER&&expected!=0 as *BootType{return expected;}
  // Shared reborrowing preserves the origin while restricting permissions; it
  // never changes the declaration's own canonical type or creates a raw pointer.
  if !ctx.failed&&actual!=0 as *BootType&&expected!=0 as *BootType&&actual.kind==BY_MUTREF&&expected.kind==BY_REF&&actual.inner==expected.inner{
@@ -382,6 +384,11 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
   }
   let mut function:*BootNode=node.decl;
   if function==0 as *BootNode||(function.flags&BF_METHOD)==0{function=boot_lookup(ctx,node.name,node.lookup,node.token);}
+  let mut hosted:bool=false;
+  if function==0 as *BootNode && node.lookup==0 as *BootModule{
+   function=hb_signature(ctx,node.name,node.token,false);hosted=function!=0 as *BootNode;
+   if hosted&&ctx.no_std{boot_error(ctx,node.token,"no_std requires an explicit declaration for hosted function");return 0 as *BootType;}
+  }
   if function==(0 as *BootNode) { boot_error(ctx,node.token,"unknown function");return 0 as *BootType; }
   if function.kind!=BN_FN { boot_error(ctx,node.token,"called name is not a function");return 0 as *BootType; }
   if node.lookup==(0 as *BootModule) && boot_find_binding(ctx,node.name,node.token)!=(0 as *BootNode) { boot_error(ctx,node.token,"value binding shadows function name");return 0 as *BootType; }
@@ -403,6 +410,7 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
    if actual.kind==BY_VOID || actual.kind==BY_STRUCT || actual.kind==BY_ARRAY { boot_error(ctx,arg.token,"variadic arguments must be scalar or pointer");return 0 as *BootType; }
    arg=arg.next;
   }
+  if hosted{return hb_lower(ctx,node,function,expected);}
   node.ty=function.ty;return node.ty;
  }
  if kind==BN_BINARY {
@@ -494,6 +502,7 @@ fn boot_check_statement(ctx:*BootContext,node:*BootNode)->bool {
  }
  if kind==BN_YIELD{
   let value:*BootType=boot_check_expr(ctx,node.left,ctx.value_type);if ctx.failed{return false;}
+  if value.kind==BY_NEVER{return true;}
   if ctx.value_type==(0 as *BootType){ctx.value_type=value;}else{boot_expect(ctx,node,value,ctx.value_type);}return true;
  }
  if kind==BN_EXPR { boot_check_expr(ctx,node.left,0 as *BootType);return false; }
@@ -626,6 +635,7 @@ pub fn boot_check(ctx:*BootContext)->bool {
  let mut item:*BootNode=ctx.program.body;
  while item!=(0 as *BootNode) && !ctx.failed {
   ctx.module=item.owner;
+  if !hb_validate(ctx,item){return false;}
   let imported:*BootNode=boot_imported(ctx,item.name,item.token);
   if ctx.failed {return false;}
   if imported!=(0 as *BootNode) && !boot_foreign_same(imported,item) {boot_error(ctx,item.token,"local declaration conflicts with imported symbol");return false;}

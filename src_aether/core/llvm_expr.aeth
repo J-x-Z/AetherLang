@@ -221,6 +221,7 @@ pub fn ll_statement(ctx:*BootContext,node:*BootNode){
   if node.left==0 as *BootNode{return;}
   let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  store ");ll_value(ctx,node.ty,value);fprintf(ctx.output,", ptr %%v%d\n",node.id);return;
  }
+ if node.kind==BN_HALT{if node.op==1{ll_text(ctx,"  call void @llvm.trap()\n");}ll_text(ctx,"  unreachable\n");ctx.llvm_terminated=true;return;}
  if node.kind==BN_ASSIGN{
   let place:i32=ll_place(ctx,node.left);let mut previous:i32=0;if node.op!=0{previous=ll_load(ctx,node.left.ty,place);}
   let mut value:i32=ll_expr(ctx,node.right);if node.op!=0{value=ll_binary_values(ctx,node,previous,value);}
