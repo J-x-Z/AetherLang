@@ -34,7 +34,7 @@ AETHER_TEST_QEMU=1 AETHER_TEST_METAL=1 OPENBLAS_LIBRARY=/opt/homebrew/opt/openbl
 .\Test-Native.ps1 -Clang 'C:\Tools\llvm-mingw\bin\clang.exe' -Python python -WorkDir '.\native-results'
 ```
 
-独立 GPU 包在 `$WORK/windows-gpu-20261118/AetherLang-Windows-x64-Vulkan.zip`。解压后 `python windows_vulkan.py run --dir . --vendor 10de` 重跑 RTX 4060 的 CPU/Vulkan 对照。CUDA-Q 的 SDK 设备探针在 `examples/quantum/cudaq_device.aeth`，设备结果见 [量子运行时](docs/QUANTUM.md)。
+历史独立测试设备不属于维护者，此次 Windows 验收仅使用维护者运行 CachyOS 的同一台笔记本。早期 GPU 包在 `$WORK/windows-gpu-20261118/AetherLang-Windows-x64-Vulkan.zip`。解压后 `python windows_vulkan.py run --dir . --vendor 10de` 重跑 RTX 4060 的 CPU/Vulkan 对照。CUDA-Q 的 SDK 设备探针在 `examples/quantum/cudaq_device.aeth`，设备结果见 [量子运行时](docs/QUANTUM.md)。
 
 ## 本轮源码和验收
 

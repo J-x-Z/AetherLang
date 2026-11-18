@@ -68,7 +68,8 @@ remain gaps for users of those ecosystems. [Numerical API](docs/MATH.md) ·
 - **Systems.** Fixed-size values, raw pointers, checked references, `own T`
   with typed destructors, packed structs, unions and C linkage are exercised in
   native programs. The self-hosted LLVM backend can emit x86-64 freestanding
-  objects. An Aether page pool boots under QEMU at O0 and O2.
+  objects. An Aether page pool and a periodic interrupt handler that samples
+  ordinary Aether work boot under QEMU at O0 and O2.
   Foreign aggregate ABI coverage includes Apple arm64 and
   x86-64 System V. The [persistent accumulator](examples/upgrade/accumulator.aeth)
   reads commands, writes a journal and closes its resources.
@@ -109,8 +110,6 @@ statistics. From the extracted bundle run:
 .\Test-Native.ps1 -Clang 'C:\Tools\llvm-mingw\bin\clang.exe' -Python python -WorkDir '.\native-results'
 ```
 
-The separate Windows Vulkan package ran the 16-qubit workload on an RTX 4060
-Laptop GPU. [Upgrade results](docs/UPGRADE.md) ·
-[Engineering handoff](HANDOFF.md)
+[Upgrade results](docs/UPGRADE.md) · [Engineering handoff](HANDOFF.md)
 
 AetherLang is distributed under the [Apache License 2.0](LICENSE).

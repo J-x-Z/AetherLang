@@ -30,7 +30,9 @@ macOS 上最终 `sh scripts/test.sh llvm23 seed` 以状态 0 完成，日志为 
 
 修正版自举编译器在同一轮通过 CPU、Metal 和 qpp 的 20 项模板检查。参数化电路完全由 Aether 构造。同一角度可绑定多个旋转门，绑定结果有独立生命周期，分配失败可重试。三量子位的 CPU、CUDA-Q qpp、Apple M4 Metal 结果均与全部八个解析复振幅比较；M4 的最大单分量误差为 7.49×10⁻⁸，所有提交完成并且内存记账归零。对于具体的十门电路，可调用 NVIDIA SDK 导出 Quake MLIR，并用 SDK 解析和验证寄存器、门序、控制位、目标位及角度。当前模板在导出前绑定数值，未绑定的 Quake 函数参数留待下一步。CUDA-Q SDK 在这台 Mac 上使用 CPU，Metal 加速由 Aether 自有运行时提供。[参数模板](../stdlib/quantum_template.aeth) · [Quake 示例](../examples/quantum/export_quake.aeth) · [设备矩阵](QUANTUM.md)
 
-## Windows 11 原生交付与设备验证
+## Windows 11 原生交付与设备验证（历史版本）
+
+本节记录先前测试环境的结果。该 Windows 设备不属于维护者，本次发行按维护者自己的双启动笔记本另行验收。
 
 Windows 包冻结于 `98402df`，SHA-256 为 `3b946dd8aa457dbdef7944d5a0588a67c0702e45eef32ecaa336b3a9f91b507b`。在 Windows x64 build 26200 解压后核验了 168 个载荷文件，并用 llvm-mingw UCRT Clang 21.1.8 和 Python 3.10.11 从包内 PowerShell 入口执行。编译器套件用 C/LLVM 在 O0/O2 编译运行并发射 COFF，还在 Windows 上从 Aether 源码生成了两份下一代编译器，三份编译器对同一入口发射完全相同的 LLVM IR。25 项编译器检查包含 LSP 的入口，内层运行 24 个协议和 CLI 场景。JXZ 35 项及终端 CSV 10 项通过。该机单次耗时为编译器套件 25.22 秒、JXZ 13.03 秒、CSV 2.86 秒。各平台发行基线及编译速度、RSS、产物和运行性能比较见下节。
 
