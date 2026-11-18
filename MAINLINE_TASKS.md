@@ -170,4 +170,4 @@ Mac主机同时最多一个全量编译，Cargo并发沿用3；Linux宿主交付
 | Linux/Windows 同版交付 | 维护者同一台 RTX 3060 双启动机器上均通过编译器、JXZ、数值和 Vulkan。 |
 | ARM64 Linux / 高通 GPU 增量 | 原生 Arch Linux ARM 的 Adreno 830 通过自举、JXZ、三组 Vulkan 负载和张量微分。 |
 
-发行源码为 `c0afcaefea18c5b6811bedd7c7334566b47a0ac6`。各平台分发 SHA-256、构建工具版本及仍有边界的能力见[本轮报告](docs/UPGRADE.md)。物理 8 GiB 验收继续暂缓。
+发行源码见 `v0.1.0` 标签及各平台安装清单。各平台分发 SHA-256、构建工具版本及仍有边界的能力见[本轮报告](docs/UPGRADE.md)。物理 8 GiB 验收继续暂缓。

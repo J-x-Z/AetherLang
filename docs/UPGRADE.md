@@ -2,13 +2,9 @@
 
 ## 0.1.0 同版交付与 ARM64 Linux 实机
 
-起点为 `aceff15`。此前 macOS/Linux 和 Windows 安装包取自不同提交。本轮用同一源码 `c0afcaefea18c5b6811bedd7c7334566b47a0ac6` 生成 macOS arm64、Linux x86-64 和 Windows x86-64 发行包。许可证与发行包一并封装，原生验收过的可执行文件、标准库和清单逐文件回读核对。安装清单摘要见发布页，归档摘要如下。[发布与下载](https://github.com/J-x-Z/AetherLang/releases/tag/v0.1.0)
+本版以 `v0.1.0` 标签对应的源码生成 macOS arm64、Linux x86-64 和 Windows x86-64 发行件。每个安装清单记录确切的 Git 提交。归档的 SHA-256 随发布文件交付。[发布与下载](https://github.com/J-x-Z/AetherLang/releases/tag/v0.1.0)
 
-| 平台 | 归档字节数 | SHA-256 |
-| --- | ---: | --- |
-| Linux x86-64 | 59,434,967 | `752ae220abea032cfb0d7d69b8364406ce066b949ca09f4f966577cdc7338a74` |
-| macOS arm64 | 4,515,458 | `6ac6d1ffc9170912f84944624bea21a414704e9624b7126db7977bc05d62106c` |
-| Windows x86-64 | 807,030 | `6264b0725925575000abaf12216ca7ff2b7223aee7c9e6ca5054c96ce43a4436` |
+Linux CI 暴露了 Rust 种子生成的可执行程序遗漏 libm 的问题。Linux GNU 链接器在张量程序上报告 `tanh`、`cos`、`sin` 未解析。现在宿主 C 与 LLVM 两条路径都会在链接输入后加入数学库，独立对象和裸机链接保留原有行为。C-only 种子 16 项、双后端种子 27 项数学与内存回归在 CachyOS 运行通过。
 
 Mac 包内 `aethc-native` 和 `jxz-native` 的 Mach-O 最低系统为 macOS 27.0，Rust 种子为 11.0；后者仍需兼容的 LLVM 21.1。Linux 包含 libLLVM，本机回读的动态依赖包括 `libxml2.so.16`、`libicuuc.so.78` 和 `libicudata.so.78`。其他系统版本可从源码构建。
 
@@ -21,7 +17,7 @@ Mac 包内 `aethc-native` 和 `jxz-native` 的 Mach-O 最低系统为 macOS 27.0
 
 **复审和复现。** 独立复核读取八个中断镜像并核对指令、采样点及哈希；另一组从 SDK 消费者检查有参数模块的复用，发现发行包遗漏 Python 模块读取器并补入。安装复验还发现 JXZ 测试复用旧项目会触发正确的文件保护，测试改为每轮独立的项目目录，同一工作根连续两次各过 42 项。各平台使用的命令和原始凭据位置见[交接](../HANDOFF.md)。Linux x86-64 的 Rust 种子使用发行版 1.99.1，macOS 使用仓库固定的 1.100.0，稳定 LLVM 为 21.1.8。
 
-发行标签与安装清单都指向 `c0afcae`。主分支随后修复了 Rust 种子语言服务器的文件 URI 转换（Windows 的扩展盘符和 UNC 路径、POSIX 文件名中的反斜杠），并让 CI 选用与生成 IR 匹配的 Clang。Windows 包使用经原生测试的 Aether 自举编译器。
+本版还修复了 Rust 种子语言服务器的文件 URI 转换（Windows 的扩展盘符和 UNC 路径、POSIX 文件名中的反斜杠），并让 CI 选用与生成 IR 匹配的 Clang。Windows 包使用经原生测试的 Aether 自举编译器。
 
 **使用范围。** 命令行 CSV 分析、回归、张量、反向微分、原生进程和系统接口已有实际程序。交互式数据帧、绘图、通用统计模型库，以及完整操作系统的进程隔离与设备驱动，仍有独立的工程工作。8 GiB 整机内存余量按维护者决定暂缓。下节记录了编译耗时、RSS、产物体积和运行耗时的同机测量。下一项建议是在第二种 ARM64 GNU/Linux 发行版上构建普通 Clang 安装包并复验依赖，以确定可分发的 glibc 和 LLVM 基线。
 

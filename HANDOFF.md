@@ -1,6 +1,6 @@
 # AetherLang 工程交接
 
-外置源码位于 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`。升级起点为 `aceff15`，三个宿主包共用的编译器、标准库和运行时源码为 `c0afcaefea18c5b6811bedd7c7334566b47a0ac6`。当前分支提交用 `git rev-parse HEAD` 查询。[主线任务](MAINLINE_TASKS.md) · [升级报告与实测指标](docs/UPGRADE.md)
+外置源码位于 `/Volumes/WINDOWS/work/AetherLang`，分支 `work/aetherlang-upgrade`。升级起点为 `aceff15`，三个宿主包的源码以经核验的 `v0.1.0` 标签和各包的 `source_commit` 为准。当前分支提交用 `git rev-parse HEAD` 查询。[主线任务](MAINLINE_TASKS.md) · [升级报告与实测指标](docs/UPGRADE.md)
 
 ## 本机重建
 
@@ -29,7 +29,7 @@ python3 scripts/package.py --work-dir "$WORK/rebuild-evidence" --output "$WORK/r
 
 ## 当前验收凭据
 
-下列路径相对 `/Volumes/WINDOWS/work/aetherlang-upgrade-work`。原始日志留在外置卷，程序、输入和测试入口随仓库交付。
+原始执行记录使用当时的目录名。提交身份重写的逐提交对照保存在外置卷 `closure-20261118/identity/commit-map.json`。下列路径相对 `/Volumes/WINDOWS/work/aetherlang-upgrade-work`。原始日志留在外置卷，程序、输入和测试入口随仓库交付。
 
 | 平台或能力 | 已执行的工作 | 本地凭据 |
 | --- | --- | --- |
