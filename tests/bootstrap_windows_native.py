@@ -19,10 +19,14 @@ fn main()->i32{_setmode(1,32768);let p:Pair=pair(41);if p.x+p.y!=83{return 1;}if
 let max:u64=18446744073709551615;printf("%s %lld %llu %.1f\\n","Ω中文😀",-9223372036854775808,max,1.5);return 0;}
 ''',encoding='utf-8')
 expected='Ω中文😀 -9223372036854775808 18446744073709551615 1.5\n'.encode()
+snapshot=Path(__file__).resolve().parent/'regressions/large_value_snapshot.aeth'
 for backend in ('c','llvm'):
  for opt in (0,2):
   exe=w/f'program Ω {backend} {opt}.exe';run(f'native {backend} O{opt} build',[tool,'build',program,'--cc',cc,'--backend',backend,f'-O{opt}','-o',exe]);run(f'native {backend} O{opt} run',[exe],output=expected)
   obj=w/f'object {backend} {opt}.o';run('COFF object '+backend+str(opt),[tool,program,'--cc',cc,'--backend',backend,f'-O{opt}','--emit-obj','-o',obj]);assert obj.read_bytes()[:2]==b'\x64\x86'
+  large=w/f'large-{backend}-O{opt}.exe'
+  run(f'large aggregate {backend} O{opt} build',[tool,'build',snapshot,'--cc',cc,'--backend',backend,f'-O{opt}','-o',large])
+  run(f'large aggregate {backend} O{opt} run',[large],output=b'')
 # Failed parsing and child startup preserve an existing requested output.
 old=w/'preserved Ω.exe';old.write_bytes(b'PRESERVE');bad=w/'bad.aeth';bad.write_text('fn main()->i32{return unknown;}')
 run('parse failure preserves output',[tool,bad,'--cc',cc,'-o',old],1);assert old.read_bytes()==b'PRESERVE'

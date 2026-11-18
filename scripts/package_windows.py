@@ -36,9 +36,9 @@ work = Path(tempfile.mkdtemp(prefix='windows-package-', dir=base))
 commit = subprocess.check_output(['git', 'rev-parse', '--verify', a.revision+'^{commit}'], cwd=repo, text=True).strip()
 source = work/'source'
 source.mkdir()
-paths = ['src_aether/core', 'jxz/src', 'stdlib', 'scripts/bootstrap_windows.py',
-         'scripts/bootstrap_jxz_windows.py', 'scripts/windows_support.py',
-         'tests/bootstrap_windows_native.py', 'tests/bootstrap_lsp.py', 'jxz/tests/windows_native.py']
+suite_files = ['scripts/bootstrap_windows.py', 'scripts/bootstrap_jxz_windows.py',
+               'scripts/windows_support.py', 'tests/bootstrap_windows_native.py',
+               'tests/bootstrap_lsp.py', 'jxz/tests/windows_native.py']
 # Rebuilding a historical revision retains that revision's test payload.
 csv_files = ['tests/windows_csv.py', 'tests/regressions/platform/windows_stdio_binary.aeth',
              'examples/analysis/regress.aeth']
@@ -46,7 +46,13 @@ has_csv_suite = subprocess.check_output(
     ['git', 'ls-tree', '--name-only', commit, '--', csv_files[0]], cwd=repo, text=True
 ).strip() == csv_files[0]
 if has_csv_suite:
-    paths.extend(csv_files)
+    suite_files.extend(csv_files)
+snapshot_fixture = 'tests/regressions/large_value_snapshot.aeth'
+has_snapshot_fixture = bool(subprocess.check_output(
+    ['git', 'ls-tree', '--name-only', commit, '--', snapshot_fixture], cwd=repo))
+if has_snapshot_fixture:
+    suite_files.append(snapshot_fixture)
+paths = ['src_aether/core', 'jxz/src', 'stdlib', *suite_files]
 archive = subprocess.check_output(['git', 'archive', '--format=tar', commit, *paths], cwd=repo)
 with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
     for item in tar:
@@ -113,8 +119,7 @@ try:
         shutil.copy2(windows_stdio, stage/'stdlib/stdio_binary.aeth')
     shutil.copytree(cross['compiler'][0]/'source',stage/'source/core')
     shutil.copytree(cross['jxz'][0]/'source',stage/'source/jxz')
-    for path in ['tests/bootstrap_windows_native.py','tests/bootstrap_lsp.py','jxz/tests/windows_native.py',
-                 'scripts/bootstrap_windows.py','scripts/bootstrap_jxz_windows.py','scripts/windows_support.py'] + (csv_files if has_csv_suite else []):
+    for path in suite_files:
         dest=stage/path;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source/path,dest)
     # These packaging/acceptance wrappers are hashed independently of the frozen
     # language source, so a later packaging fix never mislabels its source commit.
@@ -123,7 +128,16 @@ try:
     shutil.copy2(repo/'scripts/windows_native.ps1',stage/'Test-Native.ps1')
     (stage/'evidence').mkdir()
     for name,(selected,receipt) in cross.items():
-        (stage/'evidence'/f'{name}-cross.json').write_text(json.dumps(receipt,indent=2)+'\n')
+        # Keep absolute build paths and raw user/tool output in the local work directory.
+        portable = {key:receipt[key] for key in
+                    ('status','native_windows_executed','seed_sha256','source_hashes')}
+        portable['target'] = 'x86_64-windows-gnu'
+        portable['checks'] = [{'label':step['label'], 'status':step['status']}
+                              for step in receipt['checks']]
+        portable['products'] = [dict(product, file=Path(product['file']).name)
+                                for product in receipt['products']]
+        portable['artifact'] = Path(receipt['artifact']).name
+        (stage/'evidence'/f'{name}-cross.json').write_text(json.dumps(portable,indent=2)+'\n')
     products=[inspect_pe(stage/'aethc.exe',{'CreateProcessW','GetCommandLineW','_errno'}),
               inspect_pe(stage/'jxz.exe',{'CreateProcessW','FindFirstFileW','CreateHardLinkW','_errno'})]
     for product in products:
@@ -186,7 +200,7 @@ revision. No Cargo, downloads, Windows execution or Wine are used by packaging.
            for f in sorted(stage.rglob('*')) if f.is_file()]
     manifest=dict(format='aether-windows-native-bundle-1', source_commit=commit,
                   target='x86_64-windows-gnu', native_windows_executed=False,
-                  status='cross-linked; Windows-native acceptance pending', seed=report['seed'], zig=report['zig'],
+                  status='cross-linked; Windows-native acceptance pending', seed={'sha256':report['seed']['sha256']}, zig=report['zig'],
                   platform_selection={'source/core/host_platform.aeth':'platform_windows.aeth',
                                       'source/jxz/host.aeth':'host_windows.aeth'},
                   products=products, files=files)
