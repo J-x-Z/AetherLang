@@ -1,0 +1,29 @@
+struct Ticket{id:i64}
+static mut LIVE:i64=0;
+static mut MADE:i64=0;
+static mut CLOSED:i64=0;
+@drop fn close(item:own Ticket){LIVE-=1;CLOSED=CLOSED*10+item.id;}
+fn make(id:i64)->own Ticket{LIVE+=1;MADE=MADE*10+id;unsafe{return Ticket{id:id} as own Ticket;}}
+fn mark(value:i64)->i64{MADE=MADE*10+value;return value;}
+fn take(first:own Ticket,middle:i64,last:own Ticket)->i64{return first.id+middle+last.id;}
+fn fail()->i64{return take(make(1),{let local:own Ticket=make(4);return 7;},make(3));}
+fn replace()->i64{
+ let mut first:own Ticket=make(1);
+ let result:i64=take(first,mark(4),{first=make(2);make(3)});
+ if first.id!=2{return -1;}
+ return result;
+}
+fn replace_then_exit()->i64{
+ let mut first:own Ticket=make(1);
+ return take(first,mark(4),{first=make(2);return 9;});
+}
+fn pick(flag:bool)->own Ticket{return if flag{make(5)}else{make(6)};}
+fn main()->i32{
+ if take(make(1),mark(2),make(3))!=6||LIVE!=0||MADE!=123||CLOSED!=31{return 1;}
+ MADE=0;CLOSED=0;if fail()!=7||LIVE!=0||MADE!=14||CLOSED!=41{return 2;}
+ MADE=0;CLOSED=0;if replace()!=8||LIVE!=0||MADE!=1423||CLOSED!=312{return 3;}
+ MADE=0;CLOSED=0;if replace_then_exit()!=9||LIVE!=0||MADE!=142||CLOSED!=12{return 4;}
+ MADE=0;CLOSED=0;{let value:own Ticket=pick(true);if value.id!=5{return 5;}}
+ if LIVE!=0||MADE!=5||CLOSED!=5{return 6;}
+ return 0;
+}

@@ -69,6 +69,7 @@ if clang --version >/dev/null 2>&1; then
     CC=clang python3 tests/core_owned.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/core-owned"
     CC=clang python3 tests/bootstrap_closures.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-closures"
     CC=clang python3 tests/bootstrap_dynamic.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-dynamic"
+    CC=clang python3 tests/bootstrap_async.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-async"
     case "$(uname -s)/$(uname -m)" in
         Darwin/arm64|Darwin/x86_64|Linux/x86_64)
             CC=clang python3 tests/bootstrap_native_abi.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-native-abi"

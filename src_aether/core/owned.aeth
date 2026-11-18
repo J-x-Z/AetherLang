@@ -149,3 +149,26 @@ pub fn boot_own_lower(ctx:*BootContext)->bool{
  }
  return !ctx.failed;
 }
+
+// Materialize owned argument temporaries before the call. Every argument keeps
+// left-to-right evaluation; named owners first move into managed temporary slots.
+// A later argument that returns early leaves the temporary in this value scope
+// so the ordinary cleanup pass releases it exactly once.
+pub fn boot_owned_call_temps(ctx:*BootContext,node:*BootNode){
+ let mut arg:*BootNode=node.params;let mut needed:bool=false;
+ while arg!=0 as *BootNode{if arg.ty.kind==BY_OWN&&arg.kind!=BN_IDENT{needed=true;}arg=arg.next;}if !needed{return;}
+ let call:*BootNode=boot_node(ctx,BN_CALL,node.token);let body:*BootNode=boot_node(ctx,BN_BLOCK,node.token);let yield:*BootNode=boot_node(ctx,BN_YIELD,node.token);if ctx.failed{return;}
+ memcpy(call as *void,node as *void,size_of(BootNode) as u64);call.id=boot_id(ctx);call.next=0 as *BootNode;call.params=0 as *BootNode;
+ let mut tail:*BootNode=0 as *BootNode;let mut parameter:*BootNode=0 as *BootNode;arg=node.params;
+ while arg!=0 as *BootNode{
+  let next:*BootNode=arg.next;arg.next=0 as *BootNode;let mut value:*BootNode=arg;
+  {
+   let binding:*BootNode=boot_node(ctx,BN_LET,arg.token);let reference:*BootNode=boot_node(ctx,BN_IDENT,arg.token);if ctx.failed{return;}
+   binding.name=boot_alloc(ctx,64) as *u8;if ctx.failed{return;}snprintf(binding.name,64,"@call_arg_%d",binding.id);binding.ty=arg.ty;binding.left=arg;
+   reference.name=binding.name;reference.decl=binding;reference.ty=binding.ty;value=reference;
+   if tail==0 as *BootNode{body.body=binding;}else{tail.next=binding;}tail=binding;
+  }
+  if parameter==0 as *BootNode{call.params=value;}else{parameter.next=value;}parameter=value;arg=next;
+ }
+ yield.left=call;tail.next=yield;node.kind=BN_VALUE;node.flags=node.flags|4096;node.body=body;node.left=0 as *BootNode;node.params=0 as *BootNode;node.decl=0 as *BootNode;
+}

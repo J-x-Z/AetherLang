@@ -29,3 +29,9 @@ pub fn br_mut_payload(ty:*BootType,depth:i32)->bool{
 
 pub fn br_reference(ty:*BootType)->bool{return ty!=0 as *BootType&&(boot_reference(ty)||ty.dynamic_contract!=0 as *BootType);}
 pub fn br_exclusive(ty:*BootType)->bool{return ty!=0 as *BootType&&(ty.kind==BY_MUTREF||ty.dynamic_mutable);}
+
+pub fn br_raw_payload(ty:*BootType,depth:i32)->bool{
+ if ty==0 as *BootType||depth>256{return false;}if ty.kind==BY_PTR{return true;}if boot_reference(ty){return false;}
+ if ty.kind==BY_ARRAY||ty.kind==BY_ALIAS{return br_raw_payload(ty.inner,depth+1);}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{if ty.kind==BY_ENUM{let mut payload:*BootNode=field.params;while payload!=0 as *BootNode{if br_raw_payload(payload.ty,depth+1){return true;}payload=payload.next;}}else{if br_raw_payload(field.ty,depth+1){return true;}}field=field.next;}}return false;
+}

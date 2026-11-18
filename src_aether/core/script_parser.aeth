@@ -58,6 +58,7 @@ fn bs_expr(ctx:*BootContext,minimum:i32)->*BootNode{
 }
 fn bs_primary(ctx:*BootContext)->*BootNode{
  let token:*BootToken=ctx.cursor;let kind:i32=token.kind;
+ if bs_word(ctx,"await"){ctx.cursor=token.next;let node:*BootNode=boot_node(ctx,BN_AWAIT,token);if !ctx.failed{node.left=bs_expr(ctx,10);}return node;}
  if bs_word(ctx,"lambda"){return bs_lambda(ctx);}
  if kind==BT_INT||kind==BT_FLOAT||kind==BT_STRING{
   ctx.cursor=token.next;let mut k:i32=BN_INT;if kind==BT_FLOAT{k=BN_FLOAT;}if kind==BT_STRING{k=BN_STRING;}
@@ -161,9 +162,10 @@ pub fn boot_script_parse(ctx:*BootContext)->bool{
  while !ctx.failed&&bs_kind(ctx)!=BT_EOF{
   if bs_take(ctx,BS_NEWLINE){continue;}
   let token:*BootToken=ctx.cursor;
-  if !bs_word(ctx,"def"){boot_error(ctx,token,"Script top level requires def or import");return false;}ctx.cursor=token.next;
+  let asynchronous:bool=bs_word(ctx,"async");if asynchronous{ctx.cursor=ctx.cursor.next;}
+  if !bs_word(ctx,"def"){boot_error(ctx,token,"Script top level requires def or import");return false;}ctx.cursor=ctx.cursor.next;
   let name:*BootToken=bs_name(ctx);if ctx.failed{return false;}
-  let function:*BootNode=boot_node(ctx,BN_FN,name);if ctx.failed{return false;}function.name=name.text;function.flags=BS_FUNCTION|8;
+  let function:*BootNode=boot_node(ctx,BN_FN,name);if ctx.failed{return false;}function.name=name.text;function.flags=BS_FUNCTION|8;if asynchronous{function.flags=function.flags|BF_ASYNC;}
   if !bs_expect(ctx,40,"expected '(' after Script function name"){return false;}
   let mut parameter:*BootNode=0 as *BootNode;
   while !ctx.failed&&bs_kind(ctx)!=41{

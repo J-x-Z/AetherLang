@@ -61,7 +61,7 @@ pub fn boot_methods_check(ctx:*BootContext)->bool {
    if strcmp(parameter.name,"self")==0{
     if parameter!=item.decl.params{boot_error(ctx,parameter.token,"self must be the first method parameter");return false;}
     let mut receiver:*BootType=parameter.ty;if boot_indirect(receiver){receiver=receiver.inner;}
-    receiver=boot_normal_type(ctx,receiver,0,parameter.token);
+    receiver=boot_normal_type(ctx,receiver,0,parameter.token);if receiver.kind==BY_OWN{receiver=receiver.inner;}
     if receiver!=target{boot_error(ctx,parameter.token,"self parameter must be Self, &Self, &mut Self or *Self");return false;}
    }
    parameter=parameter.next;
@@ -105,20 +105,20 @@ pub fn boot_method_call(ctx:*BootContext,node:*BootNode,actual:*BootType)->bool 
   node.kind=BN_BINARY;node.op=43;node.right=node.params;node.params=0 as *BootNode;return true;
  }
  let mut target:*BootType=actual;if boot_indirect(target){target=target.inner;}
- target=boot_normal_type(ctx,target,0,node.token);if ctx.failed{return false;}
+ target=boot_normal_type(ctx,target,0,node.token);if ctx.failed{return false;}if target.kind==BY_OWN{target=target.inner;}
  let function:*BootNode=boot_method_find(ctx,target,node.name,node.token);if ctx.failed{return false;}
  let parameter:*BootNode=function.params;
- if parameter==0 as *BootNode||strcmp(parameter.name,"self")!=0{boot_error(ctx,node.token,"associated function requires Type::function syntax");return false;}
+ if parameter==0 as *BootNode||(strcmp(parameter.name,"self")!=0&&!target.async_frame){boot_error(ctx,node.token,"associated function requires Type::function syntax");return false;}
  let formal:*BootType=parameter.ty;let mut receiver:*BootNode=node.left;
  if boot_reference(formal){
-  if !boot_indirect(actual)&&!boot_method_place(receiver){return boot_method_temporary(ctx,node,target);}
+  if !boot_indirect(actual)&&!boot_method_place(receiver){return boot_method_temporary(ctx,node,actual);}
   if actual.kind==BY_PTR{boot_error(ctx,node.token,"raw pointer cannot implicitly become a checked receiver reference");return false;}
   if boot_reference(actual){
    if formal.kind==BY_MUTREF&&actual.kind!=BY_MUTREF{boot_error(ctx,node.token,"mutable method requires a mutable reference");return false;}
    let dereference:*BootNode=boot_node(ctx,BN_UNARY,node.token);if ctx.failed{return false;}dereference.op=42;dereference.left=receiver;receiver=dereference;
   }
   let borrow:*BootNode=boot_node(ctx,BN_UNARY,node.token);if ctx.failed{return false;}borrow.op=38;borrow.left=receiver;if formal.kind==BY_MUTREF{borrow.flags=1;}receiver=borrow;
- }else if actual!=target&&formal.kind!=BY_PTR{
+ }else if actual!=formal&&formal.kind!=BY_PTR{
   boot_error(ctx,node.token,"by-value method requires a value receiver; dereference explicitly");return false;
  }
  receiver.next=node.params;node.params=receiver;node.left=0 as *BootNode;node.kind=BN_CALL;node.name=function.name;node.decl=function;node.aux=target;return true;

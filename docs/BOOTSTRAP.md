@@ -313,7 +313,7 @@ Core keeps `own T` distinct from the plain nominal record `T`. Adopting or relea
 
 Declare one internal, non-generic `@drop fn release(value: own T)` per canonical type. Both emitters consume the same lowered cleanup statements: reverse declaration order at scope exit, return, break, continue and `?`. A transferred value is skipped, and the destructor's own parameter is exempt. Call transfers commit only after every argument has evaluated, so an early return from a later argument still cleans the caller's live resource. An explicit close that returns an error can release the payload with an unsafe cast and report the result.
 
-The current storage boundary is a plain record payload: owners in copyable arrays, records or enum payloads, generic destructors, owner-valued block expressions, and implicit discarded owner results are diagnosed. Bind an owned call argument to a named local before passing it. Access to a raw-pointer field of an owned resource remains an explicit unsafe operation. These restrictions preserve existing manual ABI behavior while the projection-aware ownership surface grows.
+The current storage boundary is a plain record payload: owners in copyable arrays, records or enum payloads, generic destructors, and implicit discarded owner results are diagnosed. Owned value blocks and call-argument temporaries preserve moves and cleanup. Arguments are evaluated and saved in order: if a later argument replaces a consumed source binding, the call still receives the original value; if it exits early, the saved owners are destroyed. Access to a raw-pointer field of an owned resource remains an explicit unsafe operation. These restrictions preserve existing manual ABI behavior while the projection-aware ownership surface grows.
 
 `tests/core_owned.py` compares shared rejection cases with the primary compiler and executes actual descriptor closure, heap release, conditional transfers, early exits and packed payloads through C and LLVM at O0/O2 and with ASan/UBSan.
 
@@ -397,3 +397,33 @@ python3 tests/bootstrap_hosted.py --compiler "$WORK/aethc-native" \
 
 This runner requests `--emit-c` or `--emit-llvm` explicitly, so it works with
 both the bootstrap emitter CLI and the regular native compiler CLI.
+
+### Cooperative async in both source forms
+
+The self-hosted compiler lowers Core `async fn` and Script `async def` into
+concrete owned frames. Calling an async function evaluates its arguments and
+creates the frame; its body begins on `poll()`. `await yield_now()` yields once,
+and awaiting a child preserves both parent locals and the child's frame until
+its next poll. `Pending`, `Ready(value)` and `Finished` distinguish suspension,
+completion and repeated polling. `is_finished()` observes completion; `cancel()`
+consumes the task. Script drives a task with `block_on(...)` or awaits it from
+an async function, including typed imports of Core async functions.
+
+Every persistent slot is a real `Empty`/`Full` enum. An inactive slot never
+fabricates a value or reference. The ordinary owner checker and cleanup pass
+handle restored values, return expressions, cancellation and reverse-order
+destruction. Only generated storage transfers are unsafe; user code retains its
+original checks. A task dropped before its first poll releases its captured
+owners; cancellation after suspension also releases a stored child.
+
+This surface is cooperative and single-threaded, without an implicit executor.
+Async functions are concrete and non-generic, with at most 64 top-level
+suspensions and an acyclic child-frame graph of depth at most 32. Checked
+references cannot survive suspension. Nested suspension, async closures, effect
+contracts on async declarations and async `?` propagation are diagnosed; use an
+explicit Result match/return. Ordinary suspension-free blocks still support
+loops, borrowed interfaces, closures and const-generic algorithms.
+
+`tests/bootstrap_async.py` runs the same nine Core/Script workloads as the
+primary compiler through C and LLVM at O0/O2 and with ASan/UBSan. It also verifies
+shared rejection cases and preserves existing output files after failed checks.

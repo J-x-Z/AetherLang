@@ -92,6 +92,7 @@ fn bs_prepare_expr(state:*BootScriptState,node:*BootNode)->bool{
   }
   let mut argument:*BootNode=node.params;while argument!=0 as *BootNode{if !bs_prepare_expr(state,argument){return false;}argument=argument.next;}
   let declared:*BootNode=boot_lookup(ctx,node.name,node.lookup,node.token);if ctx.failed{return false;}
+  if node.lookup==0 as *BootModule&&declared==0 as *BootNode&&bs_local(state,node.name)==0 as *BootScriptLocal&&strcmp(node.name,"block_on")==0{if node.params==0 as *BootNode||node.params.next!=0 as *BootNode{boot_error(ctx,node.token,"block_on takes one async constructor");return false;}node.kind=BN_BLOCK_ON;node.left=node.params;node.params=0 as *BootNode;return true;}
   if node.lookup==0 as *BootModule&&declared==0 as *BootNode&&bs_local(state,node.name)==0 as *BootScriptLocal&&(strcmp(node.name,"ref")==0||strcmp(node.name,"ref_mut")==0||strcmp(node.name,"deref")==0){
    if node.params==0 as *BootNode||node.params.next!=0 as *BootNode{boot_error(ctx,node.token,"Script reference operation takes one argument");return false;}
    node.kind=BN_UNARY;node.op=38;if strcmp(node.name,"deref")==0{node.op=42;}if strcmp(node.name,"ref_mut")==0{node.flags=1;}node.left=node.params;node.params=0 as *BootNode;return true;
@@ -202,9 +203,18 @@ pub fn boot_script_lower(ctx:*BootContext)->bool{
     if local.parameter.kind==BN_LET{let decl:*BootNode=local.parameter;if br_contains(local.ty,0){decl.flags=decl.flags|BF_SCRIPT_UNINIT;}else{decl.left=bs_zero(ctx,local.ty,local.token);}decl.next=function.body.body;function.body.body=decl;}
     local=local.next;
    }
-   function.flags=function.flags&255;ctx.bindings=0 as *BootBinding;ctx.function=0 as *BootNode;
+   if !bs_async_calls(ctx,function.body,false){return false;}
+   function.flags=function.flags&(-257 as i32);ctx.bindings=0 as *BootBinding;ctx.function=0 as *BootNode;
   }
   function=function.next;
  }
+ function=ctx.program.body;while function!=0 as *BootNode{if (function.flags&BF_SCRIPT_CLOSURE)!=0&&!bs_async_calls(ctx,function.body,false){return false;}function=function.next;}
  return !ctx.failed;
+}
+
+fn bs_async_calls(ctx:*BootContext,node:*BootNode,allowed:bool)->bool{
+ let mut item:*BootNode=node;while item!=0 as *BootNode&&!ctx.failed{
+  if item.kind==BN_CALL&&item.decl!=0 as *BootNode&&(item.decl.flags&BF_ASYNC)!=0&&!allowed{boot_error(ctx,item.token,"Script async calls require await or block_on");return false;}
+  if !bs_async_calls(ctx,item.left,item.kind==BN_AWAIT||item.kind==BN_BLOCK_ON)||!bs_async_calls(ctx,item.right,false)||!bs_async_calls(ctx,item.third,false)||!bs_async_calls(ctx,item.body,false)||!bs_async_calls(ctx,item.params,false){return false;}item=item.next;
+ }return !ctx.failed;
 }

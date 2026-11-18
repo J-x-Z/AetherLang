@@ -9,7 +9,7 @@ use hosted::*;
 use memory::*;
 use methods::*;
 use borrow::boot_borrow_check;
-use owned::boot_own_lower;
+use owned::{boot_own_lower,boot_owned_call_temps};
 use effects::boot_check_effects;
 use enum_model::*;
 use closures::*;
@@ -207,6 +207,14 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
   return boot_check_expr(ctx,node,expected);
  }
  let kind:i32=node.kind;
+ if kind==BN_AWAIT||kind==BN_BLOCK_ON{
+  if kind==BN_AWAIT&&(ctx.function==0 as *BootNode||(ctx.function.flags&BF_ASYNC)==0){boot_error(ctx,node.token,"await requires an async function");return 0 as *BootType;}
+  let call:*BootNode=node.left;if call.kind!=BN_CALL||call.name==0 as *u8{boot_error(ctx,node.token,"async operation requires a direct constructor");return 0 as *BootType;}
+  let function:*BootNode=boot_lookup(ctx,call.name,call.lookup,call.token);if ctx.failed{return 0 as *BootType;}
+  if kind==BN_AWAIT&&function==0 as *BootNode&&strcmp(call.name,"yield_now")==0&&call.params==0 as *BootNode{node.ty=boot_type(ctx,BY_VOID);return node.ty;}
+  if function==0 as *BootNode||(function.flags&BF_ASYNC)==0{boot_error(ctx,node.token,"async operation requires an async function");return 0 as *BootType;}
+  node.ty=boot_check_expr(ctx,call,expected);return node.ty;
+ }
  if kind==BN_CONST_VALUE{return node.ty;}
  if kind==BN_TUPLE{return boot_check_tuple(ctx,node,expected);}
  if kind==BN_VALUE&&(node.flags&4096)!=0{return node.ty;}
@@ -417,7 +425,7 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
   }
   if memory{return bm_lower(ctx,node,function);}
   if hosted{return hb_lower(ctx,node,function,expected);}
-  node.ty=function.ty;return node.ty;
+  node.ty=function.ty;boot_owned_call_temps(ctx,node);return node.ty;
  }
  if kind==BN_BINARY {
   let op:i32=node.op;let mut operand_context:*BootType=expected;
@@ -466,6 +474,7 @@ fn boot_check_statement(ctx:*BootContext,node:*BootNode)->bool {
  if node!=0 as *BootNode&&node.kind==BN_RANGE_FOR{return boot_check_range(ctx,node);}
  if ctx.failed { return false; }
  let kind:i32=node.kind;
+ if kind==BN_HALT{return true;}
  if kind==BN_BLOCK {
   if (node.flags&BF_UNSAFE)!=0{ctx.unsafe_depth=ctx.unsafe_depth+1;}
   let saved:*BootBinding=ctx.bindings;ctx.depth=ctx.depth+1;
@@ -480,7 +489,7 @@ fn boot_check_statement(ctx:*BootContext,node:*BootNode)->bool {
  if kind==BN_LET {
   if node.ty!=0 as *BootType&&node.ty.kind==BY_INFER{
    let actual:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);if ctx.failed{return false;}
-   if actual.callable==0 as *BootNode{boot_error(ctx,node.token,"inferred local requires a concrete closure value");return false;}node.ty=actual;
+   if actual.callable==0 as *BootNode&&!actual.async_frame&&!(actual.kind==BY_OWN&&actual.inner.async_frame){boot_error(ctx,node.token,"inferred local requires a concrete closure or async value");return false;}node.ty=actual;
   }
   if !boot_type_valid(ctx,node.ty,node.token,false) { return false; }
   if node.left==(0 as *BootNode) {

@@ -30,6 +30,7 @@ pub const BY_CONST_PARAMETER:i32=23; pub const BY_CONST_VALUE:i32=24; pub const 
 pub const BN_CONST_VALUE:i32=51;pub const BN_TUPLE:i32=53;pub const BN_PATTERN:i32=54;
 pub const BY_INTERFACE:i32=27;pub const BY_DYN_MARKER:i32=28;pub const BN_INTERFACE:i32=55;pub const BF_DYN_DISPATCH:i32=262144;
 pub const BF_SCRIPT_UNINIT:i32=524288;
+pub const BN_BLOCK_ON:i32=58;pub const BN_AWAIT:i32=57;pub const BF_ASYNC:i32=1048576;pub const BF_SCRIPT_CLOSURE:i32=2097152;
 pub const BY_ENUM:i32=19;pub const BY_NEVER:i32=29;pub const BN_HALT:i32=56;
 pub const BY_INFER:i32=26;pub const BN_CLOSURE:i32=52;pub const BF_CLOSURE_ENV:i32=16384;pub const BF_CLOSURE_BODY:i32=32768;
 pub const BY_OWN:i32=22; pub const BF_DROP:i32=2048; pub const BF_OWN_MOVE:i32=4096;
@@ -70,7 +71,7 @@ pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=3
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
 pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
-pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool,is_alias:bool,expression:*BootNode,callable:*BootNode,is_tuple:bool,dynamic_contract:*BootType,dynamic_mutable:bool,dynamic_methods:*BootNode }
+pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool,is_alias:bool,expression:*BootNode,callable:*BootNode,is_tuple:bool,dynamic_contract:*BootType,dynamic_mutable:bool,dynamic_methods:*BootNode,async_frame:bool }
 pub struct BootCallEdge {callee:*BootNode,next:*BootCallEdge}
 pub struct BootNode {
  host_effect:i32,effect_explicit:bool,effect_limit:i32,effect_bits:i32,calls:*BootCallEdge,

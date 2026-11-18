@@ -8,6 +8,7 @@ use parser::*;
 use script_lexer::boot_script_lex;
 use script_parser::boot_script_parse;
 use script_lower::boot_script_lower;
+use async_lower::boot_async_lower;
 use script_model::{BS_INDENT,BS_DEDENT};
 
 fn boot_project_word(token:*BootToken,word:*u8)->bool {
@@ -223,7 +224,7 @@ pub fn boot_project(ctx:*BootContext,path:*u8)->bool {
   }
   module=module.next;
  }
- ctx.program=program;return boot_script_lower(ctx);
+ ctx.program=program;return boot_script_lower(ctx)&&boot_async_lower(ctx);
 }
 pub fn boot_project_output(ctx:*BootContext,path:*u8)->bool {
  let canonical:*u8=realpath(path,0 as *u8);if canonical==(0 as *u8) {return true;}

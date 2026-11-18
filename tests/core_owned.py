@@ -21,7 +21,7 @@ def run(command,status=0):
     (work/'results.json').write_text(json.dumps(dict(core_sha256=hashlib.sha256(core.read_bytes()).hexdigest(),seed_sha256=hashlib.sha256(seed.read_bytes()).hexdigest(),checks=records),indent=2))
     assert r.returncode==status,(command,r.returncode,r.stdout,r.stderr)
     return r
-for name in ['cleanup','descriptors','error_paths','heap','packed']:
+for name in ['cleanup','descriptors','error_paths','heap','packed','temporary_arguments']:
     source=a.fixtures/f'{name}.aeth'
     run([seed,'check',source]);run([core,source,'--check'])
     for backend in ['c','llvm']:
@@ -62,7 +62,6 @@ for name,source in negative.items():
     run([seed,'check',path],1);run([core,path,'--check'],1);run([core,path,'-o',work/'rejected.c'],1)
 # Deliberately bounded surfaces; rejecting these must remain an ordinary error.
 boundaries={
- 'temporary_owner_argument':prefix+'fn take(a:own R){}fn bad(){take(make());}',
  'owner_array':prefix+'fn bad(){let a:own R=make();let values:[own R;1]=[a];}',
  'owner_record':prefix+'struct Box{value:own R}fn bad(){let a:own R=make();let b:Box=Box{value:a};}',
  'ignored_owner_result':prefix+'fn bad(){make();}',

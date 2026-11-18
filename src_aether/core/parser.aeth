@@ -30,6 +30,7 @@ fn boot_p_expect(ctx:*BootContext,kind:i32,message:*u8)->bool {
  boot_error(ctx,ctx.cursor,message);return false;
 }
 pub fn boot_p_reserved(text:*u8)->bool {
+ if strcmp(text,"async")==0||strcmp(text,"await")==0{return true;}
  if strcmp(text,"fn")==0 || strcmp(text,"let")==0 || strcmp(text,"mut")==0 || strcmp(text,"if")==0 || strcmp(text,"else")==0 {return true;}
  if strcmp(text,"while")==0 || strcmp(text,"return")==0 || strcmp(text,"break")==0 || strcmp(text,"continue")==0 {return true;}
  if strcmp(text,"struct")==0 || strcmp(text,"extern")==0 || strcmp(text,"const")==0 || strcmp(text,"unsafe")==0 {return true;}
@@ -156,7 +157,9 @@ fn boot_p_expression(ctx:*BootContext,minimum:i32)->*BootNode {
 fn boot_p_primary(ctx:*BootContext)->*BootNode {
  let token:*BootToken=ctx.cursor;
  let kind:i32=boot_p_kind(ctx);
+ if boot_p_word(ctx,"await"){boot_p_advance(ctx);let node:*BootNode=boot_node(ctx,BN_AWAIT,token);if !ctx.failed{node.left=boot_p_expression(ctx,12);}return node;}
  if kind==124||kind==BT_OR{return boot_p_closure(ctx);}
+ if boot_p_word(ctx,"unsafe"){boot_p_advance(ctx);let node:*BootNode=boot_node(ctx,BN_VALUE,token);if ctx.failed{return node;}node.body=boot_p_block(ctx);if ctx.failed{return node;}node.body.flags=node.body.flags|BF_UNSAFE;boot_value_tail(node.body,BN_YIELD);return node;}
  if boot_p_word(ctx,"match"){return boot_p_match(ctx);}
  if kind==91{return boot_p_array_value(ctx);}
  if boot_p_word(ctx,"if")||kind==123{
@@ -399,7 +402,7 @@ fn boot_p_statement(ctx:*BootContext)->*BootNode {
   boot_p_take(ctx,59);
   return boot_node(ctx,kind,token);
  }
- if boot_p_word(ctx,"unsafe") {boot_p_advance(ctx);let block:*BootNode=boot_p_block(ctx);if !ctx.failed{block.flags=block.flags|BF_UNSAFE;}return block;}
+ if boot_p_word(ctx,"unsafe") {boot_p_advance(ctx);let block:*BootNode=boot_p_block(ctx);if !ctx.failed{block.flags=block.flags|BF_UNSAFE;if !boot_p_take(ctx,59){block.flags=block.flags|16;}}return block;}
  if boot_p_kind(ctx)==123 {let block:*BootNode=boot_p_block(ctx);if block!=(0 as *BootNode)&&!boot_p_take(ctx,59){block.flags=block.flags|16;}return block;}
  let left:*BootNode=boot_p_expression(ctx,0);
  if left==0 as *BootNode {return left;}
@@ -625,7 +628,8 @@ pub fn boot_parse(ctx:*BootContext)->bool {
    }
    if !boot_p_expect(ctx,125,"expected '}' after foreign declarations") {return false;}
   } else {
-   if boot_p_word(ctx,"fn") {node=boot_p_function(ctx,false);}
+   if boot_p_word(ctx,"async"){boot_p_advance(ctx);node=boot_p_function(ctx,false);if !ctx.failed{node.flags=node.flags|BF_ASYNC;}}
+   else if boot_p_word(ctx,"fn") {node=boot_p_function(ctx,false);}
    else if boot_p_word(ctx,"struct") || boot_p_word(ctx,"union") {node=boot_p_struct(ctx,packed);}
    else if boot_p_word(ctx,"enum") {node=boot_p_enum(ctx);}
    else if boot_p_word(ctx,"interface")||boot_p_word(ctx,"trait"){node=boot_p_interface(ctx);}

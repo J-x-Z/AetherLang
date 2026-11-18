@@ -1,0 +1,18 @@
+use model::*;
+use runtime::*;
+use async_model::*;
+pub fn at_new(ctx:*BootContext)->*AsyncText{let text:*AsyncText=boot_alloc(ctx,size_of(AsyncText) as u64) as *AsyncText;if !ctx.failed{text.ctx=ctx;}return text;}
+pub fn at_text(text:*AsyncText,value:*u8){
+ if text.ctx.failed{return;}let size:u64=strlen(value);if size>16777216-text.length{boot_error(text.ctx,text.ctx.cursor,"generated async source exceeds 16 MiB");return;}
+ let need:u64=text.length+size+1;if need>text.capacity{let mut capacity:u64=text.capacity;if capacity==0{capacity=1024;}while capacity<need{capacity=capacity*2;}let data:*u8=boot_alloc(text.ctx,capacity) as *u8;if text.ctx.failed{return;}if text.length!=0{memcpy(data as *void,text.data as *void,text.length);}text.data=data;text.capacity=capacity;}
+ memcpy((text.data+text.length) as *void,value as *void,size);text.length+=size;text.data[text.length]=0;
+}
+pub fn at_number(text:*AsyncText,value:i32){let data:*u8=boot_alloc(text.ctx,32) as *u8;if !text.ctx.failed{snprintf(data,32,"%d",value);at_text(text,data);}}
+pub fn at_name(ctx:*BootContext,prefix:*u8)->*u8{
+ let name:*u8=boot_alloc(ctx,96) as *u8;if ctx.failed{return name;}
+ loop{
+  snprintf(name,96,"__async_%s_%d",prefix,boot_id(ctx));let mut collision:bool=false;let mut module:*BootModule=ctx.modules;
+  while module!=0 as *BootModule{let mut token:*BootToken=module.tokens;while token!=0 as *BootToken{if token.kind==BT_IDENT&&strcmp(token.text,name)==0{collision=true;}token=token.next;}module=module.next;}
+  if !collision{return name;}
+ }
+}

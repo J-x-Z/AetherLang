@@ -118,7 +118,7 @@ fn br_expr(state:*BootBorrowState,node:*BootNode,consume:bool)->*BootBorrowOrigi
   }
   br_access(state,br_origin(state.ctx,node.decl,node.decl.kind==BN_STATIC,0 as *BootNode),false,node.token);if br_contains(node.ty,0)&&entry!=0 as *BootBorrowEnv{return br_permit(state.ctx,entry.origins,node.decl);}return 0 as *BootBorrowOrigin;
  }
- if node.ty!=0 as *BootType&&node.ty.kind==BY_OWN&&node.kind!=BN_IDENT&&node.kind!=BN_CALL&&node.kind!=BN_CAST{
+ if node.ty!=0 as *BootType&&node.ty.kind==BY_OWN&&node.kind!=BN_IDENT&&node.kind!=BN_CALL&&node.kind!=BN_CAST&&node.kind!=BN_VALUE{
   boot_error(state.ctx,node.token,"move an owned value from a direct binding, not borrowed or projected storage");return 0 as *BootBorrowOrigin;
  }
  if node.kind==BN_UNARY&&node.op==38{
@@ -134,7 +134,7 @@ fn br_expr(state:*BootBorrowState,node:*BootNode,consume:bool)->*BootBorrowOrigi
   if node.ty.kind==BY_PTR{br_expr(state,node.left,true);return 0 as *BootBorrowOrigin;}
   return br_expr(state,node.left,consume);
  }
- if node.kind==BN_MEMBER&&(node.flags&BF_UNSAFE)==0&&node.ty.kind==BY_PTR&&br_reference(node.left.ty)&&node.left.ty.inner.kind==BY_OWN{boot_error(state.ctx,node.token,"raw pointer field cannot escape a borrowed owner");return 0 as *BootBorrowOrigin;}
+ if node.kind==BN_MEMBER&&(node.flags&BF_UNSAFE)==0&&br_raw_payload(node.ty,0)&&(node.left.ty.kind==BY_OWN||(boot_reference(node.left.ty)&&node.left.ty.inner.kind==BY_OWN)){boot_error(state.ctx,node.token,"unsafe block required to expose an owned raw pointer field");return 0 as *BootBorrowOrigin;}
  if (node.kind==BN_MEMBER||node.kind==BN_INDEX)&&!boot_indirect(node.left.ty)&&node.left.ty.kind!=BY_OWN&&!boot_place_form(node.left){
   let origins:*BootBorrowOrigin=br_expr(state,node.left,false);br_expr(state,node.right,false);if br_contains(node.ty,0){return origins;}return 0 as *BootBorrowOrigin;
  }
@@ -171,6 +171,7 @@ fn br_return(state:*BootBorrowState,node:*BootNode){
 }
 fn br_statement(state:*BootBorrowState,node:*BootNode)->i32{
  if node==0 as *BootNode||state.ctx.failed{return 1;}
+ if node.kind==BN_HALT{return 0;}
  if node.kind==BN_BLOCK{
   let depth:i32=state.depth;state.depth=depth+1;let mut item:*BootNode=node.body;let mut outcome:i32=1;
   while item!=0 as *BootNode&&outcome==1&&!state.ctx.failed{
