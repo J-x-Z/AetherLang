@@ -1,0 +1,196 @@
+// Windows x64 host services. The compiler and protocol remain Aether code;
+// these functions call native UTF16 Win32 and UCRT interfaces directly.
+extern "C" {fn malloc(size:u64)->*void;fn free(value:*void);fn strlen(text:*u8)->u64;fn strcmp(a:*u8,b:*u8)->i32;fn memset(out:*void,value:i32,size:u64)->*void;fn fread(data:*void,size:u64,count:u64,file:*void)->u64;fn fclose(file:*void)->i32;}
+use host_command::boot_windows_command;
+extern "C"{
+ fn MultiByteToWideChar(page:u32,flags:u32,text:*u8,count:i32,out:*u16,capacity:i32)->i32;
+ fn WideCharToMultiByte(page:u32,flags:u32,text:*u16,count:i32,out:*u8,capacity:i32,fallback:*u8,used:*i32)->i32;
+ fn CreateFileW(path:*u16,access:u32,share:u32,security:*void,creation:u32,flags:u32,template:*void)->*void;
+ fn CloseHandle(handle:*void)->i32;
+ fn GetFinalPathNameByHandleW(handle:*void,out:*u16,size:u32,flags:u32)->u32;
+ fn GetFileAttributesW(path:*u16)->u32;
+ fn GetLastError()->u32;
+ fn GetFullPathNameW(path:*u16,size:u32,out:*u16,last:**u16)->u32;
+ fn MoveFileExW(source:*u16,destination:*u16,flags:u32)->i32;
+ fn DeleteFileW(path:*u16)->i32;
+ fn BCryptGenRandom(provider:*void,out:*u8,count:u32,flags:u32)->i32;
+ fn _errno()->*i32;
+ fn _set_doserrno(code:u32)->i32;
+ fn _wfopen(path:*u16,mode:*u16)->*void;
+ fn _fdopen(descriptor:i32,mode:*u8)->*void;
+ fn _fseeki64(file:*void,offset:i64,origin:i32)->i32;
+ fn _ftelli64(file:*void)->i64;
+ fn _open_osfhandle(handle:i64,flags:i32)->i32;
+ fn _close(descriptor:i32)->i32;
+ fn _read(descriptor:i32,data:*u8,count:u32)->i32;
+ fn _write(descriptor:i32,data:*u8,count:u32)->i32;
+ fn _setmode(descriptor:i32,mode:i32)->i32;
+ fn GetCommandLineW()->*u16;
+ fn GetModuleFileNameW(module:*void,path:*u16,size:u32)->u32;
+ fn CommandLineToArgvW(command:*u16,count:*i32)->**u16;
+ fn LocalFree(pointer:*void)->*void;
+ fn GetEnvironmentVariableW(name:*u16,value:*u16,size:u32)->u32;
+ fn CreateProcessW(application:*u16,command:*u16,process_attrs:*void,thread_attrs:*void,inherit:i32,flags:u32,environment:*void,directory:*u16,startup:*WinStartup,process:*WinProcess)->i32;
+ fn GetStdHandle(kind:u32)->*void;
+ fn GetCurrentProcess()->*void;
+ fn DuplicateHandle(source_process:*void,source:*void,target_process:*void,target:**void,access:u32,inherit:i32,options:u32)->i32;
+ fn WaitForSingleObject(handle:*void,milliseconds:u32)->u32;
+ fn GetExitCodeProcess(handle:*void,status:*u32)->i32;
+}
+pub struct WinStartup{
+ pub cb:u32,pub reserved:*u16,pub desktop:*u16,pub title:*u16,pub x:u32,pub y:u32,pub x_size:u32,pub y_size:u32,pub x_chars:u32,pub y_chars:u32,pub fill:u32,pub flags:u32,pub show:u16,pub reserved_size:u16,pub reserved_bytes:*u8,pub input:*void,pub output:*void,pub error:*void
+}
+pub struct WinProcess{pub process:*void,pub thread:*void,pub pid:u32,pub tid:u32}
+pub fn win_errno(value:i32){let slot:*i32=_errno();*slot=value;}
+pub fn win_error_code(code:u32){
+ _set_doserrno(code);let mut value:i32=5;
+ if code==2||code==3{value=2;}if code==5||code==32||code==33{value=13;}if code==80||code==183{value=17;}if code==87||code==123{value=22;}if code==8||code==14{value=12;}if code==112{value=28;}win_errno(value);
+}
+pub fn win_error(){win_error_code(GetLastError());}
+pub fn win_wide(text:*u8)->*u16{
+ let count:i32=MultiByteToWideChar(65001,8,text,-1,0 as *u16,0);if count<=0||count>131072{win_errno(22);return 0 as *u16;}
+ let out:*u16=malloc((count as u64)*2) as *u16;if out==0 as *u16{win_errno(12);return out;}
+ if MultiByteToWideChar(65001,8,text,-1,out,count)!=count{let error:u32=GetLastError();free(out as *void);win_error_code(error);return 0 as *u16;}return out;
+}
+pub fn win_utf8(text:*u16)->*u8{
+ let count:i32=WideCharToMultiByte(65001,128,text,-1,0 as *u8,0,0 as *u8,0 as *i32);if count<=0||count>1048576{win_errno(22);return 0 as *u8;}
+ let out:*u8=malloc(count as u64) as *u8;if out==0 as *u8{win_errno(12);return out;}
+ if WideCharToMultiByte(65001,128,text,-1,out,count,0 as *u8,0 as *i32)!=count{let error:u32=GetLastError();free(out as *void);win_error_code(error);return 0 as *u8;}return out;
+}
+pub fn realpath(path:*u8,unused:*u8)->*u8{
+ if unused!=0 as *u8{win_errno(22);return 0 as *u8;}let wide:*u16=win_wide(path);if wide==0 as *u16{return 0 as *u8;}
+ let handle:*void=CreateFileW(wide,128,7,0 as *void,3,33554432,0 as *void);let error:u32=GetLastError();free(wide as *void);
+ if handle==(-1 as i64) as *void{win_error_code(error);return 0 as *u8;}
+ let count:u32=GetFinalPathNameByHandleW(handle,0 as *u16,0,0);
+ if count==0||count>131072{let error:u32=GetLastError();CloseHandle(handle);win_error_code(error);return 0 as *u8;}
+ let buffer:*u16=malloc(((count as u64)+1)*2) as *u16;
+ if buffer==0 as *u16{CloseHandle(handle);win_errno(12);return 0 as *u8;}
+ let actual:u32=GetFinalPathNameByHandleW(handle,buffer,count+1,0);let final_error:u32=GetLastError();CloseHandle(handle);
+ if actual==0||actual>count{free(buffer as *void);win_error_code(final_error);return 0 as *u8;}buffer[actual as u64]=0;
+ let mut begin:*u16=buffer;
+ if actual>=4&&buffer[0]==92&&buffer[1]==92&&buffer[2]==63&&buffer[3]==92{
+  begin=buffer+4;
+  if actual>=8&&buffer[4]==85&&buffer[5]==78&&buffer[6]==67&&buffer[7]==92{begin=buffer+6;begin[0]=92;}
+ }
+ let result:*u8=win_utf8(begin);free(buffer as *void);if result==0 as *u8{return result;}
+ let mut i:u64=0;while result[i]!=0{if result[i]==92{result[i]=47;}i=i+1;}
+ if result[0]>=97&&result[0]<=122&&result[1]==58{result[0]=result[0]-32;}return result;
+}
+pub fn fopen(path:*u8,mode:*u8)->*void{
+ let wide:*u16=win_wide(path);let flags:*u16=win_wide(mode);if wide==0 as *u16||flags==0 as *u16{free(wide as *void);free(flags as *void);return 0 as *void;}
+ let result:*void=_wfopen(wide,flags);free(wide as *void);free(flags as *void);return result;
+}
+pub fn fseek(file:*void,offset:i64,origin:i32)->i32{return _fseeki64(file,offset,origin);}
+pub fn ftell(file:*void)->i64{return _ftelli64(file);}
+pub fn fdopen(descriptor:i32,mode:*u8)->*void{return _fdopen(descriptor,mode);}
+pub fn close(descriptor:i32)->i32{return _close(descriptor);}
+pub fn read(descriptor:i32,data:*u8,count:u64)->i64{let mut size:u64=count;if size>2147483647{size=2147483647;}return _read(descriptor,data,size as u32) as i64;}
+pub fn write(descriptor:i32,data:*u8,count:u64)->i64{let mut size:u64=count;if size>2147483647{size=2147483647;}return _write(descriptor,data,size as u32) as i64;}
+pub fn remove(path:*u8)->i32{let wide:*u16=win_wide(path);if wide==0 as *u16{return -1;}let result:i32=DeleteFileW(wide);let error:u32=GetLastError();free(wide as *void);if result==0{win_error_code(error);return -1;}return 0;}
+pub fn rename(old:*u8,new_path:*u8)->i32{
+ let a:*u16=win_wide(old);let b:*u16=win_wide(new_path);if a==0 as *u16||b==0 as *u16{free(a as *void);free(b as *void);return -1;}
+ let result:i32=MoveFileExW(a,b,9);let error:u32=GetLastError();free(a as *void);free(b as *void);if result==0{win_error_code(error);return -1;}return 0;
+}
+pub fn access(path:*u8,mode:i32)->i32{
+ let wide:*u16=win_wide(path);if wide==0 as *u16{return -1;}let attributes:u32=GetFileAttributesW(wide);let error:u32=GetLastError();free(wide as *void);
+ if attributes==4294967295{win_error_code(error);return -1;}if (mode&2)!=0&&(attributes&1)!=0{win_errno(13);return -1;}return 0;
+}
+pub fn opendir(path:*u8)->*void{
+ let wide:*u16=win_wide(path);if wide==0 as *u16{return 0 as *void;}let attributes:u32=GetFileAttributesW(wide);let error:u32=GetLastError();
+ if attributes==4294967295{free(wide as *void);win_error_code(error);return 0 as *void;}
+ if (attributes&16)==0{free(wide as *void);win_errno(20);return 0 as *void;}
+ let handle:*void=CreateFileW(wide,128,7,0 as *void,3,33554432,0 as *void);let opened_error:u32=GetLastError();free(wide as *void);if handle==(-1 as i64) as *void{win_error_code(opened_error);return 0 as *void;}return handle;
+}
+pub fn closedir(directory:*void)->i32{if CloseHandle(directory)==0{win_error();return -1;}return 0;}
+pub fn mkstemp(path:*u8)->i32{
+ let length:u64=strlen(path);if length<6||strcmp(path+(length-6),"XXXXXX")!=0{win_errno(22);return -1;}
+ let alphabet:*u8="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";let mut attempt:i32=0;
+ while attempt<128{
+  let mut random:u64=0;if BCryptGenRandom(0 as *void,&mut random as *u64 as *u8,8,2)!=0{win_errno(5);return -1;}
+  let mut i:u64=0;while i<6{path[length-6+i]=alphabet[random&63];random=random>>6;i=i+1;}
+  let wide:*u16=win_wide(path);if wide==0 as *u16{return -1;}
+  let handle:*void=CreateFileW(wide,3221225472,0,0 as *void,1,128,0 as *void);let code:u32=GetLastError();free(wide as *void);
+  if handle!=(-1 as i64) as *void{let fd:i32=_open_osfhandle(handle as i64,32898);if fd<0{CloseHandle(handle);remove(path);}return fd;}
+  if code!=80&&code!=183{win_error_code(code);return -1;}attempt=attempt+1;
+ }
+ win_errno(17);return -1;
+}
+// Returned environment value is heap-owned; the driver copies into its arena.
+pub fn win_environment(name:*u8)->*u8{
+ let key:*u16=win_wide(name);if key==0 as *u16{return 0 as *u8;}
+ let count:u32=GetEnvironmentVariableW(key,0 as *u16,0);if count==0{free(key as *void);return 0 as *u8;}
+ if count>131072{free(key as *void);win_errno(22);return 0 as *u8;}
+ let buffer:*u16=malloc((count as u64)*2) as *u16;if buffer==0 as *u16{free(key as *void);return 0 as *u8;}
+ let actual:u32=GetEnvironmentVariableW(key,buffer,count);free(key as *void);if actual>=count{free(buffer as *void);win_errno(22);return 0 as *u8;}
+ buffer[actual as u64]=0;let result:*u8=win_utf8(buffer);free(buffer as *void);return result;
+}
+pub fn win_command(args:**u8)->*u16{
+ let bytes:*u8=boot_windows_command(args);if bytes==0 as *u8{win_errno(7);return 0 as *u16;}
+ let command:*u16=win_wide(bytes);free(bytes as *void);
+ if command!=0 as *u16{let mut size:u64=0;while command[size]!=0{size=size+1;}if size>=32767{free(command as *void);win_errno(7);return 0 as *u16;}}
+ return command;
+}
+pub fn win_standard(kind:u32)->*void{
+ let current:*void=GetCurrentProcess();let mut result:*void=0 as *void;
+ if DuplicateHandle(current,GetStdHandle(kind),current,&mut result as **void,0,1,2)==0{win_error();return 0 as *void;}return result;
+}
+pub fn win_standard_close(startup:*WinStartup){
+ if startup.input!=0 as *void{CloseHandle(startup.input);}if startup.output!=0 as *void{CloseHandle(startup.output);}if startup.error!=0 as *void{CloseHandle(startup.error);}
+}
+pub fn win_run_tool(args:**u8)->bool{
+ let command:*u16=win_command(args);if command==0 as *u16{return false;}
+ let startup:*WinStartup=malloc(size_of(WinStartup)) as *WinStartup;let process:*WinProcess=malloc(size_of(WinProcess)) as *WinProcess;
+ if startup==0 as *WinStartup||process==0 as *WinProcess{free(command as *void);free(startup as *void);free(process as *void);win_errno(12);return false;}
+ memset(startup as *void,0,size_of(WinStartup));memset(process as *void,0,size_of(WinProcess));startup.cb=size_of(WinStartup) as u32;startup.flags=256;startup.input=win_standard(4294967286);startup.output=win_standard(4294967285);startup.error=win_standard(4294967284);
+ if startup.input==0 as *void||startup.output==0 as *void||startup.error==0 as *void{win_standard_close(startup);free(startup as *void);free(process as *void);free(command as *void);return false;}
+ let started:i32=CreateProcessW(0 as *u16,command,0 as *void,0 as *void,1,0,0 as *void,0 as *u16,startup,process);let error:u32=GetLastError();win_standard_close(startup);free(startup as *void);free(command as *void);
+ if started==0{free(process as *void);win_error_code(error);return false;}CloseHandle(process.thread);
+ let waited:u32=WaitForSingleObject(process.process,4294967295);let mut wait_error:u32=GetLastError();let mut code:u32=1;let read:i32=GetExitCodeProcess(process.process,&mut code as *u32);if read==0{wait_error=GetLastError();}CloseHandle(process.process);free(process as *void);
+ if waited!=0||read==0{win_error_code(wait_error);return false;}return code==0;
+}
+pub fn win_arguments(count:*i32)->**u8{
+ let wide:**u16=CommandLineToArgvW(GetCommandLineW(),count);if wide==0 as **u16{win_error();return 0 as **u8;}
+ if *count<1||*count>32767{LocalFree(wide as *void);win_errno(22);return 0 as **u8;}
+ let args:**u8=malloc(((*count as u64)+1)*8) as **u8;if args==0 as **u8{LocalFree(wide as *void);return args;}memset(args as *void,0,((*count as u64)+1)*8);
+ let mut i:i32=0;while i<*count{args[i]=win_utf8(wide[i]);if args[i]==0 as *u8{let mut j:i32=0;while j<i{free(args[j] as *void);j=j+1;}free(args as *void);LocalFree(wide as *void);return 0 as **u8;}i=i+1;}
+ LocalFree(wide as *void);
+ // argv[0] may be only "aethc" when launched through PATH. Use the actual
+ // image location for adjacent stdlib discovery, independent of cwd/PATHEXT.
+ let image:*u16=malloc(65536) as *u16;if image==0 as *u16{win_arguments_free(*count,args);return 0 as **u8;}
+ let length:u32=GetModuleFileNameW(0 as *void,image,32768);
+ if length==0||length>=32768{let error:u32=GetLastError();free(image as *void);win_arguments_free(*count,args);win_error_code(error);return 0 as **u8;}
+ let invoked:*u8=win_utf8(image);free(image as *void);if invoked==0 as *u8{win_arguments_free(*count,args);return 0 as **u8;}
+ free(args[0] as *void);args[0]=invoked;
+ _setmode(0,32768);_setmode(1,32768);return args;
+}
+fn win_u16(bytes:*u8)->u32{return (bytes[0] as u32)|((bytes[1] as u32)<<8);}
+fn win_u32(bytes:*u8)->u32{return win_u16(bytes)|(win_u16(bytes+2)<<16);}
+pub fn win_valid_image(path:*u8,object:bool)->bool{
+ let file:*void=fopen(path,"rb");if file==0 as *void{return false;}
+ if fseek(file,0,2)!=0{fclose(file);return false;}let total:i64=ftell(file);if total<20||fseek(file,0,0)!=0{fclose(file);return false;}
+ let mut head:[u8;64]=[0;64];let bytes:*u8=&mut head[0] as *u8;let count:u64=fread(bytes as *void,1,64,file);
+ if object{
+  let sections:u32=win_u16(bytes+2);let ok:bool=count>=20&&win_u16(bytes)==34404&&sections>0&&win_u16(bytes+16)==0&&(win_u16(bytes+18)&8194)==0&&20+(sections as u64)*40<=total as u64;
+  let closed:i32=fclose(file);return ok&&closed==0;
+ }
+ if count!=64||head[0]!=77||head[1]!=90{fclose(file);return false;}
+ let offset:u64=win_u32(bytes+60) as u64;if offset>total as u64||26>(total as u64)-offset||fseek(file,offset as i64,0)!=0{fclose(file);return false;}
+ if fread(bytes as *void,1,26,file)!=26{fclose(file);return false;}
+ let sections:u32=win_u16(bytes+6);let optional:u32=win_u16(bytes+20);let flags:u32=win_u16(bytes+22);
+ let ok:bool=head[0]==80&&head[1]==69&&head[2]==0&&head[3]==0&&win_u16(bytes+4)==34404&&sections>0&&optional>=112&&(flags&2)!=0&&(flags&8192)==0&&win_u16(bytes+24)==523&&offset+24+(optional as u64)+(sections as u64)*40<=total as u64;
+ let closed:i32=fclose(file);return ok&&closed==0;
+}
+
+pub fn win_absolute(path:*u8)->*u8{
+ let wide:*u16=win_wide(path);if wide==0 as *u16{return 0 as *u8;}
+ let count:u32=GetFullPathNameW(wide,0,0 as *u16,0 as **u16);if count==0||count>131072{free(wide as *void);win_errno(22);return 0 as *u8;}
+ let buffer:*u16=malloc(((count as u64)+1)*2) as *u16;if buffer==0 as *u16{free(wide as *void);return 0 as *u8;}
+ let actual:u32=GetFullPathNameW(wide,count+1,buffer,0 as **u16);let error:u32=GetLastError();free(wide as *void);
+ if actual==0||actual>count{free(buffer as *void);win_error_code(error);return 0 as *u8;}buffer[actual as u64]=0;
+ let result:*u8=win_utf8(buffer);free(buffer as *void);if result==0 as *u8{return result;}
+ let mut i:u64=0;while result[i]!=0{if result[i]==92{result[i]=47;}i=i+1;}
+ if result[0]>=97&&result[0]<=122&&result[1]==58{result[0]=result[0]-32;}return result;
+}
+
+
+pub fn win_arguments_free(count:i32,args:**u8){let mut i:i32=0;while i<count{free(args[i] as *void);i=i+1;}free(args as *void);}

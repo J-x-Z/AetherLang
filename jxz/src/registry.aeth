@@ -1,3 +1,4 @@
+use host::*;
 // Exact-version HTTP(S) registry resolution. Normal builds keep existing pins;
 // jxz update explicitly reselects hashes for the manifest's exact versions.
 // Read-only editor resolution requires an existing lock and verified cache.
@@ -5,19 +6,16 @@ use registry_format::{RegistryRow,RegistryTable,registry_table_empty,registry_ta
 use registry_io::{registry_capture,registry_download,registry_url_path,registry_symlink,registry_regular,registry_transport_ready};
 use registry_cache::registry_cached;
 use config::{config_error,config_path_valid,module_name_valid};
-use path::{path_join,make_directories};
-use process::environment_get;
+
+
 use vec::{Vec,vec_new,vec_push,vec_free};
 use result::Result;
-use binary_io::read_path_bytes;
+
 use bytes::{bytes_from_vec,bytes_copy,bytes_equal};
 use output::{presence,output_lock,output_unlock,marker_valid};
 extern "C" {
-    fn free(ptr:*void); fn strcmp(a:*u8,b:*u8)->i32; fn strlen(text:*u8)->u64;
-    fn realpath(path:*u8,out:*u8)->*u8; fn mkstemp(template:*u8)->i32; fn close(fd:i32)->i32;
-    fn fdopen(fd:i32,mode:*u8)->*void; fn fopen(path:*u8,mode:*u8)->*void; fn fclose(file:*void)->i32;
+    fn free(ptr:*void); fn strcmp(a:*u8,b:*u8)->i32; fn strlen(text:*u8)->u64; fn fclose(file:*void)->i32;
     fn fwrite(data:*void,size:u64,count:u64,file:*void)->u64;
-    fn rename(old:*u8,new:*u8)->i32; fn link(old:*u8,new:*u8)->i32; fn symlink(target:*u8,path:*u8)->i32; fn remove(path:*u8)->i32;
 }
 pub struct Registry {
     pub pins:RegistryTable, pub lock_snapshot:Vec<u8>, pub lock_existed:bool, pub selected:Vec<RegistryRow>, pub origin:*u8, pub cache:*u8,
@@ -47,7 +45,8 @@ fn lock_valid(table:*RegistryTable)->bool {
     true
 }
 fn marker_matches(path:*u8,lock:*void)->bool {
-    if registry_symlink(path) { return marker_valid(path,"JXZ-CACHE-1"); }
+    if marker_valid(path,"JXZ-CACHE-1"){return true;}
+    if registry_symlink(path){return false;}
     if !registry_regular(path,lock) { return false; }
     let mut bytes:Vec<u8>=match read_path_bytes(path,32) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
     let mut ok:bool=vec_push(&mut bytes as *Vec<u8>,0 as u8);
@@ -93,9 +92,8 @@ fn initialize(registry:*Registry)->bool {
     let marker:*u8=path_join(registry.cache,".jxz-cache"); if marker==(0 as *u8) { return false; }
     let state:i32=presence(marker); let mut ok:bool=state==1 && marker_matches(marker,registry.cache_lock);
     if state==0 && !registry.readonly {
-        let argv:[*u8;9]=["find","-P",registry.cache,"-mindepth","1","-maxdepth","1","-print0",0 as *u8];
-        let mut found:Vec<u8>=match registry_capture(&argv[0] as **u8,4194304,registry.cache_lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ free(marker as *void); return false; }, };
-        if found.len==0 { ok=symlink("JXZ-CACHE-1",marker)==0; }
+        let mut found:Vec<u8>=match host_list(registry.cache,0,4194304,registry.cache_lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ free(marker as *void); return false; }, };
+        if found.len==0 { ok=host_marker_create("JXZ-CACHE-1",marker)==0; }
         vec_free(&mut found as *Vec<u8>);
     }
     free(marker as *void);

@@ -1,6 +1,7 @@
+use host::*;
 // Versioned static registry wire formats. Tab-separated UTF-8, LF terminated;
 // metadata is bounded and never interpreted as shell input or TOML manifests.
-use binary_io::read_path_bytes;
+
 use vec::{Vec,vec_new,vec_push,vec_free};
 use result::Result;
 use text::utf8_valid;
@@ -81,6 +82,7 @@ pub fn registry_url(url:*u8)->bool {
 }
 // Files are relative, with no empty/dot/up-level components or reserved metadata.
 pub fn registry_relative(path:*u8)->bool {
+    if path!=0 as *u8 && !host_registry_path(path){return false;}
     if path==(0 as *u8) || path[0]==0 || strlen(path)>1024 || path[0]==47 || strncmp(path,".jxz-",5)==0 { return false; }
     let mut i:u64=0; let mut start:u64=0;
     loop {

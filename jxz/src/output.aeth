@@ -1,20 +1,13 @@
+use host::*;
 // Build publication and crash recovery. Callers hold the target directory lock
-// throughout prepare/compile/publish or clean; flock is released on process exit.
-use path::path_join;
+// throughout prepare/compile/publish or clean; the OS releases it after the
+// final owning/inherited handle is closed.
+
 use config::package_name_valid;
 use posix::{ENOENT, F_SETFD, FD_CLOEXEC, LOCK_EX, LOCK_NB};
-extern "C" {
-    fn opendir(path: *u8) -> *void; fn closedir(directory: *void) -> i32;
-    fn dirfd(directory: *void) -> i32; fn flock(descriptor: i32, operation: i32) -> i32;
-    fn fcntl(descriptor: i32, operation: i32, ...) -> i32;
-    fn fopen(path: *u8, mode: *u8) -> *void; fn fclose(file: *void) -> i32;
+extern "C" { fn fclose(file: *void) -> i32;
     fn fgetc(file: *void) -> i32; fn fputc(byte: i32, file: *void) -> i32;
-    fn fputs(text: *u8, file: *void) -> i32; fn ferror(file: *void) -> i32;
-    fn mkdir(path: *u8, mode: u32) -> i32; fn rmdir(path: *u8) -> i32;
-    fn access(path: *u8, mode: i32) -> i32; fn readlink(path: *u8, buffer: *u8, size: u64) -> i64;
-    fn link(old: *u8, new: *u8) -> i32; fn rename(old: *u8, new: *u8) -> i32;
-    fn symlink(target: *u8, path: *u8) -> i32;
-    fn remove(path: *u8) -> i32; fn free(pointer: *void);
+    fn fputs(text: *u8, file: *void) -> i32; fn ferror(file: *void) -> i32; fn free(pointer: *void);
     fn strcmp(a: *u8, b: *u8) -> i32; fn puts(text: *u8) -> i32; fn perror(text: *u8);
 }
 
@@ -25,36 +18,21 @@ pub struct Publication {
     pub valid: bool,
 }
 
-pub fn output_lock(directory: *u8) -> *void {
-    let handle: *void = opendir(directory);
-    if handle == (0 as *void) { perror("jxz: cannot open target directory\0" as *u8); return handle; }
-    let descriptor: i32 = dirfd(handle);
-    if descriptor < 0 || fcntl(descriptor, F_SETFD, FD_CLOEXEC) != 0 || flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
-        perror("jxz: target directory is busy or cannot be locked\0" as *u8);
-        closedir(handle); return 0 as *void;
-    }
-    return handle;
-}
-pub fn output_unlock(handle: *void) -> bool { return closedir(handle) == 0; }
-pub fn output_compiler_inherits(handle: *void, inherit: bool) -> bool {
-    // Only compiler/linker children retain the lock after exec. If JXZ is
-    // killed, recovery waits for these writers; user programs never inherit it.
-    let descriptor: i32 = dirfd(handle);
-    let flags: i32 = if inherit { 0 } else { FD_CLOEXEC };
-    return descriptor >= 0 && fcntl(descriptor, F_SETFD, flags) == 0;
-}
+pub fn output_lock(path:*u8)->*void{return host_lock(path);}
+pub fn output_unlock(handle:*void)->bool{return host_unlock(handle);}
+pub fn output_compiler_inherits(handle:*void,inherit:bool)->bool{return host_inherit(handle,inherit);}
 
 // Inspect the directory entry as well as its target: an unowned dangling
 // symlink must not be mistaken for a free output pathname.
 pub fn presence(path: *u8) -> i32 {
     let mut byte: u8 = 0;
-    if readlink(path, &byte as *u8, 1) >= 0 { return 1; }
+    if host_symbolic(path) { return 1; }
     if access(path, 0) == 0 { return 1; }
-    return if __errno_get() == ENOENT { 0 } else { -1 };
+    return if host_errno() == ENOENT { 0 } else { -1 };
 }
 pub fn remove_owned(path: *u8) -> bool {
     if remove(path) == 0 { return true; }
-    return __errno_get() == ENOENT;
+    return host_errno() == ENOENT;
 }
 fn paths(directory: *u8, name: *u8) -> Publication {
     let stage: *u8 = path_join(directory, ".jxz-build\0" as *u8);
@@ -96,7 +74,7 @@ fn cleanup(transaction: *Publication) -> bool {
 }
 pub fn marker_valid(path: *u8, expected: *u8) -> bool {
     let mut text: [u8; 65] = [0; 65];
-    let length: i64 = readlink(path, &text[0] as *u8, 64);
+    let length: i64 = host_marker_read(path, &text[0] as *u8, 64);
     if length <= 0 || length >= 64 { return false; }
     text[length as u64] = 0;
     return strcmp(&text[0] as *u8, expected) == 0;
@@ -155,7 +133,7 @@ pub fn output_recover(directory: *u8) -> bool {
         }
         // A completed rollback is also settled. Mark it before deleting any
         // backup, so cleanup can safely resume after another interruption.
-        if ok && symlink("JXZ-BUILD-SETTLED\0" as *u8, transaction.settled) != 0 { ok = false; }
+        if ok && host_marker_create("JXZ-BUILD-SETTLED\0" as *u8, transaction.settled) != 0 { ok = false; }
     }
     if ok { ok = cleanup(&transaction as *Publication); }
     if !ok { puts("jxz: build recovery pending; preserving transaction and backups\0" as *u8); }
@@ -195,7 +173,7 @@ fn legacy_owner(directory: *u8, current: *u8) -> i32 {
 fn prepare(transaction: *Publication, name: *u8) -> bool {
     // Atomic marker creation avoids a half-written ownership marker after
     // SIGKILL. Before this syscall the new directory is empty and recoverable.
-    if symlink("JXZ-BUILD-1\0" as *u8, transaction.owner) != 0 { return false; }
+    if host_marker_create("JXZ-BUILD-1\0" as *u8, transaction.owner) != 0 { return false; }
     let mut ok: bool = true;
     let output: *void = fopen(transaction.records, "wx\0" as *u8);
     if output == (0 as *void) { return false; }
@@ -224,7 +202,7 @@ fn prepare(transaction: *Publication, name: *u8) -> bool {
     ok = fputc(if had_output == 1 { 49 } else { 48 }, journal) >= 0;
     if fputc(if had_record == 1 { 49 } else { 48 }, journal) < 0 || fputc(10, journal) < 0 || fputs(name, journal) < 0 || fputc(10, journal) < 0 { ok = false; }
     if fclose(journal) != 0 { ok = false; }
-    return ok && symlink("JXZ-BUILD-READY\0" as *u8, transaction.ready) == 0;
+    return ok && host_marker_create("JXZ-BUILD-READY\0" as *u8, transaction.ready) == 0;
 }
 pub fn publication_prepare(directory: *u8, name: *u8) -> Publication {
     let mut transaction: Publication = paths(directory, name);
@@ -245,7 +223,7 @@ pub fn publication_prepare(directory: *u8, name: *u8) -> Publication {
     return transaction;
 }
 pub fn publication_publish(transaction: *Publication) -> bool {
-    if rename(transaction.staged, transaction.output) != 0 || rename(transaction.records, transaction.record) != 0 || symlink("JXZ-BUILD-SETTLED\0" as *u8, transaction.settled) != 0 {
+    if rename(transaction.staged, transaction.output) != 0 || rename(transaction.records, transaction.record) != 0 || host_marker_create("JXZ-BUILD-SETTLED\0" as *u8, transaction.settled) != 0 {
         perror("jxz: cannot publish build; restoring previous output\0" as *u8);
         output_recover(transaction.directory);
         return false;

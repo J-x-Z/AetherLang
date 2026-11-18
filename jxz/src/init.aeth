@@ -1,14 +1,12 @@
+use host::*;
 // Initialize only absent files; never overwrite an existing source or manifest.
 use config::{package_name_valid};
-use path::{make_directories};
+
 extern "C" {
-    fn fopen(path: *u8, mode: *u8) -> *void;
     fn fclose(file: *void) -> i32;
     fn fputs(s: *u8, file: *void) -> i32;
     fn fputc(c: i32, file: *void) -> i32;
     fn ferror(file: *void) -> i32;
-    fn access(path: *u8, mode: i32) -> i32;
-    fn remove(path: *u8) -> i32;
     fn puts(s: *u8) -> i32;
     fn perror(s: *u8);
 }

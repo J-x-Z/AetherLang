@@ -1,25 +1,19 @@
+use host::*;
 // Local path dependency graph. Manifests own parsed strings; the final Config
 // owns copied canonical compiler arguments after this temporary graph is freed.
 use config::{Config,Dependency,config_load_at,config_free,config_path_valid,module_name_valid,config_error};
-use path::path_join;
+
 use registry::{Registry,registry_new,registry_directory,registry_finish,registry_free};
 use registry_format::registry_relative;
 use vec::{Vec,vec_new,vec_push,vec_free};
 use posix::ENOENT;
 use output::{remove_owned,marker_valid,presence};
 extern "C" {
-    fn realpath(path:*u8,out:*u8)->*u8;
     fn malloc(size:u64)->*void; fn free(ptr:*void);
     fn strlen(text:*u8)->u64; fn strcmp(a:*u8,b:*u8)->i32;
     fn memcpy(out:*void,input:*void,count:u64)->*void;
-    fn perror(text:*u8);
-    fn fopen(path:*u8,mode:*u8)->*void; fn fclose(file:*void)->i32;
+    fn perror(text:*u8); fn fclose(file:*void)->i32;
     fn fwrite(data:*void,size:u64,count:u64,file:*void)->u64;
-    fn rename(old:*u8,new:*u8)->i32; fn remove(path:*u8)->i32; fn unlink(path:*u8)->i32;
-    fn mkdir(path:*u8,mode:u32)->i32; fn rmdir(path:*u8)->i32;
-    fn access(path:*u8,mode:i32)->i32;
-    fn readlink(path:*u8,buffer:*u8,size:u64)->i64;
-    fn symlink(target:*u8,path:*u8)->i32;
 }
 struct Package { directory:*u8, entry:*u8, cfg:Config, state:i32 }
 struct Graph { packages:Vec<Package>, root:*u8, root_name:*u8, bytes:u64, registry:Registry }
@@ -30,7 +24,7 @@ fn copy(text:*u8)->*u8 {
     return out;
 }
 fn combined(directory:*u8,path:*u8)->*u8 {
-    if path[0]==47 { return copy(path); }
+    if host_absolute(path) { return copy(path); }
     return path_join(directory,path);
 }
 fn canonical(directory:*u8,path:*u8)->*u8 {
@@ -194,10 +188,9 @@ fn resolve_graph(cfg:*Config,native_inputs:bool,readonly:bool,update:bool)->bool
     return ok;
 }
 fn clear_stage(stage:*u8,owner:*u8,file:*u8)->bool {
-    let mut first:u8=0;
     // Never traverse an unexpected symlink or recursively remove user data.
-    if readlink(stage,&mut first as *u8,1)>=0 { return false; }
-    if access(stage,0)!=0 { return __errno_get()==ENOENT; }
+    if host_symbolic(stage) { return false; }
+    if access(stage,0)!=0 { return host_errno()==ENOENT; }
     if !marker_valid(owner,"JXZ-PATH-DEPS-1") {
         // A crash before the atomic owner marker leaves an empty directory.
         // rmdir preserves nonempty directories and unexpected ordinary files.
@@ -220,8 +213,7 @@ pub fn dependencies_cleanup(directory:*u8)->bool {
 fn record_authorize(path:*u8,owner:*u8,create:bool)->bool {
     let record_state:i32=presence(path); let owner_state:i32=presence(owner);
     if record_state<0 || owner_state<0 { return false; }
-    let mut byte:u8=0;
-    if record_state==1 && readlink(path,&mut byte as *u8,1)>=0 {
+    if record_state==1 && host_symbolic(path) {
         config_error("jxz: refusing a symbolic dependency record; preserving it"); return false;
     }
     if owner_state==1 {
@@ -229,9 +221,9 @@ fn record_authorize(path:*u8,owner:*u8,create:bool)->bool {
         config_error("jxz: unrecognized dependency record owner; preserving it"); return false;
     }
     if record_state==1 { config_error("jxz: unowned dependency record path; preserving it"); return false; }
-    return !create || symlink("JXZ-PATH-DEPS-RECORD-1",owner)==0;
+    return !create || host_marker_create("JXZ-PATH-DEPS-RECORD-1",owner)==0;
 }
-fn unlink_owned(path:*u8)->bool { return unlink(path)==0 || __errno_get()==ENOENT; }
+fn unlink_owned(path:*u8)->bool { return unlink(path)==0 || host_errno()==ENOENT; }
 pub fn dependencies_remove(directory:*u8)->bool {
     let path:*u8=path_join(directory,".jxz-dependencies");
     let owner:*u8=path_join(directory,".jxz-dependencies-owner");
@@ -260,7 +252,7 @@ pub fn dependencies_record(cfg:*Config,directory:*u8)->bool {
     if ok {
         if mkdir(stage,448)!=0 { ok=false; }
         else {
-            if symlink("JXZ-PATH-DEPS-1",owner)!=0 { ok=false; }
+            if host_marker_create("JXZ-PATH-DEPS-1",owner)!=0 { ok=false; }
             else {
                 let file:*void=fopen(temporary,"wx");
                 if file==(0 as *void) { ok=false; }

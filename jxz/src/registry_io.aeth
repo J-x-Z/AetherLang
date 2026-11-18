@@ -1,44 +1,24 @@
+extern "C"{fn fread(p:*void,size:u64,n:u64,file:*void)->u64;fn fclose(file:*void)->i32;fn ferror(file:*void)->i32;}
+use host::*;
 // Bounded system-tool adapters. Policy, metadata and ownership stay in Aether.
 use vec::{Vec,vec_new,vec_free,vec_push};
 use result::Result;
-use fd::{Descriptor,Pipe,fd_pipe,fd_close,fd_open_read,fd_read};
-use binary_io::fd_read_bytes;
-use process::{Command,Child,command_new,process_spawn,child_wait,child_signal,process_status_code};
-use posix::SIGKILL;
-use output::output_compiler_inherits;
+
 use sha256::{Sha256,sha256_new,sha256_update,sha256_digest};
-extern "C" { fn free(ptr:*void); fn strlen(text:*u8)->u64; fn malloc(n:u64)->*void; fn strcmp(a:*u8,b:*u8)->i32; fn readlink(path:*u8,out:*u8,size:u64)->i64; }
-pub fn registry_capture(argv:**u8,limit:u64,lock:*void)->Result<Vec<u8>,i32> {
-    let mut pipe:Pipe=fd_pipe()?;
-    let mut command:Command=command_new(argv); command.stdout_fd=pipe.writer.value;
-    if lock!=(0 as *void) && !output_compiler_inherits(lock,true) { fd_close(&mut pipe.reader as *Descriptor); fd_close(&mut pipe.writer as *Descriptor); return Result::Err(1); }
-    let mut child:Child=match process_spawn(&mut command as *Command) {
-        Result::Ok(value)=>value,
-        Result::Err(_)=>{ if lock!=(0 as *void) { output_compiler_inherits(lock,false); } fd_close(&mut pipe.reader as *Descriptor); fd_close(&mut pipe.writer as *Descriptor); return Result::Err(1); },
-    };
-    let mut failed:bool=false;
-    match fd_close(&mut pipe.writer as *Descriptor) { Result::Ok(_)=>{},Result::Err(_)=>{ failed=true; }, }
-    let mut bytes:Vec<u8>=vec_new();
-    if !failed { match fd_read_bytes(pipe.reader.value,limit) { Result::Ok(value)=>{ bytes=value; },Result::Err(_)=>{ failed=true; }, } }
-    match fd_close(&mut pipe.reader as *Descriptor) { Result::Ok(_)=>{},Result::Err(_)=>{ failed=true; }, }
-    if failed { child_signal(&mut child as *Child,SIGKILL); }
-    match child_wait(&mut child as *Child) { Result::Ok(status)=>{ if process_status_code(status)!=0 { failed=true; } },Result::Err(_)=>{ failed=true; }, }
-    if lock!=(0 as *void) && !output_compiler_inherits(lock,false) { failed=true; }
-    if failed { vec_free(&mut bytes as *Vec<u8>); return Result::Err(1); }
-    Result::Ok(bytes)
-}
-pub fn registry_symlink(path:*u8)->bool { let mut byte:u8=0; readlink(path,&mut byte as *u8,1)>=0 }
+extern "C" { fn free(ptr:*void); fn strlen(text:*u8)->u64; fn malloc(n:u64)->*void; fn strcmp(a:*u8,b:*u8)->i32; }
+pub fn registry_capture(argv:**u8,limit:u64,lock:*void)->Result<Vec<u8>,i32>{return host_capture(argv,limit,lock);}
+pub fn registry_symlink(path:*u8)->bool{return host_symbolic(path);}
 pub fn registry_sha(path:*u8,expected:*u8,limit:u64)->bool {
-    let mut file:Descriptor=match fd_open_read(path) {Result::Ok(fd)=>fd,Result::Err(_)=>{return false;}};
+    let file:*void=fopen(path,"rb");if file==0 as *void{return false;}
     let mut hash:Sha256=sha256_new();let mut block:[u8;4096]=[0;4096];
     let mut total:u64=0;let mut ok:bool=true;
     loop {
-        let count:u64=match fd_read(file.value,&mut block[0] as *u8,4096) {Result::Ok(n)=>n,Result::Err(_)=>{ok=false;break;}};
+        let count:u64=match host_read_chunk(file,&mut block[0] as *u8,4096){Result::Ok(n)=>n,Result::Err(_)=>{ok=false;break;}};
         if count==0 {break;}
         if count>limit-total || !sha256_update(&mut hash as *Sha256,&block[0] as *u8,count) {ok=false;break;}
         total+=count;
     }
-    match fd_close(&mut file as *Descriptor) {Result::Err(_)=>{ok=false;},Result::Ok(_)=>{}}
+    if fclose(file)!=0{ok=false;}
     if !ok || strlen(expected)!=64 {return false;}
     let actual:[u8;32]=sha256_digest(hash);let hex:*u8="0123456789abcdef";
     for i in 0..32 {
@@ -71,11 +51,7 @@ pub fn registry_url_path(base:*u8,path:*u8)->*u8 {
 
 // Reject FIFO/device/directory metadata before opening it: a bounded read alone
 // does not bound the time spent opening a FIFO with no writer.
-pub fn registry_regular(path:*u8,lock:*void)->bool {
-    let argv:[*u8;9]=["find","-P",path,"-maxdepth","0","-type","f","-print0",0 as *u8];
-    let mut bytes:Vec<u8>=match registry_capture(&argv[0] as **u8,8192,lock) { Result::Ok(value)=>value,Result::Err(_)=>{ return false; }, };
-    let ok:bool=bytes.len>0; vec_free(&mut bytes as *Vec<u8>); ok
-}
+pub fn registry_regular(path:*u8,lock:*void)->bool{return host_regular(path,lock);}
 
 // Before 8.4 curl only enforced --max-filesize when Content-Length was known.
 // Refuse that transport for online operations rather than silently losing bounds.

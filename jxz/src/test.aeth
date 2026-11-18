@@ -1,38 +1,25 @@
-// Discover NUL-delimited paths with the host's find utility. Compilation,
+use vec::{Vec,vec_free};extern "C"{fn fwrite(data:*void,size:u64,n:u64,file:*void)->u64;}
+use host::*;
+// Discover NUL-delimited paths through the selected host implementation. Compilation,
 // execution, status aggregation and resource ownership are AetherLang code.
 use config::{Config, config_load, config_free};
-use process::{process_run};
-use path::{path_join, make_directories};
-use fs::dir_probe;
+
 use result::Result;
 use dependencies::{dependencies_resolve,dependencies_record};
 use build::{compile_source};
 use output::{output_lock, output_unlock, output_recover, output_compiler_inherits};
 extern "C" {
-    fn fopen(path: *u8, mode: *u8) -> *void;
     fn fclose(file: *void) -> i32;
     fn fgetc(file: *void) -> i32;
     fn ferror(file: *void) -> i32;
     fn malloc(size: u64) -> *void;
     fn realloc(ptr: *void, size: u64) -> *void;
     fn free(ptr: *void);
-    fn remove(path: *u8) -> i32;
     fn puts(s: *u8) -> i32;
     fn strerror(code: i32) -> *u8;
-    fn dprintf(fd: i32, format: *u8, ...) -> i32;
 }
 
-fn test_discover(list: *u8, lock: *void) -> i32 {
-    let mut args: [*u8; 9] = ["find\0" as *u8, "tests\0" as *u8,
-        "-type\0" as *u8, "f\0" as *u8, "-name\0" as *u8,
-        "test_*.aeth\0" as *u8, "-print0\0" as *u8, 0 as *u8, 0 as *u8];
-    // Discovery writes into the locked target directory too. Keep the lock
-    // alive if JXZ is killed while find still owns the output descriptor.
-    if !output_compiler_inherits(lock, true) { return 1; }
-    let mut status: i32 = process_run(&args[0] as **u8, list);
-    if !output_compiler_inherits(lock, false) { status = 1; }
-    return status;
-}
+fn test_discover(list:*u8,lock:*void)->i32{return host_discover(list,lock);}
 
 fn test_execute(cfg: *Config, file: *void, executable: *u8, lock: *void) -> i32 {
     let mut capacity: u64 = 256;
@@ -89,7 +76,7 @@ pub fn run_tests() -> i32 {
                 }
             },
             Result::Err(code) => {
-                dprintf(2, "jxz: cannot open tests directory: %s\n", strerror(code));
+                host_error("jxz: cannot open tests directory");host_error(strerror(code));
                 config_free(&cfg as *Config);
                 return 1;
             },
@@ -103,7 +90,7 @@ pub fn run_tests() -> i32 {
             let output: *u8 = path_join(cfg.target_dir, ".jxz-test\0" as *u8);
             let mut executable: *u8 = output;
             if output != (0 as *u8) {
-                if output[0] != 47 { executable = path_join(".\0" as *u8, output); }
+                if !host_absolute(output) { executable = path_join(".\0" as *u8, output); }
             }
             if list != (0 as *u8) && executable != (0 as *u8) {
                 if test_discover(list, lock) == 0 {

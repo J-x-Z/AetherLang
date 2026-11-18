@@ -7,7 +7,7 @@ extern "C" {
  fn memcpy(dest:*void,source:*void,size:u64)->*void;
  fn strlen(text:*u8)->u64; fn strcmp(a:*u8,b:*u8)->i32;
  fn fclose(file:*void)->i32;
- fn fread(data:*u8,size:u64,count:u64,file:*void)->u64;
+ fn fread(data:*void,size:u64,count:u64,file:*void)->u64;
  fn fwrite(data:*u8,size:u64,count:u64,file:*void)->u64;
  fn ferror(file:*void)->i32;
  fn printf(format:*u8,...)->i32; fn fprintf(file:*void,format:*u8,...)->i32;

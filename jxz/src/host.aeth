@@ -1,0 +1,96 @@
+// Native project-host boundary. POSIX implementation selected by default.
+use vec::{Vec,vec_new,vec_free,vec_push};use result::Result;
+pub use path::{path_join,make_directories,make_directories_result,directory_exists};
+pub use fs::dir_probe;pub use binary_io::read_path_bytes;
+pub use process::{process_run,environment_get,environment_tool};
+use fd::{Descriptor,Pipe,fd_pipe,fd_close};use binary_io::fd_read_bytes;
+use process::{Command,Child,command_new,process_spawn,child_wait,child_signal,process_status_code};
+use posix::{SIGKILL,F_SETFD,FD_CLOEXEC,LOCK_EX,LOCK_NB};
+extern "C" {
+ fn fopen(path:*u8,mode:*u8)->*void;fn fseek(file:*void,offset:i64,origin:i32)->i32;fn ftell(file:*void)->i64;
+ fn remove(path:*u8)->i32;fn unlink(path:*u8)->i32;fn rmdir(path:*u8)->i32;fn mkdir(path:*u8,mode:u32)->i32;fn access(path:*u8,mode:i32)->i32;
+ fn rename(old:*u8,new:*u8)->i32;fn link(old:*u8,new:*u8)->i32;fn realpath(path:*u8,out:*u8)->*u8;
+ fn mkdtemp(path:*u8)->*u8;fn mkstemp(path:*u8)->i32;fn close(fd:i32)->i32;fn fdopen(fd:i32,mode:*u8)->*void;
+ fn opendir(path:*u8)->*void;fn closedir(dir:*void)->i32;fn dirfd(dir:*void)->i32;fn fcntl(fd:i32,op:i32,...)->i32;fn flock(fd:i32,op:i32)->i32;
+ fn symlink(value:*u8,path:*u8)->i32;fn readlink(path:*u8,out:*u8,size:u64)->i64;fn execvp(path:*u8,args:**u8)->i32;
+ fn malloc(n:u64)->*void;fn memcpy(a:*void,b:*void,n:u64)->*void;fn strlen(text:*u8)->u64;fn write(fd:i32,text:*void,size:u64)->i64;fn perror(text:*u8);
+}
+pub fn host_lock(directory: *u8) -> *void {
+    let handle: *void = opendir(directory);
+    if handle == (0 as *void) { perror("jxz: cannot open target directory\0" as *u8); return handle; }
+    let descriptor: i32 = dirfd(handle);
+    if descriptor < 0 || fcntl(descriptor, F_SETFD, FD_CLOEXEC) != 0 || flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+        perror("jxz: target directory is busy or cannot be locked\0" as *u8);
+        closedir(handle); return 0 as *void;
+    }
+    return handle;
+}
+pub fn host_unlock(handle: *void) -> bool { return closedir(handle) == 0; }
+pub fn host_inherit(handle: *void, inherit: bool) -> bool {
+    // Only compiler/linker children retain the lock after exec. If JXZ is
+    // killed, recovery waits for these writers; user programs never inherit it.
+    let descriptor: i32 = dirfd(handle);
+    let flags: i32 = if inherit { 0 } else { FD_CLOEXEC };
+    return descriptor >= 0 && fcntl(descriptor, F_SETFD, flags) == 0;
+}
+
+pub fn host_capture(argv:**u8,limit:u64,lock:*void)->Result<Vec<u8>,i32> {
+    let mut pipe:Pipe=fd_pipe()?;
+    let mut command:Command=command_new(argv); command.stdout_fd=pipe.writer.value;
+    if lock!=(0 as *void) && !host_inherit(lock,true) { fd_close(&mut pipe.reader as *Descriptor); fd_close(&mut pipe.writer as *Descriptor); return Result::Err(1); }
+    let mut child:Child=match process_spawn(&mut command as *Command) {
+        Result::Ok(value)=>value,
+        Result::Err(_)=>{ if lock!=(0 as *void) { host_inherit(lock,false); } fd_close(&mut pipe.reader as *Descriptor); fd_close(&mut pipe.writer as *Descriptor); return Result::Err(1); },
+    };
+    let mut failed:bool=false;
+    match fd_close(&mut pipe.writer as *Descriptor) { Result::Ok(_)=>{},Result::Err(_)=>{ failed=true; }, }
+    let mut bytes:Vec<u8>=vec_new();
+    if !failed { match fd_read_bytes(pipe.reader.value,limit) { Result::Ok(value)=>{ bytes=value; },Result::Err(_)=>{ failed=true; }, } }
+    match fd_close(&mut pipe.reader as *Descriptor) { Result::Ok(_)=>{},Result::Err(_)=>{ failed=true; }, }
+    if failed { child_signal(&mut child as *Child,SIGKILL); }
+    match child_wait(&mut child as *Child) { Result::Ok(status)=>{ if process_status_code(status)!=0 { failed=true; } },Result::Err(_)=>{ failed=true; }, }
+    if lock!=(0 as *void) && !host_inherit(lock,false) { failed=true; }
+    if failed { vec_free(&mut bytes as *Vec<u8>); return Result::Err(1); }
+    Result::Ok(bytes)
+}
+
+pub fn host_errno()->i32{return __errno_get();}
+pub fn host_marker_create(value:*u8,path:*u8)->i32{return symlink(value,path);}
+pub fn host_marker_read(path:*u8,out:*u8,size:u64)->i64{return readlink(path,out,size);}
+pub fn host_symbolic(path:*u8)->bool{let mut byte:u8=0;return readlink(path,&mut byte as *u8,1)>=0;}
+pub fn host_absolute(path:*u8)->bool{return path[0]==47;}
+pub fn host_name_valid(name:*u8)->bool{return true;}
+pub fn host_arguments(argc:i32,argv:**u8,count:*i32)->**u8{*count=argc;return argv;}
+pub fn host_finish(argc:i32,argv:**u8){}
+pub fn host_description()->*u8{return "Local commands use the native POSIX host.";}
+pub fn host_program_name(name:*u8)->*u8{let n:u64=strlen(name);let p:*u8=malloc(n+1) as *u8;if p!=0 as *u8{memcpy(p as *void,name as *void,n+1);}return p;}
+pub fn host_execute(args:**u8)->i32{execvp(args[0],args);perror("jxz: cannot execute language server");return if host_errno()==2{127}else{126};}
+pub fn host_error(message:*u8){write(2,message as *void,strlen(message));write(2,"\n" as *void,1);}
+pub fn host_regular(path:*u8,lock:*void)->bool{
+ let args:[*u8;9]=["find","-P",path,"-maxdepth","0","-type","f","-print0",0 as *u8];
+ let mut bytes:Vec<u8>=match host_capture(&args[0] as **u8,8192,lock){Result::Ok(x)=>x,Result::Err(_)=>{return false;}};
+ let ok:bool=bytes.len>0;vec_free(&mut bytes as *Vec<u8>);return ok;
+}
+pub fn host_list(path:*u8,mode:i32,limit:u64,lock:*void)->Result<Vec<u8>,i32>{
+ if mode==0{let a:[*u8;9]=["find","-P",path,"-mindepth","1","-maxdepth","1","-print0",0 as *u8];return host_capture(&a[0] as **u8,limit,lock);}
+ if mode==1{let a:[*u8;7]=["find","-P",path,"-type","f","-print0",0 as *u8];return host_capture(&a[0] as **u8,limit,lock);}
+ if mode==2{let a:[*u8;11]=["find","-P",path,"!","-type","f","!","-type","d","-print0",0 as *u8];return host_capture(&a[0] as **u8,limit,lock);}
+ let a:[*u8;8]=["find",path,"-type","f","-name","test_*.aeth","-print0",0 as *u8];return host_capture(&a[0] as **u8,limit,lock);
+}
+
+pub fn host_discover(list:*u8,lock:*void)->i32{
+ let a:[*u8;8]=["find","tests","-type","f","-name","test_*.aeth","-print0",0 as *u8];
+ if !host_inherit(lock,true){return 1;}let mut status:i32=process_run(&a[0] as **u8,list);if !host_inherit(lock,false){status=1;}return status;
+}
+
+pub fn host_registry_path(path:*u8)->bool{return true;}
+
+extern "C"{fn fread(data:*void,size:u64,n:u64,file:*void)->u64;fn ferror(file:*void)->i32;}
+
+extern "C"{fn clearerr(file:*void);}
+// Preserve partial data and retry an interrupted stdio read before declaring a
+// cache corrupt. Windows uses the same scalar UCRT interface.
+pub fn host_read_chunk(file:*void,data:*u8,size:u64)->Result<u64,i32>{
+ loop{let n:u64=fread(data as *void,1,size,file);if ferror(file)==0{return Result::Ok(n);}let e:i32=host_errno();
+ if e==4{clearerr(file);if n>0{return Result::Ok(n);}}else{return Result::Err(if e==0{5}else{e});}}
+}

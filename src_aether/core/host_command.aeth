@@ -1,4 +1,4 @@
-use model::*;
+extern "C"{fn malloc(size:u64)->*void;fn strlen(text:*u8)->u64;}
 // Microsoft argv decoding: quote every argument, double backslashes before a
 // quote and before the closing quote. No command shell interprets this text.
 pub fn boot_windows_command(args:**u8)->*u8{

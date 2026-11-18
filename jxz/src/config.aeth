@@ -1,6 +1,7 @@
+use host::*;
 // The local project manifest has explicit ownership: every parsed string points
 // into storage, which is released exactly once by config_free.
-use binary_io::read_path_bytes;
+
 use vec::{Vec, vec_new, vec_push, vec_free};
 use result::Result;
 extern "C" {
@@ -10,11 +11,10 @@ extern "C" {
     fn strncmp(a: *u8, b: *u8, count: u64) -> i32;
     fn strlen(s: *u8) -> u64;
     fn strerror(code: i32) -> *u8;
-    fn dprintf(fd: i32, format: *u8, ...) -> i32;
 }
 
 // Shared project diagnostics never write to stdout, which may carry LSP frames.
-pub fn config_error(message: *u8) { dprintf(2, "%s\n", message); }
+pub fn config_error(message: *u8) { host_error(message); }
 
 pub struct Dependency { pub name: *u8, pub path: *u8, pub version: *u8 }
 
@@ -160,7 +160,7 @@ pub fn config_path_valid(path: *u8) -> bool {
 }
 
 pub fn package_name_valid(name: *u8) -> bool {
-    if !config_path_valid(name) { return false; }
+    if !config_path_valid(name) || !host_name_valid(name) { return false; }
     if strlen(name) > 255 { return false; }
     if strncmp(name, ".jxz-\0" as *u8, 5) == 0 { return false; }
     if strcmp(name, ".\0" as *u8) == 0 || strcmp(name, "..\0" as *u8) == 0 { return false; }

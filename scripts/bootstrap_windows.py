@@ -2,6 +2,7 @@
 """Prepare and cross-link the Aether-written compiler for Windows x64; never run it."""
 import argparse,hashlib,json,os,re,shutil,struct,subprocess,tempfile
 from pathlib import Path
+from windows_support import inspect_pe
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--compiler',required=True,type=Path,help='Existing native Aether-built seed')
 p.add_argument('--work-dir',required=True,type=Path)
@@ -21,27 +22,6 @@ def save(): (w/'results.json').write_text(json.dumps(report,indent=2))
 def run(label,cmd):
  r=subprocess.run(list(map(str,cmd)),capture_output=True,timeout=240,env=env);records.append(dict(label=label,command=list(map(str,cmd)),status=r.returncode,stdout=r.stdout.decode(errors='replace'),stderr=r.stderr.decode(errors='replace')));save();assert r.returncode==0,(label,r.stderr.decode(errors='replace'));return r
 
-def pe(path):
- data=path.read_bytes();assert data[:2]==b'MZ';offset=struct.unpack_from('<I',data,60)[0];assert data[offset:offset+4]==b'PE\0\0';machine,sections,_,_,_,opt,flags=struct.unpack_from('<HHIIIHH',data,offset+4);assert machine==0x8664 and flags&2 and not flags&0x2000;assert struct.unpack_from('<H',data,offset+24)[0]==0x20b
- table=offset+24+opt
- def rva(value):
-  for i in range(sections):
-   at=table+i*40;size,virtual,rawsize,raw=struct.unpack_from('<IIII',data,at+8)
-   if virtual<=value<virtual+max(size,rawsize):return raw+value-virtual
-  raise AssertionError(('unmapped RVA',value))
- def text(at):return data[at:data.index(b'\0',at)].decode()
- imports=[];directory=struct.unpack_from('<I',data,offset+24+120)[0];at=rva(directory)
- while any(data[at:at+20]):
-  lookup,_,_,name,first=struct.unpack_from('<IIIII',data,at);dll=text(rva(name));entry=rva(lookup or first);symbols=[]
-  while True:
-   value=struct.unpack_from('<Q',data,entry)[0];entry+=8
-   if not value:break
-   symbols.append('#'+str(value&0xffff) if value>>63 else text(rva(value)+2))
-  imports.append(dict(dll=dll,symbols=symbols));at+=20
- symbols={s for item in imports for s in item['symbols']}
- assert not symbols&{'fork','execvp','waitpid','realpath','uname','__error','__errno_location'},symbols
- assert {'CreateProcessW','GetCommandLineW','MoveFileExW','_errno'}<=symbols,symbols
- return dict(file=str(path),size=len(data),sha256=hashlib.sha256(data).hexdigest(),machine='AMD64',format='PE32+',imports=imports)
 # Exercise the exact quoting algorithm on this host, using an independent
 # Microsoft argv grammar decoder. This is not Windows process execution.
 quote_source=w/'quote-source';quote_source.mkdir()
@@ -84,7 +64,7 @@ for backend in ['c','llvm']:
  run('Aether emits '+backend,[seed,selected/'aethc.aeth','--emit-'+backend,'-o',emitted])
  for level in [0,2]:
   binary=w/f'aethc-{backend}-O{level}.exe'
-  run(f'cross link {backend} O{level}',[a.zig,'cc','-target','x86_64-windows-gnu',f'-O{level}',emitted,'-lbcrypt','-lshell32','-o',binary]);products.append(pe(binary))
+  run(f'cross link {backend} O{level}',[a.zig,'cc','-target','x86_64-windows-gnu',f'-O{level}',emitted,'-lbcrypt','-lshell32','-o',binary]);products.append(inspect_pe(binary, {'CreateProcessW','GetCommandLineW','MoveFileExW','_errno'}))
 # Compare the actual Aether-emitted foreign records to the target SDK definitions.
 s=(w/'compiler.c').read_text();m=re.search(r'extern int32_t CreateProcessW\(([^;]+)\);',s);assert m
 names=re.findall(r'(a\d+_s\d+)\*',m.group(1));assert len(names)==2

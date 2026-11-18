@@ -189,9 +189,10 @@ newlines are preserved. Test binaries are rebuilt before execution. `clean`
 removes every output recorded by successful JXZ builds and reserved intermediates;
 it never recursively deletes the target directory or removes source `.c` files.
 
-This implementation currently requires a 64-bit POSIX host with `find` and the
-linker required by `aethc`. macOS is exercised by the integration suite; Windows is not supported
-by this POSIX process layer. Registry commands additionally require `curl` only. The dependency-edit/install commands `add`, `remove` and `install`
+The default host implementation requires a 64-bit POSIX host with `find` and
+the linker required by `aethc`. macOS is exercised by the integration suite.
+A separate Windows adapter has cross-build preflight below; native acceptance
+is still pending. Online registry commands additionally require `curl`. The dependency-edit/install commands `add`, `remove` and `install`
 remain unsupported and return an explicit error; remote publication is not implemented.
 
 Migration: `build` now defaults to debug (`-O0`); pass `--release` for `-O2`.
@@ -202,3 +203,41 @@ A failed metadata write preserves the previous collection.
 Cleanup also reads the previous `.jxz-output-name` format, rejects corrupt or
 incomplete records, and preserves unrelated files. Path and process operations
 are provided by `stdlib/path.aeth` and `stdlib/process.aeth`.
+
+### Windows x64 preflight
+
+The native Windows adapter is Aether code using Win32/UCRT. Project parsing,
+package verification and build publication share the POSIX implementation.
+Build preparation (does not execute Windows binaries):
+
+```sh
+python3 scripts/bootstrap_jxz_windows.py --compiler /path/to/native/aethc --work-dir /external/windows-jxz
+```
+
+The runner freezes sources and emits C/LLVM at O0/O2, links real x64 PE files
+with Zig, and checks imports and the SDK enumeration layout. Select
+`host_windows.aeth` as `host.aeth` only in that frozen build; the normal source
+checkout uses POSIX. `windows_api.aeth` and command quoting are shared with the
+self-hosted compiler. No Wine or Windows host is contacted.
+
+On an actual Windows host with native Clang/SDK configured:
+
+```powershell
+python jxz/tests/windows_native.py --jxz C:\bundle\jxz.exe --compiler C:\bundle\aethc.exe --cc C:\LLVM\bin\clang.exe --stdlib C:\bundle\stdlib --work-dir C:\aether-tests
+```
+
+That entry validates local/transitive dependencies, changes and deterministic
+records, test discovery, output preservation, inherited directory locks,
+verified offline cache, and the project LSP. On other hosts it exits **77** with
+an explicit skip. Cross-linking is not native runtime acceptance.
+
+Windows uses UTF-8 project paths with wide native APIs and `.exe` output names.
+Test discovery and cache verification do not require `find`, `tar`, a shell,
+or symlink privileges. Online fetch still requires **curl 8.4+**; its Windows
+native transport and Unicode argument behavior await native acceptance.
+Ownership markers are regular files published atomically through a hard link.
+Killing a writer before marker publication can leave a random `.jxz-marker-*`
+sibling in the parent directory; it is preserved as an uncommitted artifact,
+never treated as ownership or recursively deleted. A filesystem without hard
+links fails that operation without replacing existing files. Windows-specific
+file locking, child signal handling and crash recovery remain native-test gates.

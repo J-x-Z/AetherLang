@@ -1,26 +1,23 @@
+use host::*;
 // Content-addressed packages. A final directory is usable only after every
 // listed file and the complete file set have been verified. Unknown/corrupt
 // cache content is preserved in quarantine; it is never recursively deleted.
 use registry_format::{RegistryTable,RegistryRow,registry_table_read,registry_table_free,registry_manifest_valid,registry_copy};
 use registry_io::{registry_capture,registry_sha,registry_download,registry_url_path,registry_symlink};
-use path::{path_join,make_directories,directory_exists};
+
 use vec::{Vec,vec_new,vec_free};
 use result::Result;
 use output::presence;
 use config::config_error;
 extern "C" {
-    fn free(ptr:*void); fn strcmp(a:*u8,b:*u8)->i32; fn strncmp(a:*u8,b:*u8,n:u64)->i32; fn strlen(text:*u8)->u64;
-    fn mkdtemp(template:*u8)->*u8; fn rename(old:*u8,new:*u8)->i32; fn rmdir(path:*u8)->i32; fn remove(path:*u8)->i32;
-    fn fopen(path:*u8,mode:*u8)->*void; fn fclose(file:*void)->i32; fn fseek(file:*void,offset:i64,origin:i32)->i32; fn ftell(file:*void)->i64;
+    fn free(ptr:*void); fn strcmp(a:*u8,b:*u8)->i32; fn strncmp(a:*u8,b:*u8,n:u64)->i32; fn strlen(text:*u8)->u64; fn fclose(file:*void)->i32;
 }
 fn files_regular(directory:*u8,lock:*void)->bool {
-    let argv:[*u8;11]=["find","-P",directory,"!","-type","f","!","-type","d","-print0",0 as *u8];
-    let mut unexpected:Vec<u8>=match registry_capture(&argv[0] as **u8,4194304,lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ return false; }, };
+    let mut unexpected:Vec<u8>=match host_list(directory,2,4194304,lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ return false; }, };
     let ok:bool=unexpected.len==0; vec_free(&mut unexpected as *Vec<u8>); ok
 }
 fn exact_file_set(directory:*u8,table:*RegistryTable,lock:*void)->bool {
-    let argv:[*u8;7]=["find","-P",directory,"-type","f","-print0",0 as *u8];
-    let mut files:Vec<u8>=match registry_capture(&argv[0] as **u8,4194304,lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ return false; }, };
+    let mut files:Vec<u8>=match host_list(directory,1,4194304,lock) { Result::Ok(bytes)=>bytes,Result::Err(_)=>{ return false; }, };
     let mut ok:bool=files.len>0;
     if ok { ok=files.data[files.len-1]==0; }
     let prefix:u64=strlen(directory); let mut count:u64=0; let mut i:u64=0;

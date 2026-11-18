@@ -1,3 +1,4 @@
+use host::*;
 // JXZ local project driver. All build/configuration decisions live in AetherLang.
 use build::{build_project, run_project, clean_project, language_server};
 use init::{init_project};
@@ -7,7 +8,6 @@ use dependencies::dependencies_fetch;
 
 extern "C" {
     fn puts(s: *u8) -> i32;
-    fn dprintf(fd: i32, format: *u8, ...) -> i32;
     fn strcmp(a: *u8, b: *u8) -> i32;
 }
 
@@ -15,10 +15,11 @@ fn print_help() {
     puts("JXZ - AetherLang project driver\0" as *u8);
     puts("Usage: jxz <init [name]|build [--release]|run [-- args...]|test|clean|lsp|fetch|update>\0" as *u8);
     puts("AETHC selects the compiler; AETHER_BACKEND overrides its backend (llvm or c).\0" as *u8);
-    puts("Local project commands currently require a 64-bit POSIX host.\0" as *u8);
+    puts(host_description());
 }
 
-pub fn main(argc: i32, argv: **u8) -> i32 {
+pub fn main(argc:i32,argv:**u8)->i32{let mut count:i32=argc;let args:**u8=host_arguments(argc,argv,&mut count as *i32);if args==0 as **u8{return 1;}let status:i32=jxz_main(count,args);host_finish(count,args);return status;}
+fn jxz_main(argc: i32, argv: **u8) -> i32 {
     if argc < 2 { print_help(); return 0; }
     let command: *u8 = argv[1];
     if strcmp(command, "help\0" as *u8) == 0 || strcmp(command, "--help\0" as *u8) == 0 || strcmp(command, "-h\0" as *u8) == 0 {
@@ -48,7 +49,7 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
         return run_project(argc - start, argv + start);
     }
     if strcmp(command, "lsp") == 0 {
-        if argc != 2 { dprintf(2,"jxz lsp takes no arguments\n"); return 2; }
+        if argc != 2 { host_error("jxz lsp takes no arguments"); return 2; }
         return language_server();
     }
     if strcmp(command, "test\0" as *u8) == 0 {

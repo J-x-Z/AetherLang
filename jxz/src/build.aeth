@@ -1,7 +1,7 @@
+use host::*;
 // The compiler owns backend selection and linking; JXZ owns project policy.
 use config::{Config, config_load, config_free, package_name_valid, config_error};
-use process::{process_run, environment_tool};
-use path::{path_join, make_directories_result};
+
 use result::Result;
 use output::{Publication, output_lock, output_unlock, output_compiler_inherits, output_recover, publication_prepare, publication_publish, publication_free};
 use posix::ENOENT;
@@ -12,21 +12,14 @@ extern "C" {
     fn malloc(size: u64) -> *void;
     fn free(ptr: *void);
     fn puts(s: *u8) -> i32;
-    fn remove(path: *u8) -> i32;
-    fn access(path: *u8, mode: i32) -> i32;
-    fn rmdir(path: *u8) -> i32;
     fn perror(s: *u8);
-    fn fopen(path: *u8, mode: *u8) -> *void;
     fn fclose(file: *void) -> i32;
     fn fputs(s: *u8, file: *void) -> i32;
     fn fgetc(file: *void) -> i32;
     fn fputc(value: i32, file: *void) -> i32;
     fn strcmp(a: *u8, b: *u8) -> i32;
-    fn rename(old_path: *u8, new_path: *u8) -> i32;
     fn ferror(file: *void) -> i32;
     fn strlen(s: *u8) -> u64;
-    fn realpath(path: *u8, resolved: *u8) -> *u8;
-    fn execvp(file: *u8, argv: **u8) -> i32;
     fn strerror(code: i32) -> *u8;
 }
 
@@ -130,13 +123,7 @@ pub fn language_server() -> i32 {
                 && compiler_module_arguments(&mut cfg as *Config,&mut args as *CompilerArgs)
                 && compiler_arg(&mut args as *CompilerArgs,0 as *u8);
             if ok {
-                // No child/wait wrapper: editor signals and the server exit code
-                // belong to this PID. Successful exec releases all JXZ storage.
-                execvp(args.values.data[0],args.values.data);
-                let code:i32=__errno_get();
-                config_error("jxz: cannot execute language server");
-                config_error(strerror(code));
-                status=if code==ENOENT { 127 } else { 126 };
+                status=host_execute(args.values.data);
             } else { config_error("jxz: cannot allocate language server arguments"); }
         } else { config_error("jxz: cannot resolve language server project"); }
     }
@@ -154,7 +141,8 @@ pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
     let lock: *void = output_lock(cfg.target_dir);
     if lock == (0 as *void) { return 1; }
     if !dependencies_record(cfg,cfg.target_dir) { output_unlock(lock); return 1; }
-    let output: *u8 = path_join(cfg.target_dir, cfg.name);
+    let program:*u8=host_program_name(cfg.name);
+    let output: *u8 = if program!=0 as *u8{path_join(cfg.target_dir, program)}else{0 as *u8};
     let mut source: *u8 = cfg.main_file;
     let mut owns_source: bool = false;
     if source == (0 as *u8) {
@@ -169,7 +157,7 @@ pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
         free(resolved_source as *void); free(resolved_output as *void);
         if same_source { puts("jxz: output must not replace the input source\0" as *u8); }
         else {
-            let mut transaction: Publication = publication_prepare(cfg.target_dir, cfg.name);
+            let mut transaction: Publication = publication_prepare(cfg.target_dir, program);
             if transaction.valid {
                 puts("jxz: compiling\0" as *u8); puts(source);
                 status = compile_source(cfg, source, transaction.staged, release, lock);
@@ -180,7 +168,7 @@ pub fn build_loaded(cfg: *Config, release: bool) -> i32 {
         }
     }
     if owns_source { free(source as *void); }
-    free(output as *void);
+    free(output as *void);free(program as *void);
     if !output_unlock(lock) { status = 1; }
     return status;
 }
@@ -200,10 +188,11 @@ pub fn run_project(argc: i32, argv: **u8) -> i32 {
         status = build_loaded(&cfg as *Config, false);
         if status == 0 {
             // Prefix relative output with ./ so execvp never searches PATH.
-            let output: *u8 = path_join(cfg.target_dir, cfg.name);
+            let program:*u8=host_program_name(cfg.name);
+            let output: *u8 = if program!=0 as *u8{path_join(cfg.target_dir, program)}else{0 as *u8};
             let mut executable: *u8 = output;
             if output != (0 as *u8) {
-                if output[0] != 47 { executable = path_join(".\0" as *u8, output); }
+                if !host_absolute(output) { executable = path_join(".\0" as *u8, output); }
                 if executable != (0 as *u8) {
                     // argv points to a spare command/-- slot followed by user arguments.
                     let saved: *u8 = argv[0];
@@ -214,6 +203,7 @@ pub fn run_project(argc: i32, argv: **u8) -> i32 {
                 if executable != output { free(executable as *void); }
                 free(output as *void);
             } else { status = 1; }
+            free(program as *void);
         }
     }
     config_free(&cfg as *Config);
@@ -274,7 +264,7 @@ pub fn clean_project() -> i32 {
     let mut status: i32 = 1;
     if cfg.valid {
         if access(cfg.target_dir, 0) != 0 {
-            let missing: bool = __errno_get() == ENOENT;
+            let missing: bool = host_errno() == ENOENT;
             config_free(&cfg as *Config);
             return if missing { 0 } else { 1 };
         }

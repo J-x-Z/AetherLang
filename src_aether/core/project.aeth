@@ -91,7 +91,7 @@ fn boot_project_read(ctx:*BootContext,module:*BootModule,token:*BootToken)->bool
  if fseek(file,0,0)!=0 {fclose(file);boot_error(ctx,token,"cannot rewind module source");return false;}
  module.length=measured as u64;module.source=boot_alloc(ctx,module.length+1) as *u8;
  if module.source==(0 as *u8) {fclose(file);return false;}
- let count:u64=fread(module.source,1,module.length,file);let failed:i32=ferror(file);let closed:i32=fclose(file);
+ let count:u64=fread(module.source as *void,1,module.length,file);let failed:i32=ferror(file);let closed:i32=fclose(file);
  if count!=module.length || failed!=0 || closed!=0 {boot_error(ctx,token,"cannot completely read module source");return false;}
  module.source[module.length]=0;ctx.source_total=ctx.source_total+module.length;return true;
 }
