@@ -1,0 +1,181 @@
+// Script lexical locals and assignment paths are checked before hoisting. Core
+// owns all actual type rules, arithmetic, layout, call ABI and code generation.
+use model::*;
+use runtime::*;
+use type_model::*;
+use semantic::boot_check_expr;
+use script_model::*;
+extern "C" {fn snprintf(buffer:*u8,size:u64,format:*u8,...)->i32;}
+fn bs_local(state:*BootScriptState,name:*u8)->*BootScriptLocal{
+ let mut local:*BootScriptLocal=state.locals;while local!=0 as *BootScriptLocal{if strcmp(local.name,name)==0{return local;}local=local.next;}return 0 as *BootScriptLocal;
+}
+fn bs_literal(ctx:*BootContext,kind:i32,text:*u8,origin:*BootToken)->*BootNode{
+ let token:*BootToken=boot_alloc(ctx,size_of(BootToken) as u64) as *BootToken;if ctx.failed{return 0 as *BootNode;}
+ token.text=text;token.length=strlen(text);token.line=origin.line;token.column=origin.column;token.path=origin.path;token.kind=BT_INT;
+ if kind==BN_FLOAT{token.kind=BT_FLOAT;}if kind==BN_STRING{token.kind=BT_STRING;}
+ let node:*BootNode=boot_node(ctx,kind,token);if !ctx.failed{node.name=text;}return node;
+}
+fn bs_identifier(ctx:*BootContext,name:*u8,token:*BootToken)->*BootNode{let node:*BootNode=boot_node(ctx,BN_IDENT,token);if !ctx.failed{node.name=name;}return node;}
+fn bs_zero(ctx:*BootContext,ty:*BootType,token:*BootToken)->*BootNode{
+ if ty.kind==BY_STRUCT{
+  let node:*BootNode=boot_node(ctx,BN_STRUCT_VALUE,token);if ctx.failed{return node;}node.ty=ty;let mut field:*BootNode=ty.fields;let mut tail:*BootNode=0 as *BootNode;
+  while field!=0 as *BootNode&&!ctx.failed{let value:*BootNode=boot_node(ctx,BN_FIELD,token);if ctx.failed{return 0 as *BootNode;}value.name=field.name;value.left=bs_zero(ctx,field.ty,token);if tail==0 as *BootNode{node.params=value;}else{tail.next=value;}tail=value;field=field.next;}return node;
+ }
+ if ty.kind==BY_ARRAY{let node:*BootNode=boot_node(ctx,BN_REPEAT,token);if ctx.failed{return node;}node.value=ty.extent as i64;node.left=bs_zero(ctx,ty.inner,token);return node;}
+ if ty.kind==BY_PTR{let node:*BootNode=boot_node(ctx,BN_CAST,token);if ctx.failed{return node;}node.ty=ty;node.left=bs_literal(ctx,BN_INT,"0",token);return node;}
+ if ty.kind==BY_BOOL{return bs_literal(ctx,BN_BOOL,"false",token);}
+ if ty.kind==BY_F32||ty.kind==BY_F64{return bs_literal(ctx,BN_FLOAT,"0.0",token);}
+ return bs_literal(ctx,BN_INT,"0",token);
+}
+fn bs_bind(state:*BootScriptState,name:*u8,ty:*BootType,token:*BootToken,param:*BootNode)->*BootScriptLocal{
+ let ctx:*BootContext=state.context;let old:*BootScriptLocal=bs_local(state,name);
+ if old!=0 as *BootScriptLocal{if old.ty!=ty{boot_error(ctx,token,"Script local keeps its first inferred type");}return old;}
+ let local:*BootScriptLocal=boot_alloc(ctx,size_of(BootScriptLocal) as u64) as *BootScriptLocal;
+ let binding:*BootBinding=boot_alloc(ctx,size_of(BootBinding) as u64) as *BootBinding;if ctx.failed{return 0 as *BootScriptLocal;}
+ local.name=name;local.ty=ty;local.token=token;local.parameter=param;
+ if param==0 as *BootNode{local.parameter=boot_node(ctx,BN_LET,token);if ctx.failed{return 0 as *BootScriptLocal;}local.parameter.name=name;local.parameter.ty=ty;local.parameter.flags=1;}
+ local.next=state.locals;state.locals=local;binding.name=name;binding.node=local.parameter;binding.next=ctx.bindings;ctx.bindings=binding;return local;
+}
+fn bs_snapshot(state:*BootScriptState)->*BootScriptAssigned{
+ let mut head:*BootScriptAssigned=0 as *BootScriptAssigned;let mut local:*BootScriptLocal=state.locals;
+ while local!=0 as *BootScriptLocal&&!state.context.failed{let item:*BootScriptAssigned=boot_alloc(state.context,size_of(BootScriptAssigned) as u64) as *BootScriptAssigned;if state.context.failed{return head;}item.local=local;item.assigned=local.assigned;item.next=head;head=item;local=local.next;}return head;
+}
+fn bs_restore(state:*BootScriptState,saved:*BootScriptAssigned){
+ let mut local:*BootScriptLocal=state.locals;while local!=0 as *BootScriptLocal{local.assigned=false;local=local.next;}
+ let mut item:*BootScriptAssigned=saved;while item!=0 as *BootScriptAssigned{item.local.assigned=item.assigned;item=item.next;}
+}
+fn bs_meet(state:*BootScriptState,other:*BootScriptAssigned){
+ let mut local:*BootScriptLocal=state.locals;while local!=0 as *BootScriptLocal{let mut item:*BootScriptAssigned=other;let mut assigned:bool=false;while item!=0 as *BootScriptAssigned{if item.local==local{assigned=item.assigned;}item=item.next;}local.assigned=local.assigned&&assigned;local=local.next;}
+}
+fn bs_foreign_printf(ctx:*BootContext,token:*BootToken)->*BootModule{
+ // A separate compiler-owned lookup namespace prevents user names such as
+ // printf from capturing a generated print operation. It has the real C ABI.
+ let module:*BootModule=boot_alloc(ctx,size_of(BootModule) as u64) as *BootModule;
+ let function:*BootNode=boot_node(ctx,BN_FN,token);let param:*BootNode=boot_node(ctx,BN_PARAM,token);if ctx.failed{return 0 as *BootModule;}
+ module.id=boot_id(ctx);module.path=token.path;function.owner=module;function.name="printf";function.flags=6;function.ty=boot_type(ctx,BY_I32);function.params=param;param.name="format";param.ty=boot_ptr_type(ctx,boot_type(ctx,BY_U8));module.items=function;
+ function.next=ctx.program.body;ctx.program.body=function;return module;
+}
+fn bs_prepare_expr(state:*BootScriptState,node:*BootNode)->bool{
+ let ctx:*BootContext=state.context;if node==0 as *BootNode||ctx.failed{return !ctx.failed;}
+ if node.kind==BN_IDENT{
+  let local:*BootScriptLocal=bs_local(state,node.name);if local!=0 as *BootScriptLocal&&!local.assigned{boot_error(ctx,node.token,"Script variable may be used before assignment");return false;}return true;
+ }
+ if node.kind==BN_CALL{
+  if node.left!=0 as *BootNode{
+   if bs_local(state,node.left.name)!=0 as *BootScriptLocal{boot_error(ctx,node.token,"Script object methods are outside this self-hosted frontend");return false;}
+   node.lookup=boot_import_module(ctx,node.left.name,node.token);node.left=0 as *BootNode;if ctx.failed{return false;}
+  }
+  let mut argument:*BootNode=node.params;while argument!=0 as *BootNode{if !bs_prepare_expr(state,argument){return false;}argument=argument.next;}
+  let declared:*BootNode=boot_lookup(ctx,node.name,node.lookup,node.token);if ctx.failed{return false;}
+  if node.lookup==0 as *BootModule&&declared==0 as *BootNode&&bs_local(state,node.name)==0 as *BootScriptLocal&&strcmp(node.name,"repeat")==0{
+   let value:*BootNode=node.params;
+   if value==0 as *BootNode||value.next==0 as *BootNode||value.next.next!=0 as *BootNode||value.next.kind!=BN_INT{boot_error(ctx,node.token,"self-hosted Script repeat requires a value and nonnegative literal extent");return false;}
+   let mut extent:u64=0;if !boot_integer_value(ctx,value.next.token,18446744073709551615,&mut extent){return false;}
+   value.next=0 as *BootNode;node.kind=BN_REPEAT;node.left=value;node.params=0 as *BootNode;node.value=extent as i64;return true;
+  }
+  if node.lookup==0 as *BootModule&&declared==0 as *BootNode&&bs_local(state,node.name)==0 as *BootScriptLocal&&strcmp(node.name,"print")==0{
+   if node.params==0 as *BootNode||node.params.next!=0 as *BootNode{boot_error(ctx,node.token,"Script print takes one argument");return false;}
+   let actual:*BootType=boot_check_expr(ctx,node.params,0 as *BootType);if ctx.failed{return false;}
+   let mut format:*u8=0 as *u8;
+   if actual.kind==BY_I64{format="%lld\n";}else if actual.kind==BY_F64||actual.kind==BY_F32{format="%g\n";}else if actual.kind==BY_BOOL{format="%d\n";}else if actual.kind==BY_PTR&&actual.inner.kind==BY_U8{format="%s\n";}
+   if format==0 as *u8{boot_error(ctx,node.token,"Script print supports int, float, bool or str");return false;}
+   let text:*BootNode=bs_literal(ctx,BN_STRING,format,node.token);if ctx.failed{return false;}text.next=node.params;node.params=text;node.name="printf";node.lookup=bs_foreign_printf(ctx,node.token);return !ctx.failed;
+  }
+  return true;
+ }
+ if node.kind==BN_MEMBER&&node.left.kind==BN_IDENT&&bs_local(state,node.left.name)==0 as *BootScriptLocal{
+  let mut import:*BootImport=ctx.module.imports;while import!=0 as *BootImport{if import.symbol==0 as *u8&&strcmp(import.alias,node.left.name)==0{node.lookup=import.target;node.kind=BN_IDENT;node.left=0 as *BootNode;return true;}import=import.next;}
+ }
+ if !bs_prepare_expr(state,node.left)||!bs_prepare_expr(state,node.right){return false;}
+ let mut argument:*BootNode=node.params;while argument!=0 as *BootNode{if !bs_prepare_expr(state,argument){return false;}argument=argument.next;}return true;
+}
+fn bs_typed(state:*BootScriptState,node:*BootNode,expected:*BootType)->*BootType{
+ if !bs_prepare_expr(state,node){return 0 as *BootType;}return boot_check_expr(state.context,node,expected);
+}
+fn bs_assignment(ctx:*BootContext,name:*u8,value:*BootNode,token:*BootToken)->*BootNode{
+ let node:*BootNode=boot_node(ctx,BN_ASSIGN,token);if !ctx.failed{node.left=bs_identifier(ctx,name,token);node.right=value;}return node;
+}
+fn bs_fresh(ctx:*BootContext,token:*BootToken)->*u8{
+ let name:*u8=boot_alloc(ctx,64) as *u8;if !ctx.failed{snprintf(name,64,"@script_%d",boot_id(ctx));}return name;
+}
+fn bs_for(state:*BootScriptState,node:*BootNode)->bool{
+ let ctx:*BootContext=state.context;let call:*BootNode=node.left;
+ if call.kind!=BN_CALL||call.left!=0 as *BootNode||strcmp(call.name,"range")!=0||call.params==0 as *BootNode{boot_error(ctx,node.token,"Script for requires range(stop) or range(start, stop)");return false;}
+ if boot_lookup(ctx,"range",0 as *BootModule,node.token)!=0 as *BootNode||bs_local(state,"range")!=0 as *BootScriptLocal{boot_error(ctx,node.token,"Script range loop cannot call a shadowed range");return false;}
+ let mut start:*BootNode=call.params;let mut end:*BootNode=start.next;
+ if end==0 as *BootNode{end=start;start=bs_literal(ctx,BN_INT,"0",node.token);}else{if end.next!=0 as *BootNode{boot_error(ctx,node.token,"range takes one or two endpoints");return false;}start.next=0 as *BootNode;}
+ let a:*BootType=bs_typed(state,start,0 as *BootType);let b:*BootType=bs_typed(state,end,0 as *BootType);if ctx.failed{return false;}
+ if a.kind!=BY_I64||b!=a{boot_error(ctx,node.token,"Script range endpoints must be int");return false;}
+ let before:*BootScriptAssigned=bs_snapshot(state);let local:*BootScriptLocal=bs_bind(state,node.name,a,node.token,0 as *BootNode);if ctx.failed{return false;}local.assigned=true;
+ state.loop_depth=state.loop_depth+1;bs_statement(state,node.body);state.loop_depth=state.loop_depth-1;bs_restore(state,before);if ctx.failed{return false;}
+ let iterator:*BootNode=boot_node(ctx,BN_LET,node.token);let limit:*BootNode=boot_node(ctx,BN_LET,node.token);let iteration:*BootNode=boot_node(ctx,BN_WHILE,node.token);let condition:*BootNode=boot_node(ctx,BN_BINARY,node.token);if ctx.failed{return false;}
+ iterator.name=bs_fresh(ctx,node.token);iterator.ty=a;iterator.flags=1;iterator.left=start;iterator.next=limit;
+ limit.name=bs_fresh(ctx,node.token);limit.ty=a;limit.left=end;limit.next=iteration;
+ condition.op=60;condition.left=bs_identifier(ctx,iterator.name,node.token);condition.right=bs_identifier(ctx,limit.name,node.token);iteration.left=condition;iteration.body=node.body;
+ let set:*BootNode=bs_assignment(ctx,node.name,bs_identifier(ctx,iterator.name,node.token),node.token);
+ let increment:*BootNode=bs_assignment(ctx,iterator.name,bs_literal(ctx,BN_INT,"1",node.token),node.token);if ctx.failed{return false;}increment.op=43;
+ set.next=increment;increment.next=iteration.body.body;iteration.body.body=set;node.kind=BN_BLOCK;node.body=iterator;node.left=0 as *BootNode;return true;
+}
+// Return true only if every normal path exits. Assignment meet discards the
+// already-exited branch; a loop never establishes assignment after zero trips.
+fn bs_statement(state:*BootScriptState,node:*BootNode)->bool{
+ let ctx:*BootContext=state.context;if node==0 as *BootNode||ctx.failed{return false;}
+ if node.kind==BN_BLOCK{let mut item:*BootNode=node.body;let mut exits:bool=false;while item!=0 as *BootNode&&!ctx.failed{let this_exit:bool=bs_statement(state,item);exits=exits||this_exit;item=item.next;}return exits;}
+ if node.kind==BN_ASSIGN{
+  if node.left.kind==BN_IDENT{
+   let local:*BootScriptLocal=bs_local(state,node.left.name);
+   if node.op!=0&&(local==0 as *BootScriptLocal||!local.assigned){boot_error(ctx,node.token,"compound assignment requires an assigned Script local");return false;}
+   let actual:*BootType=bs_typed(state,node.right,0 as *BootType);if ctx.failed{return false;}
+   if actual.kind==BY_VOID{boot_error(ctx,node.token,"Script cannot bind a void value");return false;}
+   let binding:*BootScriptLocal=bs_bind(state,node.left.name,actual,node.token,0 as *BootNode);if ctx.failed{return false;}binding.assigned=true;
+  }else{bs_typed(state,node.left,0 as *BootType);bs_typed(state,node.right,0 as *BootType);}return false;
+ }
+ if node.kind==BN_IF{
+  let condition:*BootType=bs_typed(state,node.left,0 as *BootType);if ctx.failed{return false;}if condition.kind!=BY_BOOL{boot_error(ctx,node.token,"Script condition must be bool");return false;}
+  let before:*BootScriptAssigned=bs_snapshot(state);let then_exit:bool=bs_statement(state,node.body);let after:*BootScriptAssigned=bs_snapshot(state);bs_restore(state,before);
+  let else_exit:bool=bs_statement(state,node.third);if then_exit{}else if else_exit{bs_restore(state,after);}else{bs_meet(state,after);}return then_exit&&else_exit;
+ }
+ if node.kind==BN_WHILE{
+  let condition:*BootType=bs_typed(state,node.left,0 as *BootType);if ctx.failed{return false;}if condition.kind!=BY_BOOL{boot_error(ctx,node.token,"Script condition must be bool");return false;}
+  let before:*BootScriptAssigned=bs_snapshot(state);state.loop_depth=state.loop_depth+1;bs_statement(state,node.body);state.loop_depth=state.loop_depth-1;bs_restore(state,before);return false;
+ }
+ if node.kind==BS_FOR{bs_for(state,node);return false;}
+ if node.kind==BN_RETURN{
+  if node.left!=0 as *BootNode{
+   let actual:*BootType=bs_typed(state,node.left,0 as *BootType);if ctx.failed{return true;}
+   if strcmp(state.function.name,"main")==0&&state.function.ty.kind==BY_I32&&actual.kind==BY_I64{let cast:*BootNode=boot_node(ctx,BN_CAST,node.token);if ctx.failed{return true;}cast.ty=state.function.ty;cast.left=node.left;node.left=cast;}
+  }
+  return true;
+ }
+ if node.kind==BN_BREAK||node.kind==BN_CONTINUE{if state.loop_depth==0{boot_error(ctx,node.token,"Script loop jump requires an enclosing loop");}return true;}
+ if node.kind==BN_EXPR{bs_typed(state,node.left,0 as *BootType);return false;}
+ boot_error(ctx,node.token,"unsupported self-hosted Script statement");return false;
+}
+pub fn boot_script_lower(ctx:*BootContext)->bool{
+ let mut candidate:*BootNode=ctx.program.body;let mut found:bool=false;
+ while candidate!=0 as *BootNode{if (candidate.flags&BS_FUNCTION)!=0{found=true;}candidate=candidate.next;}
+ if !found{return true;}
+ if !boot_normalize(ctx){return false;}
+ let mut function:*BootNode=ctx.program.body;
+ while function!=0 as *BootNode&&!ctx.failed{
+  if function.kind==BN_FN&&(function.flags&BS_FUNCTION)!=0{
+   ctx.module=function.owner;ctx.function=function;ctx.bindings=0 as *BootBinding;ctx.depth=0;
+   let state:*BootScriptState=boot_alloc(ctx,size_of(BootScriptState) as u64) as *BootScriptState;if ctx.failed{return false;}state.context=ctx;state.function=function;
+   let mut parameter:*BootNode=function.params;
+   while parameter!=0 as *BootNode&&!ctx.failed{let local:*BootScriptLocal=bs_bind(state,parameter.name,parameter.ty,parameter.token,parameter);if !ctx.failed{local.assigned=true;}parameter=parameter.next;}
+   let exits:bool=bs_statement(state,function.body);if ctx.failed{return false;}
+   if strcmp(function.name,"main")==0&&!exits{
+    let ret:*BootNode=boot_node(ctx,BN_RETURN,function.token);if ctx.failed{return false;}ret.left=bs_literal(ctx,BN_INT,"0",function.token);let mut tail:*BootNode=function.body.body;
+    if tail==0 as *BootNode{function.body.body=ret;}else{while tail.next!=0 as *BootNode{tail=tail.next;}tail.next=ret;}
+   }
+   let mut local:*BootScriptLocal=state.locals;
+   while local!=0 as *BootScriptLocal&&!ctx.failed{
+    if local.parameter.kind==BN_LET{let decl:*BootNode=local.parameter;decl.left=bs_zero(ctx,local.ty,local.token);decl.next=function.body.body;function.body.body=decl;}
+    local=local.next;
+   }
+   function.flags=function.flags&255;ctx.bindings=0 as *BootBinding;ctx.function=0 as *BootNode;
+  }
+  function=function.next;
+ }
+ return !ctx.failed;
+}

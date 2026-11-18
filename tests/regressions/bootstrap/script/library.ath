@@ -1,0 +1,8 @@
+def triangular(n: int) -> int:
+    result = 0
+    for i in range(n):
+        result += i
+    return result
+
+def message() -> str:
+    return 'Script module: "UTF-8" é中😀'

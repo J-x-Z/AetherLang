@@ -1,0 +1,35 @@
+def choose(flag: bool) -> int:
+    if flag:
+        return 8
+    else:
+        result = 7
+    return result
+
+def main():
+    use = 7
+    if use != 7:
+        return 9
+    finish = 4
+    total = 0
+    i = 99
+    for i in range(1, finish):
+        finish = 100
+        if i == 2:
+            continue
+        total += i
+    if total != 4 or i != 3:
+        return 1
+    for i in range(4, 2):
+        total += 1000
+    if i != 3:
+        return 2
+    if choose(False) != 7 or choose(True) != 8:
+        return 3
+    # Multiline grouping has no indentation significance.
+    number = (1 +
+              2 * 3)
+    words = [1,
+             2, 3]
+    if number != 7 or words[2] != 3:
+        return 4
+    return 0

@@ -1,0 +1,10 @@
+from library import triangular as sum_to, message
+from core_bridge import increase, BASE
+import library as other
+
+def main():
+    value = increase(sum_to(BASE))
+    if value != 50 or other.triangular(4) != 6:
+        return 1
+    print(message())
+    return 0

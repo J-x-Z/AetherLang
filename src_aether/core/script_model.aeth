@@ -1,0 +1,9 @@
+// Script-only syntax and analysis state. All nodes are ordinary Core nodes
+// after boot_script_lower; backend semantics and layouts remain shared.
+use model::*;
+pub const BS_NEWLINE:i32=1100;pub const BS_INDENT:i32=1101;pub const BS_DEDENT:i32=1102;pub const BS_NOT:i32=1103;
+pub const BS_FOR:i32=1000;
+pub const BS_FUNCTION:i32=256;
+pub struct BootScriptLocal {name:*u8,ty:*BootType,token:*BootToken,parameter:*BootNode,assigned:bool,next:*BootScriptLocal}
+pub struct BootScriptState {context:*BootContext,function:*BootNode,locals:*BootScriptLocal,depth:i32,loop_depth:i32}
+pub struct BootScriptAssigned {local:*BootScriptLocal,assigned:bool,next:*BootScriptAssigned}

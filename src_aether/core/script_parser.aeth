@@ -1,0 +1,176 @@
+use model::*;
+use runtime::*;
+use type_model::boot_array_type;
+use script_model::*;
+fn bs_kind(ctx:*BootContext)->i32{return ctx.cursor.kind;}
+fn bs_word(ctx:*BootContext,text:*u8)->bool{return bs_kind(ctx)==BT_IDENT&&strcmp(ctx.cursor.text,text)==0;}
+fn bs_take(ctx:*BootContext,kind:i32)->bool{if ctx.failed||bs_kind(ctx)!=kind{return false;}ctx.cursor=ctx.cursor.next;return true;}
+fn bs_expect(ctx:*BootContext,kind:i32,text:*u8)->bool{if bs_take(ctx,kind){return true;}boot_error(ctx,ctx.cursor,text);return false;}
+fn bs_name(ctx:*BootContext)->*BootToken{
+ let token:*BootToken=ctx.cursor;
+ if !bs_take(ctx,BT_IDENT){boot_error(ctx,token,"expected Script identifier");return 0 as *BootToken;}
+ if strcmp(token.text,"def")==0||strcmp(token.text,"return")==0||strcmp(token.text,"if")==0||strcmp(token.text,"else")==0||strcmp(token.text,"for")==0||strcmp(token.text,"while")==0||strcmp(token.text,"true")==0||strcmp(token.text,"false")==0{boot_error(ctx,token,"keyword is not a Script identifier");return 0 as *BootToken;}
+ return token;
+}
+fn bs_type(ctx:*BootContext)->*BootType{
+ ctx.depth=ctx.depth+1;if ctx.depth>256{boot_error(ctx,ctx.cursor,"Script type nesting exceeds 256");return 0 as *BootType;}
+ let result:*BootType=bs_type_inner(ctx);ctx.depth=ctx.depth-1;return result;
+}
+fn bs_type_inner(ctx:*BootContext)->*BootType{
+ let token:*BootToken=bs_name(ctx);if ctx.failed{return 0 as *BootType;}
+ let name:*u8=token.text;
+ if strcmp(name,"int")==0||strcmp(name,"i64")==0{return boot_type(ctx,BY_I64);}
+ if strcmp(name,"float")==0||strcmp(name,"f64")==0{return boot_type(ctx,BY_F64);}
+ if strcmp(name,"bool")==0{return boot_type(ctx,BY_BOOL);}
+ if strcmp(name,"str")==0{return boot_ptr_type(ctx,boot_type(ctx,BY_U8));}
+ if strcmp(name,"None")==0||strcmp(name,"void")==0{return boot_type(ctx,BY_VOID);}
+ if strcmp(name,"Array")==0{
+  if !bs_expect(ctx,91,"expected '[' in Script Array type"){return 0 as *BootType;}
+  let inner:*BootType=bs_type(ctx);if ctx.failed{return inner;}
+  if !bs_expect(ctx,44,"expected ',' in Script Array type"){return 0 as *BootType;}
+  let count:*BootToken=ctx.cursor;if !bs_expect(ctx,BT_INT,"Array extent must be an integer literal"){return 0 as *BootType;}
+  let mut extent:u64=0;if !boot_integer_value(ctx,count,18446744073709551615,&mut extent){return 0 as *BootType;}
+  if !bs_expect(ctx,93,"expected ']' in Script Array type"){return 0 as *BootType;}
+  return boot_array_type(ctx,inner,extent);
+ }
+ return boot_resolve_type(ctx,name,0 as *BootModule,token);
+}
+fn bs_bp(kind:i32)->i32{
+ if kind==BT_OR{return 1;}if kind==BT_AND{return 2;}
+ if kind==124{return 4;}if kind==94{return 5;}if kind==38{return 6;}
+ if kind==BT_EQ||kind==BT_NE||kind==60||kind==62||kind==BT_LE||kind==BT_GE{return 3;}
+ if kind==BT_SHL||kind==BT_SHR{return 7;}if kind==43||kind==45{return 8;}if kind==42||kind==47||kind==37{return 9;}return 0;
+}
+fn bs_tree(ctx:*BootContext,node:*BootNode)->bool{
+ if ctx.failed{return false;}let mut depth:i32=0;
+ if node.left!=0 as *BootNode{depth=node.left.tree_depth;}if node.right!=0 as *BootNode&&node.right.tree_depth>depth{depth=node.right.tree_depth;}
+ let mut arg:*BootNode=node.params;while arg!=0 as *BootNode{if arg.tree_depth>depth{depth=arg.tree_depth;}arg=arg.next;}
+ node.tree_depth=depth+1;if node.tree_depth>256{boot_error(ctx,node.token,"Script expression tree exceeds 256");return false;}return true;
+}
+fn bs_expr(ctx:*BootContext,minimum:i32)->*BootNode{
+ ctx.depth=ctx.depth+1;if ctx.depth>256{boot_error(ctx,ctx.cursor,"Script expression nesting exceeds 256");return 0 as *BootNode;}
+ let node:*BootNode=bs_expr_inner(ctx,minimum);ctx.depth=ctx.depth-1;return node;
+}
+fn bs_primary(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;let kind:i32=token.kind;
+ if kind==BT_INT||kind==BT_FLOAT||kind==BT_STRING{
+  ctx.cursor=token.next;let mut k:i32=BN_INT;if kind==BT_FLOAT{k=BN_FLOAT;}if kind==BT_STRING{k=BN_STRING;}
+  let node:*BootNode=boot_node(ctx,k,token);if !ctx.failed{node.name=token.text;}return node;
+ }
+ if bs_word(ctx,"true")||bs_word(ctx,"false"){
+  ctx.cursor=token.next;let node:*BootNode=boot_node(ctx,BN_BOOL,token);if !ctx.failed&&strcmp(token.text,"true")==0{node.value=1;}return node;
+ }
+ if kind==BS_NOT||kind==45||kind==43||kind==126{
+  ctx.cursor=token.next;let mut minimum:i32=10;if kind==BS_NOT{minimum=3;}
+  let inner:*BootNode=bs_expr(ctx,minimum);if ctx.failed{return inner;}if kind==43{return inner;}
+  let node:*BootNode=boot_node(ctx,BN_UNARY,token);if !ctx.failed{node.left=inner;node.op=kind;if kind==BS_NOT{node.op=33;}}return node;
+ }
+ if bs_take(ctx,40){let node:*BootNode=bs_expr(ctx,0);bs_expect(ctx,41,"expected ')' after Script expression");return node;}
+ if bs_take(ctx,91){
+  let node:*BootNode=boot_node(ctx,BN_ARRAY,token);let mut tail:*BootNode=0 as *BootNode;
+  while !ctx.failed&&bs_kind(ctx)!=93{
+   let value:*BootNode=bs_expr(ctx,0);if ctx.failed{return 0 as *BootNode;}
+   if tail==0 as *BootNode{node.params=value;}else{tail.next=value;}tail=value;node.value=node.value+1;
+   if !bs_take(ctx,44){break;}
+  }
+  bs_expect(ctx,93,"expected ']' after Script array");return node;
+ }
+ let name:*BootToken=bs_name(ctx);if ctx.failed{return 0 as *BootNode;}
+ let node:*BootNode=boot_node(ctx,BN_IDENT,name);if !ctx.failed{node.name=name.text;}return node;
+}
+fn bs_expr_inner(ctx:*BootContext,minimum:i32)->*BootNode{
+ let mut left:*BootNode=bs_primary(ctx);if ctx.failed||!bs_tree(ctx,left){return 0 as *BootNode;}
+ while !ctx.failed{
+  let token:*BootToken=ctx.cursor;let kind:i32=token.kind;
+  if bs_take(ctx,40){
+   let node:*BootNode=boot_node(ctx,BN_CALL,left.token);if ctx.failed{return node;}
+   if left.kind==BN_IDENT{node.name=left.name;}
+   else if left.kind==BN_MEMBER&&left.left.kind==BN_IDENT{node.name=left.name;node.left=left.left;}
+   else{boot_error(ctx,left.token,"Script calls require a named function");return 0 as *BootNode;}
+   let mut tail:*BootNode=0 as *BootNode;
+   while !ctx.failed&&bs_kind(ctx)!=41{
+    let arg:*BootNode=bs_expr(ctx,0);if ctx.failed{return 0 as *BootNode;}
+    if tail==0 as *BootNode{node.params=arg;}else{tail.next=arg;}tail=arg;if !bs_take(ctx,44){break;}
+   }
+   bs_expect(ctx,41,"expected ')' after Script call");left=node;
+  }else if bs_take(ctx,91){
+   let index:*BootNode=bs_expr(ctx,0);if ctx.failed{return index;}bs_expect(ctx,93,"expected ']' after Script index");
+   let node:*BootNode=boot_node(ctx,BN_INDEX,token);if ctx.failed{return node;}node.left=left;node.right=index;left=node;
+  }else if bs_take(ctx,46){
+   let field:*BootToken=bs_name(ctx);if ctx.failed{return 0 as *BootNode;}
+   let node:*BootNode=boot_node(ctx,BN_MEMBER,token);if ctx.failed{return node;}node.left=left;node.name=field.text;left=node;
+  }else{
+   let power:i32=bs_bp(kind);if power==0||power<minimum{break;}
+   ctx.cursor=token.next;let right:*BootNode=bs_expr(ctx,power+1);if ctx.failed{return right;}
+   let node:*BootNode=boot_node(ctx,BN_BINARY,token);if ctx.failed{return node;}node.left=left;node.right=right;node.op=kind;left=node;
+  }
+  if !ctx.failed&&!bs_tree(ctx,left){return 0 as *BootNode;}
+ }
+ return left;
+}
+fn bs_block(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;
+ if !bs_expect(ctx,58,"expected ':' before Script block")||!bs_expect(ctx,BS_NEWLINE,"Script block must start on a new line")||!bs_expect(ctx,BS_INDENT,"expected indented Script block"){return 0 as *BootNode;}
+ ctx.depth=ctx.depth+1;if ctx.depth>256{boot_error(ctx,token,"Script block nesting exceeds 256");return 0 as *BootNode;}
+ let block:*BootNode=boot_node(ctx,BN_BLOCK,token);let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed&&bs_kind(ctx)!=BS_DEDENT&&bs_kind(ctx)!=BT_EOF{
+  if bs_take(ctx,BS_NEWLINE){continue;}
+  let statement:*BootNode=bs_statement(ctx);if ctx.failed{return 0 as *BootNode;}
+  if tail==0 as *BootNode{block.body=statement;}else{tail.next=statement;}tail=statement;
+ }
+ bs_expect(ctx,BS_DEDENT,"expected end of Script block");ctx.depth=ctx.depth-1;return block;
+}
+fn bs_if(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;ctx.cursor=token.next;
+ let node:*BootNode=boot_node(ctx,BN_IF,token);if ctx.failed{return node;}node.left=bs_expr(ctx,0);if ctx.failed{return node;}
+ node.body=bs_block(ctx);if ctx.failed{return node;}
+ if bs_word(ctx,"elif"){node.third=bs_if(ctx);}else if bs_word(ctx,"else"){ctx.cursor=ctx.cursor.next;node.third=bs_block(ctx);}return node;
+}
+fn bs_statement(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;
+ if bs_word(ctx,"if"){return bs_if(ctx);}
+ if bs_word(ctx,"while")||bs_word(ctx,"for"){
+  let mut kind:i32=BN_WHILE;if bs_word(ctx,"for"){kind=BS_FOR;}ctx.cursor=token.next;
+  let node:*BootNode=boot_node(ctx,kind,token);if ctx.failed{return node;}
+  if kind==BS_FOR{let name:*BootToken=bs_name(ctx);if ctx.failed{return node;}node.name=name.text;
+   if !bs_word(ctx,"in"){boot_error(ctx,ctx.cursor,"expected in after Script loop variable");return node;}ctx.cursor=ctx.cursor.next;
+  }
+  node.left=bs_expr(ctx,0);if ctx.failed{return node;}node.body=bs_block(ctx);return node;
+ }
+ if bs_word(ctx,"return")||bs_word(ctx,"break")||bs_word(ctx,"continue")||bs_word(ctx,"pass"){
+  let mut kind:i32=BN_RETURN;if bs_word(ctx,"break"){kind=BN_BREAK;}if bs_word(ctx,"continue"){kind=BN_CONTINUE;}if bs_word(ctx,"pass"){kind=BN_BLOCK;}
+  ctx.cursor=token.next;let node:*BootNode=boot_node(ctx,kind,token);if ctx.failed{return node;}
+  if kind==BN_RETURN&&bs_kind(ctx)!=BS_NEWLINE{node.left=bs_expr(ctx,0);}
+  bs_expect(ctx,BS_NEWLINE,"expected newline after Script statement");return node;
+ }
+ let left:*BootNode=bs_expr(ctx,0);if ctx.failed{return left;}
+ let kind:i32=bs_kind(ctx);let node:*BootNode=boot_node(ctx,BN_EXPR,token);if ctx.failed{return node;}node.left=left;
+ if kind==61||(kind>=BT_ASSIGN_BASE&&kind<BS_FOR){
+  ctx.cursor=ctx.cursor.next;node.kind=BN_ASSIGN;if kind!=61{node.op=kind-BT_ASSIGN_BASE;}node.right=bs_expr(ctx,0);
+ }
+ bs_expect(ctx,BS_NEWLINE,"expected newline after Script expression");return node;
+}
+pub fn boot_script_parse(ctx:*BootContext)->bool{
+ let program:*BootNode=boot_node(ctx,BN_PROGRAM,ctx.cursor);if ctx.failed{return false;}let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed&&bs_kind(ctx)!=BT_EOF{
+  if bs_take(ctx,BS_NEWLINE){continue;}
+  let token:*BootToken=ctx.cursor;
+  if !bs_word(ctx,"def"){boot_error(ctx,token,"Script top level requires def or import");return false;}ctx.cursor=token.next;
+  let name:*BootToken=bs_name(ctx);if ctx.failed{return false;}
+  let function:*BootNode=boot_node(ctx,BN_FN,name);if ctx.failed{return false;}function.name=name.text;function.flags=BS_FUNCTION|8;
+  if !bs_expect(ctx,40,"expected '(' after Script function name"){return false;}
+  let mut parameter:*BootNode=0 as *BootNode;
+  while !ctx.failed&&bs_kind(ctx)!=41{
+   let name:*BootToken=bs_name(ctx);if ctx.failed{return false;}
+   if !bs_expect(ctx,58,"Script parameter requires a type annotation"){return false;}
+   let node:*BootNode=boot_node(ctx,BN_PARAM,name);if ctx.failed{return false;}node.name=name.text;node.flags=1;node.ty=bs_type(ctx);
+   if parameter==0 as *BootNode{function.params=node;}else{parameter.next=node;}parameter=node;if !bs_take(ctx,44){break;}
+  }
+  if !bs_expect(ctx,41,"expected ')' after Script parameters"){return false;}
+  function.ty=boot_type(ctx,BY_VOID);if strcmp(function.name,"main")==0{function.ty=boot_type(ctx,BY_I32);}
+  if bs_take(ctx,BT_ARROW){function.ty=bs_type(ctx);}if ctx.failed{return false;}
+  function.body=bs_block(ctx);if ctx.failed{return false;}
+  if tail==0 as *BootNode{program.body=function;}else{tail.next=function;}tail=function;
+ }
+ ctx.program=program;return !ctx.failed;
+}

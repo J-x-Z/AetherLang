@@ -163,9 +163,10 @@ fn boot_lex_utf8_write(text:*u8,scalar:i32)->u64 {
  return 4;
 }
 fn boot_lex_string(lexer:*BootLexer)->bool {
+ let quote:i32=boot_lex_peek(lexer,0);
  boot_lex_advance(lexer);
  let start:u64=lexer.position;let mut length:u64=0;
- while boot_lex_peek(lexer,0)!=34 {
+ while boot_lex_peek(lexer,0)!=quote {
   let value:i32=boot_lex_peek(lexer,0);
   if value<0 || value==10 || value==13 || value==0 { return boot_lex_problem(lexer,"unterminated string\0" as *u8); }
   boot_lex_advance(lexer);
@@ -223,7 +224,9 @@ fn boot_lex_punctuation(lexer:*BootLexer)->bool {
  while index<length { boot_lex_advance(lexer);index=index+1; }
  return boot_lex_token(lexer,kind,boot_copy(lexer.context,lexer.context.source+start,length),length);
 }
-pub fn boot_lex(ctx:*BootContext)->bool {
+pub fn boot_lex(ctx:*BootContext)->bool {return boot_lex_mode(ctx,false);}
+pub fn boot_lex_script(ctx:*BootContext)->bool {return boot_lex_mode(ctx,true);}
+fn boot_lex_mode(ctx:*BootContext,script:bool)->bool {
  let lexer:*BootLexer=boot_alloc(ctx,size_of(BootLexer) as u64) as *BootLexer;
  if lexer==(0 as *BootLexer) { return false; }
  lexer.context=ctx;lexer.line=1;lexer.column=1;
@@ -231,9 +234,9 @@ pub fn boot_lex(ctx:*BootContext)->bool {
   lexer.token_line=lexer.line;lexer.token_column=lexer.column;
   let value:i32=boot_lex_peek(lexer,0);
   if value==32 || value==9 || value==10 || value==13 { boot_lex_advance(lexer); }
-  else { if value==47 && boot_lex_peek(lexer,1)==47 {
+  else { if (script&&value==35)||(!script&&value==47&&boot_lex_peek(lexer,1)==47) {
    while lexer.position<ctx.length && boot_lex_peek(lexer,0)!=10 { boot_lex_advance(lexer); }
-  } else { if value==47 && boot_lex_peek(lexer,1)==42 {
+  } else { if !script&&value==47 && boot_lex_peek(lexer,1)==42 {
    boot_lex_advance(lexer);boot_lex_advance(lexer);let mut depth:i32=1;
    while depth>0 {
     if lexer.position>=ctx.length { return boot_lex_problem(lexer,"unterminated block comment\0" as *u8); }
@@ -250,7 +253,7 @@ pub fn boot_lex(ctx:*BootContext)->bool {
    if !boot_lex_token(lexer,BT_IDENT,boot_copy(ctx,ctx.source+start,length),length) { return false; }
   } else { if boot_lex_digit(value) {
    if !boot_lex_number(lexer) { return false; }
-  } else { if value==34 {
+  } else { if value==34||(script&&value==39) {
    if !boot_lex_string(lexer) { return false; }
   } else { if !boot_lex_punctuation(lexer) { return false; } } } } } } }
  }

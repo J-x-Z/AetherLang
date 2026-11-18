@@ -1,0 +1,12 @@
+def seed() -> int:
+    print('once')
+    return 7
+
+def main():
+    data = repeat(seed(), 3)
+    empty = repeat(seed(), 0)
+    matrix = repeat(repeat(9, 2), 3)
+    data[0] = 100
+    if data[1] != 7 or matrix[2][1] != 9:
+        return 1
+    return 0

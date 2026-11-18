@@ -1,0 +1,92 @@
+// Indentation is layered over the shared byte/number/string lexer. Tokens retain
+// their original source path, physical line and UTF-8 byte column.
+use model::*;
+use runtime::*;
+use lexer::boot_lex_script;
+use script_model::*;
+struct BootScriptTokens {head:*BootToken,tail:*BootToken}
+fn bs_token(ctx:*BootContext,kind:i32,text:*u8,origin:*BootToken)->*BootToken {
+ let token:*BootToken=boot_alloc(ctx,size_of(BootToken) as u64) as *BootToken;
+ if ctx.failed{return token;}token.kind=kind;token.text=text;token.length=strlen(text);
+ token.path=origin.path;token.line=origin.line;token.column=origin.column;return token;
+}
+fn bs_append(list:*BootScriptTokens,token:*BootToken){
+ if list.head==0 as *BootToken{list.head=token;}else{list.tail.next=token;}list.tail=token;token.next=0 as *BootToken;
+}
+fn bs_synthetic(ctx:*BootContext,list:*BootScriptTokens,kind:i32,text:*u8,origin:*BootToken){
+ let token:*BootToken=bs_token(ctx,kind,text,origin);if !ctx.failed{bs_append(list,token);}
+}
+fn bs_word(token:*BootToken,text:*u8)->bool{return token.kind==BT_IDENT&&strcmp(token.text,text)==0;}
+// Convert only module-scope imports into the normal loader protocol. This does
+// not resolve names, read files, or bypass visibility checks.
+fn bs_imports(ctx:*BootContext,list:*BootScriptTokens)->bool{
+ let out:*BootScriptTokens=boot_alloc(ctx,size_of(BootScriptTokens) as u64) as *BootScriptTokens;
+ if ctx.failed{return false;}let mut cursor:*BootToken=list.head;let mut indent:i32=0;
+ while cursor.kind!=BT_EOF&&!ctx.failed{
+  let origin:*BootToken=cursor;
+  if indent==0&&(bs_word(cursor,"from")||bs_word(cursor,"import")){
+   let selected:bool=bs_word(cursor,"from");cursor=cursor.next;
+   if cursor.kind!=BT_IDENT{boot_error(ctx,cursor,"expected a Script module name");return false;}
+   let module:*BootToken=cursor;cursor=cursor.next;
+   if selected{
+    if !bs_word(cursor,"import"){boot_error(ctx,cursor,"expected import after Script module name");return false;}cursor=cursor.next;
+   }
+   let mut more:bool=true;
+   while more&&!ctx.failed{
+    bs_synthetic(ctx,out,BT_IDENT,"use",origin);bs_synthetic(ctx,out,BT_IDENT,module.text,module);
+    if selected{
+     bs_synthetic(ctx,out,58,":",origin);bs_synthetic(ctx,out,58,":",origin);
+     if cursor.kind!=BT_IDENT{boot_error(ctx,cursor,"expected imported name");return false;}
+     bs_synthetic(ctx,out,BT_IDENT,cursor.text,cursor);cursor=cursor.next;
+    }
+    if bs_word(cursor,"as"){
+     bs_synthetic(ctx,out,BT_IDENT,"as",cursor);cursor=cursor.next;
+     if cursor.kind!=BT_IDENT{boot_error(ctx,cursor,"expected import alias");return false;}
+     bs_synthetic(ctx,out,BT_IDENT,cursor.text,cursor);cursor=cursor.next;
+    }
+    bs_synthetic(ctx,out,59,";",origin);
+    more=selected&&cursor.kind==44;if more{cursor=cursor.next;}
+   }
+   if cursor.kind!=BS_NEWLINE{boot_error(ctx,cursor,"expected end of Script import");return false;}
+  }else{
+   if cursor.kind==BS_INDENT{indent=indent+1;}if cursor.kind==BS_DEDENT{indent=indent-1;}
+   let next:*BootToken=cursor.next;bs_append(out,cursor);cursor=next;
+  }
+ }
+ bs_append(out,cursor);list.head=out.head;list.tail=out.tail;return !ctx.failed;
+}
+pub fn boot_script_lex(ctx:*BootContext)->bool{
+ if !boot_lex_script(ctx){return false;}
+ let list:*BootScriptTokens=boot_alloc(ctx,size_of(BootScriptTokens) as u64) as *BootScriptTokens;
+ let levels:*i32=boot_alloc(ctx,257*4) as *i32;
+ if ctx.failed{return false;}
+ let mut current:*BootToken=ctx.tokens;let mut line:i32=0;let mut nesting:i32=0;let mut depth:i32=0;
+ let mut position:u64=0;let mut physical:i32=1;
+ while current.kind!=BT_EOF&&!ctx.failed{
+  if current.line!=line&&nesting==0{
+   if line!=0{bs_synthetic(ctx,list,BS_NEWLINE,"newline",current);}
+   while physical<current.line&&position<ctx.length{if ctx.source[position]==10{physical=physical+1;}position=position+1;}
+   let mut spaces:i32=0;let mut at:u64=position;
+   while at<ctx.length&&(ctx.source[at]==32||ctx.source[at]==9){
+    if ctx.source[at]==9{boot_error(ctx,current,"Script indentation must use spaces, not tabs");return false;}spaces=spaces+1;at=at+1;
+   }
+   if spaces>levels[depth]{
+    if depth==256{boot_error(ctx,current,"Script indentation exceeds 256 levels");return false;}depth=depth+1;levels[depth]=spaces;bs_synthetic(ctx,list,BS_INDENT,"indent",current);
+   }else{
+    while spaces<levels[depth]{depth=depth-1;bs_synthetic(ctx,list,BS_DEDENT,"dedent",current);}
+    if spaces!=levels[depth]{boot_error(ctx,current,"Script indentation does not match a previous level");return false;}
+   }
+  }
+  line=current.line;
+  if current.kind==40||current.kind==91{nesting=nesting+1;if nesting>256{boot_error(ctx,current,"Script grouping exceeds 256 levels");return false;}}
+  if current.kind==41||current.kind==93{nesting=nesting-1;if nesting<0{boot_error(ctx,current,"unmatched Script closing delimiter");return false;}}
+  if bs_word(current,"and"){current.kind=BT_AND;}else if bs_word(current,"or"){current.kind=BT_OR;}else if bs_word(current,"not"){current.kind=BS_NOT;}
+  else if bs_word(current,"True"){current.text="true";current.length=4;}else if bs_word(current,"False"){current.text="false";current.length=5;}
+  let next:*BootToken=current.next;bs_append(list,current);current=next;
+ }
+ if nesting!=0{boot_error(ctx,current,"unclosed Script grouping");return false;}
+ if line!=0{bs_synthetic(ctx,list,BS_NEWLINE,"newline",current);}
+ while depth>0{depth=depth-1;bs_synthetic(ctx,list,BS_DEDENT,"dedent",current);}
+ bs_append(list,current);if ctx.failed||!bs_imports(ctx,list){return false;}
+ ctx.tokens=list.head;ctx.cursor=list.head;return true;
+}
