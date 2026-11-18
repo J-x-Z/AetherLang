@@ -45,7 +45,7 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
   let field:i32=ll_id(ctx);ll_begin(ctx,field);ll_text(ctx,"getelementptr ");ll_type(ctx,node.aux);fprintf(ctx.output,", ptr %%r%d, i32 0, i32 %d\n",payload,ll_field_index(node.aux,node.decl));return ll_load(ctx,node.ty,field);
  }
  if node.kind==BN_UNIT{return ll_unit(ctx);}
- if node.kind==BN_INT||node.kind==BN_FLOAT||node.kind==BN_BOOL{return ll_literal_expr(ctx,node);}
+ if node.kind==BN_CONST_VALUE||node.kind==BN_INT||node.kind==BN_FLOAT||node.kind==BN_BOOL{return ll_literal_expr(ctx,node);}
  let id:i32=ll_id(ctx);
  if node.kind==BN_STRING{ll_begin(ctx,id);fprintf(ctx.output,"getelementptr [%llu x i8], ptr @a%d_str%d, i64 0, i64 0\n",node.token.length+1,ctx.c_namespace,node.id);return id;}
  if node.kind==BN_IDENT{

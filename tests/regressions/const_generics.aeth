@@ -8,6 +8,8 @@ struct Unsigned<const N:u64>{marker:u8}
 struct Signed<const N:i64>{marker:u8}
 fn unsigned_value<const N:u64>(value:Unsigned<N>)->u64{N}
 fn signed_value<const N:i64>(value:Signed<N>)->i64{N}
+fn bytes_length<const N:usize>(values:[u8;N])->usize{N}
+fn infer_later<T,const N:usize>(values:[T;N],hint:T)->usize{N}
 fn length<T,const N:usize>(values:[T;N])->usize{N}
 fn copy<T,const N:usize>(values:[T;N])->[T;N]{values}
 fn sum<const N:usize>(values:[i64;N])->i64{
@@ -46,5 +48,6 @@ fn main()->i32{
     let signed:Signed<{-9223372036854775808}>=Signed{marker:0};
     if unsigned_value(unsigned)!=18446744073709551615{return 11;}
     if signed_value(signed)!=-9223372036854775808{return 12;}
+    if bytes_length([])!=0 || bytes_length([0;2])!=2 || infer_later([],0 as u8)!=0{return 13;}
     0
 }

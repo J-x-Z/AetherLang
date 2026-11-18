@@ -1,0 +1,40 @@
+use vec::*;
+use option::*;
+extern "C"{fn puts(text:*u8)->i32;}
+const ROWS:usize=1+1;
+const COLS:usize=(1<<2)-1;
+const BIT:u8=((1 as u8)<<7)|3;
+const NEG:i64=(-9)/2;
+const OK:bool=(3*7==21)&&!false;
+const LAZY:bool=(false&&(1/0==0))||(true||(1/0==0));
+type Extent=usize;
+const FORWARD:Extent=LATER;
+const LATER:Extent=2;
+@repr(packed) struct Packed<const N:usize>{lead:u8,data:[u32;N]}
+struct Matrix<const R:usize,const C:usize>{data:[[f64;C];R]}
+fn squared<const R:usize,const C:usize>(matrix:Matrix<R,C>)->f64{
+ let mut total:f64=0.0;let mut row:usize=0;
+ while row<R{let mut column:usize=0;while column<C{let value:f64=matrix.data[row][column];total+=value*value;column+=1;}row+=1;}
+ total
+}
+fn repeat<T,const N:usize>(value:T,shape:[u8;N])->[T;N]{[value;N]}
+fn padded<const N:usize>(source:[i64;N],padding:[i64;N+1])->usize{N}
+fn bytes_len<const N:usize>(data:[u8;N])->usize{N}
+fn zeros<const N:usize>()->[u8;N]{[0;N]}
+fn main()->i32{
+ let matrix:Matrix<ROWS,COLS>=Matrix{data:[[1.0,2.0,3.0],[4.0,5.0,6.0]]};
+ if squared(matrix)!=91.0{return 1;}
+ let same:Matrix<{1+1},{2+1}>=matrix;
+ if size_of(Matrix<ROWS,COLS>)!=48||squared(same)!=91.0{return 2;}
+ let mut storage:Vec<Matrix<ROWS,COLS>>=vec_new();
+ if !vec_push(&mut storage as *Vec<Matrix<ROWS,COLS>>,matrix){return 3;}
+ let got:Matrix<ROWS,COLS>=option_or(vec_get(&storage as *Vec<Matrix<ROWS,COLS>>,0),matrix);
+ if squared(got)!=91.0{return 4;}vec_free(&mut storage as *Vec<Matrix<ROWS,COLS>>);
+ let values:[i64;3]=repeat(5,[0;3]);if values[2]!=5||padded(values,[0;4])!=3{return 5;}
+ let zero:[u8;0]=repeat(7,[]);if size_of([u8;0])!=0{return 6;}
+ if BIT!=131||NEG!=-4||!OK||!LAZY||FORWARD!=2{return 7;}
+ let made:[u8;5]=zeros();if made[4]!=0||bytes_len([0;2])!=2||bytes_len([])!=0{return 8;}
+ let packed:Packed<2>=Packed{lead:7,data:[11,13]};
+ if size_of(Packed<2>)!=9||align_of(Packed<2>)!=1||offset_of(Packed<2>,data)!=1||packed.data[1]!=13{return 9;}
+ puts("const-values=ok");return 0;
+}

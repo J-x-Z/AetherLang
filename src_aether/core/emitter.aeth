@@ -168,8 +168,8 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
   if node.kind==BN_ENUM_TAG{boot_c_text(ctx,".tag;\n");}else{fprintf(ctx.output,".payload.v%lld.",node.value);boot_c_field(ctx,node.decl);boot_c_text(ctx,";\n");}return;
  }
  if node.kind==BN_UNIT{boot_c_decl(ctx,node);boot_c_text(ctx,"{};\n");return;}
- if node.kind==BN_INT||node.kind==BN_FLOAT {
-  boot_c_decl(ctx,node);boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")(");if node.kind==BN_INT {fprintf(ctx.output,"%lluULL",node.value as u64);}else{boot_c_text(ctx,node.token.text);}boot_c_text(ctx,");\n");return;
+ if node.kind==BN_CONST_VALUE||node.kind==BN_INT||node.kind==BN_FLOAT {
+  boot_c_decl(ctx,node);boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")(");if node.kind==BN_INT||node.kind==BN_CONST_VALUE {fprintf(ctx.output,"%lluULL",node.value as u64);}else{boot_c_text(ctx,node.token.text);}boot_c_text(ctx,");\n");return;
  }
  if node.kind==BN_BOOL {boot_c_decl(ctx,node);if node.value==0{boot_c_text(ctx,"false");}else{boot_c_text(ctx,"true");}boot_c_text(ctx,";\n");return;}
  if node.kind==BN_STRING {boot_c_decl(ctx,node);boot_c_string(ctx,node.token);boot_c_text(ctx,";\n");return;}

@@ -71,6 +71,9 @@ fn invalid_const_arguments_have_the_same_check_and_build_diagnostic() {
     let work = std::env::temp_dir().join(format!("aether-const-errors-{}", std::process::id()));
     fs::create_dir_all(&work).unwrap();
     for (name,source) in [
+        ("empty_without_element","fn length<T,const N:usize>(a:[T;N])->usize{N}fn main(){length([]);}"),
+        ("empty_extent_conflict","fn same<const N:usize>(a:[u8;N],b:[u8;N]){}fn main(){same([],[1]);}"),
+        ("empty_unannotated","fn main(){let empty=[];}"),
         ("negative","struct B<const N:usize>{x:[u8;N]}fn main(){let x:B<{-1}>; }"),
         ("overflow","struct B<const N:u8>{x:i32}fn main(){let x:B<256>;}"),
         ("float","struct B<const N:f64>{x:i32}fn main(){}"),

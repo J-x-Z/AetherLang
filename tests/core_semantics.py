@@ -104,7 +104,7 @@ negative = {
     'bad_cast': ('fn f(p:*i32)->f64{return p as f64;}fn main()->i32{return 0;}', 'invalid scalar'),
     'non_place': ('fn main()->i32{let p:*i64=&(1+2);return 0;}', 'address requires'),
     'constant_address': ('const X:i32=1;fn main()->i32{let p:*i32=&X;return 0;}', 'constant has no'),
-    'constant_call': ('fn f()->i32{return 1;}const X:i32=f();fn main()->i32{return 0;}', 'Core constants'),
+    'constant_call': ('fn f()->i32{return 1;}const X:i32=f();fn main()->i32{return 0;}', 'compile-time constant'),
     'outside_break': ('fn main()->i32{break;return 0;}', 'outside a loop'),
     'outside_continue': ('fn main()->i32{continue;return 0;}', 'outside a loop'),
     'function_shadow': ('fn f()->i32{return 0;}fn main()->i32{let f:i32=1;return f();}', 'shadows function'),

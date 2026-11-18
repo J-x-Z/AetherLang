@@ -950,7 +950,7 @@ impl Specializer {
                     for (field, value) in fields.iter_mut() {
                         if let Some(ft) = template.fields.iter().find(|f| f.name.name == field.name)
                         {
-                            let want = self.partial_type(&ft.ty, &params, &bindings)?;
+                            let want = self.partial_argument_type(&ft.ty, value, &params, &bindings)?;
                             if let Some(actual) = self.expr(value, want.as_ref())? {
                                 self.unify(&ft.ty, &actual, &params, &mut bindings, span)?;
                             }
@@ -979,7 +979,7 @@ impl Specializer {
             Expr::ArrayRepeat {value,count,..} => {
                 let size=self.array_size(count,&self.bindings.clone())?;
                 *count=Box::new(Expr::Literal(Literal::Int(size as i128,count.span())));
-                let element=match expected {Some(Type::Array{elem,..})=>Some(elem.as_ref()),_=>None};
+                let element=match expected {Some(Type::Array{elem,..})|Some(Type::Slice(elem,_))=>Some(elem.as_ref()),_=>None};
                 let element=self.expr(value,element)?;
                 Ok(element.map(|elem|Type::Array{elem:Box::new(elem),size,span}))
             }
@@ -1116,7 +1116,7 @@ impl Specializer {
                 if processed[index] {
                     continue;
                 }
-                let want = self.partial_type(ty, params, bindings)?;
+                let want = self.partial_argument_type(ty, arg, params, bindings)?;
                 let ready = match phase {
                     0 => want.is_some(),
                     1 => !weak_numeric(arg) && !self.needs_context(arg),
@@ -1398,6 +1398,26 @@ impl Specializer {
             }
             _ => None,
         }
+    }
+
+    // A literal supplies its own extent even before N has been inferred. Keep
+    // a known element type as a context-only slice hint, rather than inventing
+    // a length or defaulting [] to an arbitrary element type.
+    fn partial_argument_type(
+        &mut self,
+        ty: &Type,
+        argument: &Expr,
+        params: &[Ident],
+        bindings: &Bindings,
+    ) -> Result<Option<Type>> {
+        let complete = self.partial_type(ty, params, bindings)?;
+        if complete.is_none() && matches!(argument, Expr::Array { .. } | Expr::ArrayRepeat { .. }) {
+            if let Type::ArrayExpr { elem, span, .. } = ty {
+                return self.partial_type(elem, params, bindings)
+                    .map(|element| element.map(|element| Type::Slice(Box::new(element), *span)));
+            }
+        }
+        Ok(complete)
     }
 
     fn partial_type(

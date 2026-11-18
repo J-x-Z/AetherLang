@@ -2,6 +2,7 @@ use model::*;
 use runtime::*;
 use type_model::*;
 use specialize::*;
+use const_eval::*;
 use methods::*;
 use borrow::boot_borrow_check;
 use owned::boot_own_lower;
@@ -30,6 +31,10 @@ fn boot_find_binding(ctx:*BootContext,name:*u8,token:*BootToken)->*BootNode {
  return 0 as *BootNode;
 }
 fn boot_bind(ctx:*BootContext,node:*BootNode)->bool {
+ if ctx.function!=0 as *BootNode&&node.name!=0 as *u8{
+  let mut source:*BootNode=ctx.function;if source.origin!=0 as *BootNode{source=source.origin;}
+  let mut generic:*BootNode=source.generics;while generic!=0 as *BootNode{if generic.ty.kind==BY_CONST_PARAMETER&&strcmp(generic.name,node.name)==0{boot_error(ctx,node.token,"local binding shadows a const generic parameter");return false;}generic=generic.next;}
+ }
  let mut prior:*BootBinding=ctx.bindings;
  while prior!=(0 as *BootBinding) && prior.depth==ctx.depth {
   if strcmp(prior.name,node.name)==0 { boot_error(ctx,node.token,"duplicate binding in scope");return false; }
@@ -44,11 +49,12 @@ fn boot_type_shape(ctx:*BootContext,ty:*BootType,token:*BootToken,abstract:bool,
  if ty==(0 as *BootType){boot_error(ctx,token,"missing type");return false;}
  if depth>256{boot_error(ctx,token,"type validation nesting exceeds 256");return false;}
  if abstract&&boot_type_concrete(ty,0){return boot_type_valid(ctx,ty,token,true);}
+ if ty.kind==BY_CONST_PARAMETER||ty.kind==BY_CONST_VALUE||ty.kind==BY_CONST_EXPR{boot_error(ctx,token,"const argument is not a value type");return false;}
  if ty.kind==BY_PARAMETER{if abstract{return true;}boot_error(ctx,token,"unresolved generic parameter");return false;}
  if ty.kind==BY_TEMPLATE{boot_error(ctx,token,"generic type requires explicit arguments or an initializer context");return false;}
  if ty.kind==BY_APPLICATION{
   if !abstract{boot_error(ctx,token,"unresolved generic type arguments");return false;}
-  let mut arg:*BootTypeArgument=ty.arguments;while arg!=(0 as *BootTypeArgument){if !boot_type_shape(ctx,arg.ty,token,true,depth+1){return false;}arg=arg.next;}return true;
+  let mut arg:*BootTypeArgument=ty.arguments;while arg!=(0 as *BootTypeArgument){if arg.ty.kind!=BY_CONST_PARAMETER&&arg.ty.kind!=BY_CONST_VALUE&&arg.ty.kind!=BY_CONST_EXPR{if !boot_type_shape(ctx,arg.ty,token,true,depth+1){return false;}}arg=arg.next;}return true;
  }
  if ty.checked&&!abstract{return true;}
  if (ty.kind==BY_STRUCT||ty.kind==BY_ENUM)&&!ty.complete{boot_error(ctx,token,"unknown struct type");return false;}
@@ -172,6 +178,7 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
   return boot_check_expr(ctx,node,expected);
  }
  let kind:i32=node.kind;
+ if kind==BN_CONST_VALUE{return node.ty;}
  if kind==BN_VALUE&&(node.flags&4096)!=0{return node.ty;}
  if kind==BN_ENUM_VALUE{return boot_check_enum_value(ctx,node,expected);}
  if kind==BN_MATCH{return boot_check_match(ctx,node,expected);}
@@ -212,9 +219,10 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
   node.ty=result;return result;
  }
  if kind==BN_ARRAY||kind==BN_REPEAT{
+  if kind==BN_REPEAT&&node.right!=0 as *BootNode{let extent:*BootType=ce_eval(ctx,node.right,0 as *BootTypeBinding,0 as *BootType,0);if extent==0 as *BootType{boot_error(ctx,node.token,"array repeat requires a concrete constant length");return 0 as *BootType;}node.value=ce_length(ctx,extent,node.token) as i64;if ctx.failed{return 0 as *BootType;}}
   let mut element:*BootType=0 as *BootType;
   if expected!=(0 as *BootType)&&expected.kind==BY_ARRAY{
-   if expected.extent!=(node.value as u64){boot_error(ctx,node.token,"array initializer length mismatch");return 0 as *BootType;}element=expected.inner;
+   if expected.expression==0 as *BootNode&&expected.extent!=(node.value as u64){boot_error(ctx,node.token,"array initializer length mismatch");return 0 as *BootType;}element=expected.inner;
   }
   let mut item:*BootNode=node.params;if kind==BN_REPEAT{item=node.left;}
   while item!=(0 as *BootNode){
@@ -511,7 +519,7 @@ fn boot_static_initializer(ctx:*BootContext,node:*BootNode,packed:bool)->bool {
  boot_error(ctx,node.token,"static initializer must be a constant value or a global address");return false;
 }
 fn boot_constant_form(node:*BootNode)->bool {
- if node.kind==BN_INT || node.kind==BN_FLOAT || node.kind==BN_BOOL { return true; }
+ if node.kind==BN_CONST_VALUE||node.kind==BN_INT || node.kind==BN_FLOAT || node.kind==BN_BOOL { return true; }
  if node.kind==BN_UNARY && (node.op==45 || node.op==33 || node.op==126) { return boot_constant_form(node.left); }
  return false;
 }
@@ -585,11 +593,17 @@ pub fn boot_check(ctx:*BootContext)->bool {
    }
    prior=prior.next;
   }
+  let mut generic:*BootNode=item.generics;
+  while generic!=0 as *BootNode{
+   if generic.ty.kind==BY_CONST_PARAMETER{generic.ty.inner=boot_normal_type(ctx,generic.ty.inner,0,generic.token);if ctx.failed{return false;}if !ce_integer(generic.ty.inner)&&generic.ty.inner.kind!=BY_BOOL{boot_error(ctx,generic.token,"const parameter requires an integer or bool type");return false;}}
+   generic=generic.next;
+  }
   if item.kind==BN_ENUM{
    if !boot_check_enum_definition(ctx,item){return false;}item=item.next;continue;
   }
   if item.generics!=(0 as *BootNode){
    if (item.flags&BF_EXPORT)!=0 {boot_error(ctx,item.token,"no_mangle requires a concrete non-generic definition");return false;}
+   if item.kind==BN_ALIAS&&!boot_type_shape(ctx,boot_normal_type(ctx,item.ty.inner,0,item.token),item.token,true,0){return false;}
    if item.kind==BN_FN&&!boot_check_entry(ctx,item){return false;}
    if item.kind==BN_FN&&!boot_type_shape(ctx,item.ty,item.token,true,0){return false;}
    let mut field:*BootNode=item.params;if item.kind==BN_STRUCT{field=item.body;}
@@ -650,6 +664,10 @@ pub fn boot_check(ctx:*BootContext)->bool {
    if ctx.failed || !boot_expect(ctx,item,actual,item.ty) || !boot_static_initializer(ctx,item.left,false){return false;}
   }
   if item.kind==BN_CONST {
+   if ce_integer(item.ty)||item.ty.kind==BY_BOOL{
+    let constant:*BootType=ce_eval(ctx,item.left,0 as *BootTypeBinding,item.ty,0);if constant==0 as *BootType||constant.inner!=item.ty{boot_error(ctx,item.token,"constant type mismatch");return false;}
+    let literal:*BootNode=boot_node(ctx,BN_CONST_VALUE,item.left.token);if ctx.failed{return false;}literal.ty=item.ty;literal.value=constant.extent as i64;item.left=literal;
+   }
    if !boot_constant_form(item.left) { boot_error(ctx,item.token,"Core constants require scalar literals or unary literals");return false; }
    let actual:*BootType=boot_check_expr(ctx,item.left,item.ty);
    if ctx.failed { return false; }

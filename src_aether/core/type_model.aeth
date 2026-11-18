@@ -1,9 +1,10 @@
 use model::*;
 use runtime::*;
+use const_eval::*;
 use enum_model::boot_enum_payload;
 pub fn boot_array_type(ctx:*BootContext,inner:*BootType,count:u64)->*BootType {
  let mut ty:*BootType=ctx.types;
- while ty!=(0 as *BootType){if ty.kind==BY_ARRAY&&ty.inner==inner&&ty.extent==count{return ty;}ty=ty.next;}
+ while ty!=(0 as *BootType){if ty.kind==BY_ARRAY&&ty.expression==0 as *BootNode&&ty.inner==inner&&ty.extent==count{return ty;}ty=ty.next;}
  let created:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;if created==(0 as *BootType){return created;}
  created.kind=BY_ARRAY;created.id=boot_id(ctx);created.inner=inner;created.extent=count;created.complete=true;
  created.next=ctx.types;ctx.types=created;return created;
@@ -11,11 +12,18 @@ pub fn boot_array_type(ctx:*BootContext,inner:*BootType,count:u64)->*BootType {
 pub fn boot_normal_type(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->*BootType {
  if ty==(0 as *BootType)||ctx.failed{return ty;}
  if depth>256{boot_error(ctx,token,"cyclic or excessively deep type alias");return 0 as *BootType;}
+ if ty.kind==BY_CONST_EXPR{return ty;}
  if ty.kind==BY_APPLICATION{return boot_expand_type(ctx,ty,depth+1,token);}
  if ty.kind==BY_ALIAS{return boot_normal_type(ctx,ty.inner,depth+1,token);}
  if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_OWN{
   let inner:*BootType=boot_normal_type(ctx,ty.inner,depth+1,token);if inner==(0 as *BootType){return inner;}
-  if ty.kind==BY_OWN{return boot_owned_type(ctx,inner);}if ty.kind==BY_PTR{return boot_ptr_type(ctx,inner);}if boot_reference(ty){return boot_ref_type(ctx,inner,ty.kind==BY_MUTREF);}return boot_array_type(ctx,inner,ty.extent);
+  if ty.kind==BY_OWN{return boot_owned_type(ctx,inner);}
+  if ty.kind==BY_PTR{return boot_ptr_type(ctx,inner);}if boot_reference(ty){return boot_ref_type(ctx,inner,ty.kind==BY_MUTREF);}
+  if ty.expression!=0 as *BootNode{
+   let value:*BootType=ce_eval(ctx,ty.expression,0 as *BootTypeBinding,0 as *BootType,0);if ctx.failed{return 0 as *BootType;}
+   if value==0 as *BootType{ty.inner=inner;return ty;}let count:u64=ce_length(ctx,value,token);if ctx.failed{return 0 as *BootType;}return boot_array_type(ctx,inner,count);
+  }
+  return boot_array_type(ctx,inner,ty.extent);
  }
  return ty;
 }
@@ -140,7 +148,8 @@ pub fn boot_apply_type(ctx:*BootContext,base:*BootType,arguments:*BootTypeArgume
 }
 pub fn boot_type_concrete(ty:*BootType,depth:i32)->bool{
  if ty==(0 as *BootType)||depth>256{return false;}
- if ty.kind==BY_PARAMETER||ty.kind==BY_TEMPLATE||ty.kind==BY_APPLICATION{return false;}
+ if ty.kind==BY_PARAMETER||ty.kind==BY_CONST_PARAMETER||ty.kind==BY_CONST_EXPR||ty.kind==BY_TEMPLATE||ty.kind==BY_APPLICATION{return false;}
+ if ty.kind==BY_ARRAY&&ty.expression!=0 as *BootNode{return false;}
  if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_OWN{return boot_type_concrete(ty.inner,depth+1);}return true;
 }
 pub fn boot_type_bindings(ctx:*BootContext,parameters:*BootNode)->*BootTypeBinding{
@@ -152,8 +161,13 @@ pub fn boot_type_bindings(ctx:*BootContext,parameters:*BootNode)->*BootTypeBindi
 }
 pub fn boot_substitute_type(ctx:*BootContext,ty:*BootType,bindings:*BootTypeBinding,depth:i32,token:*BootToken)->*BootType{
  if ctx.failed||ty==(0 as *BootType){return ty;}if depth>256{boot_error(ctx,token,"generic type nesting exceeds 256");return 0 as *BootType;}
- if ty.kind==BY_PARAMETER{let mut binding:*BootTypeBinding=bindings;while binding!=(0 as *BootTypeBinding){if binding.formal==ty&&binding.actual!=(0 as *BootType){return binding.actual;}binding=binding.next;}return ty;}
+ if ty.kind==BY_PARAMETER||ty.kind==BY_CONST_PARAMETER{let mut binding:*BootTypeBinding=bindings;while binding!=(0 as *BootTypeBinding){if binding.formal==ty&&binding.actual!=(0 as *BootType){return binding.actual;}binding=binding.next;}return ty;}
  if ty.kind==BY_ALIAS{return boot_substitute_type(ctx,ty.inner,bindings,depth+1,token);}
+ if ty.kind==BY_CONST_EXPR{return ce_expression(ctx,ce_substitute(ctx,ty.expression,bindings));}
+ if ty.kind==BY_ARRAY&&ty.expression!=0 as *BootNode{
+  let inner:*BootType=boot_substitute_type(ctx,ty.inner,bindings,depth+1,token);
+  return boot_normal_type(ctx,boot_array_expression(ctx,inner,ce_substitute(ctx,ty.expression,bindings)),depth+1,token);
+ }
  if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_OWN{
   let inner:*BootType=boot_substitute_type(ctx,ty.inner,bindings,depth+1,token);if inner==(0 as *BootType){return inner;}
   if ty.kind==BY_OWN{return boot_owned_type(ctx,inner);}if ty.kind==BY_PTR{return boot_ptr_type(ctx,inner);}if boot_reference(ty){return boot_ref_type(ctx,inner,ty.kind==BY_MUTREF);}return boot_array_type(ctx,inner,ty.extent);
@@ -174,18 +188,37 @@ fn boot_expand_type(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->*
  let mut parameter:*BootNode=base.parameters;let mut actual:*BootTypeArgument=ty.arguments;
  let mut arguments:*BootTypeArgument=0 as *BootTypeArgument;let mut tail:*BootTypeArgument=0 as *BootTypeArgument;let mut concrete:bool=true;
  while parameter!=(0 as *BootNode)&&actual!=(0 as *BootTypeArgument){
-  let value:*BootType=boot_normal_type(ctx,actual.ty,depth+1,token);if ctx.failed{return 0 as *BootType;}
+  let mut value:*BootType=boot_normal_type(ctx,actual.ty,depth+1,token);if ctx.failed{return 0 as *BootType;}
+  if parameter.ty.kind==BY_CONST_PARAMETER{
+   let expected:*BootType=boot_normal_type(ctx,parameter.ty.inner,depth+1,token);parameter.ty.inner=expected;
+   if !ce_integer(expected)&&expected.kind!=BY_BOOL{boot_error(ctx,token,"const parameter requires an integer or bool type");return 0 as *BootType;}
+   if value.kind==BY_STRUCT&&!value.complete{
+    let named:*BootNode=boot_node(ctx,BN_IDENT,token);if ctx.failed{return 0 as *BootType;}named.name=value.name;named.owner=value.owner;value=ce_expression(ctx,named);
+   }
+   if value.kind==BY_CONST_EXPR{
+    let constant:*BootType=ce_eval(ctx,value.expression,0 as *BootTypeBinding,expected,0);if ctx.failed{return 0 as *BootType;}if constant!=0 as *BootType{value=constant;}
+   }
+   if value.kind==BY_CONST_VALUE&&value.inner!=expected{boot_error(ctx,token,"const argument type mismatch");return 0 as *BootType;}
+   if value.kind!=BY_CONST_VALUE&&value.kind!=BY_CONST_PARAMETER&&value.kind!=BY_CONST_EXPR{boot_error(ctx,token,"const argument required for const parameter");return 0 as *BootType;}
+  }else{if value.kind==BY_CONST_VALUE||value.kind==BY_CONST_EXPR||value.kind==BY_CONST_PARAMETER{boot_error(ctx,token,"type argument required for type parameter");return 0 as *BootType;}}
   if !boot_type_concrete(value,0){concrete=false;}
   let arg:*BootTypeArgument=boot_type_argument(ctx,value);if ctx.failed{return 0 as *BootType;}
   if tail==(0 as *BootTypeArgument){arguments=arg;}else{tail.next=arg;}tail=arg;
   parameter=parameter.next;actual=actual.next;
  }
  if parameter!=(0 as *BootNode)||actual!=(0 as *BootTypeArgument){boot_error(ctx,token,"generic type argument count mismatch");return 0 as *BootType;}
- let instance:*BootType=boot_apply_type(ctx,base,arguments);if !concrete||instance.kind!=BY_APPLICATION{return instance;}
- // Publish the nominal identity before fields, so Node<T> may point to itself.
- instance.kind=BY_STRUCT;instance.complete=true;instance.packed=base.packed;instance.union_layout=base.union_layout;instance.is_enum=base.is_enum;if base.is_enum{instance.kind=BY_ENUM;}
+ let instance:*BootType=boot_apply_type(ctx,base,arguments);
+ if instance.kind==BY_ALIAS{return boot_normal_type(ctx,instance,depth+1,token);}
+ if instance.kind!=BY_APPLICATION{return instance;}
  let bindings:*BootTypeBinding=boot_type_bindings(ctx,base.parameters);let mut binding:*BootTypeBinding=bindings;actual=arguments;
  while binding!=(0 as *BootTypeBinding){binding.actual=actual.ty;binding=binding.next;actual=actual.next;}
+ if base.is_alias{
+  let target:*BootType=boot_substitute_type(ctx,base.inner,bindings,depth+1,token);if ctx.failed{return 0 as *BootType;}
+  instance.kind=BY_ALIAS;instance.inner=target;instance.complete=true;return boot_normal_type(ctx,target,depth+1,token);
+ }
+ if !concrete{return instance;}
+ // Publish the nominal identity before fields, so Node<T> may point to itself.
+ instance.kind=BY_STRUCT;instance.complete=true;instance.packed=base.packed;instance.union_layout=base.union_layout;instance.is_enum=base.is_enum;if base.is_enum{instance.kind=BY_ENUM;}
  let mut source:*BootNode=base.fields;let mut last:*BootNode=0 as *BootNode;
  while source!=(0 as *BootNode)&&!ctx.failed{
   let field:*BootNode=boot_node(ctx,BN_FIELD,source.token);if field==(0 as *BootNode){return 0 as *BootType;}
@@ -201,4 +234,9 @@ fn boot_expand_type(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->*
   if last==(0 as *BootNode){instance.fields=field;}else{last.next=field;}last=field;source=source.next;
  }
  return instance;
+}
+
+pub fn boot_array_expression(ctx:*BootContext,inner:*BootType,length:*BootNode)->*BootType{
+ let ty:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;if ty==0 as *BootType{return ty;}
+ ty.kind=BY_ARRAY;ty.id=boot_id(ctx);ty.inner=inner;ty.expression=length;ty.complete=true;ty.next=ctx.types;ctx.types=ty;return ty;
 }

@@ -135,7 +135,28 @@ information is an error. Nested instances, recursive pointer structures, Unit
 payloads, array arguments and recursive generic functions use the same rules.
 Each instantiated body is checked and emitted normally; as in the primary
 compiler, unused function templates do not establish body type correctness.
-Trait bounds, const parameters and generic aliases are not supported yet.
+Integer and bool const parameters participate in concrete type and function
+identity: `struct Block<T,const N:usize>{data:[T;N]}` and
+`fn length<T,const N:usize>(data:[T;N])->usize{N}`. Array lengths, repeat counts,
+const arguments and ordinary integer/bool constants share one checked evaluator,
+including casts, comparisons, bit operations and short-circuit boolean operators.
+Overflow, division by zero, invalid shifts, cyclic constants and conflicting
+inference are diagnostics. Typed array literals can infer their own length,
+including zero; an empty array without a known element type remains an error.
+Computed dimensions are checked after direct parameters are inferred; the
+compiler does not solve arbitrary expressions backwards. Transparent generic
+aliases such as `type Pair<T>=Block<T,2>` are supported.
+
+Trait bounds, const parameters on aliases or inherent impl declarations, and
+compile-time floating-point arithmetic are not supported yet. Layout intrinsics
+remain ordinary checked expressions, not constant-expression operators. The
+runtime regression entry uses the shared primary-compiler const fixture
+and an actual fixed-size matrix stored in `Vec`, plus multi-module constants:
+
+```sh
+python3 tests/bootstrap_constants.py --compiler "$WORK/core-stage4" \
+  --work-dir "$WORK/core-constants" --sanitize
+```
 
 Generic payload enums use a real tag and union payload in both emitters.
 `match` checks variant identity, payload arity, guarded arms, binding scope and

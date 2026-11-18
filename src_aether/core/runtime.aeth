@@ -133,12 +133,14 @@ pub fn boot_resolve_type(ctx:*BootContext,name:*u8,module:*BootModule,token:*Boo
  if module!=(0 as *BootModule) {
   let item:*BootNode=boot_lookup(ctx,name,module,token);
   if item==(0 as *BootNode) { return 0 as *BootType; }
+  if item.kind==BN_CONST{return boot_constant_type(ctx,name,module,token);}
   if item.kind!=BN_STRUCT && item.kind!=BN_ALIAS && item.kind!=BN_ENUM {boot_error(ctx,token,"imported name is not a type");return 0 as *BootType;}
   return item.ty;
  }
  let imported:*BootNode=boot_imported(ctx,name,token);
  if ctx.failed {return 0 as *BootType;}
  if imported!=(0 as *BootNode) {
+  if imported.kind==BN_CONST{return boot_constant_type(ctx,name,0 as *BootModule,token);}
   if imported.kind!=BN_STRUCT && imported.kind!=BN_ALIAS && imported.kind!=BN_ENUM {boot_error(ctx,token,"imported name is not a type");return 0 as *BootType;}
   return imported.ty;
  }
@@ -229,4 +231,9 @@ pub fn boot_overlay(ctx:*BootContext,path:*u8)->*BootOverlay{
  let mut doc:*BootOverlay=ctx.overlays;
  while doc!=0 as *BootOverlay{if strcmp(doc.path,path)==0{return doc;}doc=doc.next;}
  return 0 as *BootOverlay;
+}
+
+pub fn boot_constant_type(ctx:*BootContext,name:*u8,module:*BootModule,token:*BootToken)->*BootType{
+ let node:*BootNode=boot_node(ctx,BN_IDENT,token);let ty:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;if ctx.failed{return 0 as *BootType;}
+ node.name=name;node.lookup=module;ty.kind=BY_CONST_EXPR;ty.expression=node;ty.id=boot_id(ctx);ty.next=ctx.types;ctx.types=ty;return ty;
 }
