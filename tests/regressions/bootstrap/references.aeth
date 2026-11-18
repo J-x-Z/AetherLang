@@ -1,0 +1,33 @@
+struct Pair{left:i64,right:i64}
+static GLOBAL:i64=41;
+fn identity<T>(value:&T)->&T{return value;}
+fn select(flag:bool,a:&i64,b:&i64)->&i64{if flag{return a;}return b;}
+fn first(a:&i64,b:&i64)->&i64{return a;}
+fn from_global()->&i64{return &GLOBAL;}
+fn read(value:&i64)->i64{return *value;}
+fn add(value:&mut i64,amount:i64){*value+=amount;}
+fn view(value:&Pair)->&i64{return &value.right;}
+fn nested(value:&i64)->&i64{let temporary:i64=99;return first(value,&temporary);}
+fn main()->i32{
+ let mut number:i64=3;
+ let borrowed:&i64=identity(&number);if *borrowed!=3{return 1;}
+ number=5;
+ let mut pair:Pair=Pair{left:7,right:11};
+ let right:&i64=view(&pair);if *right!=11{return 2;}
+ add(&mut pair.right,2);
+ let exclusive:&mut i64=&mut number;
+ add(exclusive,2);if read(exclusive)!=7{return 12;}add(&mut *exclusive,2);if *exclusive!=9{return 3;}
+ let moved:&mut i64=exclusive;*moved+=1;
+ if number!=10{return 4;}
+ let mut cursor:&mut i64=&mut number;*cursor+=1;cursor=&mut number;*cursor-=1;
+ let values:[i64;3]=[4,5,6];let array:&[i64;3]=&values;
+ if array[2]!=6{return 5;}
+ let chosen:&i64=select(false,&number,&pair.right);if *chosen!=13{return 6;}
+ if *nested(&number)!=10||*from_global()!=41{return 7;}
+ let outer:&i64=&number;{let number:i64=21;let inner:&i64=&number;if *inner!=21{return 8;}}
+ if *outer!=10{return 9;}
+ let mut i:i64=0;while i<3{let r:&mut i64=&mut number;*r+=1;i+=1;}
+ if number!=13{return 10;}
+ let raw:*i64=&mut number as *i64;*raw=17;if number!=17{return 11;}
+ return 0;
+}

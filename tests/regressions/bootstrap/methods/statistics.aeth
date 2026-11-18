@@ -1,0 +1,23 @@
+use vec::*;
+struct Statistics{values:Vec<f64>}
+impl Statistics{
+ fn new()->Self{return Self{values:vec_new()};}
+ fn add(self:&mut Self,value:f64)->bool{return vec_push(&mut self.values as *Vec<f64>,value);}
+ fn mean(self:&Self)->f64{
+  let mut index:u64=0;let mut total:f64=0.0;
+  while index<self.values.len{total=total+self.values.data[index];index=index+1;}
+  return total/(self.values.len as f64);
+ }
+ fn variance(self:&Self)->f64{
+  let mean:f64=self.mean();let mut index:u64=0;let mut total:f64=0.0;
+  while index<self.values.len{let delta:f64=self.values.data[index]-mean;total=total+delta*delta;index=index+1;}
+  return total/(self.values.len as f64);
+ }
+ fn close(self:&mut Self){vec_free(&mut self.values as *Vec<f64>);}
+}
+fn main()->i32{
+ let mut data:Statistics=Statistics::new();let mut i:i64=1;
+ while i<=100{if !data.add(i as f64){data.close();return 1;}i=i+1;}
+ let mean:f64=data.mean();let variance:f64=data.variance();data.close();
+ if mean!=50.5||variance!=833.25{return 2;}return 0;
+}

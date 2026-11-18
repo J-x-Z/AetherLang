@@ -1,0 +1,53 @@
+use option::*;
+use result::*;
+use vec::*;
+extern "C" { fn puts(text:*u8)->i32; }
+struct Pair{left:i64,right:u8}
+enum Mixed{Bytes([u8;24]),Pair(Pair),Small(u8),Empty}
+enum Choice<T>{One(T),Two(T,T),None}
+fn source(ok:bool)->Result<i64,i32>{if ok{return Result::Ok(42);}Result::Err(7)}
+fn propagated(ok:bool)->Result<u8,i32>{let n:i64=source(ok)?;Result::Ok((n+1) as u8)}
+fn unit(ok:bool)->Result<(),i32>{if ok{return Result::Ok(());}Result::Err(9)}
+fn unit_chain(ok:bool)->Result<i64,i32>{unit(ok)?;Result::Ok(10)}
+fn guard(count:*i32,yes:bool)->bool{*count=*count+1;yes}
+fn choose(count:*i32)->Choice<i64>{*count=*count+1;Choice::Two(17,25)}
+fn identity<T>(v:T)->T{v}
+fn byte()->u8{7}
+fn choice_size<T>(value:Choice<T>)->usize{size_of(T)}
+fn main()->i32{
+ let mut v:Vec<i64>=vec_new();let mut i:i64=0;
+ while i<129{if !vec_push(&mut v as *Vec<i64>,i*3){return 1;}i=i+1;}
+ if option_or(vec_get(&v as *Vec<i64>,128),-1)!=384{return 2;}
+ if !vec_set(&mut v as *Vec<i64>,64,991){return 3;}
+ if option_or(vec_get(&v as *Vec<i64>,64),-1)!=991{return 4;}
+ if option_is_some(vec_get(&v as *Vec<i64>,129)){return 5;}
+ vec_free(&mut v as *Vec<i64>);
+ let mut z:Vec<()>=vec_new();i=0;while i<19{if !vec_push(&mut z as *Vec<()>,()){return 6;}i=i+1;}
+ if !option_is_some(vec_pop(&mut z as *Vec<()>))||z.len!=18{return 7;}
+ vec_free(&mut z as *Vec<()>);
+ let a:i32=match propagated(true){Result::Ok(n)=>n as i32,Result::Err(e)=>e};
+ let b:i32=match propagated(false){Result::Ok(n)=>n as i32,Result::Err(e)=>e};
+ if a!=43||b!=7{return 8;}
+ if result_or(unit_chain(true),-1)!=10||result_is_ok(unit_chain(false)){return 9;}
+ let nested:Option<Result<i64,i32>>=Option::Some(source(true));
+ let nr:Result<i64,i32>=option_or(nested,Result::Err(1));if result_or(nr,-1)!=42{return 10;}
+ let mut count:i32=0;
+ let answer:i64=match choose(&mut count as *i32){
+  Choice::Two(a,b) if guard(&mut count as *i32,false)=>a-b,
+  Choice::Two(a,b) if guard(&mut count as *i32,true)=>{let mut sum:i64=a;sum+=b;sum},
+  Choice::Two(_,_)=>0,
+  Choice::One(x)=>x,
+  Choice::None=>-1,
+ };
+ if answer!=42||count!=3{return 11;}
+ let empty:Choice<i64>=Choice::None;
+ match empty{Choice::None=>{},_=>{return 12;},}
+ let small:Mixed=Mixed::Small(251);let pair:Mixed=Mixed::Pair(Pair{left:100,right:7});
+ let width:usize=size_of(Mixed);if width!=32||align_of(Mixed)!=8{return 13;}
+ let p:i64=match pair{Mixed::Pair(v)=>v.left+(v.right as i64),_=>0};
+ let q:i64=match small{Mixed::Small(v)=>v as i64,_=>0};if p!=107||q!=251{return 14;}
+ let payload:Mixed=Mixed::Bytes([3;24]);let total:u64=match payload{Mixed::Bytes(bytes)=>(bytes[0]+bytes[23]) as u64,_=>0};if total!=6{return 15;}
+ let repeated:i64=identity(match source(true){Result::Ok(x)=>x,Result::Err(_)=>0});if repeated!=42{return 16;}
+ if choice_size(Choice::Two(1,byte()))!=1{return 17;}
+ puts("enum-values=ok");return 0;
+}

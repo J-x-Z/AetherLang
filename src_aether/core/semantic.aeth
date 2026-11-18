@@ -2,8 +2,12 @@ use model::*;
 use runtime::*;
 use type_model::*;
 use specialize::*;
+use methods::*;
+use borrow::boot_borrow_check;
+use enum_model::*;
 // Core v1 type and scope checker, executed by every bootstrap stage.
-// Raw pointers are a manual memory boundary. No borrow-checking claim is made.
+// Raw pointers remain an explicit manual memory boundary; safe references
+// retain separate types and are validated by the independent borrow pass.
 extern "C" { fn strtod(text:*u8,end:**u8)->f64; }
 struct BootTypeTrail { ty:*BootType, parent:*BootTypeTrail }
 fn boot_integer(ty:*BootType)->bool {
@@ -46,12 +50,17 @@ fn boot_type_shape(ctx:*BootContext,ty:*BootType,token:*BootToken,abstract:bool,
   let mut arg:*BootTypeArgument=ty.arguments;while arg!=(0 as *BootTypeArgument){if !boot_type_shape(ctx,arg.ty,token,true,depth+1){return false;}arg=arg.next;}return true;
  }
  if ty.checked&&!abstract{return true;}
- if ty.kind==BY_STRUCT&&!ty.complete{boot_error(ctx,token,"unknown struct type");return false;}
+ if (ty.kind==BY_STRUCT||ty.kind==BY_ENUM)&&!ty.complete{boot_error(ctx,token,"unknown struct type");return false;}
  if !abstract{ty.checked=true;}
- if ty.kind==BY_PTR{return boot_type_shape(ctx,ty.inner,token,abstract,depth+1);}
+ if boot_indirect(ty){return boot_type_shape(ctx,ty.inner,token,abstract,depth+1);}
  if ty.kind==BY_ARRAY{
   if !boot_type_shape(ctx,ty.inner,token,abstract,depth+1){return false;}
   if abstract{return true;}return boot_layout(ctx,ty,0,token);
+ }
+ if ty.kind==BY_ENUM{
+  let mut variant:*BootNode=ty.fields;
+  while variant!=0 as *BootNode{let payload:*BootType=boot_enum_payload(ctx,variant);if ctx.failed||!boot_type_shape(ctx,payload,variant.token,abstract,depth+1){return false;}variant=variant.next;}
+  if !abstract{if !boot_struct_finite(ctx,ty,0 as *BootTypeTrail,token){return false;}return boot_layout(ctx,ty,0,token);}return true;
  }
  if ty.kind==BY_STRUCT{
   let mut field:*BootNode=ty.fields;while field!=(0 as *BootNode){if !boot_type_shape(ctx,field.ty,field.token,abstract,depth+1){return false;}field=field.next;}
@@ -65,7 +74,7 @@ fn boot_type_valid(ctx:*BootContext,ty:*BootType,token:*BootToken,allow_void:boo
 
 fn boot_struct_finite(ctx:*BootContext,ty:*BootType,trail:*BootTypeTrail,token:*BootToken)->bool {
  if ty.kind==BY_ARRAY{return boot_struct_finite(ctx,ty.inner,trail,token);}
- if ty.kind!=BY_STRUCT { return true; }
+ if ty.kind!=BY_STRUCT&&ty.kind!=BY_ENUM { return true; }
  let mut prior:*BootTypeTrail=trail;
  while prior!=(0 as *BootTypeTrail) {
   if prior.ty==ty { boot_error(ctx,token,"recursive struct needs a pointer indirection");return false; }
@@ -76,7 +85,8 @@ fn boot_struct_finite(ctx:*BootContext,ty:*BootType,trail:*BootTypeTrail,token:*
  here.ty=ty;here.parent=trail;
  let mut field:*BootNode=ty.fields;
  while field!=(0 as *BootNode) {
-  if !boot_struct_finite(ctx,field.ty,here,field.token) { return false; }
+  let mut member:*BootType=field.ty;if ty.kind==BY_ENUM{member=boot_enum_payload(ctx,field);}
+  if ctx.failed||!boot_struct_finite(ctx,member,here,field.token) { return false; }
   field=field.next;
  }
  return true;
@@ -117,11 +127,14 @@ fn boot_place_writable(ctx:*BootContext,node:*BootNode)->bool {
   return true;
  }
  if node.kind==BN_MEMBER {
-  if node.left.ty.kind==BY_PTR { return true; }
+  if node.left.ty.kind==BY_PTR||node.left.ty.kind==BY_MUTREF { return true; }
+  if node.left.ty.kind==BY_REF {boot_error(ctx,node.token,"cannot mutate through shared reference");return false;}
   return boot_place_writable(ctx,node.left);
  }
  if node.kind==BN_INDEX{if node.left.ty.kind==BY_ARRAY{return boot_place_writable(ctx,node.left);}return true;}
- if node.kind==BN_UNARY && node.op==42 { return true; }
+ if node.kind==BN_UNARY && node.op==42 {
+  if node.left.ty.kind==BY_REF{boot_error(ctx,node.token,"cannot mutate through shared reference");return false;}return true;
+ }
  boot_error(ctx,node.token,"expected an assignable place");return false;
 }
 fn boot_place_addressable(ctx:*BootContext,node:*BootNode)->bool {
@@ -130,16 +143,38 @@ fn boot_place_addressable(ctx:*BootContext,node:*BootNode)->bool {
   return true;
  }
  if node.kind==BN_MEMBER {
-  if node.left.ty.kind==BY_PTR { return true; }
+  if boot_indirect(node.left.ty) { return true; }
   return boot_place_addressable(ctx,node.left);
  }
  if node.kind==BN_INDEX{if node.left.ty.kind==BY_ARRAY{return boot_place_addressable(ctx,node.left);}return true;}
- if node.kind==BN_UNARY && node.op==42 { return true; }
+ if node.kind==BN_UNARY && node.op==42 {return true;}
  boot_error(ctx,node.token,"address requires a place");return false;
 }
 pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType {
+ let actual:*BootType=boot_check_expr_inner(ctx,node,expected);
+ // Shared reborrowing preserves the origin while restricting permissions; it
+ // never changes the declaration's own canonical type or creates a raw pointer.
+ if !ctx.failed&&actual!=0 as *BootType&&expected!=0 as *BootType&&actual.kind==BY_MUTREF&&expected.kind==BY_REF&&actual.inner==expected.inner{
+  node.ty=expected;return expected;
+ }
+ return actual;
+}
+fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType {
  if ctx.failed || node==(0 as *BootNode) { return 0 as *BootType; }
+ if node.kind==BN_METHOD_CALL{
+  let actual:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);if ctx.failed||!boot_method_call(ctx,node,actual){return 0 as *BootType;}
+  return boot_check_expr(ctx,node,expected);
+ }
+ if node.kind==BN_ENUM_VALUE&&!node.ty.is_enum{
+  if (node.flags&8192)==0{boot_error(ctx,node.token,"associated method requires a call with parentheses");return 0 as *BootType;}
+  if !boot_method_associated(ctx,node){return 0 as *BootType;}
+  return boot_check_expr(ctx,node,expected);
+ }
  let kind:i32=node.kind;
+ if kind==BN_VALUE&&(node.flags&4096)!=0{return node.ty;}
+ if kind==BN_ENUM_VALUE{return boot_check_enum_value(ctx,node,expected);}
+ if kind==BN_MATCH{return boot_check_match(ctx,node,expected);}
+ if kind==BN_TRY{return boot_check_try(ctx,node);}
  if kind==BN_INT {
   let mut ty:*BootType=expected;
   if !boot_integer(ty) { ty=boot_type(ctx,BY_I64); }
@@ -229,6 +264,8 @@ pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*Boo
   if ctx.failed { return 0 as *BootType; }
   let numeric_source:bool=boot_numeric(source) || source.kind==BY_BOOL;
   let numeric_target:bool=boot_numeric(target) || target.kind==BY_BOOL;
+  if boot_reference(source)&&target.kind==BY_PTR&&source.inner==target.inner{return target;}
+  if source.kind==BY_MUTREF&&target.kind==BY_REF&&source.inner==target.inner{return target;}
   if (numeric_source && numeric_target) ||
      (source.kind==BY_PTR && (target.kind==BY_PTR || boot_integer(target))) ||
      (boot_integer(source) && target.kind==BY_PTR) { return target; }
@@ -237,7 +274,7 @@ pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*Boo
  if kind==BN_MEMBER {
   let mut base:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);
   if ctx.failed { return 0 as *BootType; }
-  if base.kind==BY_PTR { base=base.inner; }
+  if boot_indirect(base) { base=base.inner; }
   if base.kind!=BY_STRUCT { boot_error(ctx,node.token,"field access requires a struct");return 0 as *BootType; }
   let mut field:*BootNode=base.fields;
   while field!=(0 as *BootNode) {
@@ -247,7 +284,11 @@ pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*Boo
   boot_error(ctx,node.token,"unknown struct field");return 0 as *BootType;
  }
  if kind==BN_INDEX {
-  let base:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);
+  let mut base:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);
+  if !ctx.failed&&boot_reference(base)&&base.inner.kind==BY_ARRAY{
+   let deref:*BootNode=boot_node(ctx,BN_UNARY,node.left.token);if deref==0 as *BootNode{return 0 as *BootType;}
+   deref.op=42;deref.left=node.left;deref.ty=base.inner;node.left=deref;base=base.inner;
+  }
   let index:*BootType=boot_check_expr(ctx,node.right,0 as *BootType);
   if ctx.failed { return 0 as *BootType; }
   if (base.kind!=BY_PTR&&base.kind!=BY_ARRAY) || !boot_integer(index) {
@@ -266,10 +307,10 @@ pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*Boo
   if node.op==38 {
    if !boot_place_addressable(ctx,node.left) { return 0 as *BootType; }
    if (node.flags&1)!=0 && !boot_place_writable(ctx,node.left) { return 0 as *BootType; }
-   node.ty=boot_ptr_type(ctx,operand);return node.ty;
+   node.ty=boot_ref_type(ctx,operand,(node.flags&1)!=0);return node.ty;
   }
   if node.op==42 {
-   if operand.kind!=BY_PTR { boot_error(ctx,node.token,"dereference requires a pointer");return 0 as *BootType; }
+   if !boot_indirect(operand) { boot_error(ctx,node.token,"dereference requires a pointer or reference");return 0 as *BootType; }
    node.ty=operand.inner;return node.ty;
   }
   if (node.op==45 && boot_numeric(operand)) || (node.op==33 && operand.kind==BY_BOOL) || (node.op==126 && boot_integer(operand)) {
@@ -278,7 +319,8 @@ pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*Boo
   boot_error(ctx,node.token,"invalid unary operands");return 0 as *BootType;
  }
  if kind==BN_CALL {
-  let mut function:*BootNode=boot_lookup(ctx,node.name,node.lookup,node.token);
+  let mut function:*BootNode=node.decl;
+  if function==0 as *BootNode||(function.flags&BF_METHOD)==0{function=boot_lookup(ctx,node.name,node.lookup,node.token);}
   if function==(0 as *BootNode) { boot_error(ctx,node.token,"unknown function");return 0 as *BootType; }
   if function.kind!=BN_FN { boot_error(ctx,node.token,"called name is not a function");return 0 as *BootType; }
   if node.lookup==(0 as *BootModule) && boot_find_binding(ctx,node.name,node.token)!=(0 as *BootNode) { boot_error(ctx,node.token,"value binding shadows function name");return 0 as *BootType; }
@@ -345,6 +387,7 @@ pub fn boot_check_expr(ctx:*BootContext,node:*BootNode,expected:*BootType)->*Boo
 
 // The bool result means every execution path returns from the function.
 fn boot_check_statement(ctx:*BootContext,node:*BootNode)->bool {
+ if node!=0 as *BootNode&&node.kind==BN_RANGE_FOR{return boot_check_range(ctx,node);}
  if ctx.failed { return false; }
  let kind:i32=node.kind;
  if kind==BN_BLOCK {
@@ -499,7 +542,7 @@ fn boot_check_entry(ctx:*BootContext,item:*BootNode)->bool {
 }
 pub fn boot_check(ctx:*BootContext)->bool {
  if ctx.failed || ctx.program==(0 as *BootNode) { return false; }
- if !boot_normalize(ctx){return false;}
+ if !boot_normalize(ctx)||!boot_methods_check(ctx){return false;}
  // Register all declarations before any body, allowing forward calls/types.
  let mut item:*BootNode=ctx.program.body;
  while item!=(0 as *BootNode) && !ctx.failed {
@@ -517,6 +560,9 @@ pub fn boot_check(ctx:*BootContext)->bool {
     }else if prior.owner==item.owner{boot_error(ctx,item.token,"duplicate top-level name");return false;}
    }
    prior=prior.next;
+  }
+  if item.kind==BN_ENUM{
+   if !boot_check_enum_definition(ctx,item){return false;}item=item.next;continue;
   }
   if item.generics!=(0 as *BootNode){
    if (item.flags&BF_EXPORT)!=0 {boot_error(ctx,item.token,"no_mangle requires a concrete non-generic definition");return false;}
@@ -552,11 +598,13 @@ pub fn boot_check(ctx:*BootContext)->bool {
      boot_error(ctx,item.token,"variadic signature requires a foreign function with a fixed parameter");return false;
     }
     if !boot_check_entry(ctx,item) { return false; }
+    if boot_c_symbol(item)&&boot_foreign_enum(item.ty,0){boot_error(ctx,item.token,"foreign enum value ABI is not supported");return false;}
     if boot_c_symbol(item)&&item.ty.kind==BY_ARRAY{boot_error(ctx,item.token,"foreign array value ABI is not supported");return false;}
     let mut param:*BootNode=item.params;
     while param!=(0 as *BootNode) {
      if !boot_type_valid(ctx,param.ty,param.token,false) { return false; }
      if boot_c_symbol(item)&&param.ty.kind==BY_VOID{boot_error(ctx,param.token,"foreign unit parameter ABI is not supported");return false;}
+     if boot_c_symbol(item)&&boot_foreign_enum(param.ty,0){boot_error(ctx,param.token,"foreign enum value ABI is not supported");return false;}
      if boot_c_symbol(item)&&param.ty.kind==BY_ARRAY{boot_error(ctx,param.token,"foreign array value ABI is not supported");return false;}
      let mut previous:*BootNode=item.params;
      while previous!=param {
@@ -596,11 +644,15 @@ pub fn boot_check(ctx:*BootContext)->bool {
   }
   item=item.next;
  }
- return !ctx.failed;
+ if !ctx.failed{return boot_borrow_check(ctx);}
+ return false;
 }
 
 fn boot_check_generic_call(ctx:*BootContext,node:*BootNode,function:*BootNode,expected:*BootType)->*BootNode{
  let bindings:*BootTypeBinding=boot_type_bindings(ctx,function.generics);if ctx.failed{return 0 as *BootNode;}
+ if (function.flags&BF_METHOD)!=0&&node.aux!=0 as *BootType&&boot_type_concrete(node.aux,0){
+  if !boot_infer_type(ctx,function.aux,node.aux,bindings,node.token,0){return 0 as *BootNode;}
+ }
  if expected!=(0 as *BootType)&&!boot_infer_type(ctx,function.ty,expected,bindings,node.token,0){return 0 as *BootNode;}
  let mut pass:i32=0;
  while pass<2&&!ctx.failed{
@@ -629,6 +681,7 @@ fn boot_contextual_tail(ctx:*BootContext,node:*BootNode)->bool{
  return node.kind==BN_RETURN||node.kind==BN_WHILE;
 }
 fn boot_contextual_expr(ctx:*BootContext,node:*BootNode)->bool{
+ if node.kind==BN_ENUM_VALUE&&node.ty.kind==BY_TEMPLATE{return true;}
  if boot_literal_number(node){return true;}
  if node.kind==BN_ARRAY{let mut value:*BootNode=node.params;while value!=(0 as *BootNode){if !boot_contextual_expr(ctx,value){return false;}value=value.next;}return true;}
  if node.kind==BN_REPEAT{return boot_contextual_expr(ctx,node.left);}
@@ -636,4 +689,155 @@ fn boot_contextual_expr(ctx:*BootContext,node:*BootNode)->bool{
  if node.kind==BN_STRUCT_VALUE&&node.ty.kind==BY_TEMPLATE{return true;}
  if node.kind==BN_CALL&&node.params==(0 as *BootNode){let function:*BootNode=boot_lookup(ctx,node.name,node.lookup,node.token);return function!=(0 as *BootNode)&&function.generics!=(0 as *BootNode);}
  return false;
+}
+
+fn boot_check_enum_definition(ctx:*BootContext,item:*BootNode)->bool{
+ let mut variant:*BootNode=item.body;
+ while variant!=0 as *BootNode{
+  let mut prior:*BootNode=item.body;while prior!=variant{if strcmp(prior.name,variant.name)==0{boot_error(ctx,variant.token,"duplicate enum variant");return false;}prior=prior.next;}
+  let mut field:*BootNode=variant.params;while field!=0 as *BootNode{if !boot_type_shape(ctx,field.ty,field.token,item.generics!=0 as *BootNode,0){return false;}field=field.next;}
+  variant=variant.next;
+ }
+ if item.generics==0 as *BootNode{return boot_type_valid(ctx,item.ty,item.token,false);}return true;
+}
+fn boot_check_enum_value(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType{
+ let mut ty:*BootType=node.ty;
+ if ty.kind==BY_TEMPLATE&&ty.is_enum{
+  if expected!=0 as *BootType&&expected.base==ty{ty=expected;}
+  else{
+   let variant:*BootNode=boot_enum_variant(ty,node.name);if variant==0 as *BootNode{boot_error(ctx,node.token,"unknown enum variant");return 0 as *BootType;}
+   let bindings:*BootTypeBinding=boot_type_bindings(ctx,ty.parameters);let mut pass:i32=0;
+   while pass<2&&!ctx.failed{
+    let mut formal:*BootNode=variant.params;let mut actual:*BootNode=node.params;
+    while formal!=0 as *BootNode&&actual!=0 as *BootNode{
+     if pass==1||!boot_contextual_expr(ctx,actual){
+      let value:*BootType=boot_check_expr(ctx,actual,boot_generic_hint(ctx,formal.ty,bindings,actual.token));
+      if ctx.failed||!boot_infer_type(ctx,formal.ty,value,bindings,actual.token,0){return 0 as *BootType;}
+     }
+     formal=formal.next;actual=actual.next;
+    }
+    if formal!=0 as *BootNode||actual!=0 as *BootNode{boot_error(ctx,node.token,"enum payload argument count mismatch");return 0 as *BootType;}pass=pass+1;
+   }
+   let mut args:*BootTypeArgument=0 as *BootTypeArgument;let mut end:*BootTypeArgument=0 as *BootTypeArgument;let mut binding:*BootTypeBinding=bindings;
+   while binding!=0 as *BootTypeBinding{
+    if !boot_type_concrete(binding.actual,0){boot_error(ctx,node.token,"cannot infer all enum type arguments");return 0 as *BootType;}
+    let arg:*BootTypeArgument=boot_type_argument(ctx,binding.actual);if ctx.failed{return 0 as *BootType;}
+    if end==0 as *BootTypeArgument{args=arg;}else{end.next=arg;}end=arg;binding=binding.next;
+   }
+   ty=boot_normal_type(ctx,boot_apply_type(ctx,ty,args),0,node.token);
+  }
+ }
+ if ctx.failed||ty.kind!=BY_ENUM{boot_error(ctx,node.token,"unknown imported module or enum type");return 0 as *BootType;}
+ if !boot_type_valid(ctx,ty,node.token,false){return 0 as *BootType;}
+ let variant:*BootNode=boot_enum_variant(ty,node.name);if variant==0 as *BootNode{boot_error(ctx,node.token,"unknown enum variant");return 0 as *BootType;}
+ let mut field:*BootNode=variant.params;let mut argument:*BootNode=node.params;
+ while field!=0 as *BootNode&&argument!=0 as *BootNode{
+  let actual:*BootType=boot_check_expr(ctx,argument,field.ty);if ctx.failed||!boot_expect(ctx,argument,actual,field.ty){return 0 as *BootType;}
+  field=field.next;argument=argument.next;
+ }
+ if field!=0 as *BootNode||argument!=0 as *BootNode{boot_error(ctx,node.token,"enum payload argument count mismatch");return 0 as *BootType;}
+ node.ty=ty;node.decl=variant;return ty;
+}
+fn boot_check_match(ctx:*BootContext,node:*BootNode,expected:*BootType)->*BootType{
+ let subject:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);if ctx.failed{return 0 as *BootType;}
+ if subject.kind!=BY_ENUM{boot_error(ctx,node.token,"match requires an enum value");return 0 as *BootType;}
+ let saved_value:*BootType=ctx.value_type;ctx.value_type=expected;
+ let temporary:*BootNode=boot_node(ctx,BN_LET,node.token);if ctx.failed{return 0 as *BootType;}temporary.ty=subject;temporary.left=node.left;
+ let mut arm:*BootNode=node.params;let mut wildcard:bool=false;
+ while arm!=0 as *BootNode&&!ctx.failed{
+  if wildcard{boot_error(ctx,arm.token,"unreachable match arm after wildcard");break;}
+  let saved:*BootBinding=ctx.bindings;ctx.depth=ctx.depth+1;
+  if (arm.flags&1)==0{
+   let pattern:*BootNode=arm.left;let mut target:*BootType=pattern.ty;
+   if target.kind==BY_TEMPLATE&&subject.base==target{target=subject;}
+   if target!=subject{boot_error(ctx,arm.token,"match pattern uses a different enum type");break;}
+   let variant:*BootNode=boot_enum_variant(subject,pattern.name);if variant==0 as *BootNode{boot_error(ctx,arm.token,"unknown enum variant in pattern");break;}arm.decl=variant;
+   let mut prior:*BootNode=node.params;
+   while prior!=arm{if prior.decl==variant&&prior.right==0 as *BootNode{boot_error(ctx,arm.token,"unreachable duplicate enum pattern");break;}prior=prior.next;}
+   let mut binding:*BootNode=arm.params;let mut field:*BootNode=variant.params;
+   while binding!=0 as *BootNode&&field!=0 as *BootNode{
+    binding.ty=field.ty;binding.left=boot_enum_projection(ctx,temporary,variant,field);
+    if strcmp(binding.name,"_")!=0{boot_bind(ctx,binding);}binding=binding.next;field=field.next;
+   }
+   if binding!=0 as *BootNode||field!=0 as *BootNode{boot_error(ctx,arm.token,"enum pattern payload count mismatch");break;}
+  }else{if arm.right==0 as *BootNode{wildcard=true;}}
+  if arm.right!=0 as *BootNode{let guard:*BootType=boot_check_expr(ctx,arm.right,boot_type(ctx,BY_BOOL));if !ctx.failed{boot_expect(ctx,arm.right,guard,boot_type(ctx,BY_BOOL));}}
+  boot_check_statement(ctx,arm.body);
+  if !ctx.failed&&(boot_flow(arm.body)&1)!=0{
+   if ctx.value_type!=0 as *BootType&&ctx.value_type.kind!=BY_VOID{boot_error(ctx,arm.token,"match arm may finish without a value");}
+   else{
+    ctx.value_type=boot_type(ctx,BY_VOID);let unit:*BootNode=boot_node(ctx,BN_UNIT,arm.token);let finish:*BootNode=boot_node(ctx,BN_YIELD,arm.token);if ctx.failed{break;}unit.ty=ctx.value_type;finish.left=unit;
+    let mut last:*BootNode=arm.body.body;if last==0 as *BootNode{arm.body.body=finish;}else{while last.next!=0 as *BootNode{last=last.next;}last.next=finish;}
+   }
+  }
+  ctx.depth=ctx.depth-1;ctx.bindings=saved;arm=arm.next;
+ }
+ let result:*BootType=ctx.value_type;ctx.value_type=saved_value;if ctx.failed{return 0 as *BootType;}
+ if !wildcard{
+  let mut variant:*BootNode=subject.fields;
+  while variant!=0 as *BootNode{
+   let mut found:bool=false;arm=node.params;while arm!=0 as *BootNode{if arm.decl==variant&&arm.right==0 as *BootNode{found=true;}arm=arm.next;}
+   if !found{boot_error(ctx,node.token,"non-exhaustive enum match");return 0 as *BootType;}variant=variant.next;
+  }
+ }
+ if result==0 as *BootType{boot_error(ctx,node.token,"cannot infer type of a diverging match");return result;}
+ // Lower already-checked arms to ordinary scopes/conditions/yields. A guard's
+ // payload bindings exist only after its tag test; a failed guard keeps trying.
+ let block:*BootNode=boot_node(ctx,BN_BLOCK,node.token);if ctx.failed{return 0 as *BootType;}block.body=temporary;let mut last:*BootNode=temporary;
+ arm=node.params;
+ while arm!=0 as *BootNode{
+  let scope:*BootNode=boot_node(ctx,BN_BLOCK,arm.token);let mut first:*BootNode=0 as *BootNode;let mut end:*BootNode=0 as *BootNode;let mut binding:*BootNode=arm.params;
+  while binding!=0 as *BootNode{let next:*BootNode=binding.next;binding.next=0 as *BootNode;if strcmp(binding.name,"_")!=0{if end==0 as *BootNode{first=binding;}else{end.next=binding;}end=binding;}binding=next;}
+  let mut body:*BootNode=arm.body;
+  if arm.right!=0 as *BootNode{body=boot_node(ctx,BN_IF,arm.token);if ctx.failed{return 0 as *BootType;}body.left=arm.right;body.body=boot_enum_block(ctx,arm.body);}
+  if end==0 as *BootNode{first=body;}else{end.next=body;}scope.body=first;
+  let mut statement:*BootNode=scope;
+  if arm.next!=0 as *BootNode&&(arm.flags&1)==0{statement=boot_node(ctx,BN_IF,arm.token);if ctx.failed{return 0 as *BootType;}statement.left=boot_enum_test(ctx,temporary,arm.decl);statement.body=scope;}
+  last.next=statement;last=statement;arm=arm.next;
+ }
+ node.kind=BN_VALUE;node.flags=node.flags|4096;node.ty=result;node.body=block;node.left=0 as *BootNode;node.params=0 as *BootNode;return result;
+}
+fn boot_result_shape(ty:*BootType)->bool{
+ if ty==0 as *BootType||ty.kind!=BY_ENUM||strcmp(ty.name,"Result")!=0{return false;}
+ let ok:*BootNode=boot_enum_variant(ty,"Ok");let err:*BootNode=boot_enum_variant(ty,"Err");
+ return ok!=0 as *BootNode&&err!=0 as *BootNode&&ok.params!=0 as *BootNode&&err.params!=0 as *BootNode&&ok.params.next==0 as *BootNode&&err.params.next==0 as *BootNode&&ty.fields.next.next==0 as *BootNode;
+}
+fn boot_check_try(ctx:*BootContext,node:*BootNode)->*BootType{
+ let source:*BootType=boot_check_expr(ctx,node.left,0 as *BootType);if ctx.failed{return 0 as *BootType;}
+ if ctx.function==0 as *BootNode||!boot_result_shape(source)||!boot_result_shape(ctx.function.ty){boot_error(ctx,node.token,"? requires Result values and a Result-returning function");return 0 as *BootType;}
+ let target:*BootType=ctx.function.ty;let ok:*BootNode=boot_enum_variant(source,"Ok");let error:*BootNode=boot_enum_variant(source,"Err");let target_error:*BootNode=boot_enum_variant(target,"Err");
+ if error.params.ty!=target_error.params.ty{boot_error(ctx,node.token,"? requires the same error payload type");return 0 as *BootType;}
+ let temporary:*BootNode=boot_node(ctx,BN_LET,node.token);if ctx.failed{return 0 as *BootType;}temporary.ty=source;temporary.left=node.left;
+ let failure:*BootNode=boot_node(ctx,BN_IF,node.token);let returned:*BootNode=boot_node(ctx,BN_RETURN,node.token);let value:*BootNode=boot_node(ctx,BN_ENUM_VALUE,node.token);let yielded:*BootNode=boot_node(ctx,BN_YIELD,node.token);let block:*BootNode=boot_node(ctx,BN_BLOCK,node.token);if ctx.failed{return 0 as *BootType;}
+ failure.left=boot_enum_test(ctx,temporary,error);failure.body=boot_enum_block(ctx,returned);returned.left=value;value.ty=target;value.decl=target_error;value.params=boot_enum_projection(ctx,temporary,error,error.params);
+ yielded.left=boot_enum_projection(ctx,temporary,ok,ok.params);temporary.next=failure;failure.next=yielded;block.body=temporary;
+ node.kind=BN_VALUE;node.flags=node.flags|4096;node.ty=ok.params.ty;node.body=block;node.left=0 as *BootNode;return node.ty;
+}
+
+fn boot_foreign_enum(ty:*BootType,depth:i32)->bool{
+ if depth>256{return true;}if ty.kind==BY_ENUM{return true;}
+ if ty.kind==BY_ARRAY{return boot_foreign_enum(ty.inner,depth+1);}
+ if ty.kind==BY_STRUCT{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{if boot_foreign_enum(field.ty,depth+1){return true;}field=field.next;}}
+ return false;
+}
+
+fn boot_range_name(ctx:*BootContext)->*u8{let name:*u8=boot_alloc(ctx,48) as *u8;if name!=0 as *u8{snprintf(name,48,"@range_%d",boot_id(ctx));}return name;}
+fn boot_range_ident(ctx:*BootContext,binding:*BootNode)->*BootNode{let node:*BootNode=boot_node(ctx,BN_IDENT,binding.token);if node!=0 as *BootNode{node.name=binding.name;}return node;}
+fn boot_check_range(ctx:*BootContext,node:*BootNode)->bool{
+ let mut ty:*BootType=0 as *BootType;let mut end_type:*BootType=0 as *BootType;
+ if boot_literal_number(node.left)&&!boot_literal_number(node.right){end_type=boot_check_expr(ctx,node.right,0 as *BootType);ty=boot_check_expr(ctx,node.left,end_type);}
+ else{ty=boot_check_expr(ctx,node.left,0 as *BootType);end_type=boot_check_expr(ctx,node.right,ty);}
+ if ctx.failed{return false;}if !boot_integer(ty)||ty!=end_type{boot_error(ctx,node.token,"for range requires matching integer endpoint types");return false;}
+ let iterator:*BootNode=boot_node(ctx,BN_LET,node.token);let limit:*BootNode=boot_node(ctx,BN_LET,node.token);
+ let iteration:*BootNode=boot_node(ctx,BN_WHILE,node.token);let bound:*BootNode=boot_node(ctx,BN_BINARY,node.token);
+ let binding:*BootNode=boot_node(ctx,BN_LET,node.token);let advance:*BootNode=boot_node(ctx,BN_ASSIGN,node.token);let one:*BootNode=boot_node(ctx,BN_INT,node.token);
+ if ctx.failed{return false;}
+ iterator.name=boot_range_name(ctx);iterator.ty=ty;iterator.left=node.left;iterator.flags=1;iterator.next=limit;
+ limit.name=boot_range_name(ctx);limit.ty=ty;limit.left=node.right;limit.next=iteration;
+ bound.op=60;bound.left=boot_range_ident(ctx,iterator);bound.right=boot_range_ident(ctx,limit);iteration.left=bound;iteration.body=node.body;
+ binding.name=node.name;binding.ty=ty;binding.left=boot_range_ident(ctx,iterator);
+ one.name="1";let token:*BootToken=boot_alloc(ctx,size_of(BootToken) as u64) as *BootToken;if ctx.failed{return false;}memcpy(token as *void,node.token as *void,size_of(BootToken) as u64);token.text="1";token.length=1;token.kind=BT_INT;one.token=token;
+ advance.op=43;advance.left=boot_range_ident(ctx,iterator);advance.right=one;
+ binding.next=advance;advance.next=iteration.body.body;iteration.body.body=binding;
+ node.kind=BN_BLOCK;node.body=iterator;node.left=0 as *BootNode;node.right=0 as *BootNode;return boot_check_statement(ctx,node);
 }

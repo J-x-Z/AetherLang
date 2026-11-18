@@ -1,0 +1,7 @@
+from simple import Counter, make
+def main():
+    counter = make(7)
+    counter.add(4)
+    if counter.read() != 11 or make(9).read() != 9:
+        return 1
+    return 0

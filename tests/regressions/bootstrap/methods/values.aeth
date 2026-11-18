@@ -1,0 +1,33 @@
+struct Box<T>{value:T}
+impl<T> Box<T>{
+ fn new(value:T)->Self{return Self{value:value};}
+ fn get(self:&Self)->T{return self.value;}
+ fn get_ref(self:&Self)->&T{return &self.value;}
+ fn set(self:&mut Self,value:T){self.value=value;}
+ fn replace<U>(self:&Self,other:U)->Box<U>{return Box{value:other};}
+ fn into_value(self:Self)->T{return self.value;}
+}
+struct Counter{value:i64}
+impl Counter{
+ fn new(value:i64)->Self{return Self{value:value};}
+ fn add(self:&mut Self,value:i64){self.value=self.value+value;}
+ fn read(self:&Self)->i64{return self.value;}
+ fn reborrow(self:&mut Self)->i64{return self.read();}
+ fn raw(self:*Self)->i64{return self.value;}
+}
+impl Counter{}
+fn make_count(calls:*i64)->Counter{*calls=*calls+1;return Counter::new(22);}
+fn main()->i32{
+ let mut value:Box<i64>=Box::new(7);
+ if value.get()!=7{return 1;}
+ let borrowed:&i64=value.get_ref();if *borrowed!=7{return 8;}
+ value.set(11);if value.into_value()!=11{return 2;}
+ let small:Box<u8>=Box::new(31);if small.get()!=31{return 3;}
+ let other:Box<bool>=small.replace(true);if !other.get(){return 4;}
+ let empty:Box<()>=Box::new(());empty.get();
+ let mut count:Counter=Counter::new(4);count.add(8);
+ if count.read()!=12||count.reborrow()!=12{return 5;}
+ let pointer:*Counter=&mut count as *Counter;if pointer.raw()!=12{return 6;}
+ let mut calls:i64=0;if make_count(&mut calls as *i64).read()!=22||calls!=1{return 7;}
+ return 0;
+}

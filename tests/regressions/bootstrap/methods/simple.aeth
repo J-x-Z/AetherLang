@@ -1,0 +1,6 @@
+pub struct Counter{value:i64}
+impl Counter{
+ pub fn read(self:&Self)->i64{return self.value;}
+ pub fn add(self:&mut Self,value:i64){self.value=self.value+value;}
+}
+pub fn make(value:i64)->Counter{return Counter{value:value};}

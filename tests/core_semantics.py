@@ -28,7 +28,7 @@ positive = {
     'loop_jumps': 'fn f()->i32{let mut i:i32=0;while i<10{i=i+1;if i==3{continue;}if i==5{break;}}return i;}fn main()->i32{return f()-5;}',
     'literal_boundaries': 'const LOW:i8=-128;const HIGH:u8=255;const HEX:u32=0xffffffff;fn main()->i32{let small:i16=-32768;let high:u64=18446744073709551615;return 0;}',
     'scalar_and_pointer_casts': 'fn f(value:f64,p:*u8)->i32{let n:i32=value as i32;let q:*i32=p as *i32;let bits:u64=q as u64;return n+(bits as i32);}fn main()->i32{return 0;}',
-    'address_and_index': 'fn main()->i32{let mut value:i32=1;let pointer:*i32=&mut value;pointer[0]=2;return value-2;}',
+    'address_and_index': 'fn main()->i32{let mut value:i32=1;let pointer:*i32=&mut value as *i32;pointer[0]=2;return value-2;}',
     'foreign_varargs': 'extern "C"{fn printf(format:*u8,...)->i32;}fn main()->i32{printf("%d %f",1,2.0);return 0;}',
     'sizeof_forward': 'struct A{next:*A,value:i32}fn main()->i32{let bytes:usize=size_of(A);return 0;}',
 }

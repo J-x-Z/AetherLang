@@ -33,7 +33,7 @@ fn ll_global_place(ctx:*BootContext,node:*BootNode){
 }
 fn ll_initializer(ctx:*BootContext,node:*BootNode){
  if boot_zero_initializer(node){ll_text(ctx,"zeroinitializer");return;}
- if node.kind==BN_CAST{if node.left.ty.kind==BY_PTR{ll_initializer(ctx,node.left);}else{ll_text(ctx,"null");}return;}
+ if node.kind==BN_CAST{if boot_indirect(node.left.ty){ll_initializer(ctx,node.left);}else{ll_text(ctx,"null");}return;}
  if node.kind==BN_STRING{fprintf(ctx.output,"@a%d_str%d",ctx.c_namespace,node.id);return;}
  if node.kind==BN_UNARY && node.op==38{ll_global_place(ctx,node.left);return;}
  if node.kind==BN_STRUCT_VALUE{
@@ -82,6 +82,9 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
  if ctx.uses_errno && !ctx.errno_declared {fprintf(ctx.output,"declare ptr @%s()\n",ctx.errno_name);}
  let mut ty:*BootType=ctx.types;
  while ty!=(0 as *BootType){
+  if ty.kind==BY_ENUM{
+   ll_type(ctx,ty);fprintf(ctx.output," = type { i32, [%llu x ",ty.extent);ll_type(ctx,ty.inner);ll_text(ctx,"] }\n");
+  }
   if ty.kind==BY_STRUCT{
    ll_type(ctx,ty);ll_text(ctx," = type { ");let mut field:*BootNode=ty.fields;
    while field!=(0 as *BootNode){ll_type(ctx,field.ty);field=field.next;if field!=(0 as *BootNode){ll_text(ctx,", ");}}

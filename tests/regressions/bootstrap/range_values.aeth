@@ -1,0 +1,18 @@
+extern "C"{fn puts(text:*u8)->i32;}
+fn endpoint(count:*i32,value:i64)->i64{*count=*count+1;value}
+fn main()->i32{
+ let mut total:i64=0;let mut count:i32=0;
+ for i in endpoint(&mut count as *i32,1)..endpoint(&mut count as *i32,7){if i==3{continue;}if i==6{break;}total+=i;}
+ if total!=12||count!=2{return 1;}
+ for i in 3..3{total+=100;}
+ for i in 7..2{total+=100;}
+ for i in 3..2{total+=100;}
+ let low:u8=254;let high:u8=255;let mut seen:i32=0;
+ for i in low..high{if i<254{return 2;}seen+=1;continue;}
+ let max:i64=9223372036854775807;for i in max..max{if i!=max{return 3;}seen+=1;}
+ for i in -2..1{total+=i;}
+ if seen!=1||total!=9{return 4;}
+ let i:i32=77;for i in 0..2{for j in 0..2{if i==1&&j==1{total+=1;}}}
+ if i!=77||total!=10{return 5;}
+ puts("range-values=ok");return 0;
+}

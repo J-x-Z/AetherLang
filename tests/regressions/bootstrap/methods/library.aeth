@@ -1,0 +1,6 @@
+pub struct Item<T>{value:T}
+impl<T> Item<T>{
+ pub fn create(value:T)->Self{return Self{value:value};}
+ pub fn get(self:&Self)->T{return self.hidden();}
+ fn hidden(self:&Self)->T{return self.value;}
+}

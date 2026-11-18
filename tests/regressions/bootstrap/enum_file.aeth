@@ -1,0 +1,16 @@
+use result::*;
+extern "C"{fn fopen(path:*u8,mode:*u8)->*void;fn fgetc(file:*void)->i32;fn fclose(file:*void)->i32;fn puts(text:*u8)->i32;}
+fn opened(path:*u8)->Result<*void,i32>{let file:*void=fopen(path,"rb");if file==0 as *void{return Result::Err(3);}Result::Ok(file)}
+fn first_byte(path:*u8,closed:*i32)->Result<u8,i32>{
+ let file:*void=opened(path)?;let n:i32=fgetc(file);let status:i32=fclose(file);*closed=*closed+1;
+ if status!=0{return Result::Err(4);}if n<0{return Result::Err(5);}Result::Ok(n as u8)
+}
+fn main(argc:i32,argv:**u8)->i32{
+ if argc!=4{return 1;}let mut closed:i32=0;
+ if result_or(first_byte(argv[1],&mut closed as *i32),0)!=65{return 2;}
+ let empty:Result<u8,i32>=first_byte(argv[2],&mut closed as *i32);
+ let missing:Result<u8,i32>=first_byte(argv[3],&mut closed as *i32);
+ let a:i32=match empty{Result::Ok(_)=>0,Result::Err(e)=>e};
+ let b:i32=match missing{Result::Ok(_)=>0,Result::Err(e)=>e};
+ if a!=5||b!=3||closed!=2{return 3;}puts("enum-file=ok");return 0;
+}

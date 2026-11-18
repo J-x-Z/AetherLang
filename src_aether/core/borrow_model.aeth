@@ -1,0 +1,9 @@
+use model::*;
+// Declarations, not source names, identify both values and their storage.
+// Origin sets form a finite lattice: function parameters, globals, and locals.
+pub struct BootBorrowPermit {binding:*BootNode,next:*BootBorrowPermit}
+pub struct BootBorrowOrigin {root:*BootNode,external:bool,permits:*BootBorrowPermit,next:*BootBorrowOrigin}
+pub struct BootBorrowEnv {binding:*BootNode,origins:*BootBorrowOrigin,depth:i32,moved:bool,next:*BootBorrowEnv}
+pub struct BootBorrowSummary {function:*BootNode,origins:*BootBorrowOrigin,next:*BootBorrowSummary}
+pub struct BootBorrowUse {node:*BootNode,next:*BootBorrowUse}
+pub struct BootBorrowState {ctx:*BootContext,env:*BootBorrowEnv,depth:i32,summaries:*BootBorrowSummary,collect:bool,returned:*BootBorrowOrigin,live:*BootBorrowUse}

@@ -13,7 +13,7 @@ pub fn boot_infer_type(ctx:*BootContext,formal:*BootType,actual:*BootType,bindin
   }
   boot_error(ctx,token,"unbound generic type parameter");return false;
  }
- if formal.kind==BY_PTR&&actual.kind==BY_PTR{return boot_infer_type(ctx,formal.inner,actual.inner,bindings,token,depth+1);}
+ if boot_indirect(formal)&&formal.kind==actual.kind{return boot_infer_type(ctx,formal.inner,actual.inner,bindings,token,depth+1);}
  if formal.kind==BY_ARRAY&&actual.kind==BY_ARRAY&&formal.extent==actual.extent{return boot_infer_type(ctx,formal.inner,actual.inner,bindings,token,depth+1);}
  if formal.kind==BY_APPLICATION&&actual.base==formal.base{
   let mut left:*BootTypeArgument=formal.arguments;let mut right:*BootTypeArgument=actual.arguments;

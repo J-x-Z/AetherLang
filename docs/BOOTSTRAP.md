@@ -137,9 +137,23 @@ Each instantiated body is checked and emitted normally; as in the primary
 compiler, unused function templates do not establish body type correctness.
 Trait bounds, const parameters and generic aliases are not supported yet.
 
-The bootstrap compiler still rejects enums, methods,
-references, attributes and other syntax outside this subset. These features
-remain available in the primary compiler. The Core compiler targets the
+Generic payload enums use a real tag and union payload in both emitters.
+`match` checks variant identity, payload arity, guarded arms, binding scope and
+exhaustiveness; a guard does not establish coverage. Payload extraction happens
+only after the tag matches. `Result` propagation with `?` evaluates its operand
+once and returns the actual error payload, requiring an identical error type.
+`Option`, `Result`, `Vec<T>` and zero-sized `Vec<()>` consumers run natively.
+Enum values, including enums nested in a struct, currently have no foreign
+by-value ABI; use explicit pointer interfaces at that boundary.
+
+Integer `for name in start..end` evaluates both bounds once, keeps the binding
+local to each iteration, and preserves `break` and `continue`. The exclusive
+upper bound follows the primary compiler's existing range syntax. Enum and
+constant declarations are importable without `pub`, matching the primary
+resolver; functions, structs, aliases and statics retain explicit visibility.
+
+The bootstrap compiler remains a subset of the primary compiler. Syntax outside
+its implemented subset fails explicitly. The Core compiler targets the
 existing 64-bit host C ABI; its `usize`/`isize` and libc declarations do not yet
 provide a cross-target data model. This is a real self-host with native module
 loading and LLVM IR generation, not a replacement of the full language compiler.
@@ -226,9 +240,29 @@ owned buffers, argv boundaries, grouped aliases and aggregate values. There is
 no application reimplementation in Python or C; C is used only for the existing
 fault-injection shim and native code compilation.
 
-The runner separately records `jxz-capability.json`; an unsupported JXZ check
-is not a passing native-JXZ claim. The current active JXZ graph uses features
-still absent from Core, including generic Vec/Result types, payload enums,
-match/error propagation, arrays, type aliases and intrinsics. Those are further
-front-end/backend migrations; this checkpoint does not rename Core into the
-full production compiler or mark full self-hosting complete.
+The production runner also records `jxz-capability.json`, separately from
+native application execution. The active JXZ source graph now builds through
+both self-hosted emitters. Its independent command regression is:
+
+```sh
+python3 tests/bootstrap_enums.py --compiler /external/work/bootstrap-llvm/stage4 \
+  --work-dir /external/work/bootstrap-enums --sanitize
+python3 tests/bootstrap_jxz.py --compiler /external/work/bootstrap-llvm/stage4 \
+  --work-dir /external/work/bootstrap-jxz
+```
+
+The JXZ runner distinguishes its compiler builder from JXZ's `AETHC` project
+compiler, recording both paths and hashes. By default both are the self-hosted
+compiler. It builds both JXZ backends, then exercises real init/build/run/test/
+clean commands, argument boundaries, exit/signal status, preserved user output,
+and a changing three-package dependency graph. `--project-compiler` permits an
+explicit comparison compiler; that does not count as self-hosted project
+compilation. This command runner does not claim LSP acceptance or full parity
+with every feature of the primary compiler.
+
+
+## Checked references and methods
+
+The self-hosted compiler gives `&T` and `&mut T` distinct type identities. Convert an address used by a manual C interface explicitly, for example `&mut n as *i32`. Passing an exclusive reference to a checked reference parameter reborrows it. A binding, assignment or return that transfers the reference checks subsequent uses. The compiler traces function result origins and releases loans after their last use. Loans currently use the root storage identity, so simultaneous mutable loans of disjoint fields can be rejected. The first implementation diagnoses references held inside copyable aggregates, nested reference values and reference-valued block expressions that exceed its provenance model.
+
+Inherent implementations can define associated functions, shared and mutable methods, and methods on generic records. Static and instance calls enter the same checked function path. Script can call typed Core methods. The regressions include an actual Vec-backed statistics module, private methods, references returned by methods, and a side-effecting receiver evaluated once.

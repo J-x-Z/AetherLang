@@ -1,0 +1,86 @@
+use model::*;
+use runtime::*;
+use borrow_model::*;
+pub fn br_origin(ctx:*BootContext,root:*BootNode,external:bool,permit:*BootNode)->*BootBorrowOrigin{
+ let p:*BootBorrowOrigin=boot_alloc(ctx,size_of(BootBorrowOrigin) as u64) as *BootBorrowOrigin;
+ if p!=0 as *BootBorrowOrigin{p.root=root;p.external=external;if permit!=0 as *BootNode{let grant:*BootBorrowPermit=boot_alloc(ctx,size_of(BootBorrowPermit) as u64) as *BootBorrowPermit;if grant!=0 as *BootBorrowPermit{grant.binding=permit;p.permits=grant;}}}return p;
+}
+pub fn br_allowed(origin:*BootBorrowOrigin,binding:*BootNode)->bool{
+ let mut p:*BootBorrowPermit=origin.permits;while p!=0 as *BootBorrowPermit{if p.binding==binding{return true;}p=p.next;}return false;
+}
+fn br_matching(list:*BootBorrowOrigin,value:*BootBorrowOrigin)->*BootBorrowOrigin{
+ let mut p:*BootBorrowOrigin=list;while p!=0 as *BootBorrowOrigin{if p.root==value.root&&p.external==value.external{return p;}p=p.next;}return 0 as *BootBorrowOrigin;
+}
+pub fn br_has(list:*BootBorrowOrigin,value:*BootBorrowOrigin)->bool{return br_matching(list,value)!=0 as *BootBorrowOrigin;}
+pub fn br_union(ctx:*BootContext,a:*BootBorrowOrigin,b:*BootBorrowOrigin)->*BootBorrowOrigin{
+ let mut out:*BootBorrowOrigin=0 as *BootBorrowOrigin;let mut p:*BootBorrowOrigin=a;let mut second:bool=false;
+ while true{
+  if p==0 as *BootBorrowOrigin{if second{return out;}second=true;p=b;}
+  if p==0 as *BootBorrowOrigin{return out;}
+  if !br_has(out,p){
+   let item:*BootBorrowOrigin=br_origin(ctx,p.root,p.external,0 as *BootNode);if item==0 as *BootBorrowOrigin{return out;}
+   let other:*BootBorrowOrigin=br_matching(b,p);let mut permit:*BootBorrowPermit=p.permits;
+   while permit!=0 as *BootBorrowPermit{
+    if other==0 as *BootBorrowOrigin||br_allowed(other,permit.binding){let grant:*BootBorrowPermit=boot_alloc(ctx,size_of(BootBorrowPermit) as u64) as *BootBorrowPermit;if grant==0 as *BootBorrowPermit{return out;}grant.binding=permit.binding;grant.next=item.permits;item.permits=grant;}
+    permit=permit.next;
+   }
+   item.next=out;out=item;
+  }p=p.next;
+ }
+ return out;
+}
+fn br_subset(a:*BootBorrowOrigin,b:*BootBorrowOrigin)->bool{
+ let mut p:*BootBorrowOrigin=a;while p!=0 as *BootBorrowOrigin{
+  let other:*BootBorrowOrigin=br_matching(b,p);if other==0 as *BootBorrowOrigin{return false;}
+  let mut permit:*BootBorrowPermit=p.permits;while permit!=0 as *BootBorrowPermit{if !br_allowed(other,permit.binding){return false;}permit=permit.next;}p=p.next;
+ }return true;
+}
+pub fn br_equal(a:*BootBorrowOrigin,b:*BootBorrowOrigin)->bool{return br_subset(a,b)&&br_subset(b,a);}
+pub fn br_permit(ctx:*BootContext,origins:*BootBorrowOrigin,binding:*BootNode)->*BootBorrowOrigin{
+ let mut p:*BootBorrowOrigin=origins;let mut out:*BootBorrowOrigin=0 as *BootBorrowOrigin;
+ while p!=0 as *BootBorrowOrigin{
+  let item:*BootBorrowOrigin=br_origin(ctx,p.root,p.external,binding);if item==0 as *BootBorrowOrigin{return out;}
+  if item.permits!=0 as *BootBorrowPermit{item.permits.next=p.permits;}else{item.permits=p.permits;}
+  item.next=out;out=item;p=p.next;
+ }return out;
+}
+pub fn br_find(env:*BootBorrowEnv,node:*BootNode)->*BootBorrowEnv{
+ let mut p:*BootBorrowEnv=env;while p!=0 as *BootBorrowEnv{if p.binding==node{return p;}p=p.next;}return 0 as *BootBorrowEnv;
+}
+pub fn br_clone(ctx:*BootContext,env:*BootBorrowEnv)->*BootBorrowEnv{
+ let mut p:*BootBorrowEnv=env;let mut out:*BootBorrowEnv=0 as *BootBorrowEnv;let mut tail:*BootBorrowEnv=0 as *BootBorrowEnv;
+ while p!=0 as *BootBorrowEnv{
+  let item:*BootBorrowEnv=boot_alloc(ctx,size_of(BootBorrowEnv) as u64) as *BootBorrowEnv;if item==0 as *BootBorrowEnv{return out;}
+  item.binding=p.binding;item.origins=p.origins;item.depth=p.depth;item.moved=p.moved;
+  if tail==0 as *BootBorrowEnv{out=item;}else{tail.next=item;}tail=item;p=p.next;
+ }return out;
+}
+pub fn br_join(ctx:*BootContext,a:*BootBorrowEnv,b:*BootBorrowEnv)->*BootBorrowEnv{
+ let out:*BootBorrowEnv=br_clone(ctx,a);let mut p:*BootBorrowEnv=out;
+ while p!=0 as *BootBorrowEnv{let other:*BootBorrowEnv=br_find(b,p.binding);if other!=0 as *BootBorrowEnv{p.origins=br_union(ctx,p.origins,other.origins);p.moved=p.moved||other.moved;}p=p.next;}return out;
+}
+pub fn br_env_equal(a:*BootBorrowEnv,b:*BootBorrowEnv)->bool{
+ let mut p:*BootBorrowEnv=a;while p!=0 as *BootBorrowEnv{let other:*BootBorrowEnv=br_find(b,p.binding);if other==0 as *BootBorrowEnv||p.moved!=other.moved||!br_equal(p.origins,other.origins){return false;}p=p.next;}return true;
+}
+pub fn br_used(node:*BootNode,decl:*BootNode)->bool{
+ let mut p:*BootNode=node;while p!=0 as *BootNode{
+  if p.kind==BN_IDENT&&p.decl==decl{return true;}
+  if br_used(p.left,decl)||br_used(p.right,decl)||br_used(p.third,decl)||br_used(p.body,decl)||br_used(p.params,decl){return true;}p=p.next;
+ }return false;
+}
+pub fn br_expire(state:*BootBorrowState){
+ let mut p:*BootBorrowEnv=state.env;while p!=0 as *BootBorrowEnv{
+  if boot_reference(p.binding.ty){
+   let mut live:*BootBorrowUse=state.live;let mut used:bool=false;
+   while live!=0 as *BootBorrowUse{if br_used(live.node,p.binding){used=true;}live=live.next;}
+   if !used{p.origins=0 as *BootBorrowOrigin;}
+  }p=p.next;
+ }
+}
+pub fn br_live(state:*BootBorrowState,node:*BootNode)->*BootBorrowUse{
+ let p:*BootBorrowUse=boot_alloc(state.ctx,size_of(BootBorrowUse) as u64) as *BootBorrowUse;
+ if p!=0 as *BootBorrowUse{p.node=node;p.next=state.live;state.live=p;}return p;
+}
+pub fn br_summary(state:*BootBorrowState,function:*BootNode)->*BootBorrowSummary{
+ let mut p:*BootBorrowSummary=state.summaries;while p!=0 as *BootBorrowSummary{if p.function==function{return p;}p=p.next;}return 0 as *BootBorrowSummary;
+}

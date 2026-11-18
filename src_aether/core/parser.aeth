@@ -1,6 +1,7 @@
 use model::*;
 use runtime::*;
 use type_model::*;
+use methods::{boot_method_generics,boot_method_register,boot_method_empty};
 // Recursive-descent declarations/statements and a Pratt expression parser.
 // Every accepted construct produces a real AST node; unsupported syntax fails.
 fn boot_p_kind(ctx:*BootContext)->i32 {
@@ -53,6 +54,11 @@ fn boot_p_type_inner(ctx:*BootContext)->*BootType {
   let count:u64=boot_p_array_count(ctx);if ctx.failed{return 0 as *BootType;}
   if !boot_p_expect(ctx,93,"expected ']' after array type"){return 0 as *BootType;}
   return boot_array_type(ctx,inner,count);
+ }
+ if boot_p_take(ctx,38) {
+  let mutable:bool=boot_p_word(ctx,"mut");if mutable{boot_p_advance(ctx);}
+  let inner:*BootType=boot_p_type(ctx);if inner==0 as *BootType{return inner;}
+  return boot_ref_type(ctx,inner,mutable);
  }
  if boot_p_take(ctx,42) {
   let inner:*BootType=boot_p_type(ctx);
@@ -129,6 +135,7 @@ fn boot_p_expression(ctx:*BootContext,minimum:i32)->*BootNode {
 fn boot_p_primary(ctx:*BootContext)->*BootNode {
  let token:*BootToken=ctx.cursor;
  let kind:i32=boot_p_kind(ctx);
+ if boot_p_word(ctx,"match"){return boot_p_match(ctx);}
  if kind==91{return boot_p_array_value(ctx);}
  if boot_p_word(ctx,"if")||kind==123{
   let node:*BootNode=boot_node(ctx,BN_VALUE,token);if node==(0 as *BootNode){return node;}
@@ -190,10 +197,21 @@ fn boot_p_primary(ctx:*BootContext)->*BootNode {
    node.name=name.text;
    if boot_p_take(ctx,58) {
     if !boot_p_expect(ctx,58,"expected :: in imported name") {return 0 as *BootNode;}
-    node.lookup=boot_import_module(ctx,node.name,token);if node.lookup==(0 as *BootModule) {return 0 as *BootNode;}
-    let member:*BootToken=boot_p_name(ctx);if member==(0 as *BootToken) {return 0 as *BootNode;}node.name=member.text;
+    let mut imports:*BootImport=ctx.module.imports;
+    while imports!=0 as *BootImport{if imports.symbol==0 as *u8&&strcmp(imports.alias,node.name)==0{node.lookup=imports.target;}imports=imports.next;}
+    let member:*BootToken=boot_p_name(ctx);if member==(0 as *BootToken) {return 0 as *BootNode;}
+    if node.lookup==0 as *BootModule{
+     node.ty=boot_resolve_type(ctx,node.name,0 as *BootModule,token);node.kind=BN_ENUM_VALUE;node.name=member.text;
+    }else{
+     node.name=member.text;
+     if boot_p_take(ctx,58){
+      if !boot_p_expect(ctx,58,"expected :: before enum variant"){return 0 as *BootNode;}
+      node.ty=boot_resolve_type(ctx,node.name,node.lookup,token);node.kind=BN_ENUM_VALUE;
+      let variant:*BootToken=boot_p_name(ctx);if variant==0 as *BootToken{return 0 as *BootNode;}node.name=variant.text;
+     }
+    }
    }
-   if boot_p_kind(ctx)==123 && !ctx.parse_condition {return boot_p_struct_value(ctx,node);}
+   if node.kind==BN_IDENT&&boot_p_kind(ctx)==123 && !ctx.parse_condition {return boot_p_struct_value(ctx,node);}
   }
   return node;
  }
@@ -201,10 +219,10 @@ fn boot_p_primary(ctx:*BootContext)->*BootNode {
  return 0 as *BootNode;
 }
 fn boot_p_call(ctx:*BootContext,callee:*BootNode)->*BootNode {
- if callee.kind!=BN_IDENT {boot_error(ctx,ctx.cursor,"Core calls require a function name");return 0 as *BootNode;}
+ if callee.kind!=BN_IDENT&&callee.kind!=BN_ENUM_VALUE&&callee.kind!=BN_MEMBER {boot_error(ctx,ctx.cursor,"Core calls require a function name");return 0 as *BootNode;}
  let node:*BootNode=boot_node(ctx,BN_CALL,callee.token);
  if node==0 as *BootNode {return node;}
- node.name=callee.name;node.lookup=callee.lookup;boot_p_advance(ctx);
+ node.name=callee.name;node.lookup=callee.lookup;if callee.kind==BN_ENUM_VALUE{node.kind=BN_ENUM_VALUE;node.ty=callee.ty;node.flags=node.flags|8192;}if callee.kind==BN_MEMBER{node.kind=BN_METHOD_CALL;node.left=callee.left;}boot_p_advance(ctx);
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed && boot_p_kind(ctx)!=41 {
   let saved_condition:bool=ctx.parse_condition;ctx.parse_condition=false;
@@ -224,7 +242,9 @@ fn boot_p_expression_inner(ctx:*BootContext,minimum:i32)->*BootNode {
  while !ctx.failed {
   let token:*BootToken=ctx.cursor;
   let kind:i32=boot_p_kind(ctx);
-  if kind==40 {
+  if kind==63{
+   boot_p_advance(ctx);let attempt:*BootNode=boot_node(ctx,BN_TRY,token);if attempt==0 as *BootNode{return attempt;}attempt.left=left;left=attempt;
+  } else if kind==40 {
    left=boot_p_call(ctx,left);
    if left==0 as *BootNode {return left;}
   } else if kind==46 {
@@ -290,6 +310,7 @@ fn boot_p_if_inner(ctx:*BootContext)->*BootNode {
 }
 fn boot_p_statement(ctx:*BootContext)->*BootNode {
  let token:*BootToken=ctx.cursor;
+ if boot_p_word(ctx,"for"){return boot_p_range_for(ctx);}
  if boot_p_word(ctx,"let") {
   boot_p_advance(ctx);let mut flags:i32=0;
   if boot_p_word(ctx,"mut") {flags=1;boot_p_advance(ctx);}
@@ -386,7 +407,9 @@ fn boot_p_function(ctx:*BootContext,foreign:bool)->*BootNode {
  let node:*BootNode=boot_node(ctx,BN_FN,token);
  if node==0 as *BootNode {return node;}
  node.name=name.text;
- let saved_parameters:*BootNode=ctx.type_parameters;node.generics=boot_p_type_parameters(ctx);ctx.type_parameters=node.generics;
+ let saved_parameters:*BootNode=ctx.type_parameters;node.generics=boot_p_type_parameters(ctx);
+ if ctx.impl_target!=0 as *BootType{node.generics=boot_method_generics(ctx,saved_parameters,node.generics,node.token);}
+ ctx.type_parameters=node.generics;
  if foreign&&node.generics!=(0 as *BootNode){boot_error(ctx,name,"foreign generic functions are not supported");return 0 as *BootNode;}
  if foreign {node.flags=2;}
  if !boot_p_expect(ctx,40,"expected '(' after function name") {return 0 as *BootNode;}
@@ -507,6 +530,12 @@ pub fn boot_parse(ctx:*BootContext)->bool {
   }
   let mut public:bool=false;
   if boot_p_word(ctx,"pub") {public=true;boot_p_advance(ctx);}
+  if boot_p_word(ctx,"impl"){
+   if exported||public{boot_error(ctx,ctx.cursor,"visibility belongs to each inherent method");return false;}
+   node=boot_p_impl(ctx);if ctx.failed{return false;}
+   if node!=0 as *BootNode{if tail==0 as *BootNode{program.body=node;}else{tail.next=node;}tail=node;while tail.next!=0 as *BootNode{tail=tail.next;}}
+   continue;
+  }
   if boot_p_word(ctx,"extern") {
    if public || exported {boot_error(ctx,ctx.cursor,"extern declarations are already public");return false;}
    boot_p_advance(ctx);
@@ -524,6 +553,7 @@ pub fn boot_parse(ctx:*BootContext)->bool {
   } else {
    if boot_p_word(ctx,"fn") {node=boot_p_function(ctx,false);}
    else if boot_p_word(ctx,"struct") {node=boot_p_struct(ctx);}
+   else if boot_p_word(ctx,"enum") {node=boot_p_enum(ctx);}
    else if boot_p_word(ctx,"static") {node=boot_p_static(ctx,false);}
    else if boot_p_word(ctx,"const") {node=boot_p_constant(ctx);}
    else if boot_p_word(ctx,"type") {node=boot_p_alias(ctx);}
@@ -625,4 +655,93 @@ fn boot_p_type_parameters(ctx:*BootContext)->*BootNode{
   if !boot_p_expect(ctx,44,"expected ',' or '>' in generic parameters"){return result;}
   if boot_p_type_close(ctx){return result;}
  }return result;
+}
+
+fn boot_p_enum(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);let name:*BootToken=boot_p_name(ctx);if name==0 as *BootToken{return 0 as *BootNode;}
+ let ty:*BootType=boot_named_type(ctx,name.text);if ctx.failed{return 0 as *BootNode;}
+ if ty.complete{boot_error(ctx,name,"duplicate enum definition");return 0 as *BootNode;}
+ let node:*BootNode=boot_node(ctx,BN_ENUM,token);if ctx.failed{return node;}node.name=name.text;node.ty=ty;
+ let saved:*BootNode=ctx.type_parameters;node.generics=boot_p_type_parameters(ctx);ctx.type_parameters=node.generics;
+ ty.is_enum=true;ty.kind=BY_ENUM;if node.generics!=0 as *BootNode{ty.kind=BY_TEMPLATE;ty.parameters=node.generics;}
+ if !boot_p_expect(ctx,123,"expected '{' after enum name"){return 0 as *BootNode;}
+ let mut tail:*BootNode=0 as *BootNode;let mut tag:i64=0;
+ while !ctx.failed&&boot_p_kind(ctx)!=125{
+  let label:*BootToken=boot_p_name(ctx);if label==0 as *BootToken{return 0 as *BootNode;}
+  let variant:*BootNode=boot_node(ctx,BN_VARIANT,label);if ctx.failed{return variant;}variant.name=label.text;variant.value=tag;tag=tag+1;
+  if boot_p_take(ctx,40){
+   let mut last:*BootNode=0 as *BootNode;
+   while !ctx.failed&&boot_p_kind(ctx)!=41{
+    let member:*BootNode=boot_node(ctx,BN_FIELD,ctx.cursor);if ctx.failed{return member;}member.name="";member.ty=boot_p_type(ctx);
+    if last==0 as *BootNode{variant.params=member;}else{last.next=member;}last=member;
+    if !boot_p_take(ctx,44){break;}
+   }
+   if !boot_p_expect(ctx,41,"expected ')' after enum payload types"){return 0 as *BootNode;}
+  }
+  if tail==0 as *BootNode{node.body=variant;}else{tail.next=variant;}tail=variant;
+  if !boot_p_take(ctx,44){break;}
+ }
+ if !boot_p_expect(ctx,125,"expected '}' after enum variants"){return 0 as *BootNode;}
+ if tag==0{boot_error(ctx,token,"empty enum is not supported");return 0 as *BootNode;}
+ ty.fields=node.body;ty.complete=true;ctx.type_parameters=saved;return node;
+}
+fn boot_p_match(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);let node:*BootNode=boot_node(ctx,BN_MATCH,token);if ctx.failed{return node;}
+ let saved:bool=ctx.parse_condition;ctx.parse_condition=true;node.left=boot_p_expression(ctx,0);ctx.parse_condition=saved;
+ if ctx.failed||!boot_p_expect(ctx,123,"expected '{' after match subject"){return 0 as *BootNode;}
+ let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed&&boot_p_kind(ctx)!=125{
+  let arm:*BootNode=boot_node(ctx,BN_ARM,ctx.cursor);if ctx.failed{return arm;}
+  if boot_p_word(ctx,"_"){boot_p_advance(ctx);arm.flags=1;}
+  else{
+   arm.left=boot_p_primary(ctx);if ctx.failed{return 0 as *BootNode;}
+   if arm.left.kind!=BN_ENUM_VALUE{boot_error(ctx,arm.token,"match pattern requires an enum variant or '_'");return 0 as *BootNode;}
+   if boot_p_take(ctx,40){
+    let mut last:*BootNode=0 as *BootNode;
+    while !ctx.failed&&boot_p_kind(ctx)!=41{
+     let flags:i32=0;
+     let name:*BootToken=boot_p_name(ctx);if name==0 as *BootToken{return 0 as *BootNode;}
+     let binding:*BootNode=boot_node(ctx,BN_LET,name);if ctx.failed{return binding;}binding.name=name.text;binding.flags=flags;
+     if last==0 as *BootNode{arm.params=binding;}else{last.next=binding;}last=binding;
+     if !boot_p_take(ctx,44){break;}
+    }
+    if !boot_p_expect(ctx,41,"expected ')' after pattern bindings"){return 0 as *BootNode;}
+   }
+  }
+  if boot_p_word(ctx,"if"){boot_p_advance(ctx);arm.right=boot_p_expression(ctx,0);}
+  if !boot_p_expect(ctx,BT_FAT_ARROW,"expected '=>' after match pattern"){return 0 as *BootNode;}
+  if boot_p_kind(ctx)==123{arm.body=boot_p_block(ctx);boot_value_tail(arm.body,BN_YIELD);}
+  else{arm.body=boot_node(ctx,BN_YIELD,ctx.cursor);if ctx.failed{return 0 as *BootNode;}arm.body.left=boot_p_expression(ctx,0);}
+  if tail==0 as *BootNode{node.params=arm;}else{tail.next=arm;}tail=arm;
+  if !boot_p_take(ctx,44)&&boot_p_kind(ctx)!=125{boot_error(ctx,ctx.cursor,"expected ',' between match arms");return 0 as *BootNode;}
+ }
+ if !boot_p_expect(ctx,125,"expected '}' after match arms"){return 0 as *BootNode;}return node;
+}
+
+fn boot_p_impl(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);
+ let saved_parameters:*BootNode=ctx.type_parameters;let saved_target:*BootType=ctx.impl_target;
+ ctx.type_parameters=boot_p_type_parameters(ctx);let parameters:*BootNode=ctx.type_parameters;let target:*BootType=boot_p_type(ctx);if ctx.failed{return 0 as *BootNode;}
+ ctx.impl_target=target;
+ if !boot_p_expect(ctx,123,"expected '{' after inherent impl target"){return 0 as *BootNode;}
+ let mut first:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;
+ while !ctx.failed&&boot_p_kind(ctx)!=125{
+  let mut public:bool=false;if boot_p_word(ctx,"pub"){public=true;boot_p_advance(ctx);}
+  let function:*BootNode=boot_p_function(ctx,false);if ctx.failed{return 0 as *BootNode;}
+  if public{function.flags=function.flags|8;}
+  if !boot_method_register(ctx,function,target){return 0 as *BootNode;}
+  if tail==0 as *BootNode{first=function;}else{tail.next=function;}tail=function;
+ }
+ boot_p_expect(ctx,125,"expected '}' after inherent methods");ctx.type_parameters=saved_parameters;ctx.impl_target=saved_target;
+ if first==0 as *BootNode&&!ctx.failed{boot_method_empty(ctx,target,parameters,token);}return first;
+}
+
+fn boot_p_range_for(ctx:*BootContext)->*BootNode{
+ let token:*BootToken=ctx.cursor;boot_p_advance(ctx);let name:*BootToken=boot_p_name(ctx);if ctx.failed{return 0 as *BootNode;}
+ if !boot_p_word(ctx,"in"){boot_error(ctx,ctx.cursor,"expected in after for binding");return 0 as *BootNode;}boot_p_advance(ctx);
+ let node:*BootNode=boot_node(ctx,BN_RANGE_FOR,token);if ctx.failed{return node;}node.name=name.text;
+ let saved:bool=ctx.parse_condition;ctx.parse_condition=true;node.left=boot_p_expression(ctx,0);
+ if boot_p_kind(ctx)!=BT_RANGE{boot_error(ctx,ctx.cursor,"Core for requires an integer range");return 0 as *BootNode;}
+ boot_p_advance(ctx);node.right=boot_p_expression(ctx,0);ctx.parse_condition=saved;
+ node.body=boot_p_block(ctx);return node;
 }

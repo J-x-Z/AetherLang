@@ -62,15 +62,23 @@ fn bs_prepare_expr(state:*BootScriptState,node:*BootNode)->bool{
  }
  if node.kind==BN_CALL{
   if node.left!=0 as *BootNode{
-   if bs_local(state,node.left.name)!=0 as *BootScriptLocal{boot_error(ctx,node.token,"Script object methods are outside this self-hosted frontend");return false;}
-   node.lookup=boot_import_module(ctx,node.left.name,node.token);node.left=0 as *BootNode;if ctx.failed{return false;}
+   if node.left.kind==BN_IDENT&&bs_local(state,node.left.name)==0 as *BootScriptLocal{
+    let mut imported:*BootImport=ctx.module.imports;
+    while imported!=0 as *BootImport{if imported.symbol==0 as *u8&&strcmp(imported.alias,node.left.name)==0{node.lookup=imported.target;}imported=imported.next;}
+    if node.lookup!=0 as *BootModule{node.left=0 as *BootNode;}
+   }
+   if node.left!=0 as *BootNode{
+    if !bs_prepare_expr(state,node.left){return false;}
+    let mut argument:*BootNode=node.params;while argument!=0 as *BootNode{if !bs_prepare_expr(state,argument){return false;}argument=argument.next;}
+    node.kind=BN_METHOD_CALL;return true;
+   }
   }
   let mut argument:*BootNode=node.params;while argument!=0 as *BootNode{if !bs_prepare_expr(state,argument){return false;}argument=argument.next;}
   let declared:*BootNode=boot_lookup(ctx,node.name,node.lookup,node.token);if ctx.failed{return false;}
   if node.lookup==0 as *BootModule&&declared==0 as *BootNode&&bs_local(state,node.name)==0 as *BootScriptLocal&&strcmp(node.name,"repeat")==0{
    let value:*BootNode=node.params;
    if value==0 as *BootNode||value.next==0 as *BootNode||value.next.next!=0 as *BootNode||value.next.kind!=BN_INT{boot_error(ctx,node.token,"self-hosted Script repeat requires a value and nonnegative literal extent");return false;}
-   let mut extent:u64=0;if !boot_integer_value(ctx,value.next.token,18446744073709551615,&mut extent){return false;}
+   let mut extent:u64=0;if !boot_integer_value(ctx,value.next.token,18446744073709551615,&mut extent as *u64){return false;}
    value.next=0 as *BootNode;node.kind=BN_REPEAT;node.left=value;node.params=0 as *BootNode;node.value=extent as i64;return true;
   }
   if node.lookup==0 as *BootModule&&declared==0 as *BootNode&&bs_local(state,node.name)==0 as *BootScriptLocal&&strcmp(node.name,"print")==0{

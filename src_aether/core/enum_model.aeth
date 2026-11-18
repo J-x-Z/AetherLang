@@ -1,0 +1,34 @@
+use model::*;
+use runtime::*;
+// Each variant owns a real tuple-payload struct. The enum itself is a tag plus
+// union storage, never a struct containing fictitious values of every variant.
+pub fn boot_enum_variant(ty:*BootType,name:*u8)->*BootNode{
+ let mut variant:*BootNode=ty.fields;
+ while variant!=0 as *BootNode{if strcmp(variant.name,name)==0{return variant;}variant=variant.next;}
+ return 0 as *BootNode;
+}
+pub fn boot_enum_payload(ctx:*BootContext,variant:*BootNode)->*BootType{
+ if variant.ty!=0 as *BootType{return variant.ty;}
+ let ty:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;if ty==0 as *BootType{return ty;}
+ ty.kind=BY_STRUCT;ty.id=boot_id(ctx);ty.complete=true;ty.fields=variant.params;
+ // Anonymous payloads never participate in source-name lookup.
+ ty.name="";ty.owner=0 as *BootModule;ty.next=ctx.types;ctx.types=ty;variant.ty=ty;return ty;
+}
+pub fn boot_enum_reference(ctx:*BootContext,binding:*BootNode)->*BootNode{
+ let node:*BootNode=boot_node(ctx,BN_IDENT,binding.token);if node!=0 as *BootNode{node.ty=binding.ty;node.decl=binding;}return node;
+}
+pub fn boot_enum_test(ctx:*BootContext,binding:*BootNode,variant:*BootNode)->*BootNode{
+ let tag:*BootNode=boot_node(ctx,BN_ENUM_TAG,binding.token);let number:*BootNode=boot_node(ctx,BN_INT,binding.token);
+ let equal:*BootNode=boot_node(ctx,BN_BINARY,binding.token);if ctx.failed{return 0 as *BootNode;}
+ tag.left=boot_enum_reference(ctx,binding);tag.ty=boot_type(ctx,BY_U32);number.ty=tag.ty;number.value=variant.value;
+ equal.op=BT_EQ;equal.ty=boot_type(ctx,BY_BOOL);equal.left=tag;equal.right=number;return equal;
+}
+pub fn boot_enum_projection(ctx:*BootContext,binding:*BootNode,variant:*BootNode,field:*BootNode)->*BootNode{
+ let value:*BootNode=boot_node(ctx,BN_ENUM_FIELD,binding.token);if value==0 as *BootNode{return value;}
+ value.left=boot_enum_reference(ctx,binding);value.decl=field;value.aux=variant.ty;value.value=variant.value;value.ty=field.ty;return value;
+}
+
+pub fn boot_enum_block(ctx:*BootContext,node:*BootNode)->*BootNode{
+ if node.kind==BN_BLOCK{return node;}
+ let block:*BootNode=boot_node(ctx,BN_BLOCK,node.token);if block!=0 as *BootNode{block.body=node;}return block;
+}

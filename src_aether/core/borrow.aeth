@@ -1,0 +1,223 @@
+use model::*;
+use runtime::*;
+use borrow_model::*;
+use borrow_sets::*;
+// Checked references are separate from the explicitly manual raw-pointer ABI.
+// This first storage surface supports references to ordinary records/arrays;
+// copying records/arrays containing references requires projection-aware moves.
+fn br_contains(ty:*BootType,depth:i32)->bool{
+ if ty==0 as *BootType||depth>256{return false;}
+ if boot_reference(ty){return true;}if ty.kind==BY_PTR{return false;}
+ if ty.kind==BY_ARRAY||ty.kind==BY_ALIAS{return br_contains(ty.inner,depth+1);}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{if br_contains(field.ty,depth+1){return true;}field=field.next;}}
+ return false;
+}
+fn br_type(ctx:*BootContext,ty:*BootType,token:*BootToken,foreign:bool)->bool{
+ if ty==0 as *BootType{return true;}
+ if boot_reference(ty){
+  if foreign{boot_error(ctx,token,"C ABI uses explicit raw pointers, not checked references");return false;}
+  if br_contains(ty.inner,0){boot_error(ctx,token,"nested or aggregate-stored references require projection-aware reference storage");return false;}
+ }else{if br_contains(ty,0){boot_error(ctx,token,"aggregate-stored references require projection-aware reference storage");return false;}}
+ return true;
+}
+fn br_relevant(node:*BootNode)->bool{
+ let mut p:*BootNode=node;while p!=0 as *BootNode{
+  if p.kind==BN_CAST&&p.ty.kind==BY_PTR&&p.left.kind==BN_UNARY&&p.left.op==38{if br_relevant(p.left.left){return true;}p=p.next;continue;}
+  if boot_reference(p.ty)||br_relevant(p.left)||br_relevant(p.right)||br_relevant(p.third)||br_relevant(p.params)||br_relevant(p.body){return true;}p=p.next;
+ }return false;
+}
+fn br_access(state:*BootBorrowState,origins:*BootBorrowOrigin,write:bool,token:*BootToken)->bool{
+ if state.collect{return true;}
+ let mut root:*BootBorrowOrigin=origins;
+ while root!=0 as *BootBorrowOrigin{
+  let mut loan:*BootBorrowEnv=state.env;
+  while loan!=0 as *BootBorrowEnv{
+   if !loan.moved&&boot_reference(loan.binding.ty)&&!br_allowed(root,loan.binding){
+    if (write||loan.binding.ty.kind==BY_MUTREF)&&br_has(loan.origins,root){boot_error(state.ctx,token,"access conflicts with a live reference loan");return false;}
+   }loan=loan.next;
+  }root=root.next;
+ }return true;
+}
+fn br_place(state:*BootBorrowState,node:*BootNode)->*BootBorrowOrigin{
+ if node.kind==BN_IDENT{return br_origin(state.ctx,node.decl,node.decl.kind==BN_STATIC,0 as *BootNode);}
+ if node.kind==BN_MEMBER||node.kind==BN_INDEX{
+  let mut origins:*BootBorrowOrigin=0 as *BootBorrowOrigin;
+  if boot_reference(node.left.ty){origins=br_expr(state,node.left,false);}else{
+   if node.left.ty.kind==BY_PTR{br_expr(state,node.left,false);}else{origins=br_place(state,node.left);}
+  }
+  if node.kind==BN_INDEX{br_expr(state,node.right,false);}return origins;
+ }
+ if node.kind==BN_UNARY&&node.op==42{
+  let origins:*BootBorrowOrigin=br_expr(state,node.left,false);if boot_reference(node.left.ty){return origins;}return 0 as *BootBorrowOrigin;
+ }
+ boot_error(state.ctx,node.token,"reference needs an addressable place");return 0 as *BootBorrowOrigin;
+}
+fn br_install(state:*BootBorrowState,node:*BootNode,origins:*BootBorrowOrigin,depth:i32)->*BootBorrowEnv{
+ let entry:*BootBorrowEnv=boot_alloc(state.ctx,size_of(BootBorrowEnv) as u64) as *BootBorrowEnv;
+ if entry==0 as *BootBorrowEnv{return entry;}entry.binding=node;entry.origins=origins;entry.depth=depth;entry.next=state.env;state.env=entry;return entry;
+}
+fn br_value_valid(state:*BootBorrowState,node:*BootNode,origins:*BootBorrowOrigin,depth:i32)->bool{
+ if state.collect{return true;}
+ if !boot_reference(node.ty){return true;}
+ if origins==0 as *BootBorrowOrigin{boot_error(state.ctx,node.token,"checked reference has no proven storage origin");return false;}
+ let mut p:*BootBorrowOrigin=origins;
+ while p!=0 as *BootBorrowOrigin{
+  let storage:*BootBorrowEnv=br_find(state.env,p.root);
+  if !p.external&&(storage==0 as *BootBorrowEnv||storage.depth>depth){boot_error(state.ctx,node.token,"reference outlives its local storage");return false;}p=p.next;
+ }
+ return br_access(state,origins,node.ty.kind==BY_MUTREF,node.token);
+}
+fn br_call(state:*BootBorrowState,node:*BootNode)->*BootBorrowOrigin{
+ let saved:*BootBorrowEnv=state.env;let mut argument:*BootNode=node.params;let mut parameter:*BootNode=node.decl.params;
+ let summary:*BootBorrowSummary=br_summary(state,node.decl);let mut result:*BootBorrowOrigin=0 as *BootBorrowOrigin;
+ if summary!=0 as *BootBorrowSummary{
+  let mut origin:*BootBorrowOrigin=summary.origins;
+  while origin!=0 as *BootBorrowOrigin{if origin.root.kind==BN_STATIC{result=br_union(state.ctx,result,br_origin(state.ctx,origin.root,true,0 as *BootNode));}origin=origin.next;}
+ }
+ while argument!=0 as *BootNode&&!state.ctx.failed{
+  let consume:bool=parameter==0 as *BootNode||!boot_reference(parameter.ty);
+  let origins:*BootBorrowOrigin=br_expr(state,argument,consume);
+  if boot_reference(argument.ty){
+   if !br_value_valid(state,argument,origins,state.depth){return result;}
+   br_install(state,argument,origins,state.depth);
+   if summary!=0 as *BootBorrowSummary&&parameter!=0 as *BootNode{
+    let mut source:*BootBorrowOrigin=summary.origins;
+    while source!=0 as *BootBorrowOrigin{
+     if source.root==parameter&&source.external{result=br_union(state.ctx,result,origins);}source=source.next;
+    }
+   }
+  }
+  argument=argument.next;if parameter!=0 as *BootNode{parameter=parameter.next;}
+ }
+ state.env=saved;return result;
+}
+fn br_expr(state:*BootBorrowState,node:*BootNode,consume:bool)->*BootBorrowOrigin{
+ if node==0 as *BootNode||state.ctx.failed{return 0 as *BootBorrowOrigin;}
+ if node.kind==BN_IDENT{
+  let entry:*BootBorrowEnv=br_find(state.env,node.decl);
+  if boot_reference(node.ty){
+   if entry==0 as *BootBorrowEnv{boot_error(state.ctx,node.token,"reference binding has no checked origin");return 0 as *BootBorrowOrigin;}
+   if entry.moved&&!state.collect{boot_error(state.ctx,node.token,"use of moved exclusive reference");return 0 as *BootBorrowOrigin;}
+   let origins:*BootBorrowOrigin=br_permit(state.ctx,entry.origins,node.decl);
+   br_access(state,origins,node.ty.kind==BY_MUTREF,node.token);
+   if consume&&node.ty.kind==BY_MUTREF{entry.moved=true;}return origins;
+  }
+  br_access(state,br_origin(state.ctx,node.decl,node.decl.kind==BN_STATIC,0 as *BootNode),false,node.token);return 0 as *BootBorrowOrigin;
+ }
+ if node.kind==BN_UNARY&&node.op==38{
+  let origins:*BootBorrowOrigin=br_place(state,node.left);br_access(state,origins,node.ty.kind==BY_MUTREF,node.token);return origins;
+ }
+ if node.kind==BN_CAST{
+  // A raw-pointer cast is the explicit manual lifetime/alias boundary. Its
+  // operand remains type-checked; it creates no lasting checked-reference loan.
+  if node.ty.kind==BY_PTR{br_expr(state,node.left,true);return 0 as *BootBorrowOrigin;}
+  return br_expr(state,node.left,consume);
+ }
+ if node.kind==BN_MEMBER||node.kind==BN_INDEX||(node.kind==BN_UNARY&&node.op==42){
+  let origins:*BootBorrowOrigin=br_place(state,node);br_access(state,origins,false,node.token);return 0 as *BootBorrowOrigin;
+ }
+ if node.kind==BN_CALL{return br_call(state,node);}
+ if node.kind==BN_VALUE{
+  if boot_reference(node.ty){boot_error(state.ctx,node.token,"reference-valued block requires explicit return or a typed reference local");return 0 as *BootBorrowOrigin;}
+  br_statement(state,node.body);return 0 as *BootBorrowOrigin;
+ }
+ br_expr(state,node.left,false);br_expr(state,node.right,false);br_expr(state,node.third,false);
+ let mut arg:*BootNode=node.params;while arg!=0 as *BootNode{br_expr(state,arg,true);arg=arg.next;}
+ return 0 as *BootBorrowOrigin;
+}
+fn br_return(state:*BootBorrowState,node:*BootNode){
+ let origins:*BootBorrowOrigin=br_expr(state,node.left,true);
+ if node.left==0 as *BootNode||!boot_reference(node.left.ty){return;}
+ if !state.collect&&origins==0 as *BootBorrowOrigin{boot_error(state.ctx,node.token,"returned reference needs a proven parameter or global origin");return;}
+ let mut p:*BootBorrowOrigin=origins;
+ while p!=0 as *BootBorrowOrigin{
+  if !p.external&&!state.collect{boot_error(state.ctx,node.token,"returned reference points into local storage");return;}
+  // Parameter identities cross calls; loan permissions are local to this body.
+  let source:*BootBorrowOrigin=br_origin(state.ctx,p.root,p.external,0 as *BootNode);
+  state.returned=br_union(state.ctx,state.returned,source);p=p.next;
+ }
+}
+fn br_statement(state:*BootBorrowState,node:*BootNode)->i32{
+ if node==0 as *BootNode||state.ctx.failed{return 1;}
+ if node.kind==BN_BLOCK{
+  let depth:i32=state.depth;state.depth=depth+1;let mut item:*BootNode=node.body;let mut outcome:i32=1;
+  while item!=0 as *BootNode&&outcome==1&&!state.ctx.failed{
+   let saved:*BootBorrowUse=state.live;br_live(state,item.next);outcome=br_statement(state,item);br_expire(state);state.live=saved;item=item.next;
+  }
+  while state.env!=0 as *BootBorrowEnv&&state.env.depth>depth{state.env=state.env.next;}state.depth=depth;return outcome;
+ }
+ if node.kind==BN_LET{
+  if !br_type(state.ctx,node.ty,node.token,false){return 0;}
+  let origins:*BootBorrowOrigin=br_expr(state,node.left,true);if !br_value_valid(state,node,origins,state.depth){return 0;}
+  br_install(state,node,origins,state.depth);return 1;
+ }
+ if node.kind==BN_ASSIGN{
+  let target:*BootBorrowOrigin=br_place(state,node.left);br_access(state,target,true,node.token);
+  if boot_reference(node.left.ty)&&node.left.kind==BN_IDENT&&!br_used(node.right,node.left.decl){
+   let old:*BootBorrowEnv=br_find(state.env,node.left.decl);if old!=0 as *BootBorrowEnv{old.origins=0 as *BootBorrowOrigin;}
+  }
+  let origins:*BootBorrowOrigin=br_expr(state,node.right,true);
+  if boot_reference(node.left.ty){
+   if node.left.kind!=BN_IDENT{boot_error(state.ctx,node.token,"checked reference assignment requires a local binding");return 0;}
+   let entry:*BootBorrowEnv=br_find(state.env,node.left.decl);if entry==0 as *BootBorrowEnv{boot_error(state.ctx,node.token,"reference assignment has no local storage");return 0;}
+   entry.moved=true;if !br_value_valid(state,node.left,origins,entry.depth){return 0;}entry.origins=origins;entry.moved=false;
+  }return 1;
+ }
+ if node.kind==BN_RETURN{br_return(state,node);return 2;}
+ if node.kind==BN_BREAK{return 4;}if node.kind==BN_CONTINUE{return 8;}
+ if node.kind==BN_IF{
+  br_expr(state,node.left,false);let original:*BootBorrowEnv=state.env;
+  state.env=br_clone(state.ctx,original);let yes:i32=br_statement(state,node.body);let yes_env:*BootBorrowEnv=state.env;
+  state.env=br_clone(state.ctx,original);let no:i32=br_statement(state,node.third);let no_env:*BootBorrowEnv=state.env;
+  if yes==1&&no==1{state.env=br_join(state.ctx,yes_env,no_env);return 1;}
+  if yes==1{state.env=yes_env;return 1;}if no==1{state.env=no_env;return 1;}
+  state.env=br_join(state.ctx,yes_env,no_env);return yes|no;
+ }
+ if node.kind==BN_WHILE{
+  let saved:*BootBorrowUse=state.live;br_live(state,node);let mut current:*BootBorrowEnv=state.env;
+  while !state.ctx.failed{
+   state.env=br_clone(state.ctx,current);br_expr(state,node.left,false);br_statement(state,node.body);
+   let joined:*BootBorrowEnv=br_join(state.ctx,current,state.env);
+   if br_env_equal(current,joined){state.env=joined;break;}current=joined;
+  }
+  state.live=saved;return 1;
+ }
+ if node.kind==BN_EXPR||node.kind==BN_YIELD{br_expr(state,node.left,false);return 1;}
+ return 1;
+}
+fn br_function(ctx:*BootContext,function:*BootNode,summaries:*BootBorrowSummary,collect:bool)->*BootBorrowOrigin{
+ let state:*BootBorrowState=boot_alloc(ctx,size_of(BootBorrowState) as u64) as *BootBorrowState;if state==0 as *BootBorrowState{return 0 as *BootBorrowOrigin;}
+ state.ctx=ctx;state.summaries=summaries;state.collect=collect;let mut parameter:*BootNode=function.params;
+ while parameter!=0 as *BootNode{
+  let mut origin:*BootBorrowOrigin=0 as *BootBorrowOrigin;if boot_reference(parameter.ty){origin=br_origin(ctx,parameter,true,parameter);}
+  br_install(state,parameter,origin,0);parameter=parameter.next;
+ }
+ br_statement(state,function.body);return state.returned;
+}
+pub fn boot_borrow_check(ctx:*BootContext)->bool{
+ let mut summaries:*BootBorrowSummary=0 as *BootBorrowSummary;let mut item:*BootNode=ctx.program.body;
+ while item!=0 as *BootNode&&!ctx.failed{
+  if item.kind==BN_FN&&item.generics==0 as *BootNode{
+   if !br_type(ctx,item.ty,item.token,boot_c_symbol(item)){return false;}
+   let mut parameter:*BootNode=item.params;while parameter!=0 as *BootNode{if !br_type(ctx,parameter.ty,parameter.token,boot_c_symbol(item)){return false;}parameter=parameter.next;}
+   if (item.flags&2)==0&&(boot_reference(item.ty)||br_relevant(item.params)||br_relevant(item.body)){
+    let summary:*BootBorrowSummary=boot_alloc(ctx,size_of(BootBorrowSummary) as u64) as *BootBorrowSummary;if summary==0 as *BootBorrowSummary{return false;}
+    summary.function=item;summary.next=summaries;summaries=summary;
+   }
+  }
+  if item.kind==BN_STATIC&&br_contains(item.ty,0){boot_error(ctx,item.token,"checked reference storage is local or parameter storage");return false;}
+  item=item.next;
+ }
+ let mut changed:bool=true;
+ while changed&&!ctx.failed{
+  changed=false;let mut summary:*BootBorrowSummary=summaries;
+  while summary!=0 as *BootBorrowSummary&&!ctx.failed{
+   let computed:*BootBorrowOrigin=br_function(ctx,summary.function,summaries,true);
+   let joined:*BootBorrowOrigin=br_union(ctx,summary.origins,computed);
+   if !br_equal(joined,summary.origins){summary.origins=joined;changed=true;}summary=summary.next;
+  }
+ }
+ let mut summary:*BootBorrowSummary=summaries;
+ while summary!=0 as *BootBorrowSummary&&!ctx.failed{br_function(ctx,summary.function,summaries,false);summary=summary.next;}
+ return !ctx.failed;
+}

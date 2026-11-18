@@ -19,7 +19,7 @@ pub const BT_FLOAT:i32=3; pub const BT_STRING:i32=4;
 pub const BT_ARROW:i32=256; pub const BT_EQ:i32=257; pub const BT_NE:i32=258;
 pub const BT_LE:i32=259; pub const BT_GE:i32=260; pub const BT_AND:i32=261;
 pub const BT_OR:i32=262; pub const BT_SHL:i32=263; pub const BT_SHR:i32=264;
-pub const BT_ELLIPSIS:i32=265;
+pub const BT_ELLIPSIS:i32=265; pub const BT_FAT_ARROW:i32=266; pub const BT_RANGE:i32=267;
 // Compound assignment tokens encode their underlying binary operator.
 pub const BT_ASSIGN_BASE:i32=512;
 // Primitive type kinds; pointer/struct types are interned in BootContext.types.
@@ -27,6 +27,8 @@ pub const BY_VOID:i32=0; pub const BY_BOOL:i32=1; pub const BY_I8:i32=2; pub con
 pub const BY_I16:i32=4; pub const BY_U16:i32=5; pub const BY_I32:i32=6; pub const BY_U32:i32=7;
 pub const BY_I64:i32=8; pub const BY_U64:i32=9; pub const BY_F32:i32=10; pub const BY_F64:i32=11;
 pub const BY_PTR:i32=12; pub const BY_STRUCT:i32=13; pub const BY_ARRAY:i32=14; pub const BY_ALIAS:i32=15;
+pub const BY_ENUM:i32=19;
+pub const BY_REF:i32=20; pub const BY_MUTREF:i32=21;
 pub const BY_TEMPLATE:i32=16; pub const BY_PARAMETER:i32=17; pub const BY_APPLICATION:i32=18;
 // Node fields by kind:
 // PROGRAM: body=top-level list. STRUCT: name, body=FIELD list, ty.
@@ -51,6 +53,11 @@ pub const BN_INT:i32=22; pub const BN_FLOAT:i32=23; pub const BN_STRING:i32=24;
 pub const BN_IDENT:i32=25; pub const BN_BOOL:i32=26; pub const BN_CONST:i32=27;
 pub const BN_STRUCT_VALUE:i32=28; pub const BN_ARRAY:i32=29; pub const BN_REPEAT:i32=30; pub const BN_ALIAS:i32=31;
 pub const BN_ERRNO:i32=37;
+pub const BN_ENUM:i32=41; pub const BN_VARIANT:i32=42; pub const BN_ENUM_VALUE:i32=43;
+pub const BN_MATCH:i32=44; pub const BN_ARM:i32=45; pub const BN_TRY:i32=46;
+pub const BN_RANGE_FOR:i32=50;
+pub const BN_ENUM_TAG:i32=47; pub const BN_ENUM_FIELD:i32=48;
+pub const BN_METHOD_CALL:i32=49;pub const BF_METHOD:i32=512;
 pub const BN_STATIC:i32=40;
 // A definition carrying #[no_mangle] shares its symbol and native ABI with extern declarations.
 pub const BF_EXPORT:i32=64;
@@ -58,7 +65,7 @@ pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=3
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
 pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
-pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument }
+pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool }
 pub struct BootNode {
  kind:i32,id:i32,op:i32,flags:i32,tree_depth:i32,value:i64,name:*u8,token:*BootToken,
  ty:*BootType,aux:*BootType,decl:*BootNode,left:*BootNode,right:*BootNode,
@@ -75,7 +82,7 @@ pub struct BootContext {
  module_count:i32,source_total:u64,roots:*BootRoot,mapped:*BootMappedModule,
  llvm_serial:i32,llvm_block:i32,llvm_break:i32,llvm_continue:i32,llvm_terminated:bool,parse_condition:bool,
  value_type:*BootType,value_target:*BootNode,llvm_yield:i32,
- type_parameters:*BootNode,instances:*BootInstance,instance_count:i32
+ type_parameters:*BootNode,instances:*BootInstance,instance_count:i32,methods:*BootNode,impl_target:*BootType
 }
 
 pub struct BootImport { alias:*u8,symbol:*u8,target:*BootModule,wildcard:bool,token:*BootToken,next:*BootImport }

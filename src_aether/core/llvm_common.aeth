@@ -7,9 +7,9 @@ pub fn ll_text(ctx:*BootContext,text:*u8){fputs(text,ctx.output);}
 pub fn ll_id(ctx:*BootContext)->i32{ctx.llvm_serial=ctx.llvm_serial+1;return ctx.llvm_serial;}
 pub fn ll_type(ctx:*BootContext,ty:*BootType){
  if ty.kind==BY_VOID {ll_text(ctx,"{}");return;}
- if ty.kind==BY_PTR {ll_text(ctx,"ptr");return;}
+ if boot_indirect(ty) {ll_text(ctx,"ptr");return;}
  if ty.kind==BY_ARRAY{fprintf(ctx.output,"[%llu x ",ty.extent);ll_type(ctx,ty.inner);ll_text(ctx,"]");return;}
- if ty.kind==BY_STRUCT {fprintf(ctx.output,"%%a%d_s%d",ctx.c_namespace,ty.id);return;}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM {fprintf(ctx.output,"%%a%d_s%d",ctx.c_namespace,ty.id);return;}
  if ty.kind==BY_F32 {ll_text(ctx,"float");return;}if ty.kind==BY_F64 {ll_text(ctx,"double");return;}
  fprintf(ctx.output,"i%d",ll_bits(ty));
 }
@@ -67,7 +67,7 @@ pub fn ll_field_index(ty:*BootType,field:*BootNode)->i32{
 pub fn ll_cast(ctx:*BootContext,value:i32,source:*BootType,target:*BootType)->i32{
  if source==target{return value;}
  let a:i32=source.kind;let b:i32=target.kind;let id:i32=ll_id(ctx);
- if a==BY_PTR&&b==BY_PTR{return value;}
+ if boot_indirect(source)&&boot_indirect(target){return value;}
  if b==BY_BOOL{
   ll_begin(ctx,id);if ll_float(source){ll_text(ctx,"fcmp une ");}else{ll_text(ctx,"icmp ne ");}
   ll_value(ctx,source,value);if ll_float(source){ll_text(ctx,", 0.0\n");}else{ll_text(ctx,", 0\n");}return id;
@@ -111,6 +111,10 @@ pub fn ll_allocas(ctx:*BootContext,node:*BootNode){
   }
   if item.kind==BN_LET||item.kind==BN_PARAM{fprintf(ctx.output,"  %%v%d = alloca ",item.id);ll_type(ctx,item.ty);ll_text(ctx,"\n");}
   if item.kind==BN_VALUE&&item.ty.kind!=BY_VOID{fprintf(ctx.output,"  %%yield%d = alloca ",item.id);ll_type(ctx,item.ty);ll_text(ctx,"\n");}
+  if item.kind==BN_ENUM_VALUE||item.kind==BN_ENUM_FIELD{
+   let mut enum_type:*BootType=item.ty;if item.kind==BN_ENUM_FIELD{enum_type=item.left.ty;}
+   fprintf(ctx.output,"  %%enum%d = alloca ",item.id);ll_type(ctx,enum_type);ll_text(ctx,"\n");
+  }
   if item.kind==BN_ARRAY||item.kind==BN_REPEAT||(item.kind==BN_INDEX&&item.left.ty.kind==BY_ARRAY&&!boot_place_form(item.left)){
    let mut ty:*BootType=item.ty;if item.kind==BN_INDEX{ty=item.left.ty;}fprintf(ctx.output,"  %%arr%d = alloca ",item.id);ll_type(ctx,ty);ll_text(ctx,"\n");
   }

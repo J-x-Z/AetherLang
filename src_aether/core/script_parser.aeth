@@ -29,7 +29,7 @@ fn bs_type_inner(ctx:*BootContext)->*BootType{
   let inner:*BootType=bs_type(ctx);if ctx.failed{return inner;}
   if !bs_expect(ctx,44,"expected ',' in Script Array type"){return 0 as *BootType;}
   let count:*BootToken=ctx.cursor;if !bs_expect(ctx,BT_INT,"Array extent must be an integer literal"){return 0 as *BootType;}
-  let mut extent:u64=0;if !boot_integer_value(ctx,count,18446744073709551615,&mut extent){return 0 as *BootType;}
+  let mut extent:u64=0;if !boot_integer_value(ctx,count,18446744073709551615,&mut extent as *u64){return 0 as *BootType;}
   if !bs_expect(ctx,93,"expected ']' in Script Array type"){return 0 as *BootType;}
   return boot_array_type(ctx,inner,extent);
  }
@@ -85,7 +85,7 @@ fn bs_expr_inner(ctx:*BootContext,minimum:i32)->*BootNode{
   if bs_take(ctx,40){
    let node:*BootNode=boot_node(ctx,BN_CALL,left.token);if ctx.failed{return node;}
    if left.kind==BN_IDENT{node.name=left.name;}
-   else if left.kind==BN_MEMBER&&left.left.kind==BN_IDENT{node.name=left.name;node.left=left.left;}
+   else if left.kind==BN_MEMBER{node.name=left.name;node.left=left.left;}
    else{boot_error(ctx,left.token,"Script calls require a named function");return 0 as *BootNode;}
    let mut tail:*BootNode=0 as *BootNode;
    while !ctx.failed&&bs_kind(ctx)!=41{
