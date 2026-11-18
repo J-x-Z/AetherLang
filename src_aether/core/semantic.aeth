@@ -431,7 +431,9 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
   while arg!=(0 as *BootNode) {
    let actual:*BootType=boot_check_expr(ctx,arg,0 as *BootType);
    if ctx.failed { return 0 as *BootType; }
-   if actual.kind==BY_VOID || actual.kind==BY_STRUCT || actual.kind==BY_ARRAY { boot_error(ctx,arg.token,"variadic arguments must be scalar or pointer");return 0 as *BootType; }
+   if !boot_numeric(actual) && actual.kind!=BY_BOOL && !boot_indirect(actual) && actual.kind!=BY_NEVER {
+    boot_error(ctx,arg.token,"variadic arguments must be scalar or pointer");return 0 as *BootType;
+   }
    arg=arg.next;
   }
   if memory{return bm_lower(ctx,node,function);}

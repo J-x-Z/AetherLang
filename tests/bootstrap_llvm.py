@@ -142,6 +142,14 @@ for case,signature,message in [
     check('foreign-array-diagnostic-'+case,message in result.stdout+result.stderr and str(source) in result.stdout+result.stderr)
     check('foreign-array-output-preserved-'+case,output.read_text()=='USER ORIGINAL\n')
 
+invalid_vararg = root/'tests/regressions/bootstrap/invalid_variadic_enum.aeth'
+for mode in ('--check', '--emit-c', '--emit-llvm'):
+    args = [stages[4], invalid_vararg, mode]
+    if mode != '--check':
+        args += ['-o', w/'rejected-vararg']
+    result = run('reject-enum-vararg'+mode, args, expected=1)
+    check('enum-vararg-diagnostic'+mode, 'variadic arguments must be scalar or pointer' in result.stderr)
+
 void_source=w/'void-main.aeth';void_source.write_text('fn main(){return;}')
 run('void-main-emit',[stages[4],void_source,'--emit-llvm','-o',w/'void.ll'])
 run('void-main-build',[cc,'-O2',w/'void.ll','-o',w/'void-main'])

@@ -1147,6 +1147,15 @@ impl SemanticAnalyzer {
                                 let argument = self.check_expr(arg)?;
                                 self.check_tuple_abi_type(&argument, arg.span())?;
                                 if self.contains_owned(&argument) { return Err(Error::semantic_expected("E2405", "no owned values in C variadic arguments", arg.span())); }
+                                let scalar_or_pointer = match argument.unqualified() {
+                                    ResolvedType::Primitive(primitive) => *primitive != PrimitiveType::Unit,
+                                    ResolvedType::Pointer(_) | ResolvedType::Reference { .. } |
+                                    ResolvedType::String | ResolvedType::Function { .. } => true,
+                                    _ => false,
+                                };
+                                if !scalar_or_pointer {
+                                    return Err(Error::semantic_expected("E2407", "C variadic arguments must be scalar or pointer values", arg.span()));
+                                }
                                 diverges |= argument == ResolvedType::NEVER;
                             }
                         }
@@ -2135,6 +2144,18 @@ mod tests {
         let program = parser.parse_program()?;
         let mut analyzer = SemanticAnalyzer::new();
         analyzer.analyze(&program)
+    }
+
+    #[test]
+    fn foreign_variadic_tail_requires_scalar_or_pointer_values() {
+        let enumeration = include_str!("../../tests/regressions/bootstrap/invalid_variadic_enum.aeth");
+        assert!(matches!(analyze(enumeration), Err(Error::Semantic { code: "E2407", .. })));
+        let declarations = r#"extern "C" {fn consume(n:i32, ...)->i32;} struct Pair{x:i32,y:i32}"#;
+        for argument in ["p", "[7;3]", "()"] {
+            let source = format!("{declarations} fn main()->i32{{let p:Pair=Pair{{x:1,y:2}};consume(0,{argument})}}");
+            assert!(matches!(analyze(&source), Err(Error::Semantic { code: "E2407", .. })), "{argument}");
+        }
+        analyze(&format!("{declarations} fn main()->i32{{let p:Pair=Pair{{x:1,y:2}};consume(0,&p,true,7 as u8,1.5 as f32)}}")).unwrap();
     }
 
     #[test]

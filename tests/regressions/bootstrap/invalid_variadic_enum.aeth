@@ -1,0 +1,3 @@
+enum Message{Payload([u8;32]),Empty}
+extern "C" {fn inspect(count:i32,...)->i32;}
+fn main()->i32{let value:Message=Message::Payload([7;32]);return inspect(1,value);}
