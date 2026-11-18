@@ -1,0 +1,55 @@
+name: Build Linux release packages
+on:
+  push:
+    branches: ['release/v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      LLVM_SYS_211_PREFIX: /usr/lib/llvm-21
+      CARGO_BUILD_JOBS: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.100.0
+          components: rust-docs
+      - uses: Swatinem/rust-cache@v2
+      - name: Install LLVM 21 for the native runner
+        run: |
+          curl -fsS https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/aether-llvm.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/aether-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' | sudo tee /etc/apt/sources.list.d/aether-llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-21 llvm-21-dev libpolly-21-dev libclang-rt-21-dev
+      - name: Build, seal, relocate and exercise the archive
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          sh scripts/release_linux.sh "$RUNNER_TEMP/aether-release"
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: linux-${{ matrix.arch }}-package
+          path: ${{ runner.temp }}/aether-release/artifacts/
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: linux-${{ matrix.arch }}-diagnostics
+          path: |
+            ${{ runner.temp }}/aether-release/artifacts/evidence/
+            ${{ runner.temp }}/aether-release/bootstrap/**/results.json

@@ -12,7 +12,11 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--compiler", required=True, type=Path)
 parser.add_argument("--jxz", required=True, type=Path)
 parser.add_argument("--work-dir", required=True, type=Path)
+parser.add_argument("--server", type=Path, default=REPO/"tools/mcp/aether_mcp.py",
+                    help="Packaged MCP launcher or Python entry point to exercise")
 args = parser.parse_args()
+server = args.server.resolve(strict=True)
+server_command = [sys.executable, "-B", server] if server.suffix == ".py" else [server]
 base = args.work_dir.resolve()
 base.mkdir(parents=True, exist_ok=True)
 
@@ -20,7 +24,7 @@ base.mkdir(parents=True, exist_ok=True)
 class Client:
     def __init__(self, root):
         self.pipe = subprocess.Popen(
-            [sys.executable, "-B", REPO/"tools/mcp/aether_mcp.py", "--root", root,
+            [*server_command, "--root", root,
              "--compiler", args.compiler.resolve(), "--jxz", args.jxz.resolve()],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.number = 0
