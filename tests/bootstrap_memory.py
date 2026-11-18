@@ -41,6 +41,7 @@ for name in ['operations','threaded','values','qualified','typed_volatile']:
 for name,message in [('load_release','order'),('store_acquire','order'),('fence_relaxed','order'),('cas_stronger_failure','order'),('runtime_order','compile-time'),('wrong_pointer_width','type mismatch')]:
  run(name,[compiler,'check',mem/'invalid'/(name+'.aeth')],status=1,diagnostic=message)
 invalid={
+ 'shared-ref-qualifier':('fn main(){let mut x:i64=0;let p:*volatile i64=&mut x as *volatile i64;let r:&i64=(&mut *p) as &i64;}','invalid scalar'),
  'dynamic-qualifier':('interface V{fn read(self:&Self)->u32;}struct R{value:u32}impl V for R{fn read(self:&Self)->u32{self.value}}fn main(){let p:*volatile R=0 as *volatile R;let q:&dyn V=&*p as &dyn V;}','volatile qualifier'),
  'drop-qualifier':('fn main(){let p:*volatile u32=0 as *volatile u32;let q:*u32=p;}','type mismatch'),
  'generic-qualifier':('fn plain<T>(p:*T)->T{*p}fn main(){let p:*volatile u32=0 as *volatile u32;let n:u32=plain(p);}','qualifier'),
@@ -95,6 +96,27 @@ record('annotated-storage',all(re.search(pattern,local) for pattern in [r'store 
 # The zero-sized pointee has no memory access even for an arbitrary sentinel.
 unit=body('qualified_unit')
 record('unit-no-volatile-access',not re.search(r'(load|store) volatile',unit))
+# Explicit optimized IR must reflect the selected native optimization level.
+# O0/default emission remains the direct, tool-independent fixed-point format.
+fold=w/'fold.aeth';fold.write_text('#![no_std]#![no_main]#[no_mangle]fn folded()->u32{let x:u32=40;return x+2;}')
+raw=w/'fold-raw.ll';zero=w/'fold-zero.ll'
+run('direct-ir-no-host-tool',[compiler,'build',fold,'--emit-llvm','--cc',w/'missing-clang','-o',raw])
+run('zero-ir-no-host-tool',[compiler,'build',fold,'--emit-llvm','-O0','--cc',w/'missing-clang','-o',zero])
+record('default-zero-identical',raw.read_bytes()==zero.read_bytes())
+for level in [1,2,3]:
+ output=w/f'fold-O{level}.ll'
+ run(f'optimized-ir-O{level}',[compiler,'build',fold,'--emit-llvm',f'-O{level}','--cc',cc,'-o',output])
+ text=output.read_text();function=re.search(r'(?ms)^define[^\n]*@folded\(.*?^}',text)
+ record(f'optimized-ir-folded-O{level}',function is not None and 'ret i32 42' in function[0])
+# Host-tool failure, including a partial output, must not replace the user file.
+shim=w/'failed-optimizer.c'
+shim.write_text('#include <stdio.h>\n#include <string.h>\n#ifndef EMPTY\n#define EMPTY 0\n#endif\nint main(int n,char **v){if(!EMPTY)for(int i=1;i+1<n;i++)if(!strcmp(v[i],"-o")){FILE*f=fopen(v[i+1],"wb");if(!f)return 31;fputs("partial",f);fclose(f);}return EMPTY?0:23;}\n')
+for empty in [0,1]:
+ tool=w/f'bad-optimizer-{empty}'
+ run(f'optimizer-shim-{empty}',[cc,f'-DEMPTY={empty}',shim,'-o',tool])
+ protected=w/f'protected-{empty}.ll';protected.write_bytes(b'USER IR\n')
+ run(f'optimizer-failure-{empty}',[compiler,'build',fold,'--emit-llvm','-O2','--cc',tool,'-o',protected],status=1,diagnostic='host compiler')
+ record(f'optimizer-preserves-output-{empty}',protected.read_bytes()==b'USER IR\n' and not list(w.glob(protected.name+'.tmp.*')))
 if a.sanitize:
  emitted=w/'values-sanitized.c'
  run('sanitize-emit',[compiler,'build',extra/'values.aeth','--emit-c','-o',emitted])

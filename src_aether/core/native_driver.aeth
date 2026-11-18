@@ -61,3 +61,32 @@ pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bo
  if !ok {remove(stage);}
  return ok;
 }
+
+// Explicit optimized LLVM emission uses the same host compiler as native
+// output. The default/O0 direct IR path remains independent of host tools and
+// deterministic for the self-compilation fixed point. Publish only on success.
+pub fn boot_optimize_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bool {
+ let stage:*u8=boot_sibling(ctx,options.output);
+ let args:**u8=boot_alloc(ctx,12*(size_of(*u8) as u64)) as **u8;
+ if ctx.failed{return false;}
+ let fd:i32=mkstemp(stage);
+ if fd<0{boot_error(ctx,ctx.cursor,"cannot create optimized IR temporary");return false;}
+ if close(fd)!=0{remove(stage);boot_error(ctx,ctx.cursor,"cannot close optimized IR temporary");return false;}
+ let mut cc:*u8=options.cc;if cc==0 as *u8{cc=platform_env(ctx,"CC");}
+ if cc==0 as *u8||cc[0]==0{cc="clang";}
+ args[0]=cc;args[1]=options.optimize;args[2]="-x";args[3]="ir";
+ args[4]="-S";args[5]="-emit-llvm";args[6]=boot_tool_path(ctx,source);
+ args[7]="-o";args[8]=boot_tool_path(ctx,stage);args[9]=0 as *u8;
+ let mut ok:bool=!ctx.failed&&platform_run_tool(args);
+ if ok{
+  let output:*void=fopen(stage,"rb");
+  if output==0 as *void{ok=false;}else{
+   let mut byte:u8=0;let count:u64=fread(&mut byte as *u8 as *void,1,1,output);
+   let read_error:i32=ferror(output);let close_error:i32=fclose(output);
+   ok=count==1&&byte!=0&&read_error==0&&close_error==0;
+  }
+  if !ok{boot_error(ctx,ctx.cursor,"host compiler produced empty or unreadable optimized IR");}
+ }else if !ctx.failed{boot_error(ctx,ctx.cursor,"host compiler failed to optimize LLVM IR");}
+ if ok&&rename(stage,options.output)!=0{ok=false;boot_error(ctx,ctx.cursor,"cannot replace optimized IR output");}
+ if !ok{remove(stage);}return ok;
+}

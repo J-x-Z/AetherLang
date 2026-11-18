@@ -198,6 +198,8 @@ fn boot_generate(ctx:*BootContext,cmd:*BootCommand)->bool {
  if write_error!=0 || close_error!=0 {ok=boot_arguments_error(ctx,"cannot completely write output");}
  if cmd.native {
   if ok {ok=boot_native_publish(ctx,cmd,path);}remove(path);
+ } else if cmd.llvm&&strcmp(cmd.optimize,"-O0")!=0 {
+  if ok{ok=boot_optimize_publish(ctx,cmd,path);}remove(path);
  } else {
   if ok && rename(path,cmd.output)!=0 {ok=boot_arguments_error(ctx,"cannot replace output");}
   if !ok {remove(path);}

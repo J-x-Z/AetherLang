@@ -325,7 +325,7 @@ fn boot_check_expr_inner(ctx:*BootContext,node:*BootNode,expected:*BootType)->*B
    if ctx.unsafe_depth==0{boot_error(ctx,node.token,"adopting or releasing an owned resource requires unsafe");return 0 as *BootType;}return target;
   }
   if boot_reference(source)&&target.kind==BY_PTR&&source.inner==target.inner&&source.inner.kind!=BY_OWN{return target;}
-  if source.kind==BY_MUTREF&&target.kind==BY_REF&&source.inner==target.inner{return target;}
+  if source.kind==BY_MUTREF&&target.kind==BY_REF&&source.inner==target.inner&&source.volatile_access==target.volatile_access{return target;}
   if (numeric_source && numeric_target) ||
      (source.kind==BY_PTR && (target.kind==BY_PTR || boot_integer(target))) ||
      (boot_integer(source) && target.kind==BY_PTR) { return target; }
