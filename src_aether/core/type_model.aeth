@@ -89,3 +89,15 @@ pub fn boot_flow(node:*BootNode)->i32{
  }
  return 1;
 }
+
+// Rewriting return tails requires the resolved return type, after aliases.
+pub fn boot_value_tail(node:*BootNode,kind:i32){
+ if node==(0 as *BootNode){return;}
+ if node.kind==BN_BLOCK{
+  let mut last:*BootNode=node.body;if last==(0 as *BootNode){return;}
+  while last.next!=(0 as *BootNode){last=last.next;}
+  if (last.flags&16)!=0{boot_value_tail(last,kind);}return;
+ }
+ if node.kind==BN_IF{boot_value_tail(node.body,kind);boot_value_tail(node.third,kind);return;}
+ if node.kind==BN_EXPR&&(node.flags&16)!=0{node.kind=kind;}
+}

@@ -144,7 +144,12 @@ positive('container-values', {'main.aeth':(root/'tests/regressions/bootstrap/con
 positive('block-values', {'main.aeth':(root/'tests/regressions/bootstrap/block_values.aeth').read_text()},
          expected='block-values=ok\n',levels=('0','2'))
 
+positive('unit-values', {'main.aeth':(root/'tests/regressions/bootstrap/unit_values.aeth').read_text()},
+         expected='unit-values=ok\n',levels=('0','2'))
+
 bad = {
+ 'foreign-unit-parameter': ({'main.aeth':'extern "C"{fn foreign(value:());}fn main(){}'}, 'foreign unit parameter ABI'),
+ 'unit-arithmetic': ({'main.aeth':'fn main(){let x:()=()+();}'}, 'invalid binary operands'),
  'value-missing-else': ({'main.aeth':'fn main(){let flag:bool=false;let x:i32=if flag{1};}'}, 'without yielding'),
  'value-discards-tail': ({'main.aeth':'fn main(){let x:i32={1;};}'}, 'without yielding'),
  'value-branch-type': ({'main.aeth':'fn main(){let x:i32=if true{1}else{false};}'}, 'type mismatch'),

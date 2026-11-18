@@ -12,7 +12,7 @@ fn ll_foreign_valid(ctx:*BootContext,node:*BootNode)->bool{
 fn ll_signature(ctx:*BootContext,node:*BootNode){
  let foreign:bool=(node.flags&2)!=0;
  if foreign{ll_text(ctx,"declare ");ll_attr(ctx,node.ty);}else{ll_text(ctx,"define internal ");}
- ll_type(ctx,node.ty);ll_text(ctx," ");ll_function(ctx,node);ll_text(ctx,"(");let mut param:*BootNode=node.params;
+ ll_return_type(ctx,node.ty);ll_text(ctx," ");ll_function(ctx,node);ll_text(ctx,"(");let mut param:*BootNode=node.params;
  while param!=(0 as *BootNode){
   ll_type(ctx,param.ty);ll_text(ctx," ");if foreign{ll_attr(ctx,param.ty);}else{fprintf(ctx.output,"%%arg%d",param.id);}
   param=param.next;if param!=(0 as *BootNode){ll_text(ctx,", ");}
@@ -76,7 +76,7 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
  while item!=(0 as *BootNode){
   if item.kind==BN_FN&&(item.flags&2)==0&&item.owner==ctx.root_module&&strcmp(item.name,"main")==0{
    ll_text(ctx,"define i32 @main(i32 %argc, ptr %argv) {\nentry:\n  ");if item.ty.kind!=BY_VOID{ll_text(ctx,"%result = ");}
-   ll_text(ctx,"call ");ll_type(ctx,item.ty);ll_text(ctx," ");ll_function(ctx,item);ll_text(ctx,"(");if item.params!=(0 as *BootNode){ll_text(ctx,"i32 %argc, ptr %argv");}ll_text(ctx,")\n");
+   ll_text(ctx,"call ");ll_return_type(ctx,item.ty);ll_text(ctx," ");ll_function(ctx,item);ll_text(ctx,"(");if item.params!=(0 as *BootNode){ll_text(ctx,"i32 %argc, ptr %argv");}ll_text(ctx,")\n");
    if item.ty.kind==BY_VOID{ll_text(ctx,"  ret i32 0\n}");}else{ll_text(ctx,"  ret i32 %result\n}");}ll_text(ctx,"\n");
   }item=item.next;
  }

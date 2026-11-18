@@ -77,6 +77,9 @@ stages={i:w/f'stage{i}' for i in range(1,5)}
 run('core-seed-check',[seed,entry,'--check'])
 run('core-seed-emit-c',[seed,entry,'-o',w/'stage1.c'])
 run('build-stage1',[cc,'-O2',w/'stage1.c','-lm','-o',stages[1]])
+# Compare the same current emitter built through different backends, rather
+# than requiring a preceding compiler release to print the new C format.
+run('current-emitter-c',[stages[1],entry,'-o',w/'current-generation.c'])
 for i in range(1,4):
     run(f'stage{i}-check-self',[stages[i],entry,'--check'])
     run(f'stage{i}-emit-llvm',[stages[i],entry,'--emit-llvm','-o',w/f'stage{i+1}.ll'])
@@ -84,7 +87,7 @@ for i in range(1,4):
 run('stage4-check-self',[stages[4],entry,'--check'])
 equal('llvm-three-generations-identical',w/'stage2.ll',w/'stage3.ll',w/'stage4.ll')
 run('llvm-built-compiler-emits-c',[stages[4],entry,'-o',w/'roundtrip.c'])
-equal('c-backend-roundtrip-identical',w/'stage1.c',w/'roundtrip.c')
+equal('c-backend-roundtrip-identical',w/'current-generation.c',w/'roundtrip.c')
 run('shared-semantics',[sys.executable,root/'tests/core_semantics.py','--compiler',stages[4],
                         '--work-dir',w/'semantics','--cc',cc])
 run('llvm-module-projects',[sys.executable,root/'tests/bootstrap_modules.py','--compiler',stages[2],
@@ -151,7 +154,7 @@ for level in ['0','2']:
 # Clang IR input alone does not establish C-front-end UBSan instrumentation.
 flags=['-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer','-fno-sanitize-recover=all']
 sanenv={**env,'ASAN_OPTIONS':'detect_leaks=0:abort_on_error=1','UBSAN_OPTIONS':'halt_on_error=1'}
-run('build-sanitized-emitter',[cc,*flags,w/'stage1.c','-lm','-o',w/'sanitized'])
+run('build-sanitized-emitter',[cc,*flags,w/'current-generation.c','-lm','-o',w/'sanitized'])
 run('sanitized-emit-self',[w/'sanitized',entry,'--emit-llvm','-o',w/'sanitized.ll'],env=sanenv)
 equal('sanitized-llvm-identical',w/'sanitized.ll',w/'stage2.ll')
 run('sanitized-module-emission',[sys.executable,root/'tests/bootstrap_modules.py','--compiler',w/'sanitized',

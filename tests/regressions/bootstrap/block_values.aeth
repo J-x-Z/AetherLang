@@ -7,8 +7,8 @@ fn exit_operand()->i32{return ({return 7;})/0;}
 fn noop(){}
 fn main()->i32{
  let mut counter:i32=0;
- let x:i32=if true{add(&counter,1)}else{add(&counter,100)};
- let y:i32={let local:i32=add(&counter,2);if local==3{local+4}else{100}};
+ let x:i32=if true{add(&counter as *i32,1)}else{add(&counter as *i32,100)};
+ let y:i32={let local:i32=add(&counter as *i32,2);if local==3{local+4}else{100}};
  if x!=1||y!=7||counter!=3{return 1;}
  let pair:Pair=if false{Pair{x:1,y:2}}else{Pair{x:3,y:4}};
  let a:[i32;2]=if pair.x==3{[5,6]}else{[7,8]};
@@ -18,7 +18,7 @@ fn main()->i32{
  if early(true)!=7||early(false)!=9||both(true)!=11||both(false)!=12{return 4;}
  let mut i:i32=0;
  while i<4{ i+=1;let value:i32={if i==1{continue;}if i==4{break;}i};counter+=value;}
- if counter!=8||i!=4{return 5;}
+ if counter!=8||i!=4{return 5;};
  (if true{noop()}else{noop()});
  if align_of(Pair)!=8||align_of([Pair;0])!=8||size_of(Pair)!=16{return 6;}
  puts("block-values=ok");return 0;

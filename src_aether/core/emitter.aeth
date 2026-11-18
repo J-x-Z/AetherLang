@@ -38,10 +38,10 @@ fn boot_c_private(ctx:*BootContext,suffix:*u8) {
 }
 fn boot_c_type(ctx:*BootContext,ty:*BootType) {
  if ty==0 as *BootType {boot_error(ctx,ctx.cursor,"emitter received an untyped node");return;}
- if ty.kind==BY_PTR {boot_c_type(ctx,ty.inner);boot_c_text(ctx,"*");return;}
+ if ty.kind==BY_PTR {if ty.inner.kind==BY_VOID{boot_c_text(ctx,"void");}else{boot_c_type(ctx,ty.inner);}boot_c_text(ctx,"*");return;}
  if ty.kind==BY_STRUCT {boot_c_private(ctx,"s");boot_c_number(ctx,ty.id);return;}
  if ty.kind==BY_ARRAY {boot_c_private(ctx,"a");boot_c_number(ctx,ty.id);return;}
- if ty.kind==BY_VOID {boot_c_text(ctx,"void");return;}
+ if ty.kind==BY_VOID {boot_c_private(ctx,"unit");return;}
  if ty.kind==BY_BOOL {boot_c_text(ctx,"bool");return;}
  if ty.kind==BY_I8 {boot_c_text(ctx,"int8_t");return;}
  if ty.kind==BY_U8 {boot_c_text(ctx,"uint8_t");return;}
@@ -55,6 +55,7 @@ fn boot_c_type(ctx:*BootContext,ty:*BootType) {
  if ty.kind==BY_F64 {boot_c_text(ctx,"double");return;}
  boot_error(ctx,ctx.cursor,"unsupported C type");
 }
+fn boot_c_return_type(ctx:*BootContext,ty:*BootType){if ty.kind==BY_VOID{boot_c_text(ctx,"void");}else{boot_c_type(ctx,ty);}}
 fn boot_c_function(ctx:*BootContext,node:*BootNode) {
  if (node.flags&2)!=0 {boot_c_text(ctx,node.name);return;}
  boot_c_private(ctx,"f");boot_c_number(ctx,node.id);
@@ -106,6 +107,9 @@ fn boot_emit_place(ctx:*BootContext,node:*BootNode) {
  if node.kind==BN_INDEX {
   if node.left.ty.kind==BY_ARRAY{boot_emit_place(ctx,node.left);}else{boot_emit_expr(ctx,node.left);}boot_emit_expr(ctx,node.right);
   if node.left.ty.kind==BY_ARRAY{boot_c_array_bound(ctx,node);}
+  if node.left.ty.kind==BY_PTR&&node.ty.kind==BY_VOID{
+   boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;
+  }
   boot_c_type(ctx,node.ty);boot_c_text(ctx," *");boot_c_place(ctx,node);boot_c_text(ctx," = &(");
   if node.left.ty.kind==BY_ARRAY{boot_c_place(ctx,node.left);boot_c_text(ctx,"->data");}else{boot_c_temp(ctx,node.left);}
   boot_c_text(ctx,"[");boot_c_temp(ctx,node.right);boot_c_text(ctx,"]);\n");return;
@@ -114,6 +118,7 @@ fn boot_emit_place(ctx:*BootContext,node:*BootNode) {
 }
 fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
  if ctx.failed||node==0 as *BootNode{return;}
+ if node.kind==BN_UNIT{boot_c_decl(ctx,node);boot_c_text(ctx,"{};\n");return;}
  if node.kind==BN_INT||node.kind==BN_FLOAT {
   boot_c_decl(ctx,node);boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")(");if node.kind==BN_INT {fprintf(ctx.output,"%lluULL",node.value as u64);}else{boot_c_text(ctx,node.token.text);}boot_c_text(ctx,");\n");return;
  }
@@ -142,7 +147,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
  }
  if node.kind==BN_ALIGNOF {boot_c_decl(ctx,node);boot_c_text(ctx,"(int64_t)_Alignof(");boot_c_type(ctx,node.aux);boot_c_text(ctx,");\n");return;}
  if node.kind==BN_VALUE{
-  if node.ty.kind!=BY_VOID{boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_temp(ctx,node);boot_c_text(ctx,";\n");}
+  boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_temp(ctx,node);if node.ty.kind==BY_VOID{boot_c_text(ctx," = {}");}boot_c_text(ctx,";\n");
   let saved:*BootNode=ctx.value_target;ctx.value_target=node;boot_emit_stmt(ctx,node.body);ctx.value_target=saved;
   fprintf(ctx.output,"a%d_yield%d:;\n",ctx.c_namespace,node.id);return;
  }
@@ -151,7 +156,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
   boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);boot_c_temp(ctx,node.left);boot_c_text(ctx,".");boot_c_field(ctx,node.decl);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_MEMBER||node.kind==BN_INDEX||(node.kind==BN_UNARY&&node.op==42) {
-  boot_emit_place(ctx,node);boot_c_decl(ctx,node);boot_c_text(ctx,"*");boot_c_place(ctx,node);boot_c_text(ctx,";\n");return;
+  boot_emit_place(ctx,node);boot_c_decl(ctx,node);if node.ty.kind==BY_VOID{boot_c_text(ctx,"{};\n");return;}boot_c_text(ctx,"*");boot_c_place(ctx,node);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_UNARY&&node.op==38 {
   boot_emit_place(ctx,node.left);boot_c_decl(ctx,node);boot_c_place(ctx,node.left);boot_c_text(ctx,";\n");return;
@@ -181,7 +186,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
   while arg!=0 as *BootNode {
    boot_c_temp(ctx,arg);arg=arg.next;if arg!=0 as *BootNode{boot_c_text(ctx,",");}
   }
-  boot_c_text(ctx,");\n");return;
+  boot_c_text(ctx,");\n");if node.ty.kind==BY_VOID{boot_c_decl(ctx,node);boot_c_text(ctx,"{};\n");}return;
  }
  if node.kind==BN_BINARY {
   boot_emit_expr(ctx,node.left);
@@ -195,6 +200,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
  boot_error(ctx,node.token,"unsupported expression in C emitter");
 }
 fn boot_emit_binary_value(ctx:*BootContext,node:*BootNode){
+  if node.left.ty.kind==BY_PTR&&node.left.ty.inner.kind==BY_VOID&&(node.op==43||node.op==45){boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;}
   let integer:bool=boot_c_integer(node.left.ty);
   if integer&&(node.op==43||node.op==45||node.op==42||node.op==BT_SHL) {
    boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")((uint64_t)");boot_c_temp(ctx,node.left);boot_c_op(ctx,node.op);
@@ -232,7 +238,7 @@ fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
    boot_emit_expr(ctx,node.right);boot_c_decl(ctx,node);boot_emit_binary_value(ctx,node);
    boot_c_text(ctx,"*");boot_c_place(ctx,node.left);boot_c_text(ctx," = ");boot_c_temp(ctx,node);boot_c_text(ctx,";\n");return;
   }
-  boot_emit_expr(ctx,node.right);boot_c_text(ctx,"*");boot_c_place(ctx,node.left);boot_c_text(ctx," = ");boot_c_temp(ctx,node.right);boot_c_text(ctx,";\n");return;
+  boot_emit_expr(ctx,node.right);if node.left.ty.kind==BY_VOID{return;}boot_c_text(ctx,"*");boot_c_place(ctx,node.left);boot_c_text(ctx," = ");boot_c_temp(ctx,node.right);boot_c_text(ctx,";\n");return;
  }
  if node.kind==BN_YIELD{
   boot_emit_expr(ctx,node.left);if node.left.ty.kind!=BY_VOID{boot_c_temp(ctx,ctx.value_target);boot_c_text(ctx," = ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";");}
@@ -240,7 +246,7 @@ fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
  }
  if node.kind==BN_EXPR {boot_emit_expr(ctx,node.left);return;}
  if node.kind==BN_RETURN {
-  if node.left!=0 as *BootNode {boot_emit_expr(ctx,node.left);boot_c_text(ctx,"return ");boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");}
+  if node.left!=0 as *BootNode {boot_emit_expr(ctx,node.left);boot_c_text(ctx,"return ");if node.left.ty.kind!=BY_VOID{boot_c_temp(ctx,node.left);}boot_c_text(ctx,";\n");}
   else{boot_c_text(ctx,"return;\n");}return;
  }
  if node.kind==BN_IF {
@@ -256,7 +262,7 @@ fn boot_emit_stmt(ctx:*BootContext,node:*BootNode) {
 }
 fn boot_emit_signature(ctx:*BootContext,node:*BootNode) {
  if (node.flags&2)!=0{boot_c_text(ctx,"extern ");}else{boot_c_text(ctx,"static ");}
- boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_function(ctx,node);boot_c_text(ctx,"(");
+ boot_c_return_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_function(ctx,node);boot_c_text(ctx,"(");
  let mut param:*BootNode=node.params;
  if param==0 as *BootNode{boot_c_text(ctx,"void");}
  while param!=0 as *BootNode{
@@ -296,6 +302,7 @@ pub fn boot_emit(ctx:*BootContext)->bool {
  if ctx.failed||ctx.program==0 as *BootNode||ctx.output==0 as *void{return false;}
  if !boot_choose_namespace(ctx){return false;}
  boot_c_text(ctx,"/* Aether Core compiler output. */\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n");
+ boot_c_text(ctx,"typedef struct {} ");boot_c_private(ctx,"unit");boot_c_text(ctx,";\n");
  boot_c_text(ctx,"static int64_t ");boot_c_private(ctx,"sdiv(");boot_c_text(ctx,"int64_t a,int64_t b,unsigned bits,int rem){if(!b)__builtin_trap();int64_t m=bits==64?INT64_MIN:-(INT64_C(1)<<(bits-1));if(a==m&&b==-1)__builtin_trap();return rem?a%b:a/b;}\n");
  boot_c_text(ctx,"static uint64_t ");boot_c_private(ctx,"udiv(");boot_c_text(ctx,"uint64_t a,uint64_t b,unsigned bits,int rem){(void)bits;if(!b)__builtin_trap();return rem?a%b:a/b;}\n");
  boot_c_text(ctx,"static uint64_t ");boot_c_private(ctx,"ftou(");boot_c_text(ctx,"double x,unsigned bits){if(!(x>0.0))return 0;double lim=bits==64?18446744073709551616.0:(double)(UINT64_C(1)<<bits);if(x>=lim)return bits==64?UINT64_MAX:((UINT64_C(1)<<bits)-1);return (uint64_t)x;}\n");

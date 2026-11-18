@@ -76,7 +76,7 @@ the executable `main`; an imported file's private `main` remains an ordinary
 function. Diagnostics retain the originating file, line and column.
 
 Core v1 supports functions, C FFI and variadics, explicit scalar/pointer/struct
-types, fixed arrays, transparent type aliases, constants, lexical locals, casts, fields, indexing, `size_of`, arithmetic,
+types, fixed arrays, transparent type aliases, constants, lexical locals, casts, fields, indexing, `size_of`/`align_of`, arithmetic,
 conditionals, loops, returns, and raw-address operations. All locals require an
 initializer. Non-void functions must return a value on every reachable finishing path; a
 provably diverging `loop` or `while true` does not require a trailing return.
@@ -84,6 +84,9 @@ Only `main()` or `main(argc:i32, argv:**u8)` is an entry point, returning void/i
 Semicolons are optional at the same token boundaries as the primary parser. A
 final expression without a semicolon supplies a non-void function value,
 including final blocks and `if` branches; a semicolon discards that value.
+`if` and block expressions also produce typed values inside initializers, calls
+and larger expressions. Early returns and loop exits retain their enclosing
+function/loop destination; only paths that continue need to yield the value.
 Struct values can be constructed, copied and returned; recursive layouts require
 pointers. Initializers must supply every field exactly once, may use shorthand
 names, and evaluate fields in source order regardless of declaration order.
@@ -100,6 +103,14 @@ aliases and imported aliases; cyclic aliases are rejected. `loop`, `break` and
 `continue` use the same reachable-exit rules as ordinary `while` statements.
 Compound arithmetic and bitwise assignments evaluate the place once, load its
 old value, then evaluate the right operand before storing the result.
+
+`()` is a real zero-sized value with alignment one; `void` is its existing
+alias. Unit values can be passed internally, copied, stored in structs and arrays,
+and returned. Returning Unit keeps the native `void` return ABI. Raw Unit pointers
+use C `void*`; their zero-stride arithmetic and zero-byte loads/stores never access
+sentinel memory. Foreign by-value Unit parameters remain explicitly rejected.
+Unit-returning functions discard an ordinary final expression consistently even
+when their return type is spelled through an alias.
 
 Integer operations wrap by width except division/remainder by zero and signed
 MIN/-1, which trap. Operand and argument evaluation is left-to-right, Boolean
@@ -168,7 +179,8 @@ This second runner starts with an already self-hosted Core compiler. That
 compiler builds the new compiler's complete module graph through C;
 the resulting compiler emits LLVM IR for its complete source. Three consecutive
 LLVM-built generations must reproduce identical `.ll` bytes. The LLVM-built
-compiler must also reproduce the C seed's generated C exactly. The runner
+compiler must also reproduce the current emitter's C output exactly, comparing
+the same implementation built through C and through LLVM. The runner
 blocks accidental calls to Rust `aethc`, runs external module projects, and
 executes heap/aggregate, file I/O, short-circuit, numeric, UTF-8, and C ABI
 workloads at O0/O2. Its ASan/UBSan build instruments the C-built compiler while

@@ -48,7 +48,7 @@ pub const BN_INDEX:i32=19; pub const BN_CAST:i32=20; pub const BN_SIZEOF:i32=21;
 pub const BN_INT:i32=22; pub const BN_FLOAT:i32=23; pub const BN_STRING:i32=24;
 pub const BN_IDENT:i32=25; pub const BN_BOOL:i32=26; pub const BN_CONST:i32=27;
 pub const BN_STRUCT_VALUE:i32=28; pub const BN_ARRAY:i32=29; pub const BN_REPEAT:i32=30; pub const BN_ALIAS:i32=31;
-pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=34;
+pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=34; pub const BN_UNIT:i32=35;
 // flags: bit 0 mutable binding, bit 1 foreign function, bit 2 variadic, bit 3 public declaration.
 pub struct BootArena { next:*BootArena, reserved:u64 }
 pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }

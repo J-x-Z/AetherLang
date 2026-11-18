@@ -97,7 +97,7 @@ negative = {
     'negative_overflow': ('fn main()->i32{let x:i8=-129;return 0;}', 'outside its type range'),
     'unsigned_negative': ('fn main()->i32{let x:u8=-1;return 0;}', 'signed integer'),
     'integer_mixed_width': ('fn main()->i32{let x:i64=1;let y:i32=2;return x+y;}', 'operand types differ'),
-    'void_deref': ('fn f(p:*void)->i32{return *p;}fn main()->i32{return 0;}', 'non-void pointer'),
+    'void_deref': ('fn f(p:*void)->i32{return *p;}fn main()->i32{return 0;}', 'type mismatch'),
     'bad_index': ('fn f(p:*i32)->i32{return p[true];}fn main()->i32{return 0;}', 'integer index'),
     'bad_cast': ('fn f(p:*i32)->f64{return p as f64;}fn main()->i32{return 0;}', 'invalid scalar'),
     'non_place': ('fn main()->i32{let p:*i64=&(1+2);return 0;}', 'address requires'),

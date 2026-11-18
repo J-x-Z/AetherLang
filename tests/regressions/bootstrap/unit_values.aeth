@@ -1,0 +1,24 @@
+extern "C"{fn puts(text:*u8)->i32;fn malloc(n:usize)->*void;fn free(p:*void);}
+struct UnitPair{first:(),second:void}
+struct Padded{a:u8,unit:(),b:u64}
+type Unit=();
+fn discard()->Unit{42}
+fn identity(value:())->(){return value;}
+fn side(counter:*i32)->(){*counter+=1;return ();}
+fn main()->i32{
+ discard();let mut counter:i32=0;
+ let block_unit:()={};let conditional_unit:()=if false{side(&counter as *i32);};
+ let value:()=identity(());let equivalent:void=value;
+ let mut pair:UnitPair=UnitPair{first:equivalent,second:()};pair.first=identity(pair.second);
+ let units:[();4]=[side(&counter as *i32);4];let empty:[();0]=[side(&counter as *i32);0];
+ let selected:()=if true{identity(units[2])}else{side(&counter as *i32)};
+ let inside:()={let inner:()=selected;inner};
+ if counter!=2||size_of(())!=0||size_of(UnitPair)!=0||align_of(())!=1{return 1;}
+ if size_of([();4])!=0||size_of(Padded)!=16||align_of(Padded)!=8{return 2;}
+ let mut pointer:*()=1 as *();let before:usize=pointer as usize;
+ pointer+=20;pointer-=7;if pointer as usize!=before{return 3;}
+ let loaded:()=*pointer;*pointer=inside;pointer[100]=loaded;let indexed:()=pointer[999];
+ let raw:*void=malloc(16);if raw==0 as *void{return 4;}free(raw);
+ let carried:Padded=Padded{a:7,unit:indexed,b:42};if carried.a!=7||carried.b!=42{return 5;}
+ puts("unit-values=ok");return 0;
+}

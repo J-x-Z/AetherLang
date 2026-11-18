@@ -32,6 +32,7 @@ fn ll_literal_expr(ctx:*BootContext,node:*BootNode)->i32{
  ll_text(ctx,", ");ll_type(ctx,node.ty);ll_text(ctx," ");ll_literal(ctx,node,node.ty);ll_text(ctx,"\n");return id;
 }
 fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
+ if node.kind==BN_UNIT{return ll_unit(ctx);}
  if node.kind==BN_INT||node.kind==BN_FLOAT||node.kind==BN_BOOL{return ll_literal_expr(ctx,node);}
  let id:i32=ll_id(ctx);
  if node.kind==BN_STRING{ll_begin(ctx,id);fprintf(ctx.output,"getelementptr [%llu x i8], ptr @a%d_str%d, i64 0, i64 0\n",node.token.length+1,ctx.c_namespace,node.id);return id;}
@@ -57,8 +58,8 @@ fn ll_expr_inner(ctx:*BootContext,node:*BootNode)->i32{
  if node.kind==BN_VALUE{
   let saved:*BootNode=ctx.value_target;let saved_yield:i32=ctx.llvm_yield;
   ctx.value_target=node;ctx.llvm_yield=ll_id(ctx);let finish:i32=ctx.llvm_yield;ll_statement(ctx,node.body);
-  if !ctx.llvm_terminated{ll_text(ctx,"  unreachable\n");}ll_label(ctx,finish);
-  ctx.value_target=saved;ctx.llvm_yield=saved_yield;if node.ty.kind==BY_VOID{return 0;}
+  if !ctx.llvm_terminated{if node.ty.kind==BY_VOID{ll_jump(ctx,finish);}else{ll_text(ctx,"  unreachable\n");}}ll_label(ctx,finish);
+  ctx.value_target=saved;ctx.llvm_yield=saved_yield;if node.ty.kind==BY_VOID{return ll_unit(ctx);}
   ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,node.ty);fprintf(ctx.output,", ptr %%yield%d\n",node.id);return id;
  }
  if node.kind==BN_SIZEOF{
@@ -94,7 +95,7 @@ fn ll_call(ctx:*BootContext,node:*BootNode)->i32{
  }
  let id:i32=ll_id(ctx);
  if node.ty.kind!=BY_VOID{ll_begin(ctx,id);}else{ll_text(ctx,"  ");}
- ll_text(ctx,"call ");if (node.decl.flags&2)!=0{ll_attr(ctx,node.ty);}ll_type(ctx,node.ty);ll_text(ctx," ");
+ ll_text(ctx,"call ");if (node.decl.flags&2)!=0{ll_attr(ctx,node.ty);}ll_return_type(ctx,node.ty);ll_text(ctx," ");
  if (node.decl.flags&4)!=0{
   ll_text(ctx,"(");param=node.decl.params;while param!=(0 as *BootNode){ll_type(ctx,param.ty);ll_text(ctx,", ");param=param.next;}ll_text(ctx,"...) ");
  }
@@ -107,7 +108,7 @@ fn ll_call(ctx:*BootContext,node:*BootNode)->i32{
   ll_type(ctx,ty);ll_text(ctx," ");if param!=(0 as *BootNode)&&(node.decl.flags&2)!=0{ll_attr(ctx,ty);}ll_reg(ctx,arg.llvm_value);
   if param!=(0 as *BootNode){param=param.next;}arg=arg.next;if arg!=(0 as *BootNode){ll_text(ctx,", ");}
  }
- ll_text(ctx,")\n");return id;
+ ll_text(ctx,")\n");if node.ty.kind==BY_VOID{return ll_unit(ctx);}return id;
 }
 fn ll_division_guard(ctx:*BootContext,ty:*BootType,a:i32,b:i32){
  let zero:i32=ll_id(ctx);ll_begin(ctx,zero);ll_text(ctx,"icmp eq ");ll_value(ctx,ty,b);ll_text(ctx,", 0\n");
@@ -201,7 +202,7 @@ pub fn ll_statement(ctx:*BootContext,node:*BootNode){
  }
  if node.kind==BN_EXPR{ll_expr(ctx,node.left);return;}
  if node.kind==BN_RETURN{
-  if node.left==(0 as *BootNode){ll_text(ctx,"  ret void\n");}else{let value:i32=ll_expr(ctx,node.left);ll_text(ctx,"  ret ");ll_value(ctx,node.left.ty,value);ll_text(ctx,"\n");}
+  if node.left==(0 as *BootNode){ll_text(ctx,"  ret void\n");}else{let value:i32=ll_expr(ctx,node.left);if node.left.ty.kind==BY_VOID{ll_text(ctx,"  ret void\n");}else{ll_text(ctx,"  ret ");ll_value(ctx,node.left.ty,value);ll_text(ctx,"\n");}}
   ctx.llvm_terminated=true;return;
  }
  if node.kind==BN_IF{

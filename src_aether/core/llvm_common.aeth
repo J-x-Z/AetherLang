@@ -5,13 +5,15 @@ extern "C" {fn strtod(text:*u8,end:**u8)->f64;}
 pub fn ll_text(ctx:*BootContext,text:*u8){fputs(text,ctx.output);}
 pub fn ll_id(ctx:*BootContext)->i32{ctx.llvm_serial=ctx.llvm_serial+1;return ctx.llvm_serial;}
 pub fn ll_type(ctx:*BootContext,ty:*BootType){
- if ty.kind==BY_VOID {ll_text(ctx,"void");return;}
+ if ty.kind==BY_VOID {ll_text(ctx,"{}");return;}
  if ty.kind==BY_PTR {ll_text(ctx,"ptr");return;}
  if ty.kind==BY_ARRAY{fprintf(ctx.output,"[%llu x ",ty.extent);ll_type(ctx,ty.inner);ll_text(ctx,"]");return;}
  if ty.kind==BY_STRUCT {fprintf(ctx.output,"%%a%d_s%d",ctx.c_namespace,ty.id);return;}
  if ty.kind==BY_F32 {ll_text(ctx,"float");return;}if ty.kind==BY_F64 {ll_text(ctx,"double");return;}
  fprintf(ctx.output,"i%d",ll_bits(ty));
 }
+pub fn ll_return_type(ctx:*BootContext,ty:*BootType){if ty.kind==BY_VOID{ll_text(ctx,"void");}else{ll_type(ctx,ty);}}
+pub fn ll_unit(ctx:*BootContext)->i32{let id:i32=ll_id(ctx);ll_begin(ctx,id);ll_text(ctx,"select i1 true, {} zeroinitializer, {} zeroinitializer\n");return id;}
 pub fn ll_bits(ty:*BootType)->i32{
  if ty.kind==BY_BOOL{return 1;}if ty.kind==BY_I8||ty.kind==BY_U8{return 8;}
  if ty.kind==BY_I16||ty.kind==BY_U16{return 16;}if ty.kind==BY_I32||ty.kind==BY_U32{return 32;}return 64;
@@ -50,9 +52,11 @@ pub fn ll_literal(ctx:*BootContext,node:*BootNode,ty:*BootType){
  ll_integer(ctx,node.value,ty);
 }
 pub fn ll_load(ctx:*BootContext,ty:*BootType,pointer:i32)->i32{
+ if ty.kind==BY_VOID{return ll_unit(ctx);}
  let id:i32=ll_id(ctx);ll_begin(ctx,id);ll_text(ctx,"load ");ll_type(ctx,ty);fprintf(ctx.output,", ptr %%r%d\n",pointer);return id;
 }
 pub fn ll_store(ctx:*BootContext,ty:*BootType,value:i32,pointer:i32){
+ if ty.kind==BY_VOID{return;}
  ll_text(ctx,"  store ");ll_value(ctx,ty,value);fprintf(ctx.output,", ptr %%r%d\n",pointer);
 }
 pub fn ll_field_index(ty:*BootType,field:*BootNode)->i32{
