@@ -20,7 +20,9 @@ for name,expected in [('missing compiler.exe',127),('invalid compiler.exe',126)]
 # Real local transitive graph and Unicode paths, without any shell command.
 dep=w/'dependency 中文';leaf=w/'leaf';(dep/'src').mkdir(parents=True);(leaf/'src').mkdir(parents=True)
 (leaf/'Jxz.toml').write_text("[package]\nname='leaf'\n[build]\nsrc='src'\n",encoding='utf8');(leaf/'src/lib.aeth').write_text('pub fn value()->i32{return 41;}')
-(dep/'Jxz.toml').write_text("[package]\nname='dep'\n[build]\nsrc='src'\n[dependencies]\nleaf={path='../leaf'}\n",encoding='utf8');(dep/'src/lib.aeth').write_text('use leaf::value; pub fn answer()->i32{return value()+1;}')
+(dep/'Jxz.toml').write_text("[package]\nname='dep'\n[build]\nsrc='src'\n[dependencies]\nleaf={path='../leaf'}\n",encoding='utf8')
+dep_entry=dep/'src/lib.aeth'
+dep_entry.write_text('use leaf::value;\npub fn answer()->i32{return value()+1;}',encoding='utf-8')
 manifest="[package]\nname='program'\n[build]\nsrc='src'\ntarget='target'\n[dependencies]\ndep={path='../dependency 中文'}\n"
 (root/'Jxz.toml').write_text(manifest,encoding='utf8');text='use dep::answer;\nfn main()->i32{if answer()!=42{return 3;}return 0;}\n';(root/'src/main.aeth').write_text(text)
 (root/'tests/nested').mkdir(parents=True);(root/'tests/nested/test_.aeth').write_text('fn main()->i32{return 0;}')
@@ -60,7 +62,10 @@ messages=[{'jsonrpc':'2.0','id':1,'method':'initialize','params':{'rootUri':root
 r=subprocess.run([str(jxz),'lsp'],input=b''.join(map(frame,messages)),cwd=root,env=env,capture_output=True,timeout=60);assert r.returncode==0,(r.returncode,r.stdout,r.stderr);data=r.stdout;responses=[]
 while data:
  header,data=data.split(b'\r\n\r\n',1);assert header.startswith(b'Content-Length: '),header;n=int(header.split(b':',1)[1]);responses.append(json.loads(data[:n]));data=data[n:]
-assert any(x.get('id')==2 and 'lib.aeth' in json.dumps(x.get('result')) for x in responses),responses
+definition=[x.get('result') for x in responses if x.get('id')==2]
+expected_definition={'uri':dep_entry.as_uri(),'range':{
+ 'start':{'line':1,'character':7},'end':{'line':1,'character':13}}}
+assert definition==[expected_definition],(definition,expected_definition)
 assert any(x.get('method')=='textDocument/publishDiagnostics' and x.get('params',{}).get('diagnostics') for x in responses),responses
 assert (root/'src/main.aeth').read_text()==text;records.append({'label':'native project LSP definition/unsaved/shutdown','exit':r.returncode,'responses':responses});save()
 # Force stdio failure with errno == 0: it must not become Ok(partial bytes).

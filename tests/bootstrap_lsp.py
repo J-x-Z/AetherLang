@@ -10,7 +10,7 @@ repo=Path(__file__).resolve().parent.parent
 metadata=dict(compiler=compiler,sha256=hashlib.sha256(Path(compiler).read_bytes()).hexdigest())
 def persist(): (w/'results.json').write_text(json.dumps(dict(**metadata,checks=results),indent=2))
 def file(name,text):
- p=w/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(text);return p
+ p=w/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(text,encoding='utf-8');return p
 def req(i,method,params=None):return dict(id=i,method=method,params=params)
 def note(method,params=None):return dict(method=method,params=params)
 def opened(p,t):return note('textDocument/didOpen',dict(textDocument=dict(uri=p.as_uri(),version=1,text=t)))
