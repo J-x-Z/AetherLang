@@ -100,7 +100,8 @@ if clang --version >/dev/null 2>&1; then
         python3 tests/bootstrap_kernel_target.py --compiler "$native_compiler" --cc "$kernel_cc" \
             --work-dir "$CARGO_TARGET_DIR/native-kernel-target" --qemu
         if [ "$bootstrap_backend" = llvm ]; then
-            python3 tests/kernel_timer.py --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/kernel-timer"
+            python3 tests/kernel_timer.py --seed "$compiler" --selfhost "$native_compiler" --cc "$kernel_cc" \
+                --work-dir "$CARGO_TARGET_DIR/kernel-timer"
         fi
     fi
     test_quantum_templates "$native_compiler" "$CARGO_TARGET_DIR/native-quantum-templates" --backends c llvm
