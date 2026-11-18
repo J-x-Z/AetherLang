@@ -24,7 +24,13 @@ jobs:
         run: sudo apt-get install -y llvm
       - name: Select Xcode object inspection tools
         if: runner.os == 'macOS'
-        run: dirname "$(xcrun --find llvm-objdump)" >> "$GITHUB_PATH"
+        run: |
+          tools="$RUNNER_TEMP/aether-llvm-tools"
+          mkdir -p "$tools"
+          for name in llvm-objdump llvm-nm; do
+            ln -s "$(xcrun --find "$name")" "$tools/$name"
+          done
+          echo "$tools" >> "$GITHUB_PATH"
       - run: sh scripts/test.sh c
       - run: cargo build --locked --release --no-default-features
   llvm:
