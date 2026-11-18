@@ -80,6 +80,42 @@ measurements. CPU qpp tensor storage and GPU to_host use logical little-endian
 wire order; the adapter deliberately avoids CUDA-Q's big-endian display index
 operator when copying amplitudes.
 
+### Export an Aether circuit to Quake
+
+`quantum_quake::quantum_export_quake(circuit,max_bytes,error,error_capacity)`
+returns `Result<QuakeText,i32>`. It sends the validated ten-gate circuit through
+the same CUDA-Q kernel builder used by state simulation and asks the SDK for
+its Quake MLIR module. Qubit indices and bound f64 angles are preserved. Export
+accepts 1–62 qubits and builds IR without executing the kernel or allocating an
+amplitude vector. This is Aether-to-Quake export of a constructed circuit.
+Importing Quake, CUDA-Q C++, or Python is outside this API.
+
+On success, `.data` points to NUL-terminated UTF-8 and `.length` counts the
+bytes before NUL. The text remains readable after freeing the circuit. Release
+the owner with `quantum_quake_free(&mut text as *QuakeText)`. Copies alias the
+same allocation. The byte budget includes the trailing NUL and covers the
+returned text allocation. SDK builder and serialization workspace are additional.
+Error codes 1, 2, 3 and 100 mean invalid input or ABI, output allocation failure,
+insufficient output budget and SDK failure, respectively. The SDK generates the
+kernel symbol, so independent exports can differ in spelling.
+
+Rebuild the optional bridge to obtain the two new export/free symbols. Existing
+state-vector applications can continue to use their version-1 bridge.
+
+```sh
+/path/to/aethc build examples/quantum/export_quake.aeth --sysroot . \
+  --link-object /external/work/libaether_cudaq.dylib -o /external/work/export-quake
+/external/work/export-quake > /external/work/circuit.mlir
+python3 tests/cudaq_runtime.py --compiler /path/to/aethc \
+  --bridge /external/work/libaether_cudaq.dylib --work-dir /external/work/cudaq-test \
+  --quake-python /path/to/python-with-cudaq
+```
+
+The verifier loads the exported module using CUDA-Q's MLIR bindings and checks
+the register width, gate sequence, signed rotation angles and the distinct
+control/target operands. The boundary tests include a 62-qubit IR export, small
+budgets, invalid gates and release of the Aether-owned result.
+
 `stdlib/cuda.aeth` separately exposes the CUDA runtime and cuBLAS C ABI with
 fallible owned buffer/stream/handle helpers. Raw GPU pointers and asynchronous
 lifetimes remain under caller control. Differentiation in the circuit layer

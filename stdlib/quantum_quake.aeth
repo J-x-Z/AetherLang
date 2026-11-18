@@ -1,0 +1,36 @@
+// Owned SDK Quake text. Length excludes its trailing NUL. Copies borrow data.
+use quantum::{Circuit, QuantumGate, Q_INVALID};
+use result::Result;
+extern "C" {
+    fn aether_cudaq_abi_version()->u32;
+    fn aether_cudaq_quake(qubits:u32, gates:*QuantumGate, count:u64, max_bytes:u64,
+                          output:**u8, length:*u64, error:*u8, error_capacity:u64)->i32;
+    fn aether_cudaq_quake_free(text:*u8);
+    fn snprintf(output:*u8, capacity:usize, format:*u8,...)->i32;
+}
+pub struct QuakeText { pub data:*u8, pub length:u64 }
+
+fn invalid_export(message:*u8, error:*u8, capacity:u64)->Result<QuakeText,i32> {
+    if error!=0 as *u8 && capacity>0 {snprintf(error,capacity as usize,"%s",message);}
+    return Result::Err(Q_INVALID);
+}
+
+// max_bytes bounds the returned allocation (including NUL), excluding SDK workspace.
+pub fn quantum_export_quake(circuit:*Circuit, max_bytes:u64, error:*u8, error_capacity:u64)->Result<QuakeText,i32> {
+    if circuit==0 as *Circuit {return invalid_export("missing circuit",error,error_capacity);}
+    if aether_cudaq_abi_version()!=1 {return invalid_export("unsupported CUDA-Q bridge ABI",error,error_capacity);}
+    if circuit.gates.len>circuit.gates.capacity {return invalid_export("invalid gate buffer",error,error_capacity);}
+    let mut text:QuakeText=QuakeText{data:0 as *u8,length:0};
+    let status:i32=aether_cudaq_quake(circuit.qubits,circuit.gates.data,circuit.gates.len,max_bytes,
+                                      &mut text.data as **u8,&mut text.length as *u64,error,error_capacity);
+    if status!=0 {return Result::Err(status);}
+    return Result::Ok(text);
+}
+
+pub fn quantum_quake_free(text:*QuakeText) {
+    if text!=0 as *QuakeText {
+        aether_cudaq_quake_free(text.data);
+        text.data=0 as *u8;
+        text.length=0;
+    }
+}

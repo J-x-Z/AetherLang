@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <exception>
 #include <mutex>
 #include <vector>
@@ -19,13 +20,14 @@ static int failure(int code,const char *message,char *error,std::uint64_t capaci
   return code;
 }
 extern "C" std::uint32_t aether_cudaq_abi_version() noexcept { return 1; }
-extern "C" std::int32_t aether_cudaq_state(std::uint32_t qubits,
-    const AetherQuantumGate *gates,std::uint64_t count,AetherComplex64 *output,
-    std::uint64_t capacity,char *error,std::uint64_t error_capacity,std::int32_t *on_gpu) noexcept {
-  if(error && error_capacity)error[0]=0;
-  if(on_gpu)*on_gpu=0;
-  if(!qubits || qubits>24 || !output || (count && !gates) || capacity!=(std::uint64_t{1}<<qubits))
-    return failure(1,"invalid circuit or state buffer",error,error_capacity);
+
+// Both execution and IR export consume precisely this validated gate stream.
+template <typename Consumer>
+static int with_kernel(std::uint32_t qubits, const AetherQuantumGate *gates,
+                       std::uint64_t count, char *error, std::uint64_t error_capacity,
+                       Consumer &&consume) noexcept {
+  if (!qubits || qubits > 62 || (count && !gates))
+    return failure(1, "invalid circuit", error, error_capacity);
   for(std::uint64_t i=0;i<count;++i) {
     const auto &g=gates[i];
     if(g.kind<1 || g.kind>10 || g.target>=qubits || !std::isfinite(g.angle) ||
@@ -47,6 +49,19 @@ extern "C" std::int32_t aether_cudaq_state(std::uint32_t qubits,
         case 10:kernel.swap(q[g.control],target);break;
       }
     }
+    return consume(kernel);
+  } catch(const std::exception &e) {return failure(100,e.what(),error,error_capacity);}
+  catch(...) {return failure(100,"unknown CUDA-Q exception",error,error_capacity);}
+}
+
+extern "C" std::int32_t aether_cudaq_state(std::uint32_t qubits,
+    const AetherQuantumGate *gates,std::uint64_t count,AetherComplex64 *output,
+    std::uint64_t capacity,char *error,std::uint64_t error_capacity,std::int32_t *on_gpu) noexcept {
+  if(error && error_capacity)error[0]=0;
+  if(on_gpu)*on_gpu=0;
+  if(!qubits || qubits>24 || !output || capacity!=(std::uint64_t{1}<<qubits))
+    return failure(1,"invalid circuit or state buffer",error,error_capacity);
+  return with_kernel(qubits, gates, count, error, error_capacity, [&](auto &kernel) {
     auto state=cudaq::get_state(kernel);
     if(state.get_precision()!=cudaq::SimulationState::precision::fp64)
       return failure(100,"CUDA-Q backend must use fp64 state-vector precision",error,error_capacity);
@@ -64,6 +79,28 @@ extern "C" std::int32_t aether_cudaq_state(std::uint32_t qubits,
     for(std::uint64_t i=0;i<capacity;++i)output[i]={host[i].real(),host[i].imag()};
     if(on_gpu)*on_gpu=state.is_on_gpu()?1:0;
     return 0;
-  } catch(const std::exception &e) {return failure(100,e.what(),error,error_capacity);}
-  catch(...) {return failure(100,"unknown CUDA-Q exception",error,error_capacity);}
+  });
 }
+
+extern "C" std::int32_t aether_cudaq_quake(std::uint32_t qubits,
+    const AetherQuantumGate *gates, std::uint64_t count, std::uint64_t max_bytes,
+    char **output, std::uint64_t *length, char *error, std::uint64_t error_capacity) noexcept {
+  if (error && error_capacity) error[0] = 0;
+  if (output) *output = nullptr;
+  if (length) *length = 0;
+  if (!output || !length)
+    return failure(1, "missing Quake output fields", error, error_capacity);
+  return with_kernel(qubits, gates, count, error, error_capacity, [&](auto &kernel) {
+    const auto text = kernel.to_quake();
+    if (text.size() >= max_bytes)
+      return failure(3, "Quake text exceeds byte budget including NUL", error, error_capacity);
+    auto *copy = static_cast<char *>(std::malloc(text.size() + 1));
+    if (!copy) return failure(2, "cannot allocate Quake text", error, error_capacity);
+    std::memcpy(copy, text.c_str(), text.size() + 1);
+    *output = copy;
+    *length = text.size();
+    return 0;
+  });
+}
+
+extern "C" void aether_cudaq_quake_free(char *text) noexcept { std::free(text); }

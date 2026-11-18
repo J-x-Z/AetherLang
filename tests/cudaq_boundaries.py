@@ -50,11 +50,53 @@ for name, qubits, gate, count, capacity in [
     assert error.raw[3] == 0 and error.raw[4:20] == b'Z' * 16
     assert (output[0].re, output[0].im, output[1].re, output[1].im) == (123, 456, 789, 321)
 
-source = Path(__file__).resolve().parent / 'regressions/quantum/cudaq_boundaries.aeth'
+export = lib.aether_cudaq_quake
+export.argtypes = [c.c_uint32, c.POINTER(Gate), c.c_uint64, c.c_uint64,
+                   c.POINTER(c.c_void_p), c.POINTER(c.c_uint64), c.c_void_p, c.c_uint64]
+export.restype = c.c_int32
+release = lib.aether_cudaq_quake_free
+release.argtypes = [c.c_void_p]
+release.restype = None
+for name, qubits, gate, count, limit, status in [
+    ('zero-qubits', 0, None, 0, 8192, 1), ('invalid-width', 63, None, 0, 8192, 1),
+    ('missing-gates', 3, None, 1, 8192, 1),
+    ('bad-control', 3, Gate(8, 1, 1, 0), 1, 8192, 1),
+    ('infinite-angle', 3, Gate(7, 1, 0, float('inf')), 1, 8192, 1),
+    ('zero-budget', 1, None, 0, 0, 3), ('tiny-budget', 3, None, 0, 12, 3),
+    ('no-state-allocation', 62, Gate(1, 61, 0, 0), 1, 8192, 0),
+]:
+    out, length = c.c_void_p(1), c.c_uint64(99)
+    error = c.create_string_buffer(b'Z' * 20, 21)
+    code = export(qubits, c.byref(gate) if gate else None, count, limit, c.byref(out),
+                  c.byref(length), error, 4)
+    save(dict(name='quake/'+name, status=code, length=length.value, error=error.value.decode()))
+    assert code == status, records[-1]
+    if code:
+        assert out.value is None and length.value == 0
+        assert error.raw[3] == 0 and error.raw[4:20] == b'Z' * 16
+    else:
+        assert 0 < length.value < limit and error.value == b''
+        try:
+            data = c.string_at(out, length.value + 1)
+            assert data[-1:] == b'\0' and b'quake.veq<62>' in data[:-1]
+        finally:
+            release(out)
+release(None)
+for label in ('missing-pointer', 'missing-length'):
+    out, length = c.c_void_p(1), c.c_uint64(99)
+    error = c.create_string_buffer(80)
+    rc = export(1, None, 0, 8192, None if label == 'missing-pointer' else c.byref(out),
+                None if label == 'missing-length' else c.byref(length), error, len(error))
+    save(dict(name='quake/'+label, status=rc, error=error.value.decode()))
+    assert rc == 1 and b'output fields' in error.value
+    assert length.value == 0 if label == 'missing-pointer' else out.value is None
+
+repo = Path(__file__).resolve().parents[1]
+source = repo / 'tests/regressions/quantum/cudaq_boundaries.aeth'
 for backend in args.backends:
     binary = work / f'wrapper-{backend}'
     for label, command in [
-        ('build', [compiler, 'build', source, '--backend', backend, '-O2', '--link-object', library, '-o', binary]),
+        ('build', [compiler, 'build', source, '--sysroot', repo, '--backend', backend, '-O2', '--link-object', library, '-o', binary]),
         ('run', [binary]),
     ]:
         command = list(map(str, command))

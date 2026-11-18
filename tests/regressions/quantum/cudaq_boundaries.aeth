@@ -1,5 +1,6 @@
 use quantum::{Circuit,QuantumGate,Complex64,quantum_new,quantum_free,quantum_state_free,Q_INVALID,Q_LIMIT};
 use quantum_cudaq::quantum_cudaq;
+use quantum_quake::{QuakeText,quantum_export_quake,quantum_quake_free};
 use result::Result;
 fn main()->i32 {
  if size_of(QuantumGate)!=24 || align_of(QuantumGate)!=8 || offset_of(QuantumGate,kind)!=0 ||
@@ -18,8 +19,23 @@ fn main()->i32 {
   Result::Err(code)=>{status=code;},
   Result::Ok(state)=>{quantum_state_free(state);}
  }
- quantum_free(circuit);
  if status!=Q_LIMIT{return 6;}
  if gpu!=0 || error[0]==65 || error[4]!=65 || error[7]!=65{return 7;}
+ match quantum_export_quake(circuit,1,&mut error[0] as *u8,4) {
+  Result::Err(code)=>{if code!=Q_LIMIT || error[0]==0{return 8;}},
+  Result::Ok(text)=>{let mut owned:QuakeText=text;quantum_quake_free(&mut owned as *QuakeText);return 9;}
+ }
+ let mut text:QuakeText=match quantum_export_quake(circuit,8192,&mut error[0] as *u8,4) {
+  Result::Ok(t)=>t,Result::Err(_)=>{return 10;}
+ };
+ quantum_free(circuit);
+ if text.length==0 || text.data[text.length]!=0 || error[0]!=0 {return 11;}
+ quantum_quake_free(&mut text as *QuakeText);
+ if text.data!=0 as *u8 || text.length!=0 {return 12;}
+ quantum_quake_free(&mut text as *QuakeText);
+ match quantum_export_quake(0 as *Circuit,8192,&mut error[0] as *u8,4) {
+  Result::Err(e)=>{if e!=Q_INVALID || error[0]!=109 || error[3]!=0 || error[4]!=65{return 13;}},
+  Result::Ok(t)=>{let mut owned:QuakeText=t;quantum_quake_free(&mut owned as *QuakeText);return 14;}
+ }
  0
 }
