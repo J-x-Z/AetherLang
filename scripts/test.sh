@@ -29,7 +29,7 @@ python3 tests/package_install.py --work-dir "$CARGO_TARGET_DIR/package-install"
 compiler="$CARGO_TARGET_DIR/debug/aethc"
 # $backends is an intentional list of fixed tokens selected above.
 python3 scripts/validate.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/validation" --backends $backends
-for suite in dynamic_values closure_values array_repeat aggregate_abi system_values global_linkage semantic_values runtime_foundation generic_runtime memory_runtime simd_values platform_intrinsics process_runtime math_values terminal_stats quantum_values cuda_bindings literal_escapes extern_definitions c_void_pointers install_output vec_alignment vec32 darwin_target freestanding target_layout interfaces_methods ffi_modules contracts legacy_runtime text_map host_builtins sha256 compute_runtime compute_applications compute_jit compute_planning; do
+for suite in dynamic_values closure_values async_runtime array_repeat aggregate_abi system_values global_linkage semantic_values runtime_foundation generic_runtime memory_runtime simd_values platform_intrinsics process_runtime math_values terminal_stats quantum_values cuda_bindings literal_escapes extern_definitions c_void_pointers install_output vec_alignment vec32 darwin_target freestanding target_layout interfaces_methods ffi_modules contracts legacy_runtime text_map host_builtins sha256 compute_runtime compute_applications compute_jit compute_planning; do
     python3 "tests/$suite.py" --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/$suite" --backends $backends
 done
 case "$(uname -s)/$(uname -m)" in
@@ -55,6 +55,8 @@ if clang --version >/dev/null 2>&1; then
     python3 tests/bootstrap_memory.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-memory" --sanitize
     python3 tests/bootstrap_patterns.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-patterns" --sanitize
     python3 tests/bootstrap_hosted.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-hosted" --sanitize
+    python3 tests/bootstrap_production.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/native-services"
+    python3 tests/bootstrap_lsp.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-lsp"
     python3 tests/bootstrap_cli.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/native-cli"
     if [ "$bootstrap_backend" = llvm ]; then
         python3 tests/bootstrap_effects.py --compiler "$native_compiler" --reference-compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-effects"
