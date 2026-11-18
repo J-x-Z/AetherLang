@@ -15,27 +15,46 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 30
+  archive:
+    runs-on: ubuntu-latest
+    # GitHub only exposes draft releases to identities with push access.
+    # This job transfers bytes; the Windows job executes them separately.
+    permissions:
+      contents: write
     steps:
-      - name: Fetch and verify archive
+      - name: Download and verify the maintainer-selected release archive
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           ARCHIVE_SHA256: ${{ inputs.sha256 }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$ARCHIVE_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "aetherlang-$TAG-windows-x86_64.zip" --output windows.zip
+          echo "$ARCHIVE_SHA256  windows.zip" | sha256sum --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-bundle
+          path: windows.zip
+          retention-days: 1
+  windows:
+    needs: archive
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-bundle
+      - name: Verify archive and manifest
+        env:
+          ARCHIVE_SHA256: ${{ inputs.sha256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
-          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Invalid release tag' }
-          $name = "aetherlang-$env:TAG-windows-x86_64.zip"
-          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern $name
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ((Get-FileHash $name).Hash -ne $env:ARCHIVE_SHA256) { throw 'Archive SHA-256 mismatch' }
-          Expand-Archive $name bundle
+          if ((Get-FileHash windows.zip).Hash -ne $env:ARCHIVE_SHA256) { throw 'Archive SHA-256 mismatch' }
+          Expand-Archive windows.zip bundle
           $entry = @(Get-ChildItem bundle -Recurse -File -Filter Test-Native.ps1)
           if ($entry.Count -ne 1) { throw 'Expected one native acceptance entry point' }
           $root = $entry[0].Directory.FullName
