@@ -52,6 +52,7 @@ fn boot_c_private(ctx:*BootContext,suffix:*u8) {
 }
 fn boot_c_type(ctx:*BootContext,ty:*BootType) {
  if ty==0 as *BootType {boot_error(ctx,ctx.cursor,"emitter received an untyped node");return;}
+ if ty.kind==BY_OWN{boot_c_type(ctx,ty.inner);return;}
  if boot_indirect(ty) {if ty.inner.kind==BY_VOID{boot_c_text(ctx,"void");}else{boot_c_type(ctx,ty.inner);}boot_c_text(ctx,"*");return;}
  if ty.kind==BY_STRUCT||ty.kind==BY_ENUM {boot_c_private(ctx,"s");boot_c_number(ctx,ty.id);return;}
  if ty.kind==BY_ARRAY {boot_c_private(ctx,"a");boot_c_number(ctx,ty.id);return;}
@@ -219,6 +220,7 @@ fn boot_emit_expr(ctx:*BootContext,node:*BootNode) {
   }else{boot_c_op(ctx,node.op);boot_c_temp(ctx,node.left);}
   boot_c_text(ctx,";\n");return;
  }
+ if node.kind==BN_CAST&&(node.ty.kind==BY_OWN||node.left.ty.kind==BY_OWN){boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);boot_c_temp(ctx,node.left);boot_c_text(ctx,";\n");return;}
  if node.kind==BN_CAST {
   boot_emit_expr(ctx,node.left);boot_c_decl(ctx,node);boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")");
   if (node.left.ty.kind==BY_F32||node.left.ty.kind==BY_F64)&&boot_c_integer(node.ty) {

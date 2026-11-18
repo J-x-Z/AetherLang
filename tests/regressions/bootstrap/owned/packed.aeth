@@ -1,0 +1,13 @@
+@repr(packed) struct Resource{tag:u8,value:i64}
+@repr(C) union Bits{integer:i64,byte:u8}
+static mut TOTAL:i64=0;
+@drop fn dispose(resource:own Resource){TOTAL+=resource.value;}
+fn make(value:i64)->own Resource{unsafe{return Resource{tag:7,value:value} as own Resource;}}
+fn transfer(value:own Resource)->own Resource{return value;}
+fn main()->i32{
+ if size_of(Resource)!=9||offset_of(Resource,value)!=1{return 1;}
+ {let a:own Resource=make(12);let b:own Resource=transfer(a);if b.tag!=7||b.value!=12{return 2;}}
+ if TOTAL!=12{return 3;}
+ let bits:Bits=Bits{integer:3};unsafe{if bits.byte!=3{return 4;}}
+ return 0;
+}

@@ -1,0 +1,151 @@
+use model::*;
+use runtime::*;
+// Both physical emitters consume these ordinary, typed AST statements. Live
+// flags preserve exactly-once cleanup across conditional moves and loop exits.
+struct OwnDrop{ty:*BootType,function:*BootNode,next:*OwnDrop}
+struct OwnLocal{binding:*BootNode,flag:*BootNode,drop:*BootNode,depth:i32,next:*OwnLocal}
+struct OwnState{ctx:*BootContext,drops:*OwnDrop,locals:*OwnLocal,depth:i32,loop_depth:i32,value_depth:i32}
+struct OwnChain{head:*BootNode,tail:*BootNode}
+fn ow_chain(ctx:*BootContext)->*OwnChain{return boot_alloc(ctx,size_of(OwnChain) as u64) as *OwnChain;}
+fn ow_append(chain:*OwnChain,node:*BootNode){
+ if node==0 as *BootNode{return;}if chain.tail==0 as *BootNode{chain.head=node;}else{chain.tail.next=node;}
+ chain.tail=node;while chain.tail.next!=0 as *BootNode{chain.tail=chain.tail.next;}
+}
+fn ow_ident(ctx:*BootContext,binding:*BootNode)->*BootNode{
+ let node:*BootNode=boot_node(ctx,BN_IDENT,binding.token);if node!=0 as *BootNode{node.name=binding.name;node.decl=binding;node.ty=binding.ty;}return node;
+}
+fn ow_bool(ctx:*BootContext,value:bool,token:*BootToken)->*BootNode{
+ let node:*BootNode=boot_node(ctx,BN_BOOL,token);if node!=0 as *BootNode{node.ty=boot_type(ctx,BY_BOOL);if value{node.value=1;}}return node;
+}
+fn ow_let(ctx:*BootContext,value:*BootNode)->*BootNode{
+ let node:*BootNode=boot_node(ctx,BN_LET,value.token);if node!=0 as *BootNode{node.name="@owned_temp";node.ty=value.ty;node.left=value;node.flags=1;}return node;
+}
+fn ow_flag(ctx:*BootContext,flag:*BootNode,value:bool)->*BootNode{
+ let node:*BootNode=boot_node(ctx,BN_ASSIGN,flag.token);if node!=0 as *BootNode{node.left=ow_ident(ctx,flag);node.right=ow_bool(ctx,value,flag.token);node.ty=flag.ty;}return node;
+}
+fn ow_local(state:*OwnState,binding:*BootNode)->*OwnLocal{
+ let mut item:*OwnLocal=state.locals;while item!=0 as *OwnLocal{if item.binding==binding{return item;}item=item.next;}return 0 as *OwnLocal;
+}
+fn ow_drop(state:*OwnState,ty:*BootType)->*BootNode{
+ let mut item:*OwnDrop=state.drops;while item!=0 as *OwnDrop{if item.ty==ty{return item.function;}item=item.next;}return 0 as *BootNode;
+}
+fn ow_register(state:*OwnState,binding:*BootNode,except:*BootNode)->*BootNode{
+ let item:*OwnLocal=boot_alloc(state.ctx,size_of(OwnLocal) as u64) as *OwnLocal;if item==0 as *OwnLocal{return 0 as *BootNode;}
+ item.binding=binding;item.depth=state.depth;item.drop=ow_drop(state,binding.ty);if item.drop==except{item.drop=0 as *BootNode;}
+ item.next=state.locals;state.locals=item;
+ if item.drop==0 as *BootNode{return 0 as *BootNode;}
+ item.flag=ow_let(state.ctx,ow_bool(state.ctx,true,binding.token));return item.flag;
+}
+fn ow_cleanup_one(state:*OwnState,item:*OwnLocal)->*BootNode{
+ if item==0 as *OwnLocal||item.flag==0 as *BootNode{return 0 as *BootNode;}
+ let ctx:*BootContext=state.ctx;let branch:*BootNode=boot_node(ctx,BN_IF,item.binding.token);let body:*BootNode=boot_node(ctx,BN_BLOCK,item.binding.token);
+ let statement:*BootNode=boot_node(ctx,BN_EXPR,item.binding.token);let call:*BootNode=boot_node(ctx,BN_CALL,item.binding.token);if ctx.failed{return 0 as *BootNode;}
+ branch.left=ow_ident(ctx,item.flag);branch.body=body;body.body=ow_flag(ctx,item.flag,false);body.body.next=statement;statement.left=call;
+ call.name=item.drop.name;call.decl=item.drop;call.ty=boot_type(ctx,BY_VOID);call.params=ow_ident(ctx,item.binding);return branch;
+}
+fn ow_cleanup(state:*OwnState,minimum:i32)->*BootNode{
+ let chain:*OwnChain=ow_chain(state.ctx);if chain==0 as *OwnChain{return 0 as *BootNode;}
+ let mut item:*OwnLocal=state.locals;while item!=0 as *OwnLocal{if item.depth>=minimum{ow_append(chain,ow_cleanup_one(state,item));}item=item.next;}return chain.head;
+}
+fn ow_block(ctx:*BootContext,head:*BootNode,token:*BootToken)->*BootNode{
+ let block:*BootNode=boot_node(ctx,BN_BLOCK,token);if block!=0 as *BootNode{block.body=head;}return block;
+}
+fn ow_value(ctx:*BootContext,chain:*OwnChain,value:*BootNode,token:*BootToken)->*BootNode{
+ let yield:*BootNode=boot_node(ctx,BN_YIELD,token);let expression:*BootNode=boot_node(ctx,BN_VALUE,token);if ctx.failed{return 0 as *BootNode;}
+ yield.left=value;yield.ty=value.ty;ow_append(chain,yield);expression.body=ow_block(ctx,chain.head,token);expression.ty=value.ty;return expression;
+}
+fn ow_expr(state:*OwnState,node:*BootNode)->*BootNode{
+ if node==0 as *BootNode||state.ctx.failed{return node;}
+ let ctx:*BootContext=state.ctx;
+ if node.kind==BN_IDENT&&(node.flags&BF_OWN_MOVE)!=0{
+  node.flags=node.flags&((-1 as i32)^BF_OWN_MOVE);let local:*OwnLocal=ow_local(state,node.decl);
+  if local==0 as *OwnLocal||local.flag==0 as *BootNode{return node;}
+  let chain:*OwnChain=ow_chain(ctx);let temp:*BootNode=ow_let(ctx,node);if ctx.failed{return node;}
+  ow_append(chain,temp);ow_append(chain,ow_flag(ctx,local.flag,false));return ow_value(ctx,chain,ow_ident(ctx,temp),node.token);
+ }
+ if node.kind==BN_CALL{
+  let mut argument:*BootNode=node.params;let mut transfers:bool=false;
+  while argument!=0 as *BootNode{if argument.ty.kind==BY_OWN{transfers=true;}argument=argument.next;}
+  if transfers{
+   let chain:*OwnChain=ow_chain(ctx);let clears:*OwnChain=ow_chain(ctx);if ctx.failed{return node;}
+   let mut first:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;argument=node.params;
+   while argument!=0 as *BootNode&&!ctx.failed{
+    let next:*BootNode=argument.next;argument.next=0 as *BootNode;
+    if argument.ty.kind==BY_OWN{
+     let local:*OwnLocal=ow_local(state,argument.decl);argument.flags=argument.flags&((-1 as i32)^BF_OWN_MOVE);
+     if local!=0 as *OwnLocal&&local.flag!=0 as *BootNode{ow_append(clears,ow_flag(ctx,local.flag,false));}
+    }else{argument=ow_expr(state,argument);}
+    let temp:*BootNode=ow_let(ctx,argument);ow_append(chain,temp);let value:*BootNode=ow_ident(ctx,temp);
+    if tail==0 as *BootNode{first=value;}else{tail.next=value;}tail=value;argument=next;
+   }
+   // Commit transfers only after every argument finished evaluation. A return
+   // in a later argument still sees the caller's original live resource flags.
+   ow_append(chain,clears.head);node.params=first;return ow_value(ctx,chain,node,node.token);
+  }
+ }
+ if node.kind==BN_VALUE{
+  let saved:i32=state.value_depth;state.value_depth=state.depth;node.body=ow_stmt(state,node.body);state.value_depth=saved;return node;
+ }
+ node.left=ow_expr(state,node.left);node.right=ow_expr(state,node.right);node.third=ow_expr(state,node.third);
+ let mut argument:*BootNode=node.params;let mut first:*BootNode=0 as *BootNode;let mut tail:*BootNode=0 as *BootNode;
+ while argument!=0 as *BootNode&&!ctx.failed{let next:*BootNode=argument.next;argument.next=0 as *BootNode;let value:*BootNode=ow_expr(state,argument);if tail==0 as *BootNode{first=value;}else{tail.next=value;}tail=value;argument=next;}node.params=first;return node;
+}
+fn ow_stmt(state:*OwnState,node:*BootNode)->*BootNode{
+ if node==0 as *BootNode||state.ctx.failed{return node;}let ctx:*BootContext=state.ctx;
+ if node.kind==BN_BLOCK{
+  let saved:*OwnLocal=state.locals;state.depth+=1;let chain:*OwnChain=ow_chain(ctx);if ctx.failed{return node;}
+  let mut item:*BootNode=node.body;while item!=0 as *BootNode&&!ctx.failed{let next:*BootNode=item.next;item.next=0 as *BootNode;ow_append(chain,ow_stmt(state,item));item=next;}
+  ow_append(chain,ow_cleanup(state,state.depth));node.body=chain.head;state.locals=saved;state.depth-=1;return node;
+ }
+ if node.kind==BN_LET{
+  node.left=ow_expr(state,node.left);if node.ty.kind==BY_OWN{node.next=ow_register(state,node,0 as *BootNode);}return node;
+ }
+ if node.kind==BN_ASSIGN{
+  node.left=ow_expr(state,node.left);node.right=ow_expr(state,node.right);
+  if node.left.ty.kind==BY_OWN{
+   let local:*OwnLocal=ow_local(state,node.left.decl);let chain:*OwnChain=ow_chain(ctx);let temp:*BootNode=ow_let(ctx,node.right);if ctx.failed{return node;}
+   ow_append(chain,temp);ow_append(chain,ow_cleanup_one(state,local));node.right=ow_ident(ctx,temp);ow_append(chain,node);
+   if local!=0 as *OwnLocal&&local.flag!=0 as *BootNode{ow_append(chain,ow_flag(ctx,local.flag,true));}return chain.head;
+  }return node;
+ }
+ if node.kind==BN_RETURN||node.kind==BN_YIELD{
+  let chain:*OwnChain=ow_chain(ctx);if ctx.failed{return node;}
+  if node.left!=0 as *BootNode{node.left=ow_expr(state,node.left);let value:*BootNode=ow_let(ctx,node.left);ow_append(chain,value);node.left=ow_ident(ctx,value);}
+  let mut depth:i32=0;if node.kind==BN_YIELD{depth=state.value_depth+1;}
+  ow_append(chain,ow_cleanup(state,depth));ow_append(chain,node);return chain.head;
+ }
+ if node.kind==BN_BREAK||node.kind==BN_CONTINUE{
+  let chain:*OwnChain=ow_chain(ctx);if ctx.failed{return node;}ow_append(chain,ow_cleanup(state,state.loop_depth+1));ow_append(chain,node);return chain.head;
+ }
+ if node.kind==BN_WHILE{
+  node.left=ow_expr(state,node.left);let saved:i32=state.loop_depth;state.loop_depth=state.depth;node.body=ow_stmt(state,node.body);state.loop_depth=saved;return node;
+ }
+ if node.kind==BN_IF{node.left=ow_expr(state,node.left);node.body=ow_stmt(state,node.body);node.third=ow_stmt(state,node.third);return node;}
+ if node.kind==BN_EXPR{node.left=ow_expr(state,node.left);}return node;
+}
+fn ow_relevant(node:*BootNode)->bool{
+ let mut item:*BootNode=node;while item!=0 as *BootNode{
+  if item.ty!=0 as *BootType&&item.ty.kind==BY_OWN{return true;}
+  if ow_relevant(item.left)||ow_relevant(item.right)||ow_relevant(item.third)||ow_relevant(item.body)||ow_relevant(item.params){return true;}item=item.next;
+ }return false;
+}
+pub fn boot_own_lower(ctx:*BootContext)->bool{
+ let mut drops:*OwnDrop=0 as *OwnDrop;let mut function:*BootNode=ctx.program.body;
+ while function!=0 as *BootNode&&!ctx.failed{
+  if (function.flags&BF_DROP)!=0{
+   if function.kind!=BN_FN||(function.flags&2)!=0||function.generics!=0 as *BootNode||boot_c_symbol(function)||function.ty.kind!=BY_VOID||function.params==0 as *BootNode||function.params.next!=0 as *BootNode||function.params.ty.kind!=BY_OWN{boot_error(ctx,function.token,"@drop requires an internal non-generic function (own T) -> void");return false;}
+   let mut prior:*OwnDrop=drops;while prior!=0 as *OwnDrop{if prior.ty==function.params.ty{boot_error(ctx,function.token,"only one destructor may be declared for an owned type");return false;}prior=prior.next;}
+   let item:*OwnDrop=boot_alloc(ctx,size_of(OwnDrop) as u64) as *OwnDrop;if item==0 as *OwnDrop{return false;}item.ty=function.params.ty;item.function=function;item.next=drops;drops=item;
+  }function=function.next;
+ }
+ function=ctx.program.body;
+ while function!=0 as *BootNode&&!ctx.failed{
+  if function.kind==BN_FN&&(function.flags&2)==0&&function.generics==0 as *BootNode&&(function.ty.kind==BY_OWN||ow_relevant(function.params)||ow_relevant(function.body)){
+   ctx.module=function.owner;let state:*OwnState=boot_alloc(ctx,size_of(OwnState) as u64) as *OwnState;if state==0 as *OwnState{return false;}
+   state.ctx=ctx;state.drops=drops;let prefix:*OwnChain=ow_chain(ctx);if ctx.failed{return false;}
+   let mut parameter:*BootNode=function.params;while parameter!=0 as *BootNode{if parameter.ty.kind==BY_OWN{ow_append(prefix,ow_register(state,parameter,function));}parameter=parameter.next;}
+   function.body=ow_stmt(state,function.body);let tail:*OwnChain=ow_chain(ctx);if ctx.failed{return false;}ow_append(tail,function.body.body);ow_append(tail,ow_cleanup(state,0));ow_append(prefix,tail.head);function.body.body=prefix.head;
+  }function=function.next;
+ }
+ return !ctx.failed;
+}

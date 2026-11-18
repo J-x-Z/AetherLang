@@ -207,3 +207,18 @@ pub fn boot_ref_type(ctx:*BootContext,inner:*BootType,mutable:bool)->*BootType {
 }
 pub fn boot_reference(ty:*BootType)->bool{return ty!=0 as *BootType&&(ty.kind==BY_REF||ty.kind==BY_MUTREF);}
 pub fn boot_indirect(ty:*BootType)->bool{return ty!=0 as *BootType&&(ty.kind==BY_PTR||boot_reference(ty));}
+
+pub fn boot_owned_type(ctx:*BootContext,inner:*BootType)->*BootType{
+ let mut ty:*BootType=ctx.types;while ty!=0 as *BootType{if ty.kind==BY_OWN&&ty.inner==inner{return ty;}ty=ty.next;}
+ let created:*BootType=boot_alloc(ctx,size_of(BootType) as u64) as *BootType;if created==0 as *BootType{return created;}
+ created.kind=BY_OWN;created.inner=inner;created.complete=true;created.id=boot_id(ctx);created.next=ctx.types;ctx.types=created;return created;
+}
+pub fn boot_storage_type(ty:*BootType)->*BootType{if ty.kind==BY_OWN{return ty.inner;}return ty;}
+
+pub fn boot_raw_fields(ty:*BootType,depth:i32)->bool{
+ if ty==0 as *BootType{return false;}if depth>256{return true;}
+ if ty.kind==BY_PTR{return true;}if boot_reference(ty){return false;}
+ if ty.kind==BY_OWN||ty.kind==BY_ARRAY||ty.kind==BY_ALIAS{return boot_raw_fields(ty.inner,depth+1);}
+ if ty.kind==BY_STRUCT||ty.kind==BY_ENUM{let mut field:*BootNode=ty.fields;while field!=0 as *BootNode{if boot_raw_fields(field.ty,depth+1){return true;}field=field.next;}}
+ return false;
+}

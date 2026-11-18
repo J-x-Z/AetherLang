@@ -272,3 +272,13 @@ Inherent implementations can define associated functions, shared and mutable met
 ### Native packed records, unions and static pointers
 
 Core computes byte offsets once for both backends. `@repr(C)` and `@repr(packed)` apply to structs and unions. Construct a union with one named field. Reading or writing a union member requires an unsafe block. A newly constructed union zeroes the bytes beyond its active field. `offset_of(T, field)` uses the same layout as static address relocations and runtime reads. Checked storage includes nested packed records and arrays of unions holding pointers. On macOS the native driver selects classic dyld rebases when a packed static initializer contains a pointer relocation. When linking such emitted C, LLVM or objects separately, pass `-Wl,-no_fixup_chains` to Clang. The linker may report the intentionally unaligned slots. The validation entry is `tests/bootstrap_layout.py`.
+
+### Opt-in owned resources
+
+Core keeps `own T` distinct from the plain nominal record `T`. Adopting or releasing the payload uses an explicit unsafe cast; existing raw pointers and manual containers acquire no destructor implicitly. A by-value binding, argument, assignment or return transfers the resource and invalidates its old binding. Branches and loops retain possible moves, and a live borrow prevents a move. Reassignment requires the previous owner to have been consumed.
+
+Declare one internal, non-generic `@drop fn release(value: own T)` per canonical type. Both emitters consume the same lowered cleanup statements: reverse declaration order at scope exit, return, break, continue and `?`. A transferred value is skipped, and the destructor's own parameter is exempt. Call transfers commit only after every argument has evaluated, so an early return from a later argument still cleans the caller's live resource. An explicit close that returns an error can release the payload with an unsafe cast and report the result.
+
+The current storage boundary is a plain record payload: owners in copyable arrays, records or enum payloads, generic destructors, owner-valued block expressions, and implicit discarded owner results are diagnosed. Bind an owned call argument to a named local before passing it. Access to a raw-pointer field of an owned resource remains an explicit unsafe operation. These restrictions preserve existing manual ABI behavior while the projection-aware ownership surface grows.
+
+`tests/core_owned.py` compares shared rejection cases with the primary compiler and executes actual descriptor closure, heap release, conditional transfers, early exits and packed payloads through C and LLVM at O0/O2 and with ASan/UBSan.

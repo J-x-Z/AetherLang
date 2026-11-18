@@ -53,6 +53,7 @@ if clang --version >/dev/null 2>&1; then
     CC=clang python3 tests/bootstrap_enums.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-enums" --sanitize
     CC=clang python3 tests/bootstrap_jxz.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-jxz"
     CC=clang python3 tests/core_references.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/core-references"
+    CC=clang python3 tests/core_owned.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --seed "$compiler" --work-dir "$CARGO_TARGET_DIR/core-owned"
     case "$(uname -s)/$(uname -m)" in
         Darwin/arm64|Darwin/x86_64|Linux/x86_64)
             CC=clang python3 tests/bootstrap_native_abi.py --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" --work-dir "$CARGO_TARGET_DIR/bootstrap-native-abi"

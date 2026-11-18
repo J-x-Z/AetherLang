@@ -1,0 +1,21 @@
+extern "C"{fn open(path:*u8,flags:i32,...)->i32;fn close(fd:i32)->i32;fn fcntl(fd:i32,command:i32,...)->i32;}
+struct Descriptor{fd:i32}
+static mut COUNT:i32=0;
+static mut STATUS:i32=0;
+fn release(fd:i32)->i32{let status:i32=close(fd);COUNT+=1;STATUS=status;return status;}
+@drop fn descriptor_drop(value:own Descriptor){release(value.fd);}
+fn adopt(fd:i32)->own Descriptor{unsafe{return Descriptor{fd:fd} as own Descriptor;}}
+fn number(value:&own Descriptor)->i32{return value.fd;}
+fn scoped(fd:i32){let resource:own Descriptor=adopt(fd);if number(&resource)!=fd{return;}}
+fn failure(fd:i32)->i32{let resource:own Descriptor=adopt(fd);let missing:i32=open("",0);if missing<0{return missing;}close(missing);return 0;}
+fn checked_close(resource:own Descriptor)->i32{unsafe{let manual:Descriptor=resource as Descriptor;return release(manual.fd);}}
+fn main()->i32{
+ let first:i32=open("/dev/null",0);if first<0{return 1;}scoped(first);
+ if COUNT!=1||STATUS!=0||fcntl(first,1)!=-1{return 2;}
+ let second:i32=open("/dev/null",0);if second<0{return 3;}
+ if failure(second)!=-1||COUNT!=2||STATUS!=0||fcntl(second,1)!=-1{return 4;}
+ let third:i32=open("/dev/null",0);if third<0{return 5;}
+ let resource:own Descriptor=adopt(third);if checked_close(resource)!=0{return 6;}
+ if COUNT!=3||STATUS!=0||fcntl(third,1)!=-1{return 7;}
+ return 0;
+}

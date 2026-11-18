@@ -1,0 +1,14 @@
+struct Resource{value:i64}
+static mut COUNT:i64=0;
+@drop fn resource_drop(value:own Resource){COUNT+=1;}
+fn make()->own Resource{unsafe{return Resource{value:10} as own Resource;}}
+enum Outcome<T>{Ok(T),Err(i64)}
+fn produce(fail:bool)->Outcome<i64>{if fail{return Outcome::Err(5);}return Outcome::Ok(3);}
+fn calculate(fail:bool)->Outcome<i64>{let resource:own Resource=make();let value:i64=produce(fail)?;return Outcome::Ok(value+resource.value);}
+fn main()->i32{
+ let failed:Outcome<i64>=calculate(true);match failed{Outcome::Ok(value)=>{return 1;},Outcome::Err(code)=>{if code!=5{return 2;}}}
+ if COUNT!=1{return 3;}
+ let success:Outcome<i64>=calculate(false);match success{Outcome::Ok(value)=>{if value!=13{return 4;}},Outcome::Err(code)=>{return 5;}}
+ if COUNT!=2{return 6;}
+ return 0;
+}

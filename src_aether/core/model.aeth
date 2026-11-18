@@ -28,6 +28,7 @@ pub const BY_I16:i32=4; pub const BY_U16:i32=5; pub const BY_I32:i32=6; pub cons
 pub const BY_I64:i32=8; pub const BY_U64:i32=9; pub const BY_F32:i32=10; pub const BY_F64:i32=11;
 pub const BY_PTR:i32=12; pub const BY_STRUCT:i32=13; pub const BY_ARRAY:i32=14; pub const BY_ALIAS:i32=15;
 pub const BY_ENUM:i32=19;
+pub const BY_OWN:i32=22; pub const BF_DROP:i32=2048; pub const BF_OWN_MOVE:i32=4096;
 pub const BY_REF:i32=20; pub const BY_MUTREF:i32=21;
 pub const BY_TEMPLATE:i32=16; pub const BY_PARAMETER:i32=17; pub const BY_APPLICATION:i32=18;
 // Node fields by kind:

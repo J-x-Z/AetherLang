@@ -13,9 +13,9 @@ pub fn boot_normal_type(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken
  if depth>256{boot_error(ctx,token,"cyclic or excessively deep type alias");return 0 as *BootType;}
  if ty.kind==BY_APPLICATION{return boot_expand_type(ctx,ty,depth+1,token);}
  if ty.kind==BY_ALIAS{return boot_normal_type(ctx,ty.inner,depth+1,token);}
- if boot_indirect(ty)||ty.kind==BY_ARRAY{
+ if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_OWN{
   let inner:*BootType=boot_normal_type(ctx,ty.inner,depth+1,token);if inner==(0 as *BootType){return inner;}
-  if ty.kind==BY_PTR{return boot_ptr_type(ctx,inner);}if boot_reference(ty){return boot_ref_type(ctx,inner,ty.kind==BY_MUTREF);}return boot_array_type(ctx,inner,ty.extent);
+  if ty.kind==BY_OWN{return boot_owned_type(ctx,inner);}if ty.kind==BY_PTR{return boot_ptr_type(ctx,inner);}if boot_reference(ty){return boot_ref_type(ctx,inner,ty.kind==BY_MUTREF);}return boot_array_type(ctx,inner,ty.extent);
  }
  return ty;
 }
@@ -43,6 +43,7 @@ pub fn boot_normalize(ctx:*BootContext)->bool{
 // Compute the host layout once for field addressing, constants and native ABI lowering.
 pub fn boot_layout(ctx:*BootContext,ty:*BootType,depth:i32,token:*BootToken)->bool{
  if ctx.failed{return false;}if ty.layout_align!=0{return true;}
+ if ty.kind==BY_OWN{if !boot_layout(ctx,ty.inner,depth+1,token){return false;}ty.layout_size=ty.inner.layout_size;ty.layout_align=ty.inner.layout_align;return true;}
  if depth>256{boot_error(ctx,token,"recursive or excessively deep value layout");return false;}
  let mut size:u64=0;let mut alignment:u64=1;let limit:u64=9223372036854775807;
  if ty.kind==BY_BOOL||ty.kind==BY_I8||ty.kind==BY_U8{size=1;}
@@ -140,7 +141,7 @@ pub fn boot_apply_type(ctx:*BootContext,base:*BootType,arguments:*BootTypeArgume
 pub fn boot_type_concrete(ty:*BootType,depth:i32)->bool{
  if ty==(0 as *BootType)||depth>256{return false;}
  if ty.kind==BY_PARAMETER||ty.kind==BY_TEMPLATE||ty.kind==BY_APPLICATION{return false;}
- if boot_indirect(ty)||ty.kind==BY_ARRAY{return boot_type_concrete(ty.inner,depth+1);}return true;
+ if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_OWN{return boot_type_concrete(ty.inner,depth+1);}return true;
 }
 pub fn boot_type_bindings(ctx:*BootContext,parameters:*BootNode)->*BootTypeBinding{
  let mut result:*BootTypeBinding=0 as *BootTypeBinding;let mut tail:*BootTypeBinding=0 as *BootTypeBinding;let mut parameter:*BootNode=parameters;
@@ -153,9 +154,9 @@ pub fn boot_substitute_type(ctx:*BootContext,ty:*BootType,bindings:*BootTypeBind
  if ctx.failed||ty==(0 as *BootType){return ty;}if depth>256{boot_error(ctx,token,"generic type nesting exceeds 256");return 0 as *BootType;}
  if ty.kind==BY_PARAMETER{let mut binding:*BootTypeBinding=bindings;while binding!=(0 as *BootTypeBinding){if binding.formal==ty&&binding.actual!=(0 as *BootType){return binding.actual;}binding=binding.next;}return ty;}
  if ty.kind==BY_ALIAS{return boot_substitute_type(ctx,ty.inner,bindings,depth+1,token);}
- if boot_indirect(ty)||ty.kind==BY_ARRAY{
+ if boot_indirect(ty)||ty.kind==BY_ARRAY||ty.kind==BY_OWN{
   let inner:*BootType=boot_substitute_type(ctx,ty.inner,bindings,depth+1,token);if inner==(0 as *BootType){return inner;}
-  if ty.kind==BY_PTR{return boot_ptr_type(ctx,inner);}if boot_reference(ty){return boot_ref_type(ctx,inner,ty.kind==BY_MUTREF);}return boot_array_type(ctx,inner,ty.extent);
+  if ty.kind==BY_OWN{return boot_owned_type(ctx,inner);}if ty.kind==BY_PTR{return boot_ptr_type(ctx,inner);}if boot_reference(ty){return boot_ref_type(ctx,inner,ty.kind==BY_MUTREF);}return boot_array_type(ctx,inner,ty.extent);
  }
  if ty.kind==BY_APPLICATION{
   let mut args:*BootTypeArgument=0 as *BootTypeArgument;let mut tail:*BootTypeArgument=0 as *BootTypeArgument;let mut old:*BootTypeArgument=ty.arguments;

@@ -1,0 +1,27 @@
+struct Ticket{value:i64}
+static mut LIVE:i64=0;
+static mut CLOSED:i64=0;
+static mut ORDER:i64=0;
+@drop fn close(ticket:own Ticket){LIVE-=1;CLOSED+=1;ORDER=ORDER*10+ticket.value;}
+fn make(value:i64)->own Ticket{LIVE+=1;unsafe{return Ticket{value:value} as own Ticket;}}
+fn consume(ticket:own Ticket)->i64{return ticket.value;}
+fn transfer(ticket:own Ticket)->own Ticket{return ticket;}
+fn early(flag:bool)->i64{let first:own Ticket=make(1);let second:own Ticket=make(2);if flag{return first.value+second.value;}return 4;}
+fn branch(flag:bool){let item:own Ticket=make(3);if flag{consume(item);}}
+fn loops(){let mut i:i64=0;while i<4{let item:own Ticket=make(4);i+=1;if i==1{continue;}if i==3{break;}}}
+fn replace(){let mut item:own Ticket=make(5);consume(item);item=make(6);item=item;}
+fn arguments(first:own Ticket,second:i64)->i64{return first.value+second;}
+fn failed_transfer()->i64{let item:own Ticket=make(7);return arguments(item,{return 9;});}
+fn ordinary_call()->i64{let item:own Ticket=make(8);return arguments(item,2);}
+fn main()->i32{
+ if early(true)!=3||LIVE!=0||CLOSED!=2||ORDER!=21{return 1;}
+ ORDER=0;branch(false);if LIVE!=0||CLOSED!=3{return 2;}
+ branch(true);if LIVE!=0||CLOSED!=4{return 3;}
+ loops();if LIVE!=0||CLOSED!=7{return 4;}
+ replace();if LIVE!=0||CLOSED!=9{return 5;}
+ if failed_transfer()!=9||LIVE!=0||CLOSED!=10{return 6;}
+ if ordinary_call()!=10||LIVE!=0||CLOSED!=11{return 7;}
+ {let first:own Ticket=make(9);let moved:own Ticket=transfer(first);if moved.value!=9{return 8;}}
+ if LIVE!=0||CLOSED!=12{return 9;}
+ return 0;
+}

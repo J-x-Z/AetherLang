@@ -1,0 +1,22 @@
+extern "C"{fn malloc(bytes:usize)->*void;fn free(data:*void);}
+struct Buffer{data:*i64,count:usize}
+static mut ALLOCATED:i64=0;
+static mut FREED:i64=0;
+@drop fn destroy(value:own Buffer){unsafe{free(value.data as *void);}FREED+=1;}
+fn make(count:usize)->own Buffer{
+ let data:*i64=malloc(count*8) as *i64;
+ if data==0 as *i64{unsafe{return Buffer{data:data,count:0} as own Buffer;}}
+ ALLOCATED+=1;let mut i:usize=0;while i<count{data[i]=i as i64;i+=1;}
+ unsafe{return Buffer{data:data,count:count} as own Buffer;}
+}
+fn transfer(value:own Buffer)->own Buffer{return value;}
+fn work()->i64{
+ let first:own Buffer=make(8);let moved:own Buffer=transfer(first);
+ if moved.count==0{return -1;}
+ let mut total:i64=0;let mut i:usize=0;unsafe{while i<moved.count{total+=moved.data[i];i+=1;}}
+ return total;
+}
+fn main()->i32{
+ let mut i:i32=0;while i<128{if work()!=28{return 1;}i+=1;}
+ if ALLOCATED!=128||FREED!=128{return 2;}return 0;
+}

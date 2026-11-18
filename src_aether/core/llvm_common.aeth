@@ -6,6 +6,7 @@ extern "C" {fn strtod(text:*u8,end:**u8)->f64;}
 pub fn ll_text(ctx:*BootContext,text:*u8){fputs(text,ctx.output);}
 pub fn ll_id(ctx:*BootContext)->i32{ctx.llvm_serial=ctx.llvm_serial+1;return ctx.llvm_serial;}
 pub fn ll_type(ctx:*BootContext,ty:*BootType){
+ if ty.kind==BY_OWN{ll_type(ctx,ty.inner);return;}
  if ty.kind==BY_VOID {ll_text(ctx,"{}");return;}
  if boot_indirect(ty) {ll_text(ctx,"ptr");return;}
  if ty.kind==BY_ARRAY{fprintf(ctx.output,"[%llu x ",ty.extent);ll_type(ctx,ty.inner);ll_text(ctx,"]");return;}
@@ -65,7 +66,7 @@ pub fn ll_field_index(ty:*BootType,field:*BootNode)->i32{
  while item!=(0 as *BootNode){if item==field{return index;}index=index+1;item=item.next;}return -1;
 }
 pub fn ll_cast(ctx:*BootContext,value:i32,source:*BootType,target:*BootType)->i32{
- if source==target{return value;}
+ if source==target||(target.kind==BY_OWN&&target.inner==source)||(source.kind==BY_OWN&&source.inner==target){return value;}
  let a:i32=source.kind;let b:i32=target.kind;let id:i32=ll_id(ctx);
  if boot_indirect(source)&&boot_indirect(target){return value;}
  if b==BY_BOOL{

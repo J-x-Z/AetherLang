@@ -48,6 +48,7 @@ fn boot_p_type(ctx:*BootContext)->*BootType {
  ctx.depth=ctx.depth-1;return ty;
 }
 fn boot_p_type_inner(ctx:*BootContext)->*BootType {
+ if boot_p_word(ctx,"own"){boot_p_advance(ctx);let inner:*BootType=boot_p_type(ctx);if inner==0 as *BootType{return inner;}return boot_owned_type(ctx,inner);}
  if boot_p_take(ctx,91){
   let inner:*BootType=boot_p_type(ctx);if inner==(0 as *BootType){return inner;}
   if !boot_p_expect(ctx,59,"expected ';' in array type"){return 0 as *BootType;}
@@ -529,19 +530,21 @@ pub fn boot_parse(ctx:*BootContext)->bool {
  let mut tail:*BootNode=0 as *BootNode;
  while !ctx.failed && boot_p_kind(ctx)!=BT_EOF {
   let mut node:*BootNode=0 as *BootNode;
-  let mut packed:bool=false;let mut repr:bool=false;
+  let mut packed:bool=false;let mut repr:bool=false;let mut destructor:bool=false;
   if boot_p_take(ctx,64){
-   if !boot_p_word(ctx,"repr"){boot_error(ctx,ctx.cursor,"expected @repr(C) or @repr(packed)");return false;}
+   if boot_p_word(ctx,"drop"){boot_p_advance(ctx);destructor=true;}else{
+   if !boot_p_word(ctx,"repr"){boot_error(ctx,ctx.cursor,"expected @drop, @repr(C) or @repr(packed)");return false;}
    boot_p_advance(ctx);if !boot_p_expect(ctx,40,"expected '(' after repr"){return false;}
    packed=boot_p_word(ctx,"packed");if !packed && !boot_p_word(ctx,"C"){boot_error(ctx,ctx.cursor,"unknown record representation");return false;}
    boot_p_advance(ctx);if !boot_p_expect(ctx,41,"expected ')' after representation"){return false;}repr=true;
+   }
   }
   let mut exported:bool=false;
   if boot_p_take(ctx,35) {
    let inner:bool=boot_p_take(ctx,33);
    if !boot_p_expect(ctx,91,"expected '[' after '#'"){return false;}
    if inner {
-    if ctx.module!=ctx.root_module || tail!=0 as *BootNode || ctx.no_main || !boot_p_word(ctx,"no_main"){
+    if destructor || repr || ctx.module!=ctx.root_module || tail!=0 as *BootNode || ctx.no_main || !boot_p_word(ctx,"no_main"){
      boot_error(ctx,ctx.cursor,"expected a single root #![no_main] before declarations");return false;
     }
     boot_p_advance(ctx);if !boot_p_expect(ctx,93,"expected ']' after no_main"){return false;}
@@ -555,13 +558,13 @@ pub fn boot_parse(ctx:*BootContext)->bool {
   if boot_p_word(ctx,"pub") {public=true;boot_p_advance(ctx);}
   if repr && !boot_p_word(ctx,"struct") && !boot_p_word(ctx,"union"){boot_error(ctx,ctx.cursor,"repr requires a struct or union");return false;}
   if boot_p_word(ctx,"impl"){
-   if exported||public{boot_error(ctx,ctx.cursor,"visibility belongs to each inherent method");return false;}
+   if exported||public||destructor{boot_error(ctx,ctx.cursor,"visibility belongs to each inherent method");return false;}
    node=boot_p_impl(ctx);if ctx.failed{return false;}
    if node!=0 as *BootNode{if tail==0 as *BootNode{program.body=node;}else{tail.next=node;}tail=node;while tail.next!=0 as *BootNode{tail=tail.next;}}
    continue;
   }
   if boot_p_word(ctx,"extern") {
-   if public || exported {boot_error(ctx,ctx.cursor,"extern declarations are already public");return false;}
+   if public || exported || destructor {boot_error(ctx,ctx.cursor,"extern declarations are already public and cannot declare destructors");return false;}
    boot_p_advance(ctx);
    if boot_p_kind(ctx)!=BT_STRING {boot_error(ctx,ctx.cursor,"expected foreign ABI string \"C\"");return false;}
    if ctx.cursor.length!=1 || strcmp(ctx.cursor.text,"C")!=0 {boot_error(ctx,ctx.cursor,"Core supports only extern \"C\"");return false;}
@@ -587,6 +590,7 @@ pub fn boot_parse(ctx:*BootContext)->bool {
     if node.kind!=BN_FN && node.kind!=BN_STATIC{boot_error(ctx,node.token,"no_mangle requires a function or static definition");return false;}
     node.flags=node.flags|BF_EXPORT;
    }
+   if destructor{if node.kind!=BN_FN{boot_error(ctx,node.token,"@drop requires a function");return false;}node.flags=node.flags|BF_DROP;}
    if public {node.flags=node.flags|8;}
    if tail==0 as *BootNode {program.body=node;} else {tail.next=node;}
    tail=node;
