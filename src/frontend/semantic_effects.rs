@@ -304,6 +304,14 @@ mod tests {
     use super::*;
     use crate::frontend::{lexer::Lexer, parser::Parser};
     #[test]
+    fn explicit_empty_effects_forbid_observable_writes() {
+        let mut parser = Parser::new(Lexer::new("static mut X:i32=0;fn bump() effect[]{X=1;}",0));
+        assert!(SemanticAnalyzer::new().analyze(&parser.parse_program().unwrap()).is_err());
+        let mut parser = Parser::new(Lexer::new("fn f() effect[read write]{}",0));
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
     fn trusted_foreign_contracts_merge_without_erasing_known_effects() {
         for (source,ok) in [
             ("extern \"C\"{@pure fn external(x:i32)->i32;}fn f()->i32 pure{external(1)}",true),

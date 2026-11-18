@@ -6,6 +6,7 @@ use const_eval::*;
 use methods::*;
 use borrow::boot_borrow_check;
 use owned::boot_own_lower;
+use effects::boot_check_effects;
 use enum_model::*;
 use closures::*;
 // Core v1 type and scope checker, executed by every bootstrap stage.
@@ -717,7 +718,7 @@ pub fn boot_check(ctx:*BootContext)->bool {
   }
   item=item.next;
  }
- if !ctx.failed&&boot_borrow_check(ctx){return boot_own_lower(ctx);}
+ if !ctx.failed && boot_borrow_check(ctx) && boot_own_lower(ctx){return boot_check_effects(ctx);}
  return false;
 }
 

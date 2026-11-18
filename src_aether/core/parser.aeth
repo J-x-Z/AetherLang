@@ -1,4 +1,5 @@
 use model::*;
+use effects::boot_effect_name;
 use runtime::*;
 use type_model::*;
 use const_eval::ce_expression;
@@ -460,6 +461,17 @@ fn boot_p_function(ctx:*BootContext,foreign:bool)->*BootNode {
  node.ty=boot_type(ctx,BY_VOID);
  if boot_p_take(ctx,BT_ARROW) {node.ty=boot_p_type(ctx);}
  if ctx.failed {return 0 as *BootNode;}
+ if boot_p_word(ctx,"pure"){node.effect_explicit=true;boot_p_advance(ctx);}
+ else if boot_p_word(ctx,"effect"){
+  node.effect_explicit=true;boot_p_advance(ctx);
+  if !boot_p_expect(ctx,91,"expected '[' after effect"){return 0 as *BootNode;}
+  while boot_p_kind(ctx)!=93 && !ctx.failed{
+   let effect:i32=boot_effect_name(ctx.cursor.text);
+   if boot_p_kind(ctx)!=BT_IDENT || effect<=0{boot_error(ctx,ctx.cursor,"unknown function effect");return 0 as *BootNode;}
+   node.effect_limit=node.effect_limit|effect;boot_p_advance(ctx);if !boot_p_take(ctx,44){break;}
+  }
+  if !boot_p_expect(ctx,93,"expected ']' after effects"){return 0 as *BootNode;}
+ }
  if foreign {
   if boot_p_kind(ctx)==123 {boot_error(ctx,ctx.cursor,"foreign function requires ';', not a body");return 0 as *BootNode;}
   boot_p_take(ctx,59);
@@ -575,7 +587,16 @@ pub fn boot_parse(ctx:*BootContext)->bool {
    boot_p_advance(ctx);
    if !boot_p_expect(ctx,123,"expected '{' after foreign ABI") {return false;}
    while !ctx.failed && boot_p_kind(ctx)!=125 {
-    if boot_p_word(ctx,"static"){node=boot_p_static(ctx,true);}else{node=boot_p_function(ctx,true);}
+    let mut annotated:bool=false;let mut mask:i32=0;
+    while boot_p_take(ctx,64){
+     if boot_p_kind(ctx)!=BT_IDENT{boot_error(ctx,ctx.cursor,"expected a foreign effect annotation");return false;}
+     let effect:i32=boot_effect_name(ctx.cursor.text);
+     if effect<0{boot_error(ctx,ctx.cursor,"unknown foreign effect annotation");return false;}
+     annotated=true;mask=mask|effect;boot_p_advance(ctx);
+    }
+    if boot_p_word(ctx,"static"){
+     if annotated{boot_error(ctx,ctx.cursor,"effect annotation requires a function");return false;}node=boot_p_static(ctx,true);
+    }else{node=boot_p_function(ctx,true);if node!=0 as *BootNode && annotated{node.effect_explicit=true;node.effect_limit=node.effect_limit|mask;}}
     if node==0 as *BootNode {return false;}
     if tail==0 as *BootNode {program.body=node;} else {tail.next=node;}
     tail=node;

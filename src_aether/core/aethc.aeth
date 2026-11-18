@@ -1,0 +1,3 @@
+// Standard native CLI entry. main.aeth also accepts the original bootstrap C-emission shorthand.
+use driver::boot_regular_driver;
+fn main(argc:i32,argv:**u8)->i32{return boot_regular_driver(argc,argv);}

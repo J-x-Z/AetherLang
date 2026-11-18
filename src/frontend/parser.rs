@@ -532,14 +532,14 @@ impl Parser {
                     };
                     self.advance();
                     effects.push(effect);
-                    self.consume(&TokenKind::Comma);
+                    if !self.consume(&TokenKind::Comma) { break; }
                 } else {
                     break;
                 }
             }
             
             self.expect(TokenKind::RBracket)?;
-            return Ok(EffectSet { is_pure: false, effects });
+            return Ok(EffectSet { is_pure: effects.is_empty(), effects });
         }
         
         // Default: no effect annotation

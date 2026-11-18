@@ -17,7 +17,7 @@ extern "C" {
 }
 pub struct BootCommand {
  input:*u8, output:*u8, lsp:bool, symbols:bool, json_errors:bool, llvm:bool, native:bool, object:bool, check:bool,
- optimize:*u8, objects:**u8, object_count:i32
+ optimize:*u8,cc:*u8,objects:**u8,object_count:i32,libraries:**u8,library_count:i32
 }
 pub fn boot_sibling(ctx:*BootContext,output:*u8)->*u8 {
  let size:u64=strlen(output);
@@ -74,12 +74,12 @@ fn boot_valid_image(path:*u8,object:bool)->bool {
 }
 pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bool {
  let stage:*u8=boot_sibling(ctx,options.output);
- let args:**u8=boot_alloc(ctx,((options.object_count as u64)+16)*(size_of(*u8) as u64)) as **u8;
+ let args:**u8=boot_alloc(ctx,((options.object_count as u64)+(options.library_count as u64)+16)*(size_of(*u8) as u64)) as **u8;
  if ctx.failed {return false;}
  let descriptor:i32=mkstemp(stage);
  if descriptor<0 {perror("aether-core: create output");return false;}
  if close(descriptor)!=0 {perror("aether-core: close output");remove(stage);return false;}
- let cc:*u8=getenv("CC");let mut n:i32=0;
+ let mut cc:*u8=options.cc;if cc==0 as *u8{cc=getenv("CC");}let mut n:i32=0;
  if cc!=0 as *u8 && cc[0]!=0 {args[n]=cc;}else{args[n]="clang";}
  n=n+1;args[n]=options.optimize;n=n+1;args[n]="-x";n=n+1;
  if options.llvm {args[n]="ir";}else{args[n]="c";}n=n+1;
@@ -90,6 +90,7 @@ pub fn boot_native_publish(ctx:*BootContext,options:*BootCommand,source:*u8)->bo
  let mut i:i32=0;
  while i<options.object_count {args[n]=options.objects[i];i=i+1;n=n+1;}
  if !options.object {
+  i=0;while i<options.library_count{args[n]=options.libraries[i];n=n+1;i=i+1;}
   args[n]="-lm";n=n+1;
   if ctx.packed_relocation {
    let info:*u8=boot_host_info(ctx);if ctx.failed{remove(stage);return false;}

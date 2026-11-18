@@ -70,7 +70,9 @@ pub const BN_VALUE:i32=32; pub const BN_YIELD:i32=33; pub const BN_ALIGNOF:i32=3
 pub struct BootArena { next:*BootArena, reserved:u64 }
 pub struct BootToken { kind:i32,text:*u8,length:u64,line:i32,column:i32,path:*u8,next:*BootToken }
 pub struct BootType { kind:i32,id:i32,name:*u8,inner:*BootType,fields:*BootNode,next:*BootType,complete:bool,emitted:i32,owner:*BootModule,extent:u64,packed:bool,union_layout:bool,layout_size:u64,layout_align:u64,checked:bool,parameters:*BootNode,base:*BootType,arguments:*BootTypeArgument,is_enum:bool,is_alias:bool,expression:*BootNode,callable:*BootNode }
+pub struct BootCallEdge {callee:*BootNode,next:*BootCallEdge}
 pub struct BootNode {
+ effect_explicit:bool,effect_limit:i32,effect_bits:i32,calls:*BootCallEdge,
  kind:i32,id:i32,op:i32,flags:i32,tree_depth:i32,value:i64,name:*u8,token:*BootToken,
  ty:*BootType,aux:*BootType,decl:*BootNode,left:*BootNode,right:*BootNode,
  third:*BootNode,body:*BootNode,params:*BootNode,next:*BootNode,owner:*BootModule,lookup:*BootModule,llvm_value:i32,generics:*BootNode,origin:*BootNode
@@ -92,7 +94,8 @@ pub struct BootContext {
 }
 
 pub struct BootImport { alias:*u8,symbol:*u8,target:*BootModule,wildcard:bool,exported:bool,token:*BootToken,next:*BootImport }
-pub struct BootModule { id:i32,inline_module:bool,path:*u8,directory:*u8,source:*u8,length:u64,tokens:*BootToken,items:*BootNode,imports:*BootImport,state:i32,next:*BootModule }
+pub struct BootExport { name:*u8,item:*BootNode,next:*BootExport }
+pub struct BootModule { exports:*BootExport,has_reexports:bool,id:i32,inline_module:bool,path:*u8,directory:*u8,source:*u8,length:u64,tokens:*BootToken,items:*BootNode,imports:*BootImport,state:i32,next:*BootModule }
 pub struct BootRoot { path:*u8,next:*BootRoot }
 
 pub struct BootMappedModule { name:*u8, path:*u8, next:*BootMappedModule }

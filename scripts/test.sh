@@ -46,6 +46,13 @@ done
 
 python3 tests/bootstrap_core.py --compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-core" --backend "$bootstrap_backend"
 if clang --version >/dev/null 2>&1; then
+    native_compiler="$CARGO_TARGET_DIR/bootstrap-core/aethc-native"
+    CC=clang "$CARGO_TARGET_DIR/bootstrap-core/stage4" build src_aether/core/aethc.aeth --backend llvm -O2 -o "$native_compiler"
+    if [ "$bootstrap_backend" = llvm ]; then
+        python3 tests/bootstrap_effects.py --compiler "$native_compiler" --reference-compiler "$compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-effects"
+    else
+        python3 tests/bootstrap_effects.py --compiler "$native_compiler" --work-dir "$CARGO_TARGET_DIR/bootstrap-effects"
+    fi
     for suite in bootstrap_script bootstrap_methods; do
         CC=clang python3 "tests/$suite.py" --compiler "$CARGO_TARGET_DIR/bootstrap-core/stage4" \
             --sanitized-compiler "$CARGO_TARGET_DIR/bootstrap-core/stage2-sanitized" --work-dir "$CARGO_TARGET_DIR/$suite"
