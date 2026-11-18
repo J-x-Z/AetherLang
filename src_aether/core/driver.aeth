@@ -88,7 +88,15 @@ fn boot_parse_command(ctx:*BootContext,cmd:*BootCommand,argc:i32,argv:**u8)->boo
     cmd.optimize=boot_optimization(level);
     if cmd.optimize==0 as *u8 {return boot_arguments_error(ctx,"expected optimization level 0..3");}
    } else {
-    if i>=argc {return boot_arguments_error(ctx,"missing option argument");}
+    if i>=argc {
+     if strcmp(arg,"-I")==0 {return boot_arguments_error(ctx,"-I requires a directory");}
+     if strcmp(arg,"-o")==0 {return boot_arguments_error(ctx,"-o requires one output path");}
+     if strcmp(arg,"--backend")==0 {return boot_arguments_error(ctx,"--backend requires c or llvm");}
+     if strcmp(arg,"--module")==0 {return boot_arguments_error(ctx,"--module requires NAME=FILE.aeth");}
+     if strcmp(arg,"--sysroot")==0 {return boot_arguments_error(ctx,"--sysroot requires a directory");}
+     if strcmp(arg,"--link-object")==0 {return boot_arguments_error(ctx,"--link-object requires a file");}
+     return boot_arguments_error(ctx,"unknown command option");
+    }
     let value:*u8=argv[i];i=i+1;
     if strcmp(arg,"-I")==0 {if !boot_project_root(ctx,value){return false;}}
     else if strcmp(arg,"--module")==0 {if !boot_project_map(ctx,value){return false;}}
