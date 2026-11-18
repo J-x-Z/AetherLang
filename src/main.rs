@@ -201,7 +201,10 @@ fn search_paths(cli: &Cli) -> Result<Vec<PathBuf>, String> {
         paths.push(library);
         return Ok(paths);
     }
-    let executable = std::env::current_exe().map_err(|e| format!("locating compiler installation: {e}"))?;
+    // Darwin may retain executable or directory symlinks in current_exe().
+    // Discover libraries beside the real tool, rather than beside its alias.
+    let executable = std::env::current_exe().and_then(fs::canonicalize)
+        .map_err(|e| format!("locating compiler installation: {e}"))?;
     if let Some(directory) = executable.parent() {
         let installed = library_at(directory).or_else(|| {
             if directory.file_name().is_some_and(|name| name == "bin") {
@@ -221,7 +224,10 @@ fn search_paths(cli: &Cli) -> Result<Vec<PathBuf>, String> {
     let build_root = if build_root.is_absolute() { build_root } else { manifest.join(build_root) };
     if let Ok(build_root) = fs::canonicalize(build_root) {
         let filename = format!("aethc{}", std::env::consts::EXE_SUFFIX);
-        if ["debug", "release"].iter().any(|profile| executable == build_root.join(profile).join(&filename)) {
+        if ["debug", "release"].iter().any(|profile| {
+            fs::canonicalize(build_root.join(profile))
+                .is_ok_and(|directory| executable == directory.join(&filename))
+        }) {
             paths.push(manifest.join("stdlib"));
         }
     }

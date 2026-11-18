@@ -92,6 +92,12 @@ fn main() -> i32 {
     elsewhere = work / 'unrelated cwd'
     elsewhere.mkdir(exist_ok=True)
     run('install/prefix-check', [installed, 'check', source], cwd=elsewhere)
+    tool_alias = work / 'tool directory alias Ω'
+    tool_alias.symlink_to(installed.parent, target_is_directory=True)
+    run('install/prefix-directory-alias', [tool_alias / installed.name, 'check', source], cwd=elsewhere)
+    executable_alias = work / 'compiler executable alias β'
+    executable_alias.symlink_to(installed)
+    run('install/prefix-executable-alias', [executable_alias, 'check', source], cwd=elsewhere)
     # execvp skips a directory with the compiler's name. Stdlib discovery must
     # skip it too, including a searchable directory without listing permission.
     decoy = work / 'earlier PATH Ω'
@@ -115,17 +121,34 @@ fn main() -> i32 {
     installed.rename(prefix / 'aethc')
     installed = prefix / 'aethc'
     run('install/flat-package-check', [installed, 'check', source], cwd=elsewhere)
+    flat_alias = work / 'flat package executable alias'
+    flat_alias.symlink_to(installed)
+    run('install/flat-package-executable-alias', [flat_alias, 'check', source], cwd=elsewhere)
     conventional = prefix / 'lib/aetherlang/stdlib'
     conventional.parent.mkdir(parents=True, exist_ok=True)
     (prefix / 'stdlib').rename(conventional)
     installed.rename(prefix / 'bin/aethc')
     installed = prefix / 'bin/aethc'
     run('install/conventional-prefix-check', [installed, 'check', source], cwd=elsewhere)
+    conventional_alias = work / 'conventional tools alias'
+    conventional_alias.symlink_to(installed.parent, target_is_directory=True)
+    alias_compiler = conventional_alias / installed.name
+    run('install/conventional-prefix-directory-alias', [alias_compiler, 'check', source], cwd=elsewhere)
     hidden = conventional.with_name('stdlib.saved')
     conventional.rename(hidden)
     library_only = consumer / 'library_only.aeth'
     library_only.write_text('use vec::{Vec, vec_new}; fn main() -> i32 { let v: Vec<i64> = vec_new(); return v.len as i32; }')
     run('install/no-development-tree-fallback', [installed, 'check', library_only], expected=1, cwd=elsewhere)
+    run('install/no-development-tree-fallback-through-alias', [alias_compiler, 'check', library_only], expected=1, cwd=elsewhere)
+    # A real Cargo profile binary still discovers its development stdlib when
+    # launched through an unrelated directory alias. The copied binary above
+    # must not gain that privilege, even when this test runs below target/.
+    metadata['cargo_profile_alias_checked'] = compiler.parent.name in ('debug', 'release')
+    if metadata['cargo_profile_alias_checked']:
+        profile_alias = work / 'Cargo profile alias Ω'
+        profile_alias.symlink_to(compiler.parent, target_is_directory=True)
+        run('install/cargo-profile-direct', [compiler, 'check', library_only], cwd=elsewhere)
+        run('install/cargo-profile-directory-alias', [profile_alias / compiler.name, 'check', library_only], cwd=elsewhere)
     hidden.rename(conventional)
     explicit = work / 'explicit sysroot'
     (explicit / 'stdlib').mkdir(parents=True, exist_ok=True)
@@ -149,6 +172,10 @@ fn main() -> i32 {
         if run('install/override-' + label, [installed, 'build', probe, '--backend', args.backends[0],
                                             '--sysroot', explicit, *options, '-o', binary], environment=environment):
             run('install/override-run-' + label, [binary], expected=31)
+    for label, options, expected in [('sysroot', [], 23), ('module-path', ['-I', overrides], 31)]:
+        if run('install/alias-override-' + label, [alias_compiler, 'build', probe, '--backend', args.backends[0],
+                                                '--sysroot', explicit, *options, '-o', binary], cwd=elsewhere):
+            run('install/alias-override-run-' + label, [binary], expected=expected)
 
 if args.only != 'install':
     directory = work / 'output transactions'
