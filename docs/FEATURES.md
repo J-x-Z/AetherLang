@@ -29,4 +29,4 @@
 
 各平台测量和版本变更见[升级报告](UPGRADE.md)。
 
-对于 `x86_64-unknown-none`，Rust 种子从 `d22a1d9` 起为独立编译的普通函数也禁用 red zone。直接编译发射的 C 须传 `-mno-red-zone`。QEMU 启动与自举编译器仍缺的内核能力见[内核验收边界](UPGRADE.md#aether-写内核的实际边界)。
+对于 `x86_64-unknown-none`，Rust 种子从 `d22a1d9` 起为独立编译的普通函数也禁用 red zone。直接编译发射的 C 须传 `-mno-red-zone`。QEMU 启动与自举编译器仍缺的内核能力见[内核验收边界](UPGRADE.md#自举内核与量子计算新能力)。
