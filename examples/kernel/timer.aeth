@@ -1,0 +1,73 @@
+#![no_std]
+#![no_main]
+
+// One CPU. The PIT interrupts ordinary Aether work every 10 ms.
+@repr(C)
+struct InterruptFrame { ip:u64, cs:u64, flags:u64, sp:u64, ss:u64 }
+
+static mut ticks:u64=0;
+static mut steps:u64=0;
+static mut samples:u64=0;
+static mut sampled_steps:u64=0;
+static mut sampled_ip:u64=0;
+static mut checksum:u64=0;
+const SAMPLES:u64=8;
+
+extern "C" { fn timer_putc(ch:u8); }
+
+#[no_mangle]
+@interrupt
+pub fn timer_irq(frame:*InterruptFrame) {
+    unsafe {
+        __atomic_fetch_add_u64_explicit(&mut ticks as *u64,1,0);
+        let current:u64=__atomic_load_u64_explicit(&mut steps as *u64,0);
+        let previous:u64=__atomic_load_u64_explicit(&mut sampled_steps as *u64,0);
+        if current>previous && __atomic_load_u64_explicit(&mut samples as *u64,0)<SAMPLES {
+            __atomic_store_u64_explicit(&mut sampled_steps as *u64,current,0);
+            __atomic_store_u64_explicit(&mut sampled_ip as *u64,frame.ip,0);
+            __atomic_fetch_add_u64_explicit(&mut samples as *u64,1,2);
+        }
+    }
+}
+
+#[no_mangle]
+pub fn timer_work()->i32 {
+    let mut n:u64=0;
+    let mut sum:u64=0;
+    unsafe {
+        while __atomic_load_u64_explicit(&mut samples as *u64,1)<SAMPLES {
+            n+=1;
+            sum+=n&1023;
+            __atomic_store_u64_explicit(&mut steps as *u64,n,0);
+        }
+        checksum=sum;
+    }
+    let tail:u64=n&1023;
+    let expected:u64=(n/1024)*523776+tail*(tail+1)/2;
+    if n<SAMPLES || sum!=expected {return 1;}
+    0
+}
+
+fn print_text(text:*u8) {
+    let mut i:u64=0;
+    while text[i]!=0 {timer_putc(text[i]);i+=1;}
+}
+
+fn print_u64(value:u64) {
+    if value>=10 {print_u64(value/10);}
+    timer_putc((48+value%10) as u8);
+}
+
+// Called after CLI. The receiver can check the interrupted PC in the linked ELF.
+#[no_mangle]
+pub fn timer_report() {
+    unsafe {
+        print_text("timer ticks=");print_u64(ticks);
+        print_text(" samples=");print_u64(samples);
+        print_text(" steps=");print_u64(steps);
+        print_text(" sampled_steps=");print_u64(sampled_steps);
+        print_text(" ip=");print_u64(sampled_ip);
+        print_text(" checksum=");print_u64(checksum);
+        timer_putc(10);
+    }
+}
