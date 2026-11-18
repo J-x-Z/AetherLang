@@ -39,6 +39,9 @@ module=w/'dimensions';module.mkdir(exist_ok=True)
 for name,source,expected in [
  ('shared-primary-fixture',root/'tests/regressions/const_generics.aeth',b''),
  ('numerical-vec',root/'tests/regressions/bootstrap/const_values.aeth',b'const-values=ok\n'),
+ ('binary32-context',root/'tests/regressions/floating_context.aeth',b''),
+ ('constant-aliases',root/'tests/regressions/constants_aliases.aeth',b'constants and aliases\n'),
+ ('scientific-constants',root/'tests/regressions/bootstrap/scientific_constants.aeth',b''),
  ('imported-constant',module/'main.aeth',b'')]:
     run(name+'-check',[compiler,source,'-I',root/'stdlib','--check'])
     for fmt in a.formats:
@@ -50,6 +53,10 @@ for name,source,expected in [
             run(name+'-'+fmt+opt+'-run',[binary],stdout=expected)
 
 invalid={
+ 'dead-operand':('const X:bool=false&&7;','bool'),
+ 'dead-name':('const X:bool=true||absent;','unknown'),
+ 'float-nonfinite':('const X:f64=0.0/0.0;','non-finite'),
+ 'float32-overflow':('const X:f32=2.0e38*2.0;','non-finite'),
  'logical-operand':('const X:bool=true&&1;','logical constant operands'),
  'add-overflow':('const X:u8=255+1;','overflows'),
  'subtract-overflow':('const X:u8=0-1;','overflows'),

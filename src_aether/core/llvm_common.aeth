@@ -47,6 +47,7 @@ fn ll_float_value(node:*BootNode)->f64{
 }
 pub fn ll_literal(ctx:*BootContext,node:*BootNode,ty:*BootType){
  if ll_float(ty){
+  if node.kind==BN_CONST_VALUE{fprintf(ctx.output,"0x%016llX",node.value as u64);return;}
   let mut value:f64=ll_float_value(node);if ty.kind==BY_F32{value=(value as f32) as f64;}
   let mut bits:u64=0;memcpy(&mut bits as *u64 as *void,&value as *f64 as *void,8);
   fprintf(ctx.output,"0x%016llX",bits);return;

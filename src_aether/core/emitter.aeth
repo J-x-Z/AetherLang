@@ -1,4 +1,5 @@
 use model::*;
+use const_eval::ce_decode_float;
 use runtime::*;
 use memory::bm_c_order;
 use type_model::boot_type_concrete;
@@ -353,6 +354,7 @@ fn boot_emit_struct(ctx:*BootContext,ty:*BootType) {
  boot_c_text(ctx,"};\n");ty.emitted=2;
 }
 fn boot_emit_float_constant(ctx:*BootContext,node:*BootNode) {
+ if node.kind==BN_CONST_VALUE{fprintf(ctx.output,"%a",ce_decode_float(node.value as u64));return;}
  if node.kind==BN_UNARY {boot_c_text(ctx,"-(");boot_emit_float_constant(ctx,node.left);boot_c_text(ctx,")");return;}
  boot_c_text(ctx,node.token.text);
 }
@@ -398,9 +400,10 @@ fn boot_emit_storage(ctx:*BootContext,node:*BootNode,definition:bool){
  boot_c_text(ctx,";\n");
 }
 fn boot_emit_constant(ctx:*BootContext,node:*BootNode) {
- boot_c_text(ctx,"static const ");boot_c_type(ctx,node.ty);boot_c_text(ctx," ");boot_c_binding(ctx,node);boot_c_text(ctx," = ");
+ boot_c_text(ctx,"static ");boot_c_type(ctx,node.ty);boot_c_text(ctx," const ");boot_c_binding(ctx,node);boot_c_text(ctx," = ");
  if node.ty.kind==BY_BOOL {if node.value==0{boot_c_text(ctx,"false");}else{boot_c_text(ctx,"true");}}
  else if boot_c_integer(node.ty) {boot_c_text(ctx,"(");boot_c_type(ctx,node.ty);boot_c_text(ctx,")");fprintf(ctx.output,"%lluULL",node.value as u64);}
+ else if node.left.kind==BN_STRING{boot_c_string(ctx,node.left.token);}
  else {boot_emit_float_constant(ctx,node.left);}
  boot_c_text(ctx,";\n");
 }

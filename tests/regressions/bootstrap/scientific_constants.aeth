@@ -1,0 +1,14 @@
+const BASE:f32=16777216.0;
+const SMALL:f32=(BASE+1.0)-BASE;
+const LARGE:f64=((BASE as f64)+1.0)-(BASE as f64);
+const NEG:f64= -0.0;
+const SAT:i8=1024.25 as i8;
+const SIGN:f64=(-5 as i8) as f64;
+const SAME:bool=NEG==0.0;
+const SAFE:bool=false && ((1/0)==0);
+fn main()->i32{
+    if SMALL!=0.0 || LARGE!=1.0 || !SAME || SAT!=127 || SIGN!= -5.0 || SAFE {return 1;}
+    // The reciprocal distinguishes negative zero after both forms of emission.
+    if (1.0/NEG)>=0.0{return 2;}
+    return 0;
+}

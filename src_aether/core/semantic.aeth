@@ -749,11 +749,15 @@ pub fn boot_check(ctx:*BootContext)->bool {
    if ctx.failed || !boot_expect(ctx,item,actual,item.ty) || !boot_static_initializer(ctx,item.left,false){return false;}
   }
   if item.kind==BN_CONST {
-   if ce_integer(item.ty)||item.ty.kind==BY_BOOL{
+   if ce_integer(item.ty)||ce_float(item.ty)||item.ty.kind==BY_BOOL{
     let constant:*BootType=ce_eval(ctx,item.left,0 as *BootTypeBinding,item.ty,0);if constant==0 as *BootType||constant.inner!=item.ty{boot_error(ctx,item.token,"constant type mismatch");return false;}
+    // Every operand is type-checked. Constant evaluation alone skips the RHS
+    // of a short-circuit operator and cannot diagnose an ill-typed dead branch.
+    let actual:*BootType=boot_check_expr(ctx,item.left,item.ty);
+    if ctx.failed || !boot_expect(ctx,item,actual,item.ty){return false;}
     let literal:*BootNode=boot_node(ctx,BN_CONST_VALUE,item.left.token);if ctx.failed{return false;}literal.ty=item.ty;literal.value=constant.extent as i64;item.left=literal;
    }
-   if !boot_constant_form(item.left) { boot_error(ctx,item.token,"Core constants require scalar literals or unary literals");return false; }
+   if !boot_constant_form(item.left) && item.left.kind!=BN_STRING {boot_error(ctx,item.token,"expected a scalar constant or string literal");return false;}
    let actual:*BootType=boot_check_expr(ctx,item.left,item.ty);
    if ctx.failed { return false; }
    if !boot_expect(ctx,item,actual,item.ty) { return false; }

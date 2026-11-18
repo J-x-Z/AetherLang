@@ -145,7 +145,7 @@ pub fn boot_emit_llvm(ctx:*BootContext)->bool{
   if item.kind==BN_STATIC{ll_storage(ctx,item);}
   if item.kind==BN_CONST{
    fprintf(ctx.output,"@a%d_c%d = private constant ",ctx.c_namespace,item.id);ll_type(ctx,item.ty);ll_text(ctx," ");
-   if ll_float(item.ty){ll_literal(ctx,item.left,item.ty);}else{ll_integer(ctx,item.value,item.ty);}ll_text(ctx,"\n");
+   if item.left.kind==BN_STRING{ll_initializer(ctx,item.left);}else if ll_float(item.ty){ll_literal(ctx,item.left,item.ty);}else{ll_integer(ctx,item.value,item.ty);}ll_text(ctx,"\n");
   }
   if item.kind==BN_FN&&(item.flags&2)!=0{
    let mut previous:*BootNode=ctx.program.body;let mut duplicate:bool=false;

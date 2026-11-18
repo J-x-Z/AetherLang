@@ -21,12 +21,51 @@ pub fn ce_binding(formal:*BootType,bindings:*BootTypeBinding)->*BootType{
  let mut item:*BootTypeBinding=bindings;while item!=0 as *BootTypeBinding{if item.formal==formal{if item.actual!=0 as *BootType&&item.actual.kind==BY_CONST_VALUE{return item.actual;}return 0 as *BootType;}item=item.next;}return 0 as *BootType;
 }
 fn ce_error(ctx:*BootContext,node:*BootNode,text:*u8)->*BootType{boot_error(ctx,node.token,text);return 0 as *BootType;}
-fn ce_literal(node:*BootNode)->bool{return node.kind==BN_INT||node.kind==BN_BOOL||(node.kind==BN_UNARY&&node.op==45&&node.left.kind==BN_INT);}
+extern "C" {fn strtod(text:*u8,end:**u8)->f64;}
+pub fn ce_float(ty:*BootType)->bool{return ty!=0 as *BootType&&(ty.kind==BY_F32||ty.kind==BY_F64);}
+pub fn ce_decode_float(bits:u64)->f64{
+ let mut number:f64=0.0;memcpy(&mut number as *f64 as *void,&bits as *u64 as *void,8);return number;
+}
+fn ce_float_value(ctx:*BootContext,node:*BootNode,ty:*BootType,value:f64)->*BootType{
+ let mut rounded:f64=value;if ty.kind==BY_F32{rounded=(value as f32) as f64;}
+ if rounded-rounded!=0.0{return ce_error(ctx,node,"non-finite floating-point constant");}
+ let mut bits:u64=0;memcpy(&mut bits as *u64 as *void,&rounded as *f64 as *void,8);
+ return ce_value(ctx,ty,bits);
+}
+fn ce_float_to_int(value:f64,ty:*BootType)->u64{
+ if ty.kind==BY_I8{return (value as i8) as u64;}
+ if ty.kind==BY_I16{return (value as i16) as u64;}
+ if ty.kind==BY_I32{return (value as i32) as u64;}
+ if ty.kind==BY_I64{return (value as i64) as u64;}
+ if ty.kind==BY_U8{return (value as u8) as u64;}
+ if ty.kind==BY_U16{return (value as u16) as u64;}
+ if ty.kind==BY_U32{return (value as u32) as u64;}
+ return value as u64;
+}
+fn ce_float_binary(ctx:*BootContext,node:*BootNode,ty:*BootType,a:f64,b:f64)->*BootType{
+ let op:i32=node.op;let boolean:*BootType=boot_type(ctx,BY_BOOL);
+ if op==60{return ce_value(ctx,boolean,(a<b) as u64);}
+ if op==62{return ce_value(ctx,boolean,(a>b) as u64);}
+ if op==BT_EQ{return ce_value(ctx,boolean,(a==b) as u64);}
+ if op==BT_NE{return ce_value(ctx,boolean,(a!=b) as u64);}
+ if op==BT_LE{return ce_value(ctx,boolean,(a<=b) as u64);}
+ if op==BT_GE{return ce_value(ctx,boolean,(a>=b) as u64);}
+ if op==43{return ce_float_value(ctx,node,ty,a+b);}
+ if op==45{return ce_float_value(ctx,node,ty,a-b);}
+ if op==42{return ce_float_value(ctx,node,ty,a*b);}
+ if op==47{return ce_float_value(ctx,node,ty,a/b);}
+ return ce_error(ctx,node,"invalid floating-point constant operation");
+}
+fn ce_literal(node:*BootNode)->bool{return node.kind==BN_INT||node.kind==BN_FLOAT||node.kind==BN_BOOL||(node.kind==BN_UNARY&&node.op==45&&ce_literal(node.left));}
 pub fn ce_eval(ctx:*BootContext,node:*BootNode,bindings:*BootTypeBinding,expected:*BootType,depth:i32)->*BootType{
  if ctx.failed||node==0 as *BootNode{return 0 as *BootType;}
  if depth>256{return ce_error(ctx,node,"cyclic or excessively deep constant expression");}
  if node.kind==BN_CONST_VALUE{return ce_value(ctx,node.ty,node.value as u64);}
  if node.kind==BN_BOOL{return ce_value(ctx,boot_type(ctx,BY_BOOL),node.value as u64);}
+ if node.kind==BN_FLOAT{
+  let mut ty:*BootType=expected;if !ce_float(ty){ty=boot_type(ctx,BY_F64);}
+  return ce_float_value(ctx,node,ty,strtod(node.token.text,0 as **u8));
+ }
  if node.kind==BN_INT{
   let mut ty:*BootType=expected;if !ce_integer(ty){ty=boot_type(ctx,BY_I64);}
   let mut limit:u64=ce_mask(ty);if ce_signed(ty){limit=limit>>1;}
@@ -44,6 +83,17 @@ pub fn ce_eval(ctx:*BootContext,node:*BootNode,bindings:*BootTypeBinding,expecte
  if node.kind==BN_CAST{
   let mut hint:*BootType=0 as *BootType;if node.left.kind==BN_INT&&node.ty.kind==BY_U64{hint=node.ty;}
   let value:*BootType=ce_eval(ctx,node.left,bindings,hint,depth+1);if value==0 as *BootType{return value;}
+  if ce_float(value.inner){
+   let number:f64=ce_decode_float(value.extent);
+   if ce_float(node.ty){return ce_float_value(ctx,node,node.ty,number);}
+   if node.ty.kind==BY_BOOL{return ce_value(ctx,node.ty,(number!=0.0) as u64);}
+   if ce_integer(node.ty){return ce_value(ctx,node.ty,ce_float_to_int(number,node.ty)&ce_mask(node.ty));}
+   return ce_error(ctx,node,"numeric constant cast required");
+  }
+  if ce_float(node.ty){
+   let mut number:f64=value.extent as f64;if ce_signed(value.inner){number=ce_i64(value.extent,value.inner) as f64;}
+   return ce_float_value(ctx,node,node.ty,number);
+  }
   if !ce_integer(value.inner)&&value.inner.kind!=BY_BOOL{return ce_error(ctx,node,"integer or bool constant cast required");}
   if node.ty.kind==BY_BOOL{return ce_value(ctx,node.ty,(value.extent!=0) as u64);}
   if !ce_integer(node.ty){return ce_error(ctx,node,"integer or bool constant cast required");}
@@ -58,6 +108,7 @@ pub fn ce_eval(ctx:*BootContext,node:*BootNode,bindings:*BootTypeBinding,expecte
   }
   let value:*BootType=ce_eval(ctx,node.left,bindings,expected,depth+1);if value==0 as *BootType{return value;}
   if node.op==33&&value.inner.kind==BY_BOOL{return ce_value(ctx,value.inner,1-value.extent);}
+  if ce_float(value.inner)&&node.op==45{return ce_float_value(ctx,node,value.inner,-ce_decode_float(value.extent));}
   if !ce_integer(value.inner){return ce_error(ctx,node,"invalid constant unary operand");}
   if node.op==126{return ce_value(ctx,value.inner,ce_mask(value.inner)^value.extent);}
   if node.op==45{
@@ -76,17 +127,17 @@ pub fn ce_eval(ctx:*BootContext,node:*BootNode,bindings:*BootTypeBinding,expecte
   if ce_literal(node.left)&&!ce_literal(node.right){b=ce_eval(ctx,node.right,bindings,expected,depth+1);if ctx.failed{return b;}let mut hint:*BootType=expected;if b!=0 as *BootType{hint=b.inner;}a=ce_eval(ctx,node.left,bindings,hint,depth+1);}
   else{
    a=ce_eval(ctx,node.left,bindings,expected,depth+1);if ctx.failed{return a;}
-   if a!=0 as *BootType&&a.inner.kind==BY_BOOL&&((node.op==BT_AND&&a.extent==0)||(node.op==BT_OR&&a.extent!=0)){return a;}
    let mut hint:*BootType=expected;if a!=0 as *BootType{hint=a.inner;}b=ce_eval(ctx,node.right,bindings,hint,depth+1);
   }
   if a==0 as *BootType||b==0 as *BootType{return 0 as *BootType;}
   if a.inner!=b.inner{return ce_error(ctx,node,"constant binary type mismatch");}
   return ce_binary(ctx,node,a,b);
  }
- return ce_error(ctx,node,"expression is not an integer or bool compile-time constant");
+ return ce_error(ctx,node,"expression is not a scalar compile-time constant");
 }
 fn ce_binary(ctx:*BootContext,node:*BootNode,left:*BootType,right:*BootType)->*BootType{
  let ty:*BootType=left.inner;let a:u64=left.extent;let b:u64=right.extent;let op:i32=node.op;
+ if ce_float(ty){return ce_float_binary(ctx,node,ty,ce_decode_float(a),ce_decode_float(b));}
  if op==BT_EQ{return ce_value(ctx,boot_type(ctx,BY_BOOL),(a==b) as u64);}if op==BT_NE{return ce_value(ctx,boot_type(ctx,BY_BOOL),(a!=b) as u64);}
  if ty.kind==BY_BOOL{
   if op==BT_AND{return ce_value(ctx,ty,((a!=0)&&(b!=0)) as u64);}if op==BT_OR{return ce_value(ctx,ty,((a!=0)||(b!=0)) as u64);}
