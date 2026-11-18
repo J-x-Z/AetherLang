@@ -23,7 +23,6 @@ selection are outside this interface. [CUDA-Q dynamic kernel builder](https://nv
 | Linux x86_64, RTX 3060 Laptop GPU | CUDA-Q cuStateVec, fp64 | Eight mixed circuits and 40 optimizer steps, `on_gpu=1` |
 | macOS arm64, Apple M4 GPU | Aether compute queue, Metal, complex64 | 16 qubits, all amplitudes checked, 42 submissions |
 | Linux x86_64, RTX 3060 Laptop GPU | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
-| Windows 11 x64, RTX 4060 Laptop GPU | Aether compute queue, Vulkan, complex64 | C and LLVM, 65,536 amplitudes, 42 submissions, max L1 error per amplitude 7.81873961e-8 |
 | Android, Adreno 750 | Aether compute queue, Vulkan, complex64 | Same 16-qubit workload and 42 submissions |
 
 CUDA-Q documents GPU simulation targets on Linux and CPU simulation on Apple
@@ -158,6 +157,41 @@ The verifier loads the exported module using CUDA-Q's MLIR bindings and checks
 the register width, gate sequence, signed rotation angles and the distinct
 control/target operands. The boundary tests include a 62-qubit IR export, small
 budgets, invalid gates and release of the Aether-owned result.
+
+### Passing angles to an exported Quake function
+
+`quantum_template_quake::quantum_template_export_quake(template, max_bytes, error, capacity)`
+exports a function with one scalar `f64` argument per declared slot, in slot order.
+A shared slot feeds each corresponding rotation. Unused slots remain in the signature
+and literal angles stay constant. The result is the same owned `QuakeText` as the
+concrete export and can outlive its source template. Rebuild the SDK bridge for the
+additional template export symbol. Older concrete-export and state clients keep
+their existing ABI.
+
+```sh
+/path/to/aethc build examples/quantum/export_template_quake.aeth --sysroot . \
+  --link-object /external/work/libaether_cudaq.dylib -o /external/work/export-template
+/external/work/export-template > /external/work/template.mlir
+```
+
+With CUDA-Q 0.16 installed in Python, add `runtime/cudaq` to `PYTHONPATH`.
+The loader parses and verifies the SDK module once, adds the SDK's host launch
+metadata, and reuses its compilation cache. The quantum instructions and their
+parameter uses come from the exported file.
+
+```python
+from pathlib import Path
+from quake import QuakeKernel
+
+kernel = QuakeKernel(Path("/external/work/template.mlir").read_text())
+first = kernel.get_state(0.32, 0.4, 0.0)
+second = kernel.get_state(-0.93, 1.13, 0.0)
+```
+
+The SDK regression passes five argument sets to one loaded module and compares
+all eight complex amplitudes against an analytic circuit. Wrong arity and
+nonfinite input fail before launch. The example runs on the Mac qpp CPU target.
+For a CUDA-Q GPU target pass `--gpu` to the SDK test runner.
 
 `stdlib/cuda.aeth` separately exposes the CUDA runtime and cuBLAS C ABI with
 fallible owned buffer/stream/handle helpers. Raw GPU pointers and asynchronous

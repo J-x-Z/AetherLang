@@ -1,0 +1,25 @@
+// Export a fixed-topology circuit as a CUDA-Q function with one f64 argument per slot.
+use result::Result;
+use quantum::{Q_INVALID};
+use quantum_quake::QuakeText;
+use quantum_template::{CircuitTemplate,TemplateGate};
+extern "C" {
+    fn aether_cudaq_abi_version()->u32;
+    fn aether_cudaq_template_quake(qubits:u32,gates:*TemplateGate,count:u64,slots:u32,max_bytes:u64,
+                                   output:**u8,length:*u64,error:*u8,error_capacity:u64)->i32;
+    fn snprintf(output:*u8,capacity:usize,format:*u8,...)->i32;
+}
+
+pub fn quantum_template_export_quake(owner:*CircuitTemplate,max_bytes:u64,error:*u8,
+                                      error_capacity:u64)->Result<QuakeText,i32> {
+    if owner==0 as *CircuitTemplate || owner.qubits==0 || owner.gates.len>owner.gates.capacity ||
+       aether_cudaq_abi_version()!=1 {
+        if error!=0 as *u8 && error_capacity>0 {snprintf(error,error_capacity as usize,"invalid CUDA-Q template or bridge");}
+        return Result::Err(Q_INVALID);
+    }
+    let mut text:QuakeText=QuakeText{data:0 as *u8,length:0};
+    let status:i32=aether_cudaq_template_quake(owner.qubits,owner.gates.data,owner.gates.len,owner.slots,max_bytes,
+                                               &mut text.data as **u8,&mut text.length as *u64,error,error_capacity);
+    if status!=0 {return Result::Err(status);}
+    return Result::Ok(text);
+}

@@ -91,6 +91,42 @@ for label in ('missing-pointer', 'missing-length'):
     assert rc == 1 and b'output fields' in error.value
     assert length.value == 0 if label == 'missing-pointer' else out.value is None
 
+class TemplateGate(c.Structure):
+    _fields_ = [('gate', Gate), ('slot', c.c_int64)]
+
+assert c.sizeof(TemplateGate) == 32 and TemplateGate.slot.offset == 24
+template_export = lib.aether_cudaq_template_quake
+template_export.argtypes = [c.c_uint32, c.POINTER(TemplateGate), c.c_uint64, c.c_uint32, *export.argtypes[3:]]
+template_export.restype = c.c_int32
+for label, gate, slots, limit, expected in [
+    ('empty', None, 0, 8192, 0),
+    ('unused-slots', None, 4, 8192, 0),
+    ('literal', TemplateGate(Gate(5, 0, 0, -.7), -1), 0, 8192, 0),
+    ('bound-rx', TemplateGate(Gate(5, 0, 0, 0), 1), 2, 8192, 0),
+    ('invalid-sentinel', TemplateGate(Gate(7, 0, 0, 0), -2), 2, 8192, 1),
+    ('slot-bounds', TemplateGate(Gate(6, 0, 0, 0), 2), 2, 8192, 1),
+    ('not-a-rotation', TemplateGate(Gate(1, 0, 0, 0), 0), 1, 8192, 1),
+    ('constant-out-of-bounds', TemplateGate(Gate(2, 1, 0, 0), -1), 2, 8192, 1),
+    ('huge-arity-small-budget', None, 0xffffffff, 8192, 3),
+    ('output-budget', TemplateGate(Gate(7, 0, 0, 0), 0), 1, 16, 3),
+]:
+    out, length, error = c.c_void_p(42), c.c_uint64(99), c.create_string_buffer(64)
+    status = template_export(1, c.byref(gate) if gate else None, int(gate is not None), slots,
+                             limit, c.byref(out), c.byref(length), error, len(error))
+    save(dict(name='template/'+label, status=status, length=length.value, error=error.value.decode()))
+    assert status == expected, records[-1]
+    if status:
+        assert length.value == 0 and out.value is None and error.value
+    else:
+        try:
+            assert 0 < length.value < limit and not error.value
+            text = c.string_at(out, length.value+1)
+            assert text[-1] == 0 and b'func.func' in text
+            if label == 'bound-rx':
+                assert b'quake.rx (%arg1)' in text
+        finally:
+            release(out)
+
 repo = Path(__file__).resolve().parents[1]
 source = repo / 'tests/regressions/quantum/cudaq_boundaries.aeth'
 for backend in args.backends:

@@ -27,6 +27,17 @@ for backend in a.backends:
     module.write_text(exported.stdout, encoding='utf-8')
     if a.quake_python:
         run('parse and verify SDK Quake', [a.quake_python, repo/'tests/verify_cudaq_quake.py', module])
+    templated = w / f'export-template-{backend}'
+    run('build template export', [c, 'build', repo/'examples/quantum/export_template_quake.aeth',
+                                  '--sysroot', repo, '--backend', backend, '-O2',
+                                  '--link-object', bridge, '-o', templated])
+    result = run('export unbound Quake', [templated])
+    assert result.stdout.count(': f64') >= 3 and 'quake.ry' in result.stdout
+    template_file = w / f'template-{backend}.mlir'
+    template_file.write_text(result.stdout, encoding='utf-8')
+    if a.quake_python:
+        run('execute same Quake module with multiple angles',
+            [a.quake_python, repo/'tests/verify_cudaq_template.py', template_file] + (['--gpu'] if a.gpu else []))
     probe = w / f'cudaq-device-{backend}'
     run('build device probe', [c, 'build', repo / 'examples/quantum/cudaq_device.aeth',
         '--sysroot', repo, '--backend', backend, '-O2', '--link-object', bridge, '-o', probe])

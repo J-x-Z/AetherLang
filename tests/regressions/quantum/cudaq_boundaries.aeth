@@ -1,6 +1,8 @@
 use quantum::{Circuit,QuantumGate,Complex64,quantum_new,quantum_free,quantum_state_free,Q_INVALID,Q_LIMIT};
 use quantum_cudaq::quantum_cudaq;
 use quantum_quake::{QuakeText,quantum_export_quake,quantum_quake_free};
+use quantum_template::{CircuitTemplate,TemplateGate,quantum_template_new,quantum_template_free};
+use quantum_template_quake::quantum_template_export_quake;
 use result::Result;
 fn main()->i32 {
  if size_of(QuantumGate)!=24 || align_of(QuantumGate)!=8 || offset_of(QuantumGate,kind)!=0 ||
@@ -28,6 +30,7 @@ fn main()->i32 {
  let mut text:QuakeText=match quantum_export_quake(circuit,8192,&mut error[0] as *u8,4) {
   Result::Ok(t)=>t,Result::Err(_)=>{return 10;}
  };
+ let mut template:CircuitTemplate=match quantum_template_new(circuit,2){Result::Ok(t)=>t,Result::Err(e)=>{return e;}};
  quantum_free(circuit);
  if text.length==0 || text.data[text.length]!=0 || error[0]!=0 {return 11;}
  quantum_quake_free(&mut text as *QuakeText);
@@ -36,6 +39,18 @@ fn main()->i32 {
  match quantum_export_quake(0 as *Circuit,8192,&mut error[0] as *u8,4) {
   Result::Err(e)=>{if e!=Q_INVALID || error[0]!=109 || error[3]!=0 || error[4]!=65{return 13;}},
   Result::Ok(t)=>{let mut owned:QuakeText=t;quantum_quake_free(&mut owned as *QuakeText);return 14;}
+ }
+ if size_of(TemplateGate)!=32 || offset_of(TemplateGate,slot)!=24 {return 15;}
+ let t:*CircuitTemplate=&mut template as *CircuitTemplate;
+ let mut param_text:QuakeText=match quantum_template_export_quake(t,8192,&mut error[0] as *u8,4){
+    Result::Ok(v)=>v,Result::Err(e)=>{return e;}
+ };
+ quantum_template_free(t);
+ if param_text.length==0 || param_text.data[param_text.length]!=0 {return 16;}
+ quantum_quake_free(&mut param_text as *QuakeText);
+ match quantum_template_export_quake(t,8192,&mut error[0] as *u8,4) {
+   Result::Err(e)=>{if e!=Q_INVALID || error[0]==0 || error[3]!=0 || error[4]!=65{return 17;}},
+   Result::Ok(v)=>{let mut wrong:QuakeText=v;quantum_quake_free(&mut wrong as *QuakeText);return 18;}
  }
  0
 }

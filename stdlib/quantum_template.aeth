@@ -10,7 +10,8 @@ pub const QT_NOT_ROTATION:i32=12;
 pub const QT_ARITY:i32=13;
 pub const QT_NONFINITE:i32=14;
 
-struct TemplateGate { gate:QuantumGate, slot:i64 }
+// Gate plus -1 for a literal angle, or the index of a runtime f64 argument.
+pub struct TemplateGate { gate:QuantumGate, slot:i64 }
 pub struct CircuitTemplate { qubits:u32, slots:u32, gates:Vec<TemplateGate> }
 
 // Snapshot all gates. The source can immediately be edited or freed.

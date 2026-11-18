@@ -1,0 +1,37 @@
+use result::Result;
+use quantum::{Circuit,Q_RX,Q_RY,Q_RZ,Q_CX,Q_INVALID,quantum_new,quantum_gate,quantum_free};
+use quantum_template::{CircuitTemplate,quantum_template_new,quantum_template_parameter,quantum_template_free};
+use quantum_quake::{QuakeText,quantum_quake_free};
+use quantum_template_quake::quantum_template_export_quake;
+extern "C" {
+    fn printf(format:*u8,...)->i32;
+    fn fflush(stream:*void)->i32;
+}
+
+// Each of the first two slots feeds two gates. Slot 2 is unused. A constant
+// Rx is applied alongside the parameterized rotations.
+fn example()->Result<QuakeText,i32> {
+    let c:*Circuit=quantum_new(3)?;
+    let ok:bool=quantum_gate(c,Q_RY,2,0,0.0)==0 && quantum_gate(c,Q_RY,2,0,0.0)==0 &&
+                quantum_gate(c,Q_RX,1,0,0.5)==0 && quantum_gate(c,Q_RX,1,0,0.0)==0 &&
+                quantum_gate(c,Q_CX,0,2,0.0)==0 &&
+                quantum_gate(c,Q_RZ,0,0,0.0)==0;
+    if !ok {quantum_free(c);return Result::Err(Q_INVALID);}
+    let snapshot:Result<CircuitTemplate,i32>=quantum_template_new(c,3);
+    quantum_free(c);
+    let mut owner:CircuitTemplate=snapshot?;
+    let t:*CircuitTemplate=&mut owner as *CircuitTemplate;
+    if quantum_template_parameter(t,0,0)!=0 || quantum_template_parameter(t,1,0)!=0 ||
+       quantum_template_parameter(t,3,1)!=0 || quantum_template_parameter(t,5,1)!=0 {quantum_template_free(t);return Result::Err(Q_INVALID);}
+    let artifact:Result<QuakeText,i32>=quantum_template_export_quake(t,1048576,0 as *u8,0);
+    quantum_template_free(t);
+    return artifact;
+}
+
+fn main()->i32 {
+    let mut text:QuakeText=match example(){Result::Ok(t)=>t,Result::Err(e)=>{return e;}};
+    let written:i32=printf("%s",text.data);
+    quantum_quake_free(&mut text as *QuakeText);
+    if written<0 || fflush(0 as *void)!=0 {return 1;}
+    return 0;
+}
